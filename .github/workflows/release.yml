@@ -1,0 +1,63 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Extract version
+        id: version
+        shell: pwsh
+        run: |
+          $content = Get-Content "ClaudeClient/version.h" -Raw
+          $major = [regex]::Match($content, 'VERSION_MAJOR\s+(\d+)').Groups[1].Value
+          $minor = [regex]::Match($content, 'VERSION_MINOR\s+(\d+)').Groups[1].Value
+          $patch = [regex]::Match($content, 'VERSION_PATCH\s+(\d+)').Groups[1].Value
+          $version = "$major.$minor.$patch"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "TAG=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build Release
+        run: msbuild ClaudeClient.sln /p:Configuration=Release /p:Platform=x64 /m /nologo
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CluadeX-x64
+          path: x64/Release/CluadeX.exe
+
+      - name: Create Release (on merge to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.TAG }}
+          name: CluadeX ${{ steps.version.outputs.TAG }}
+          body: |
+            ## CluadeX ${{ steps.version.outputs.TAG }}
+
+            AI Coding Assistant by Xman Studio
+            https://xman4289.com
+
+            ### Download
+            Download `CluadeX.exe` below and run it directly — no installation required.
+
+            ### Requirements
+            - Windows 10 1809+ (x64)
+            - For local mode: [Ollama](https://ollama.com) installed and running
+          files: x64/Release/CluadeX.exe
+          draft: false
+          prerelease: false
+          make_latest: true

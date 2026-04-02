@@ -1,0 +1,30 @@
+# Build outputs
+x64/
+Debug/
+Release/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.log
+*.tlog/
+*.lastbuildstate
+*.ipdb
+*.iobj
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+ipch/
+
+# Misc
+*.bak
+*.tmp
+Thumbs.db
+desktop.ini
