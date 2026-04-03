@@ -25,6 +25,28 @@ public class MainViewModel : ViewModelBase
     public bool IsModelLoaded { get => _isModelLoaded; set => SetProperty(ref _isModelLoaded, value); }
     public bool IsModelLoading { get => _isModelLoading; set => SetProperty(ref _isModelLoading, value); }
 
+    // ─── Localized Nav Labels ───
+    public string NavChat => _loc.T("nav.chat");
+    public string NavModels => _loc.T("nav.models");
+    public string NavSettings => _loc.T("nav.settings");
+    public string NavPlugins => _loc.T("nav.plugins");
+    public string NavPermissions => _loc.T("nav.permissions");
+    public string NavTasks => _loc.T("nav.tasks");
+    public string NavFeatures => _loc.T("nav.features");
+    public string TitleSubtitle => _loc.T("title.subtitle");
+
+    private void RefreshNavLabels()
+    {
+        OnPropertyChanged(nameof(NavChat));
+        OnPropertyChanged(nameof(NavModels));
+        OnPropertyChanged(nameof(NavSettings));
+        OnPropertyChanged(nameof(NavPlugins));
+        OnPropertyChanged(nameof(NavPermissions));
+        OnPropertyChanged(nameof(NavTasks));
+        OnPropertyChanged(nameof(NavFeatures));
+        OnPropertyChanged(nameof(TitleSubtitle));
+    }
+
     // Buddy companion
     public BuddyService BuddyService => _buddyService;
     public bool IsBuddyEnabled => _settingsService.Settings.Features.BuddyCompanion;
@@ -91,6 +113,9 @@ public class MainViewModel : ViewModelBase
 
         // Initialize localization from saved setting
         _loc.SetLanguage(_settingsService.Settings.Language);
+
+        // Refresh all nav labels when language changes
+        _loc.LanguageChanged += RefreshNavLabels;
 
         // Refresh buddy visibility when settings change
         _settingsService.SettingsChanged += () =>

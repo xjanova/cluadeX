@@ -180,15 +180,15 @@
 
                         <!-- Row 2: Navigation -->
                         <StackPanel Grid.Row="2" Margin="8,0,8,4">
-                            <RadioButton Content="Chat" Style="{StaticResource NavButton}" Tag="&#xE8BD;"
+                            <RadioButton Content="{Binding NavChat}" Style="{StaticResource NavButton}" Tag="&#xE8BD;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Chat"
                                          GroupName="Nav" x:Name="NavChat"/>
-                            <RadioButton Content="Models" Style="{StaticResource NavButton}" Tag="&#xE8F1;"
+                            <RadioButton Content="{Binding NavModels}" Style="{StaticResource NavButton}" Tag="&#xE8F1;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Models"
                                          GroupName="Nav"/>
-                            <RadioButton Content="Settings" Style="{StaticResource NavButton}" Tag="&#xE713;"
+                            <RadioButton Content="{Binding NavSettings}" Style="{StaticResource NavButton}" Tag="&#xE713;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Settings, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Settings"
                                          GroupName="Nav"/>
@@ -196,15 +196,15 @@
                             <!-- Separator -->
                             <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
 
-                            <RadioButton Content="Plugins" Style="{StaticResource NavButton}" Tag="&#xE74C;"
+                            <RadioButton Content="{Binding NavPlugins}" Style="{StaticResource NavButton}" Tag="&#xE74C;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Plugins, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Plugins"
                                          GroupName="Nav"/>
-                            <RadioButton Content="Permissions" Style="{StaticResource NavButton}" Tag="&#xE72E;"
+                            <RadioButton Content="{Binding NavPermissions}" Style="{StaticResource NavButton}" Tag="&#xE72E;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Permissions, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Permissions"
                                          GroupName="Nav"/>
-                            <RadioButton Content="Tasks" Style="{StaticResource NavButton}" Tag="&#xE9D5;"
+                            <RadioButton Content="{Binding NavTasks}" Style="{StaticResource NavButton}" Tag="&#xE9D5;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
                                          GroupName="Nav"/>
@@ -212,7 +212,7 @@
                             <!-- Separator -->
                             <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
 
-                            <RadioButton Content="Features" Style="{StaticResource NavButton}" Tag="&#xE734;"
+                            <RadioButton Content="{Binding NavFeatures}" Style="{StaticResource NavButton}" Tag="&#xE734;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Features, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Features"
                                          GroupName="Nav"/>

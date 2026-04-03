@@ -393,11 +393,14 @@
             </Border>
 
             <!-- ═══════ BUTTONS ═══════ -->
-            <StackPanel Orientation="Horizontal" Margin="0,20,0,24">
-                <Button Content="Save Settings" Style="{StaticResource PrimaryButton}"
+            <StackPanel Orientation="Horizontal" Margin="0,20,0,24" VerticalAlignment="Center">
+                <Button Content="💾 Save Settings" Style="{StaticResource PrimaryButton}"
                         Command="{Binding SaveCommand}" Margin="0,0,12,0"/>
                 <Button Content="Reset to Defaults" Style="{StaticResource SecondaryButton}"
-                        Command="{Binding ResetDefaultsCommand}"/>
+                        Command="{Binding ResetDefaultsCommand}" Margin="0,0,12,0"/>
+                <!-- Save feedback next to buttons -->
+                <TextBlock Text="{Binding SaveStatus}" Foreground="{StaticResource GreenBrush}"
+                           FontSize="14" FontWeight="Bold" VerticalAlignment="Center"/>
             </StackPanel>
 
         </StackPanel>

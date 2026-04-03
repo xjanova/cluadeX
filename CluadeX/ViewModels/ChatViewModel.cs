@@ -399,17 +399,17 @@ public class ChatViewModel : ViewModelBase
     {
         if (string.IsNullOrEmpty(sessionId)) return;
 
+        // Don't reload current session
+        if (CurrentSession?.Id == sessionId) return;
+
         // Save current first
         AutoSave();
 
-        // Try loading from database
+        // Try loading from database (full messages)
         var session = _persistenceService.LoadSession(sessionId);
 
-        // Fallback: check in-memory Sessions collection (for sessions not yet persisted)
-        if (session == null)
-        {
-            session = Sessions.FirstOrDefault(s => s.Id == sessionId);
-        }
+        // Fallback: check in-memory Sessions collection
+        session ??= Sessions.FirstOrDefault(s => s.Id == sessionId);
 
         if (session == null)
         {
@@ -417,15 +417,25 @@ public class ChatViewModel : ViewModelBase
             return;
         }
 
-        CurrentSession = session;
-        Messages.Clear();
-        foreach (var msg in session.Messages)
-            Messages.Add(msg);
+        App.Current?.Dispatcher.Invoke(() =>
+        {
+            CurrentSession = session;
+            Messages.Clear();
+            foreach (var msg in session.Messages)
+                Messages.Add(msg);
 
-        StatusText = $"Loaded: {session.Title}";
-        _isDirty = false;
-        UpdateContextInfo();
-        ScrollToBottom?.Invoke();
+            if (session.Messages.Count == 0)
+            {
+                StatusText = $"Empty session: {session.Title}";
+            }
+            else
+            {
+                StatusText = $"Loaded: {session.Title} ({session.Messages.Count} messages)";
+            }
+            _isDirty = false;
+            UpdateContextInfo();
+            ScrollToBottom?.Invoke();
+        });
     }
 
     private void DeleteSession(string? sessionId)
@@ -440,23 +450,31 @@ public class ChatViewModel : ViewModelBase
             System.Windows.MessageBoxImage.Warning);
         if (result != System.Windows.MessageBoxResult.Yes) return;
 
+        // Delete from DB
         _persistenceService.DeleteSession(sessionId);
 
-        // Remove from list
-        for (int i = Sessions.Count - 1; i >= 0; i--)
+        // Remove from UI list immediately
+        App.Current?.Dispatcher.Invoke(() =>
         {
-            if (Sessions[i].Id == sessionId)
+            for (int i = Sessions.Count - 1; i >= 0; i--)
             {
-                Sessions.RemoveAt(i);
-                break;
+                if (Sessions[i].Id == sessionId)
+                {
+                    Sessions.RemoveAt(i);
+                    break;
+                }
             }
-        }
 
-        // If we deleted the current session, create a new one
-        if (CurrentSession?.Id == sessionId)
-        {
-            NewSession();
-        }
+            // If we deleted the current session, create a new one
+            if (CurrentSession?.Id == sessionId)
+            {
+                CurrentSession = null;
+                Messages.Clear();
+                NewSession();
+            }
+
+            StatusText = "Session deleted";
+        });
     }
 
     // ─── Context Tracking ───
