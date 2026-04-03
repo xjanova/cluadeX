@@ -41,6 +41,9 @@
         <DataTemplate DataType="{x:Type vm:TaskManagerViewModel}">
             <views:TaskManagerView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:FeaturesViewModel}">
+            <views:FeaturesView/>
+        </DataTemplate>
     </Window.Resources>
 
     <Border x:Name="RootBorder">
@@ -99,6 +102,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
@@ -203,6 +207,14 @@
                             <RadioButton Content="Tasks" Style="{StaticResource NavButton}" Tag="&#xE9D5;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
+                                         GroupName="Nav"/>
+
+                            <!-- Separator -->
+                            <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
+
+                            <RadioButton Content="Features" Style="{StaticResource NavButton}" Tag="&#xE734;"
+                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Features, Mode=OneWay}"
+                                         Command="{Binding NavigateToCommand}" CommandParameter="Features"
                                          GroupName="Nav"/>
                         </StackPanel>
 
@@ -429,8 +441,92 @@
                             </Grid>
                         </ScrollViewer>
 
-                        <!-- Row 5: Bottom Status -->
-                        <Border Grid.Row="5" Padding="14,10" BorderThickness="0,1,0,0"
+                        <!-- Row 5: Buddy Companion Widget -->
+                        <Border Grid.Row="5" Padding="8,6" BorderThickness="0,1,0,0"
+                                BorderBrush="{StaticResource Surface0Brush}"
+                                Visibility="{Binding IsBuddyEnabled, Converter={StaticResource BoolVis}}">
+                            <Border Background="{StaticResource Surface0Brush}" CornerRadius="10" Padding="10,8"
+                                    Cursor="Hand" MouseLeftButtonDown="Buddy_Pet">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Buddy Emoji -->
+                                    <Border Width="40" Height="40" CornerRadius="20"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Border.Background>
+                                            <SolidColorBrush Color="{Binding BuddyService.CurrentBuddy.RarityColor, FallbackValue=#313244}" Opacity="0.25"/>
+                                        </Border.Background>
+                                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding BuddyService.CurrentBuddy.HatEmoji, FallbackValue=''}"
+                                                       FontSize="8" HorizontalAlignment="Center" Margin="0,-2,0,-4"/>
+                                            <TextBlock Text="{Binding BuddyService.CurrentBuddy.DisplayEmoji, FallbackValue=🐱}"
+                                                       FontSize="20" HorizontalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <!-- Buddy Info -->
+                                    <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding BuddyService.CurrentBuddy.Soul.Name, FallbackValue=Buddy}"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       FontSize="12" FontWeight="Bold"
+                                                       FontFamily="{StaticResource MainFont}"/>
+                                            <TextBlock Text="{Binding BuddyService.CurrentBuddy.ShinyBadge, FallbackValue=''}"
+                                                       FontSize="10" Margin="2,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.RarityStars, FallbackValue=⭐}"
+                                                   FontSize="9" Margin="0,1,0,0"/>
+                                        <!-- Speech Bubble -->
+                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.SpeechBubble, FallbackValue=''}"
+                                                   Foreground="{StaticResource Overlay1Brush}"
+                                                   FontSize="10" FontStyle="Italic"
+                                                   FontFamily="{StaticResource MainFont}"
+                                                   TextTrimming="CharacterEllipsis" MaxWidth="130"
+                                                   Visibility="{Binding BuddyService.CurrentBuddy.HasSpeech, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Border.ToolTip>
+                                    <StackPanel Margin="4">
+                                        <TextBlock FontSize="14" FontWeight="Bold" Margin="0,0,0,4">
+                                            <Run Text="{Binding BuddyService.CurrentBuddy.DisplayEmoji, Mode=OneWay}"/>
+                                            <Run Text="{Binding BuddyService.CurrentBuddy.Soul.Name, Mode=OneWay}"/>
+                                            <Run Text="{Binding BuddyService.CurrentBuddy.ShinyBadge, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.RarityStars}" Margin="0,0,0,4"/>
+                                        <TextBlock FontSize="11" Foreground="Gray">
+                                            <Run Text="Species: "/><Run Text="{Binding BuddyService.CurrentBuddy.Bones.Species, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="11" Foreground="Gray">
+                                            <Run Text="Personality: "/><Run Text="{Binding BuddyService.CurrentBuddy.Soul.Personality, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <Border Height="1" Background="Gray" Opacity="0.3" Margin="0,6"/>
+                                        <TextBlock FontSize="11" Foreground="Gray" Text="📊 Stats" FontWeight="SemiBold" Margin="0,2,0,2"/>
+                                        <TextBlock FontSize="10" Foreground="Gray">
+                                            <Run Text="🔧 Debugging: "/><Run Text="{Binding BuddyService.CurrentBuddy.Bones.Stats.Debugging, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="10" Foreground="Gray">
+                                            <Run Text="🧘 Patience: "/><Run Text="{Binding BuddyService.CurrentBuddy.Bones.Stats.Patience, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="10" Foreground="Gray">
+                                            <Run Text="🌀 Chaos: "/><Run Text="{Binding BuddyService.CurrentBuddy.Bones.Stats.Chaos, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="10" Foreground="Gray">
+                                            <Run Text="📖 Wisdom: "/><Run Text="{Binding BuddyService.CurrentBuddy.Bones.Stats.Wisdom, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="10" Foreground="Gray">
+                                            <Run Text="😏 Snark: "/><Run Text="{Binding BuddyService.CurrentBuddy.Bones.Stats.Snark, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <Border Height="1" Background="Gray" Opacity="0.3" Margin="0,6"/>
+                                        <TextBlock FontSize="10" Foreground="Gray" FontStyle="Italic" Text="Click to pet! 💕"/>
+                                    </StackPanel>
+                                </Border.ToolTip>
+                            </Border>
+                        </Border>
+
+                        <!-- Row 6: Bottom Status -->
+                        <Border Grid.Row="6" Padding="14,10" BorderThickness="0,1,0,0"
                                 BorderBrush="{StaticResource Surface0Brush}">
                             <StackPanel>
                                 <!-- Project Name -->

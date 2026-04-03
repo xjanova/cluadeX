@@ -43,10 +43,41 @@ public class AppSettings
     public double FontSize { get; set; } = 14;
     public bool StreamOutput { get; set; } = true;
 
+    // Language / Localization
+    public string Language { get; set; } = "en"; // "en" or "th"
+
+    // Feature Toggles — users can enable/disable optional features
+    public FeatureToggles Features { get; set; } = new();
+
     // HuggingFace settings
     public string? HuggingFaceToken { get; set; }
 
     // AI Provider settings
     public AiProviderType ActiveProvider { get; set; } = AiProviderType.Local;
     public Dictionary<string, ProviderConfig> ProviderConfigs { get; set; } = new();
+}
+
+/// <summary>
+/// Feature toggles — allows users to enable/disable optional features.
+/// All core features default to enabled. Fun/experimental features can be toggled.
+/// </summary>
+public class FeatureToggles
+{
+    // Core (always available)
+    public bool BuddyCompanion { get; set; } = true;
+    public bool PluginSystem { get; set; } = true;
+    public bool TaskManager { get; set; } = true;
+    public bool WebFetch { get; set; } = true;
+    public bool GitIntegration { get; set; } = true;
+    public bool GitHubIntegration { get; set; } = true;
+    public bool ContextMemory { get; set; } = true;
+    public bool SmartEditing { get; set; } = true;
+    public bool MarkdownRendering { get; set; } = true;
+    public bool SyntaxHighlighting { get; set; } = true;
+
+    // Security
+    public bool PermissionSystem { get; set; } = true;
+    public bool DangerousCommandBlocking { get; set; } = true;
+    public bool PathTraversalProtection { get; set; } = true;
+    public bool DpapiEncryption { get; set; } = true;
 }

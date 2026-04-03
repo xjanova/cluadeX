@@ -8,6 +8,8 @@ public class MainViewModel : ViewModelBase
     private readonly SettingsService _settingsService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;
+    private readonly BuddyService _buddyService;
+    private readonly LocalizationService _loc;
 
     private ViewModelBase? _currentView;
     private string _selectedNavItem = "Chat";
@@ -23,14 +25,20 @@ public class MainViewModel : ViewModelBase
     public bool IsModelLoaded { get => _isModelLoaded; set => SetProperty(ref _isModelLoaded, value); }
     public bool IsModelLoading { get => _isModelLoading; set => SetProperty(ref _isModelLoading, value); }
 
+    // Buddy companion
+    public BuddyService BuddyService => _buddyService;
+    public bool IsBuddyEnabled => _settingsService.Settings.Features.BuddyCompanion;
+
     public ChatViewModel ChatVM { get; }
     public ModelManagerViewModel ModelManagerVM { get; }
     public SettingsViewModel SettingsVM { get; }
     public PluginManagerViewModel PluginManagerVM { get; }
     public PermissionsViewModel PermissionsVM { get; }
     public TaskManagerViewModel TaskManagerVM { get; }
+    public FeaturesViewModel FeaturesVM { get; }
 
     public ICommand NavigateToCommand { get; }
+    public ICommand PetBuddyCommand { get; }
 
     public MainViewModel(
         ChatViewModel chatVM,
@@ -39,9 +47,12 @@ public class MainViewModel : ViewModelBase
         PluginManagerViewModel pluginManagerVM,
         PermissionsViewModel permissionsVM,
         TaskManagerViewModel taskManagerVM,
+        FeaturesViewModel featuresVM,
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
-        AiProviderManager providerManager)
+        AiProviderManager providerManager,
+        BuddyService buddyService,
+        LocalizationService loc)
     {
         ChatVM = chatVM;
         ModelManagerVM = modelManagerVM;
@@ -49,13 +60,17 @@ public class MainViewModel : ViewModelBase
         PluginManagerVM = pluginManagerVM;
         PermissionsVM = permissionsVM;
         TaskManagerVM = taskManagerVM;
+        FeaturesVM = featuresVM;
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
+        _buddyService = buddyService;
+        _loc = loc;
 
         CurrentView = chatVM;
 
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
+        PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
 
         _providerManager.OnStatusChanged += status =>
             App.Current?.Dispatcher.Invoke(() => ModelStatus = status);
@@ -74,7 +89,29 @@ public class MainViewModel : ViewModelBase
                 ModelStatus = _providerManager.ActiveProvider.StatusMessage;
             });
 
+        // Initialize localization from saved setting
+        _loc.SetLanguage(_settingsService.Settings.Language);
+
+        // Refresh buddy visibility when settings change
+        _settingsService.SettingsChanged += () =>
+            App.Current?.Dispatcher.Invoke(() => OnPropertyChanged(nameof(IsBuddyEnabled)));
+
+        // Forward buddy changes to UI
+        _buddyService.BuddyChanged += () =>
+            App.Current?.Dispatcher.Invoke(() => OnPropertyChanged(nameof(BuddyService)));
+
         Task.Run(DetectGpu);
+        InitializeBuddy();
+    }
+
+    private void InitializeBuddy()
+    {
+        try
+        {
+            if (_settingsService.Settings.Features.BuddyCompanion)
+                _buddyService.Initialize();
+        }
+        catch { /* Buddy is non-critical */ }
     }
 
     private void DetectGpu()
@@ -102,6 +139,7 @@ public class MainViewModel : ViewModelBase
             "Plugins" => PluginManagerVM,
             "Permissions" => PermissionsVM,
             "Tasks" => TaskManagerVM,
+            "Features" => FeaturesVM,
             _ => ChatVM,
         };
 

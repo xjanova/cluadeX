@@ -43,6 +43,8 @@ public partial class App : Application
         services.AddSingleton<PermissionService>();
         services.AddSingleton<TaskManagerService>();
         services.AddSingleton<WebFetchService>();
+        services.AddSingleton<BuddyService>();
+        services.AddSingleton<LocalizationService>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();
@@ -52,6 +54,7 @@ public partial class App : Application
         services.AddSingleton<PluginManagerViewModel>();
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
+        services.AddSingleton<FeaturesViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();

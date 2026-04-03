@@ -39,6 +39,12 @@ public partial class MainWindow : Window
     private void BtnClose_Click(object sender, RoutedEventArgs e)
         => Close();
 
+    private void Buddy_Pet(object sender, MouseButtonEventArgs e)
+    {
+        _viewModel.BuddyService.Pet();
+        e.Handled = true;
+    }
+
     private void OnStateChanged(object? sender, EventArgs e)
     {
         if (WindowState == WindowState.Maximized)
