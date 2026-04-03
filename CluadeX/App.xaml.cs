@@ -45,6 +45,7 @@ public partial class App : Application
         services.AddSingleton<WebFetchService>();
         services.AddSingleton<BuddyService>();
         services.AddSingleton<LocalizationService>();
+        services.AddSingleton<ActivationService>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();

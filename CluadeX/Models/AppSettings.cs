@@ -46,6 +46,9 @@ public class AppSettings
     // Language / Localization
     public string Language { get; set; } = "en"; // "en" or "th"
 
+    // Activation Key — unlocks advanced features
+    public string? ActivationKey { get; set; }
+
     // Feature Toggles — users can enable/disable optional features
     public FeatureToggles Features { get; set; } = new();
 

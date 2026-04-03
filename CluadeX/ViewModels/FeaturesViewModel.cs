@@ -21,6 +21,20 @@ public class FeatureItem : ViewModelBase
         set => SetProperty(ref _isEnabled, value);
     }
 
+    private bool _isLocked;
+    public bool IsLocked
+    {
+        get => _isLocked;
+        set => SetProperty(ref _isLocked, value);
+    }
+
+    private bool _isUnlocked = true;
+    public bool IsUnlocked
+    {
+        get => _isUnlocked;
+        set => SetProperty(ref _isUnlocked, value);
+    }
+
     // Populated by ViewModel from LocalizationService
     private string _name = "";
     public string Name { get => _name; set => SetProperty(ref _name, value); }
@@ -36,6 +50,7 @@ public class FeaturesViewModel : ViewModelBase
 {
     private readonly SettingsService _settingsService;
     private readonly LocalizationService _loc;
+    private readonly ActivationService _activation;
 
     public ObservableCollection<FeatureItem> CoreFeatures { get; } = new();
     public ObservableCollection<FeatureItem> AdvancedFeatures { get; } = new();
@@ -69,19 +84,84 @@ public class FeaturesViewModel : ViewModelBase
     private string _funDesc = "";
     public string FunDesc { get => _funDesc; set => SetProperty(ref _funDesc, value); }
 
-    public ICommand ToggleFeatureCommand { get; }
+    // Activation
+    private bool _isActivated;
+    public bool IsActivated { get => _isActivated; set => SetProperty(ref _isActivated, value); }
+    private string _activationTier = "Free";
+    public string ActivationTier { get => _activationTier; set => SetProperty(ref _activationTier, value); }
+    private string _activationKeyInput = "";
+    public string ActivationKeyInput { get => _activationKeyInput; set => SetProperty(ref _activationKeyInput, value); }
+    private string _activationMessage = "";
+    public string ActivationMessage { get => _activationMessage; set => SetProperty(ref _activationMessage, value); }
+    private bool _activationSuccess;
+    public bool ActivationSuccess { get => _activationSuccess; set => SetProperty(ref _activationSuccess, value); }
 
-    public FeaturesViewModel(SettingsService settingsService, LocalizationService loc)
+    public ICommand ToggleFeatureCommand { get; }
+    public ICommand ActivateCommand { get; }
+    public ICommand DeactivateCommand { get; }
+
+    public FeaturesViewModel(SettingsService settingsService, LocalizationService loc, ActivationService activation)
     {
         _settingsService = settingsService;
         _loc = loc;
+        _activation = activation;
 
         ToggleFeatureCommand = new RelayCommand<FeatureItem>(ToggleFeature);
+        ActivateCommand = new RelayCommand(DoActivate);
+        DeactivateCommand = new RelayCommand(DoDeactivate);
 
         _loc.LanguageChanged += RefreshLabels;
+        _activation.ActivationChanged += () =>
+        {
+            RefreshActivationState();
+            RefreshLockStates();
+        };
 
         BuildFeatureList();
         RefreshLabels();
+        RefreshActivationState();
+    }
+
+    private void RefreshActivationState()
+    {
+        IsActivated = _activation.IsActivated;
+        ActivationTier = _activation.TierDisplayName;
+    }
+
+    private void DoActivate()
+    {
+        var (success, message) = _activation.Activate(ActivationKeyInput);
+        ActivationMessage = message;
+        ActivationSuccess = success;
+        if (success) ActivationKeyInput = "";
+    }
+
+    private void DoDeactivate()
+    {
+        _activation.Deactivate();
+        ActivationMessage = _loc.CurrentLanguage == "th"
+            ? "ปิดการใช้งานแล้ว กลับสู่โหมดฟรี"
+            : "Deactivated. Returned to Free tier.";
+        ActivationSuccess = false;
+    }
+
+    private void RefreshLockStates()
+    {
+        RefreshCollectionLocks(CoreFeatures);
+        RefreshCollectionLocks(AdvancedFeatures);
+        RefreshCollectionLocks(ToolFeatures);
+        RefreshCollectionLocks(SecurityFeatures);
+        RefreshCollectionLocks(FunFeatures);
+    }
+
+    private void RefreshCollectionLocks(ObservableCollection<FeatureItem> items)
+    {
+        foreach (var item in items)
+        {
+            bool unlocked = _activation.IsFeatureUnlocked(item.Key);
+            item.IsLocked = !unlocked;
+            item.IsUnlocked = unlocked;
+        }
     }
 
     private void BuildFeatureList()
@@ -267,7 +347,13 @@ public class FeaturesViewModel : ViewModelBase
             item.Name = _loc.T(item.Key);
             item.Description = _loc.T(item.Key + ".desc");
 
-            if (item.RequiresApiKey)
+            bool unlocked = _activation.IsFeatureUnlocked(item.Key);
+            item.IsLocked = !unlocked;
+            item.IsUnlocked = unlocked;
+
+            if (!unlocked)
+                item.StatusLabel = "\U0001F512 " + _loc.T("features.requiresKey");
+            else if (item.RequiresApiKey)
                 item.StatusLabel = _loc.T("features.requiresKey");
             else if (!item.IsToggleable)
                 item.StatusLabel = _loc.T("features.free");
