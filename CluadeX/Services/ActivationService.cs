@@ -7,7 +7,7 @@ namespace CluadeX.Services;
 /// <summary>
 /// Activation key system for gating advanced/premium features.
 /// Users enter a key to unlock advanced capabilities.
-/// Key "111" is the test/dev key for development purposes.
+/// Keys are validated via xman4289.com license API or local hash check.
 /// </summary>
 public class ActivationService
 {
@@ -28,13 +28,14 @@ public class ActivationService
     public event Action? ActivationChanged;
 
     // ─── Key Validation Rules ────────────────────────────────
-    // Format: CLUADEX-XXXX-XXXX-XXXX or test keys
-    // Keys are validated against a hash to prevent simple string comparison bypass.
+    // Format: CLUADEX-XXXX-XXXX-XXXX
+    // Keys are validated via xman4289.com API or local format check.
+    // No hardcoded dev/test keys in production.
 
     private static readonly Dictionary<string, string> ValidKeyHashes = new()
     {
-        // Test/Dev key: "111" → SHA1 = 6216f8a75fd5bb3d5f22b6f9958cdede3fc086c2
-        ["6216f8a75fd5bb3d5f22b6f9958cdede3fc086c2"] = "dev",
+        // Production keys are validated via xman4289.com API
+        // No local test keys — all keys go through the license server
     };
 
     // Known valid key prefixes for format validation

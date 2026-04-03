@@ -10,6 +10,7 @@ public class MainViewModel : ViewModelBase
     private readonly AiProviderManager _providerManager;
     private readonly BuddyService _buddyService;
     private readonly LocalizationService _loc;
+    private readonly AutoUpdateService _autoUpdate;
 
     private ViewModelBase? _currentView;
     private string _selectedNavItem = "Chat";
@@ -51,6 +52,20 @@ public class MainViewModel : ViewModelBase
     public BuddyService BuddyService => _buddyService;
     public bool IsBuddyEnabled => _settingsService.Settings.Features.BuddyCompanion;
 
+    // ─── Auto-Update ───
+    private bool _showUpdateBar;
+    private string _updateMessage = "";
+    private double _updateProgress;
+    private string _updateProgressText = "";
+    private bool _isUpdating;
+    private UpdateInfo? _pendingUpdate;
+    public bool ShowUpdateBar { get => _showUpdateBar; set => SetProperty(ref _showUpdateBar, value); }
+    public string UpdateMessage { get => _updateMessage; set => SetProperty(ref _updateMessage, value); }
+    public double UpdateProgress { get => _updateProgress; set => SetProperty(ref _updateProgress, value); }
+    public string UpdateProgressText { get => _updateProgressText; set => SetProperty(ref _updateProgressText, value); }
+    public bool IsUpdating { get => _isUpdating; set => SetProperty(ref _isUpdating, value); }
+    public string AppVersion => $"v{AutoUpdateService.CurrentVersion}";
+
     public ChatViewModel ChatVM { get; }
     public ModelManagerViewModel ModelManagerVM { get; }
     public SettingsViewModel SettingsVM { get; }
@@ -61,6 +76,9 @@ public class MainViewModel : ViewModelBase
 
     public ICommand NavigateToCommand { get; }
     public ICommand PetBuddyCommand { get; }
+    public ICommand InstallUpdateCommand { get; }
+    public ICommand DismissUpdateCommand { get; }
+    public ICommand CheckUpdateCommand { get; }
 
     public MainViewModel(
         ChatViewModel chatVM,
@@ -74,8 +92,10 @@ public class MainViewModel : ViewModelBase
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
         BuddyService buddyService,
-        LocalizationService loc)
+        LocalizationService loc,
+        AutoUpdateService autoUpdate)
     {
+        _autoUpdate = autoUpdate;
         ChatVM = chatVM;
         ModelManagerVM = modelManagerVM;
         SettingsVM = settingsVM;
@@ -93,6 +113,24 @@ public class MainViewModel : ViewModelBase
 
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
         PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
+        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
+        DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
+        CheckUpdateCommand = new AsyncRelayCommand(CheckForUpdate);
+
+        // Wire up auto-update events
+        _autoUpdate.OnDownloadProgress += (percent, status) =>
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                UpdateProgress = percent;
+                UpdateProgressText = status;
+            });
+
+        // Check for updates on startup (delayed 5 seconds)
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(5000);
+            await CheckForUpdate();
+        });
 
         _providerManager.OnStatusChanged += status =>
             App.Current?.Dispatcher.Invoke(() => ModelStatus = status);
@@ -171,5 +209,52 @@ public class MainViewModel : ViewModelBase
         // Sync model list/selection when navigating to Chat (picks up changes from Models tab)
         if (target == "Chat")
             ChatVM.SyncModelSelectionFromSettings();
+    }
+
+    // ─── Auto-Update ───
+
+    private async Task CheckForUpdate()
+    {
+        try
+        {
+            var info = await _autoUpdate.CheckForUpdateAsync();
+            if (info != null)
+            {
+                _pendingUpdate = info;
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}";
+                    ShowUpdateBar = true;
+                    IsUpdating = false;
+                });
+            }
+        }
+        catch { /* silently fail */ }
+    }
+
+    private async Task InstallUpdate()
+    {
+        if (_pendingUpdate == null || IsUpdating) return;
+
+        IsUpdating = true;
+        UpdateMessage = "Downloading update...";
+        UpdateProgress = 0;
+
+        string? zipPath = await _autoUpdate.DownloadUpdateAsync(_pendingUpdate);
+        if (zipPath != null)
+        {
+            UpdateMessage = "Installing update... App will restart.";
+            UpdateProgress = 100;
+
+            // Small delay to show the message
+            await Task.Delay(1000);
+
+            _autoUpdate.InstallAndRestart(zipPath);
+        }
+        else
+        {
+            UpdateMessage = "Download failed. Try again later.";
+            IsUpdating = false;
+        }
     }
 }

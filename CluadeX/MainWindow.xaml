@@ -573,8 +573,74 @@
                     </Grid>
                 </Border>
 
-                <!-- MAIN CONTENT -->
-                <ContentControl Grid.Column="1" Content="{Binding CurrentView}"/>
+                <!-- UPDATE NOTIFICATION BAR -->
+                <Grid Grid.Column="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Update bar (slides in when update available) -->
+                    <Border Grid.Row="0" Padding="12,8"
+                            Visibility="{Binding ShowUpdateBar, Converter={StaticResource BoolVis}}">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                <GradientStop Color="#1A6366F1" Offset="0"/>
+                                <GradientStop Color="#1A06B6D4" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Update icon -->
+                            <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets" FontSize="16"
+                                       Foreground="{StaticResource BlueBrush}" VerticalAlignment="Center"
+                                       Margin="0,0,10,0"/>
+
+                            <!-- Message + progress -->
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding UpdateMessage}"
+                                           Foreground="{StaticResource TextBrush}" FontSize="12"/>
+                                <ProgressBar Value="{Binding UpdateProgress}" Maximum="100"
+                                             Height="4" Margin="0,4,0,0"
+                                             Style="{StaticResource ContextProgressBar}"
+                                             Foreground="{StaticResource BlueBrush}"
+                                             Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
+                                <TextBlock Text="{Binding UpdateProgressText}"
+                                           Foreground="{StaticResource Overlay0Brush}" FontSize="10"
+                                           Margin="0,2,0,0"
+                                           Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
+                            </StackPanel>
+
+                            <!-- Install button -->
+                            <Button Grid.Column="2" Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding InstallUpdateCommand}"
+                                    Padding="14,5" Margin="8,0" FontSize="11">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                               VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Install &amp; Restart" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+
+                            <!-- Dismiss -->
+                            <Button Grid.Column="3" Style="{StaticResource IconButton}"
+                                    Command="{Binding DismissUpdateCommand}"
+                                    ToolTip="Dismiss" Padding="4">
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                           Foreground="{StaticResource Overlay0Brush}"/>
+                            </Button>
+                        </Grid>
+                    </Border>
+
+                    <!-- MAIN CONTENT -->
+                    <ContentControl Grid.Row="1" Content="{Binding CurrentView}"/>
+                </Grid>
             </Grid>
             <!-- ═══════ MODEL LOADING OVERLAY ═══════ -->
             <Border Grid.Row="0" Grid.RowSpan="2" Panel.ZIndex="999"

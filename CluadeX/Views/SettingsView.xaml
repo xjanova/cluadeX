@@ -398,6 +398,14 @@
                         Command="{Binding SaveCommand}" Margin="0,0,12,0"/>
                 <Button Content="Reset to Defaults" Style="{StaticResource SecondaryButton}"
                         Command="{Binding ResetDefaultsCommand}" Margin="0,0,12,0"/>
+                <Button Style="{StaticResource SecondaryButton}" Margin="0,0,12,0"
+                        Command="{Binding DataContext.CheckUpdateCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Check for Updates" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
                 <!-- Save feedback next to buttons -->
                 <TextBlock Text="{Binding SaveStatus}" Foreground="{StaticResource GreenBrush}"
                            FontSize="14" FontWeight="Bold" VerticalAlignment="Center"/>
