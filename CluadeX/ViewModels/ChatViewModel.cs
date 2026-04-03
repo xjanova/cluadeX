@@ -402,8 +402,20 @@ public class ChatViewModel : ViewModelBase
         // Save current first
         AutoSave();
 
+        // Try loading from database
         var session = _persistenceService.LoadSession(sessionId);
-        if (session == null) return;
+
+        // Fallback: check in-memory Sessions collection (for sessions not yet persisted)
+        if (session == null)
+        {
+            session = Sessions.FirstOrDefault(s => s.Id == sessionId);
+        }
+
+        if (session == null)
+        {
+            StatusText = "Session not found";
+            return;
+        }
 
         CurrentSession = session;
         Messages.Clear();
@@ -412,6 +424,7 @@ public class ChatViewModel : ViewModelBase
 
         StatusText = $"Loaded: {session.Title}";
         _isDirty = false;
+        UpdateContextInfo();
         ScrollToBottom?.Invoke();
     }
 
@@ -613,6 +626,10 @@ public class ChatViewModel : ViewModelBase
         CurrentSession = session;
         Messages.Clear();
         _isDirty = false;
+
+        // Persist immediately so LoadSession can find it
+        try { _persistenceService.SaveSession(session); }
+        catch { /* ignore if save fails */ }
     }
 
     // ─── Send Message ───
