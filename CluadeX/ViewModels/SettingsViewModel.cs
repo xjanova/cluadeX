@@ -12,6 +12,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly SettingsService _settingsService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;
+    private readonly LocalizationService _localizationService;
 
     private string _modelDirectory = string.Empty;
     private string _cacheDirectory = string.Empty;
@@ -35,6 +36,7 @@ public class SettingsViewModel : ViewModelBase
     private string _gpuBackend = "Auto";
     private int _batchSize = 512;
     private int _threadCount = 0;
+    private string _uiLanguage = "English";
 
     // AI Provider fields
     private AiProviderType _selectedProvider;
@@ -68,6 +70,23 @@ public class SettingsViewModel : ViewModelBase
     public string GpuBackend { get => _gpuBackend; set => SetProperty(ref _gpuBackend, value); }
     public int BatchSize { get => _batchSize; set => SetProperty(ref _batchSize, value); }
     public int ThreadCount { get => _threadCount; set => SetProperty(ref _threadCount, value); }
+
+    /// <summary>UI language: "English" or "ไทย". Changes LocalizationService and saves to settings.</summary>
+    public string UiLanguage
+    {
+        get => _uiLanguage;
+        set
+        {
+            if (SetProperty(ref _uiLanguage, value))
+            {
+                string lang = value == "ไทย" ? "th" : "en";
+                _localizationService.SetLanguage(lang);
+                _settingsService.UpdateSettings(s => s.Language = lang);
+            }
+        }
+    }
+
+    public List<string> UiLanguageOptions { get; } = new() { "English", "ไทย" };
 
     // AI Provider properties
     public AiProviderType SelectedProvider
@@ -160,11 +179,13 @@ public class SettingsViewModel : ViewModelBase
     public SettingsViewModel(
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
-        AiProviderManager providerManager)
+        AiProviderManager providerManager,
+        LocalizationService localizationService)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
+        _localizationService = localizationService;
 
         BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder("Model Directory", ModelDirectory); if (p != null) ModelDirectory = p; });
         BrowseCacheDirCommand = new RelayCommand(() => { var p = BrowseFolder("Cache Directory", CacheDirectory); if (p != null) CacheDirectory = p; });
@@ -396,6 +417,8 @@ public class SettingsViewModel : ViewModelBase
         AutoExecuteCode = s.AutoExecuteCode;
         MaxAutoFixAttempts = s.MaxAutoFixAttempts;
         PreferredLanguage = s.PreferredLanguage;
+        _uiLanguage = s.Language == "th" ? "ไทย" : "English"; // don't trigger setter during load
+        OnPropertyChanged(nameof(UiLanguage));
         FontSize = s.FontSize;
         StreamOutput = s.StreamOutput;
         HuggingFaceToken = s.HuggingFaceToken ?? "";

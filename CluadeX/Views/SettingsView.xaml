@@ -365,6 +365,18 @@
                                   Width="150"/>
                     </StackPanel>
 
+                    <!-- UI Language / ภาษา -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                        <TextBlock Text="🌐 Language / ภาษา:" Foreground="{StaticResource TextBrush}"
+                                   FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <ComboBox ItemsSource="{Binding UiLanguageOptions}"
+                                  SelectedItem="{Binding UiLanguage}"
+                                  Style="{StaticResource ModernComboBox}"
+                                  Width="150"/>
+                        <TextBlock Text="(เปลี่ยนภาษาทั้งโปรแกรม)" Foreground="{StaticResource Overlay0Brush}"
+                                   FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </StackPanel>
+
                     <CheckBox Content="Stream Output (show tokens as they generate)" IsChecked="{Binding StreamOutput}"/>
                 </StackPanel>
             </Border>
