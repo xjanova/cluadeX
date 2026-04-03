@@ -36,7 +36,7 @@ jobs:
         run: dotnet build CluadeX.sln -c Release --no-restore --nologo
 
       - name: Publish
-        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo
+        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo -p:ErrorOnDuplicatePublishOutputFiles=false
 
       - name: Create zip
         shell: pwsh
