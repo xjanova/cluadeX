@@ -203,6 +203,14 @@ public class ChatViewModel : ViewModelBase
         _autoSaveTimer.Tick += (_, _) => AutoSave();
         _autoSaveTimer.Start();
 
+        // Reusable debounce timer for history search
+        _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _searchDebounceTimer.Tick += (_, _) =>
+        {
+            _searchDebounceTimer.Stop();
+            ExecuteHistorySearch(_pendingSearchQuery);
+        };
+
         // Listen for model status changes
         _llamaService.OnStatusChanged += status =>
             App.Current?.Dispatcher.Invoke(() => LoadedModelName = status);
@@ -368,6 +376,14 @@ public class ChatViewModel : ViewModelBase
     {
         if (string.IsNullOrEmpty(sessionId)) return;
 
+        // Confirmation dialog for destructive operation
+        var result = System.Windows.MessageBox.Show(
+            "Are you sure you want to delete this session? This cannot be undone.",
+            "Delete Session",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning);
+        if (result != System.Windows.MessageBoxResult.Yes) return;
+
         _persistenceService.DeleteSession(sessionId);
 
         // Remove from list
@@ -479,9 +495,10 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
-    private async Task CloneRepo()
+    private Task CloneRepo()
     {
         StatusText = "Type the GitHub URL in chat: e.g. 'clone https://github.com/owner/repo'";
+        return Task.CompletedTask;
     }
 
     private void CloseFolder()
@@ -557,11 +574,12 @@ public class ChatViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            StatusText = $"Error: {ex.Message}";
+            string safeMsg = SanitizeErrorMessage(ex.Message);
+            StatusText = $"Error: {safeMsg}";
             var errorMsg = new ChatMessage
             {
                 Role = MessageRole.Assistant,
-                Content = $"**Error:** {ex.Message}",
+                Content = $"**Error:** {safeMsg}",
                 HasError = true,
             };
             Messages.Add(errorMsg);
@@ -764,7 +782,11 @@ public class ChatViewModel : ViewModelBase
         return sb.ToString();
     }
 
-    private void StopGeneration() => _cts?.Cancel();
+    private void StopGeneration()
+    {
+        try { _cts?.Cancel(); }
+        catch (ObjectDisposedException) { /* CTS already disposed */ }
+    }
 
     private async Task ExecuteCodeBlock(CodeBlock? block)
     {
@@ -876,12 +898,13 @@ public class ChatViewModel : ViewModelBase
 
     // ─── History Search ───
 
-    private DispatcherTimer? _searchDebounceTimer;
+    private readonly DispatcherTimer _searchDebounceTimer;
+    private string _pendingSearchQuery = "";
 
     private void PerformHistorySearch(string query)
     {
         // Debounce: wait 300ms after last keystroke
-        _searchDebounceTimer?.Stop();
+        _searchDebounceTimer.Stop();
 
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -890,12 +913,7 @@ public class ChatViewModel : ViewModelBase
             return;
         }
 
-        _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-        _searchDebounceTimer.Tick += (_, _) =>
-        {
-            _searchDebounceTimer.Stop();
-            ExecuteHistorySearch(query);
-        };
+        _pendingSearchQuery = query;
         _searchDebounceTimer.Start();
     }
 
@@ -943,5 +961,23 @@ public class ChatViewModel : ViewModelBase
         CurrentSession?.Messages.Clear();
         _isDirty = true;
         StatusText = "Chat cleared.";
+    }
+
+    /// <summary>Strip raw exception prefixes and sensitive info from error messages.</summary>
+    private string SanitizeErrorMessage(string message)
+    {
+        // Remove common .NET exception prefixes
+        message = System.Text.RegularExpressions.Regex.Replace(
+            message, @"^(System\.\w+Exception|Exception):\s*", "");
+        // Redact any API keys that might appear in error messages
+        foreach (var kvp in _settingsService.Settings.ProviderConfigs)
+        {
+            if (!string.IsNullOrEmpty(kvp.Value.ApiKey) && message.Contains(kvp.Value.ApiKey))
+                message = message.Replace(kvp.Value.ApiKey, "[REDACTED]");
+        }
+        if (!string.IsNullOrEmpty(_settingsService.Settings.HuggingFaceToken)
+            && message.Contains(_settingsService.Settings.HuggingFaceToken))
+            message = message.Replace(_settingsService.Settings.HuggingFaceToken, "[REDACTED]");
+        return message;
     }
 }

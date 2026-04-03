@@ -66,15 +66,26 @@ public class GitService
     /// <summary>git add files. Pass "." for all, or specific paths.</summary>
     public async Task<GitResult> AddAsync(string paths = ".")
     {
-        return await RunGitAsync($"add {paths}");
+        // Sanitize: only allow safe path characters
+        if (!IsValidGitArg(paths))
+            return new GitResult { Success = false, Error = "Invalid path characters." };
+        return await RunGitAsync($"add -- {paths}");
     }
 
     /// <summary>git commit with message.</summary>
     public async Task<GitResult> CommitAsync(string message)
     {
-        // Escape double quotes in message
-        string escaped = message.Replace("\"", "\\\"");
-        return await RunGitAsync($"commit -m \"{escaped}\"");
+        // Write message to temp file to avoid shell injection
+        string tmpFile = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(tmpFile, message);
+            return await RunGitAsync($"commit -F \"{tmpFile}\"");
+        }
+        finally
+        {
+            try { File.Delete(tmpFile); } catch { }
+        }
     }
 
     /// <summary>git push (with optional remote and branch)</summary>
@@ -128,27 +139,47 @@ public class GitService
     /// <summary>Create and switch to a new branch.</summary>
     public async Task<GitResult> CreateBranchAsync(string branchName)
     {
+        if (!IsValidBranchName(branchName))
+            return new GitResult { Success = false, Error = "Invalid branch name. Use alphanumeric, hyphens, underscores, slashes only." };
         return await RunGitAsync($"checkout -b {branchName}");
     }
 
     /// <summary>Switch to existing branch.</summary>
     public async Task<GitResult> CheckoutAsync(string branchName)
     {
+        if (!IsValidBranchName(branchName))
+            return new GitResult { Success = false, Error = "Invalid branch name." };
         return await RunGitAsync($"checkout {branchName}");
     }
 
     /// <summary>Merge a branch into current branch.</summary>
     public async Task<GitResult> MergeAsync(string branchName)
     {
+        if (!IsValidBranchName(branchName))
+            return new GitResult { Success = false, Error = "Invalid branch name." };
         return await RunGitAsync($"merge {branchName}");
     }
 
     /// <summary>Delete a local branch.</summary>
     public async Task<GitResult> DeleteBranchAsync(string branchName, bool force = false)
     {
+        if (!IsValidBranchName(branchName))
+            return new GitResult { Success = false, Error = "Invalid branch name." };
         string flag = force ? "-D" : "-d";
         return await RunGitAsync($"branch {flag} {branchName}");
     }
+
+    // ─── Input Validation ───
+    private static readonly System.Text.RegularExpressions.Regex BranchNameRegex = new(
+        @"^[a-zA-Z0-9_\-/.]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool IsValidBranchName(string name)
+        => !string.IsNullOrWhiteSpace(name) && name.Length < 256
+           && BranchNameRegex.IsMatch(name) && !name.Contains("..");
+
+    private static bool IsValidGitArg(string arg)
+        => !string.IsNullOrWhiteSpace(arg) && !arg.Contains(';') && !arg.Contains('|')
+           && !arg.Contains('&') && !arg.Contains('`') && !arg.Contains('$');
 
     // ═══════════════════════════════════════════
     // Diff & Log
@@ -217,8 +248,10 @@ public class GitService
 
     public async Task<GitResult> StashAsync(string message = "")
     {
-        string args = string.IsNullOrEmpty(message) ? "stash" : $"stash push -m \"{message}\"";
-        return await RunGitAsync(args);
+        if (string.IsNullOrEmpty(message)) return await RunGitAsync("stash");
+        // Sanitize message: strip shell-dangerous chars
+        string safe = message.Replace("\"", "'").Replace("`", "").Replace("$", "").Replace(";", "").Replace("&", "").Replace("|", "");
+        return await RunGitAsync($"stash push -m \"{safe}\"");
     }
 
     public async Task<GitResult> StashPopAsync()
@@ -280,9 +313,12 @@ public class GitService
 
     public async Task<GitResult> CreateTagAsync(string name, string message = "")
     {
+        if (!IsValidBranchName(name))
+            return new GitResult { Success = false, Error = "Invalid tag name." };
         if (string.IsNullOrEmpty(message))
             return await RunGitAsync($"tag {name}");
-        return await RunGitAsync($"tag -a {name} -m \"{message}\"");
+        string safe = message.Replace("\"", "'").Replace("`", "").Replace("$", "").Replace(";", "").Replace("&", "").Replace("|", "");
+        return await RunGitAsync($"tag -a {name} -m \"{safe}\"");
     }
 
     // ═══════════════════════════════════════════

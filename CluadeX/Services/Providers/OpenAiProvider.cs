@@ -100,6 +100,8 @@ public class OpenAiProvider : ApiProviderBase
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
+            if (!string.IsNullOrEmpty(config.ApiKey))
+                error = error.Replace(config.ApiKey, "[REDACTED]");
             RaiseError($"OpenAI API error {response.StatusCode}: {error}");
             yield break;
         }
@@ -165,11 +167,16 @@ public class OpenAiProvider : ApiProviderBase
                 return (true, $"Connected to OpenAI ({config.EffectiveModelId ?? "gpt-4o"})");
 
             var error = await response.Content.ReadAsStringAsync(ct);
+            if (!string.IsNullOrEmpty(config.ApiKey))
+                error = error.Replace(config.ApiKey, "[REDACTED]");
             return (false, $"HTTP {(int)response.StatusCode}: {error}");
         }
         catch (Exception ex)
         {
-            return (false, $"Connection failed: {ex.Message}");
+            var msg = ex.Message;
+            if (!string.IsNullOrEmpty(config.ApiKey))
+                msg = msg.Replace(config.ApiKey, "[REDACTED]");
+            return (false, $"Connection failed: {msg}");
         }
     }
 }

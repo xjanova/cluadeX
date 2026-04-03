@@ -80,9 +80,10 @@ public class GitHubService
     /// <summary>Create a Pull Request using gh CLI.</summary>
     public async Task<GitResult> CreatePullRequestAsync(string title, string body, string baseBranch = "main")
     {
-        string escapedTitle = title.Replace("\"", "\\\"");
-        string escapedBody = body.Replace("\"", "\\\"");
-        return await RunGhAsync($"pr create --title \"{escapedTitle}\" --body \"{escapedBody}\" --base {baseBranch}");
+        string safeTitle = SanitizeShellArg(title);
+        string safeBody = SanitizeShellArg(body);
+        string safeBranch = SanitizeShellArg(baseBranch);
+        return await RunGhAsync($"pr create --title \"{safeTitle}\" --body \"{safeBody}\" --base {safeBranch}");
     }
 
     /// <summary>List Pull Requests.</summary>
@@ -106,9 +107,9 @@ public class GitHubService
     /// <summary>Create an Issue.</summary>
     public async Task<GitResult> CreateIssueAsync(string title, string body)
     {
-        string escapedTitle = title.Replace("\"", "\\\"");
-        string escapedBody = body.Replace("\"", "\\\"");
-        return await RunGhAsync($"issue create --title \"{escapedTitle}\" --body \"{escapedBody}\"");
+        string safeTitle = SanitizeShellArg(title);
+        string safeBody = SanitizeShellArg(body);
+        return await RunGhAsync($"issue create --title \"{safeTitle}\" --body \"{safeBody}\"");
     }
 
     /// <summary>View repo info.</summary>
@@ -189,6 +190,12 @@ public class GitHubService
 
         return input;
     }
+
+    /// <summary>Strip shell-dangerous characters from arguments.</summary>
+    private static string SanitizeShellArg(string input)
+        => input.Replace("\"", "'").Replace("`", "").Replace("$", "")
+                .Replace(";", "").Replace("&", "").Replace("|", "")
+                .Replace("%", "").Replace("^", "").Replace("!", "");
 
     private static string ExtractRepoName(string repoUrl)
     {

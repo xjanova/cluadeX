@@ -164,9 +164,10 @@ public class TaskManagerService
 
     private void AppendOutput(TaskInfo task, string text)
     {
-        lock (_lock)
+        // Marshal to UI thread to avoid cross-thread PropertyChanged issues
+        Application.Current?.Dispatcher.Invoke(() =>
         {
             task.Output += text;
-        }
+        });
     }
 }

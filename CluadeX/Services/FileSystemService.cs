@@ -271,21 +271,16 @@ public class FileSystemService
         // Normalize path
         string normalized = relativePath.Replace('/', Path.DirectorySeparatorChar);
 
-        // If it's an absolute path, ensure it's under working directory
-        string fullPath;
+        // Reject absolute paths entirely — only relative paths allowed
         if (Path.IsPathRooted(normalized))
-        {
-            fullPath = Path.GetFullPath(normalized);
-        }
-        else
-        {
-            fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, normalized));
-        }
+            throw new UnauthorizedAccessException("Absolute paths are not allowed. Use relative paths from the project root.");
 
-        // Security: ensure path stays within working directory
+        string fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, normalized));
+
+        // Security: ensure path stays within working directory (handles .. traversal)
         string workDirFull = Path.GetFullPath(_workingDirectory);
         if (!fullPath.StartsWith(workDirFull, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException($"Access denied. Path must be within the working directory: {workDirFull}");
+            throw new UnauthorizedAccessException("Access denied. Path must be within the working directory.");
 
         return fullPath;
     }

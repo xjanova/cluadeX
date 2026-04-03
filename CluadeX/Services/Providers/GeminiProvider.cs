@@ -174,8 +174,9 @@ public class GeminiProvider : ApiProviderBase
         var requestObj = BuildGeminiRequest(history, userMessage, systemPrompt);
         var body = JsonSerializer.Serialize(requestObj);
 
-        string url = $"{baseUrl}/v1beta/models/{model}:streamGenerateContent?alt=sse&key={config.ApiKey}";
+        string url = $"{baseUrl}/v1beta/models/{model}:streamGenerateContent?alt=sse";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Add("x-goog-api-key", config.ApiKey);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -250,8 +251,10 @@ public class GeminiProvider : ApiProviderBase
             string baseUrl = config.BaseUrl?.TrimEnd('/') ?? "https://generativelanguage.googleapis.com";
 
             // List models to validate the key
-            string url = $"{baseUrl}/v1beta/models?key={config.ApiKey}";
-            using var response = await _httpClient.GetAsync(url, ct);
+            string url = $"{baseUrl}/v1beta/models";
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("x-goog-api-key", config.ApiKey);
+            using var response = await _httpClient.SendAsync(request, ct);
 
             if (response.IsSuccessStatusCode)
                 return (true, $"Connected to Gemini ({config.EffectiveModelId ?? "gemini-2.0-flash"})");

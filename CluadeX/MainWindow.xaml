@@ -5,6 +5,7 @@
         xmlns:vm="clr-namespace:CluadeX.ViewModels"
         xmlns:conv="clr-namespace:CluadeX.Converters"
         Title="CluadeX - AI Coding Assistant"
+        Icon="Assets/app.ico"
         Height="800" Width="1280"
         MinHeight="600" MinWidth="900"
         WindowStartupLocation="CenterScreen"
@@ -19,7 +20,7 @@
     </WindowChrome.WindowChrome>
 
     <Window.Resources>
-        <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
+        <!-- BoolVis is defined globally in App.xaml -->
 
         <!-- View templates -->
         <DataTemplate DataType="{x:Type vm:ChatViewModel}">
@@ -56,13 +57,15 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
-                    <TextBlock Text="&#x2728;" FontSize="15" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                    <Image Source="Assets/logo.png" Width="24" Height="24"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           Margin="0,0,8,0" VerticalAlignment="Center"/>
                     <TextBlock Text="CluadeX" FontSize="13" FontWeight="Bold"
                                Foreground="{StaticResource TextBrush}"
                                FontFamily="{StaticResource MainFont}"
                                VerticalAlignment="Center"/>
-                    <TextBlock Text=" &#x2014; AI Coding Assistant" FontSize="11"
+                    <TextBlock Text=" — AI Coding Assistant" FontSize="11"
                                Foreground="{StaticResource Overlay0Brush}"
                                FontFamily="{StaticResource MainFont}"
                                VerticalAlignment="Center" Margin="2,1,0,0"/>
@@ -100,17 +103,36 @@
                         </Grid.RowDefinitions>
 
                         <!-- Row 0: Logo -->
-                        <Border Padding="16,16,16,12">
+                        <Border Padding="16,14,16,10">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#x2728;" FontSize="22" Margin="0,0,10,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock Text="CluadeX" FontSize="20" FontWeight="Bold"
-                                               Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}"/>
-                                    <TextBlock Text="by Xman Studio" FontSize="10"
+                                <!-- Logo with glow effect -->
+                                <Border Width="42" Height="42" CornerRadius="21" Margin="0,0,12,0"
+                                        VerticalAlignment="Center">
+                                    <Border.Background>
+                                        <RadialGradientBrush>
+                                            <GradientStop Color="#201E90FF" Offset="0"/>
+                                            <GradientStop Color="#001E90FF" Offset="1"/>
+                                        </RadialGradientBrush>
+                                    </Border.Background>
+                                    <Image Source="Assets/logo.png" Width="38" Height="38"
+                                           RenderOptions.BitmapScalingMode="HighQuality"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock FontSize="19" FontWeight="Bold"
+                                               FontFamily="{StaticResource MainFont}">
+                                        <TextBlock.Foreground>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                <GradientStop Color="#CDD6F4" Offset="0"/>
+                                                <GradientStop Color="#89B4FA" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </TextBlock.Foreground>
+                                        CluadeX
+                                    </TextBlock>
+                                    <TextBlock Text="by Xman Studio" FontSize="9.5"
                                                Foreground="{StaticResource Overlay0Brush}"
                                                FontFamily="{StaticResource MainFont}"
-                                               Margin="0,-2,0,0"/>
+                                               Margin="1,-2,0,0" Opacity="0.8"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -306,6 +328,29 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
+                                <!-- Empty state for sessions -->
+                                <TextBlock Text="No conversations yet.&#x0a;Click 'New Chat' to start!"
+                                           Foreground="{StaticResource Overlay0Brush}"
+                                           FontFamily="{StaticResource MainFont}"
+                                           FontSize="11" TextWrapping="Wrap"
+                                           HorizontalAlignment="Center"
+                                           Margin="20,30" Opacity="0.7"
+                                           TextAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ChatVM.Sessions.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+
                                 <!-- Search results (shown during search) -->
                                 <ItemsControl ItemsSource="{Binding ChatVM.SearchResults}">
                                     <ItemsControl.Style>
@@ -359,6 +404,28 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+
+                                <!-- Empty state for search results -->
+                                <TextBlock Text="No results found."
+                                           Foreground="{StaticResource Overlay0Brush}"
+                                           FontFamily="{StaticResource MainFont}"
+                                           FontSize="11" HorizontalAlignment="Center"
+                                           Margin="20,20" Opacity="0.7">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding ChatVM.IsSearchingHistory}" Value="True"/>
+                                                        <Condition Binding="{Binding ChatVM.SearchResults.Count}" Value="0"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                             </Grid>
                         </ScrollViewer>
 

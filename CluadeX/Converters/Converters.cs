@@ -32,16 +32,25 @@ public class BoolToVisibilityConverter : IValueConverter
 
 public class RoleToBrushConverter : IValueConverter
 {
+    // Cached frozen brushes to avoid GC pressure
+    private static readonly SolidColorBrush UserBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)));
+    private static readonly SolidColorBrush AssistantBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)));
+    private static readonly SolidColorBrush ExecBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)));
+    private static readonly SolidColorBrush ToolBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x94, 0xE2, 0xD5)));
+    private static readonly SolidColorBrush SystemBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xCB, 0xA6, 0xF7)));
+    private static readonly SolidColorBrush DefaultBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)));
+    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value switch
         {
-            MessageRole.User => new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)),      // Blue
-            MessageRole.Assistant => new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)),  // Green
-            MessageRole.CodeExecution => new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)), // Yellow
-            MessageRole.ToolAction => new SolidColorBrush(Color.FromRgb(0x94, 0xE2, 0xD5)), // Teal
-            MessageRole.System => new SolidColorBrush(Color.FromRgb(0xCB, 0xA6, 0xF7)),     // Mauve
-            _ => new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)),
+            MessageRole.User => UserBrush,
+            MessageRole.Assistant => AssistantBrush,
+            MessageRole.CodeExecution => ExecBrush,
+            MessageRole.ToolAction => ToolBrush,
+            MessageRole.System => SystemBrush,
+            _ => DefaultBrush,
         };
     }
 
@@ -51,15 +60,21 @@ public class RoleToBrushConverter : IValueConverter
 
 public class RoleToBackgroundConverter : IValueConverter
 {
+    private static readonly SolidColorBrush UserBg = Freeze(new SolidColorBrush(Color.FromRgb(0x2F, 0x3D, 0x5C)));
+    private static readonly SolidColorBrush AssistantBg = Freeze(new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44)));
+    private static readonly SolidColorBrush ExecBg = Freeze(new SolidColorBrush(Color.FromRgb(0x3A, 0x35, 0x30)));
+    private static readonly SolidColorBrush ToolBg = Freeze(new SolidColorBrush(Color.FromRgb(0x2D, 0x3A, 0x3E)));
+    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value switch
         {
-            MessageRole.User => new SolidColorBrush(Color.FromRgb(0x2F, 0x3D, 0x5C)),          // Dark blue bubble
-            MessageRole.Assistant => new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44)),      // Surface0
-            MessageRole.CodeExecution => new SolidColorBrush(Color.FromRgb(0x3A, 0x35, 0x30)),  // Dark yellow tint
-            MessageRole.ToolAction => new SolidColorBrush(Color.FromRgb(0x2D, 0x3A, 0x3E)),     // Dark teal tint
-            _ => new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44)),
+            MessageRole.User => UserBg,
+            MessageRole.Assistant => AssistantBg,
+            MessageRole.CodeExecution => ExecBg,
+            MessageRole.ToolAction => ToolBg,
+            _ => AssistantBg,
         };
     }
 

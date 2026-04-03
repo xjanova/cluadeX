@@ -78,12 +78,11 @@ public class HuggingFaceService
             ? query : query + " gguf";
         string url = $"https://huggingface.co/api/models?search={Uri.EscapeDataString(searchTerm)}&sort=downloads&limit=20";
 
-        SetAuthHeader();
-        var response = await _httpClient.GetAsync(url, ct);
+        using var request = CreateAuthRequest(HttpMethod.Get, url);
+        var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         string json = await response.Content.ReadAsStringAsync(ct);
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 
         // Parse with flexible handling
         var results = new List<HuggingFaceModelResult>();
@@ -128,8 +127,8 @@ public class HuggingFaceService
     {
         string url = $"https://huggingface.co/api/models/{repoId}";
 
-        SetAuthHeader();
-        var response = await _httpClient.GetAsync(url, ct);
+        using var request = CreateAuthRequest(HttpMethod.Get, url);
+        var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         string json = await response.Content.ReadAsStringAsync(ct);
@@ -169,9 +168,8 @@ public class HuggingFaceService
     {
         string url = $"https://huggingface.co/{repoId}/resolve/main/{fileName}";
 
-        SetAuthHeader();
-
-        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var dlRequest = CreateAuthRequest(HttpMethod.Get, url);
+        using var response = await _httpClient.SendAsync(dlRequest, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
         long totalBytes = response.Content.Headers.ContentLength ?? 0;
@@ -190,9 +188,8 @@ public class HuggingFaceService
         if (downloadedBytes > 0 && totalBytes > 0)
         {
             // Try range request for resume
-            var rangeRequest = new HttpRequestMessage(HttpMethod.Get, url);
+            var rangeRequest = CreateAuthRequest(HttpMethod.Get, url);
             rangeRequest.Headers.Range = new RangeHeaderValue(downloadedBytes, null);
-            SetAuthHeader();
             using var rangeResponse = await _httpClient.SendAsync(rangeRequest, HttpCompletionOption.ResponseHeadersRead, ct);
 
             if (rangeResponse.StatusCode == System.Net.HttpStatusCode.PartialContent)
@@ -312,12 +309,13 @@ public class HuggingFaceService
         return "Unknown";
     }
 
-    private void SetAuthHeader()
+    /// <summary>Create a request message with auth header (per-request, not on DefaultRequestHeaders).</summary>
+    private HttpRequestMessage CreateAuthRequest(HttpMethod method, string url)
     {
+        var request = new HttpRequestMessage(method, url);
         string? token = _settingsService.Settings.HuggingFaceToken;
         if (!string.IsNullOrEmpty(token))
-        {
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return request;
     }
 }

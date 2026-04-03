@@ -16,19 +16,24 @@ public class AgentToolService
     private readonly CodeExecutionService _codeExecution;
     private readonly GitService _gitService;
     private readonly GitHubService _gitHubService;
+    private readonly PermissionService _permissionService;
 
     // Regex to match [ACTION: tool_name]...[/ACTION] blocks
     private static readonly Regex ActionRegex = new(
         @"\[ACTION:\s*(\w+)\](.*?)\[/ACTION\]",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
+    /// <summary>Raised when a tool requires user confirmation (PermAction.Ask).</summary>
+    public event Func<string, string, Task<bool>>? OnPermissionRequired;
+
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
-        GitService gitService, GitHubService gitHubService)
+        GitService gitService, GitHubService gitHubService, PermissionService permissionService)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
         _gitService = gitService;
         _gitHubService = gitHubService;
+        _permissionService = permissionService;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -75,6 +80,25 @@ public class AgentToolService
     {
         try
         {
+            // ── Permission check ──
+            string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
+            string scope = call.Type switch
+            {
+                ToolType.WriteFile or ToolType.EditFile or ToolType.CreateDirectory => "write",
+                ToolType.RunCommand => "execute",
+                ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
+                _ => "execute",
+            };
+            var perm = _permissionService.CheckPermission(resource, scope);
+            if (perm == PermAction.Deny)
+                return Fail(call, $"Permission denied for {scope}: {resource}");
+            if (perm == PermAction.Ask)
+            {
+                bool allowed = OnPermissionRequired != null
+                    && await OnPermissionRequired.Invoke(call.ToolName, $"{scope}: {resource}");
+                if (!allowed)
+                    return Fail(call, $"User denied permission for {scope}: {resource}");
+            }
             return call.Type switch
             {
                 // File tools
@@ -493,12 +517,38 @@ public class AgentToolService
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
 
-        // Security: block dangerous commands
-        string cmdLower = command.ToLowerInvariant();
-        string[] blockedPrefixes = ["rm -rf /", "format ", "del /s /q c:", "rmdir /s /q c:"];
-        foreach (var blocked in blockedPrefixes)
+        // Security: block dangerous commands with comprehensive patterns
+        string cmdLower = command.ToLowerInvariant().Trim();
+        string[] blockedPatterns = [
+            "rm -rf /", "rm -rf ~", "rm -rf .",
+            "format ", "format\t",
+            "del /s", "del /f", "del /q",
+            "rmdir /s", "rd /s",
+            "remove-item -recurse",
+            "shutdown", "restart-computer",
+            "reg delete", "reg add",
+            "net user", "net localgroup",
+            "takeown", "icacls",
+            "mkfs.", "dd if=",
+            "> /dev/", ">/dev/",
+        ];
+        // Also block shell escape patterns
+        string[] blockedContains = [
+            "| rm ", "| del ", "&& rm ", "&& del ",
+            "; rm ", "; del ", "` rm ", "` del ",
+            "invoke-webrequest", "invoke-restmethod",
+            "start-bitstransfer",
+            "certutil -urlcache",
+            "bitsadmin /transfer",
+        ];
+        foreach (var blocked in blockedPatterns)
         {
             if (cmdLower.StartsWith(blocked))
+                return Fail(call, $"Command blocked for safety: {command}");
+        }
+        foreach (var blocked in blockedContains)
+        {
+            if (cmdLower.Contains(blocked))
                 return Fail(call, $"Command blocked for safety: {command}");
         }
 

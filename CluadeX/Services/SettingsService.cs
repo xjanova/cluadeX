@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CluadeX.Models;
@@ -7,6 +9,57 @@ namespace CluadeX.Services;
 
 public class SettingsService
 {
+    // ─── DPAPI Encryption for API Keys ───────────────────────────
+    private static string EncryptString(string plainText)
+    {
+        if (string.IsNullOrEmpty(plainText)) return plainText;
+        try
+        {
+            byte[] data = Encoding.UTF8.GetBytes(plainText);
+            byte[] encrypted = ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
+            return "ENC:" + System.Convert.ToBase64String(encrypted);
+        }
+        catch { return plainText; }
+    }
+
+    private static string DecryptString(string encryptedText)
+    {
+        if (string.IsNullOrEmpty(encryptedText)) return encryptedText;
+        if (!encryptedText.StartsWith("ENC:")) return encryptedText; // legacy plaintext
+        try
+        {
+            byte[] encrypted = System.Convert.FromBase64String(encryptedText["ENC:".Length..]);
+            byte[] data = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(data);
+        }
+        catch { return string.Empty; }
+    }
+
+    /// <summary>Encrypt all API keys in settings before saving.</summary>
+    private static void EncryptSecrets(AppSettings settings)
+    {
+        if (!string.IsNullOrEmpty(settings.HuggingFaceToken) && !settings.HuggingFaceToken.StartsWith("ENC:"))
+            settings.HuggingFaceToken = EncryptString(settings.HuggingFaceToken);
+
+        foreach (var kvp in settings.ProviderConfigs)
+        {
+            if (!string.IsNullOrEmpty(kvp.Value.ApiKey) && !kvp.Value.ApiKey.StartsWith("ENC:"))
+                kvp.Value.ApiKey = EncryptString(kvp.Value.ApiKey);
+        }
+    }
+
+    /// <summary>Decrypt all API keys in settings after loading.</summary>
+    private static void DecryptSecrets(AppSettings settings)
+    {
+        if (!string.IsNullOrEmpty(settings.HuggingFaceToken))
+            settings.HuggingFaceToken = DecryptString(settings.HuggingFaceToken);
+
+        foreach (var kvp in settings.ProviderConfigs)
+        {
+            if (!string.IsNullOrEmpty(kvp.Value.ApiKey))
+                kvp.Value.ApiKey = DecryptString(kvp.Value.ApiKey);
+        }
+    }
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -59,6 +112,7 @@ public class SettingsService
             {
                 string json = File.ReadAllText(_settingsPath);
                 _settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+                DecryptSecrets(_settings);
             }
         }
         catch
@@ -74,14 +128,19 @@ public class SettingsService
             string? dir = Path.GetDirectoryName(_settingsPath);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            string json = JsonSerializer.Serialize(_settings, JsonOptions);
+            // Clone settings and encrypt secrets before writing to disk
+            var clone = JsonSerializer.Deserialize<AppSettings>(
+                JsonSerializer.Serialize(_settings, JsonOptions), JsonOptions)!;
+            EncryptSecrets(clone);
+
+            string json = JsonSerializer.Serialize(clone, JsonOptions);
             File.WriteAllText(_settingsPath, json);
             EnsureDirectoriesExist();
             SettingsChanged?.Invoke();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.GetType().Name}");
         }
     }
 
