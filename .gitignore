@@ -1,9 +1,12 @@
 # Build outputs
+bin/
+obj/
 x64/
 Debug/
 Release/
+publish/
 *.exe
-*.obj
+*.dll
 *.pdb
 *.ilk
 *.idb
@@ -12,6 +15,12 @@ Release/
 *.lastbuildstate
 *.ipdb
 *.iobj
+
+# .NET
+*.nupkg
+project.lock.json
+*.nuget.props
+*.nuget.targets
 
 # Visual Studio
 .vs/
@@ -22,6 +31,7 @@ Release/
 *.VC.db
 *.VC.opendb
 ipch/
+launchSettings.json
 
 # Misc
 *.bak

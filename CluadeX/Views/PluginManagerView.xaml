@@ -1,0 +1,241 @@
+<UserControl x:Class="CluadeX.Views.PluginManagerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:CluadeX.Views"
+             xmlns:vm="clr-namespace:CluadeX.ViewModels">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Page Header -->
+        <StackPanel Margin="24,16,24,12">
+            <TextBlock Text="Plugin Manager" FontSize="24" FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}"
+                       FontFamily="{StaticResource MainFont}"/>
+            <TextBlock Text="Install, enable, and manage plugins"
+                       Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,2,0,0"/>
+        </StackPanel>
+
+        <!-- Main Content: Left List + Right Details -->
+        <Grid Grid.Row="1" Margin="24,0,24,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left Panel: Plugin List -->
+            <Border Background="{StaticResource Surface0Brush}" CornerRadius="8"
+                    Padding="0">
+                <ListBox ItemsSource="{Binding Plugins}"
+                         SelectedItem="{Binding SelectedPlugin}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="12,10"/>
+                            <Setter Property="Margin" Value="4"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Bd" Background="Transparent"
+                                                CornerRadius="6" Padding="{TemplateBinding Padding}"
+                                                Margin="{TemplateBinding Margin}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background"
+                                                        Value="{StaticResource Surface1Brush}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="Background"
+                                                        Value="{StaticResource Surface1Brush}"/>
+                                                <Setter TargetName="Bd" Property="BorderBrush"
+                                                        Value="{StaticResource BlueBrush}"/>
+                                                <Setter TargetName="Bd" Property="BorderThickness"
+                                                        Value="1"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextBrush}"/>
+                                    <TextBlock Text="{Binding Version}" FontSize="11"
+                                               Foreground="{StaticResource Overlay0Brush}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <!-- ON/OFF Badge -->
+                                <Border Grid.Column="1" CornerRadius="4" Padding="8,3"
+                                        VerticalAlignment="Center">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.15"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Enabled}" Value="True">
+                                                    <Setter Property="Background">
+                                                        <Setter.Value>
+                                                            <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock FontSize="11" FontWeight="Bold">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="OFF"/>
+                                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Enabled}" Value="True">
+                                                        <Setter Property="Text" Value="ON"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <!-- Right Panel: Selected Plugin Details -->
+            <Border Grid.Column="2" Background="{StaticResource Surface0Brush}"
+                    CornerRadius="8" Padding="24,20">
+                <Grid>
+                    <!-- Empty state when nothing selected -->
+                    <TextBlock Text="Select a plugin to view details"
+                               Foreground="{StaticResource Overlay0Brush}"
+                               FontSize="14" HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Visibility="{Binding SelectedPlugin, Converter={StaticResource NullToCollapsed}, ConverterParameter=Invert}"/>
+
+                    <!-- Plugin details -->
+                    <StackPanel DataContext="{Binding SelectedPlugin}"
+                                Visibility="{Binding DataContext.SelectedPlugin, RelativeSource={RelativeSource AncestorType=UserControl},
+                                             Converter={StaticResource NullToCollapsed}}">
+
+                        <!-- Plugin Name -->
+                        <TextBlock Text="{Binding Name}" FontSize="22" FontWeight="Bold"
+                                   Foreground="{StaticResource TextBrush}"
+                                   FontFamily="{StaticResource MainFont}" Margin="0,0,0,8"/>
+
+                        <!-- Version -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock Text="Version:" Foreground="{StaticResource Overlay0Brush}"
+                                       FontSize="13" Margin="0,0,8,0"/>
+                            <TextBlock Text="{Binding Version}" Foreground="{StaticResource TextBrush}"
+                                       FontSize="13" FontFamily="{StaticResource MonoFont}"/>
+                        </StackPanel>
+
+                        <!-- Status -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock Text="Status:" Foreground="{StaticResource Overlay0Brush}"
+                                       FontSize="13" Margin="0,0,8,0"/>
+                            <Border CornerRadius="4" Padding="8,3">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background">
+                                            <Setter.Value>
+                                                <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.15"/>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Enabled}" Value="True">
+                                                <Setter Property="Background">
+                                                    <Setter.Value>
+                                                        <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock FontSize="12" FontWeight="SemiBold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Disabled"/>
+                                            <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Enabled}" Value="True">
+                                                    <Setter Property="Text" Value="Enabled"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Description -->
+                        <TextBlock Text="Description" Foreground="{StaticResource BlueBrush}"
+                                   FontSize="14" FontWeight="SemiBold" Margin="0,8,0,6"/>
+                        <TextBlock Text="{Binding Description}" Foreground="{StaticResource TextBrush}"
+                                   FontSize="13" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                        <!-- Path -->
+                        <TextBlock Text="Location" Foreground="{StaticResource BlueBrush}"
+                                   FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <TextBlock Text="{Binding Path}" Foreground="{StaticResource Overlay0Brush}"
+                                   FontSize="12" FontFamily="{StaticResource MonoFont}"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Bottom Toolbar -->
+        <Border Grid.Row="2" Background="{StaticResource Surface0Brush}"
+                CornerRadius="8" Margin="24,12,24,16" Padding="16,12">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button Content="Enable" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding EnableCommand}" Margin="0,0,8,0"/>
+                <Button Content="Disable" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding DisableCommand}" Margin="0,0,8,0"/>
+                <Button Content="Add Plugin" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding AddPluginCommand}" Margin="0,0,8,0"/>
+                <Button Style="{StaticResource SecondaryButton}"
+                        Command="{Binding OpenFolderCommand}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Open Folder" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}"
+                        Command="{Binding RefreshCommand}" Margin="8,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Refresh" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

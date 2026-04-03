@@ -1,0 +1,207 @@
+<UserControl x:Class="CluadeX.Views.PermissionsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:CluadeX.ViewModels">
+
+    <UserControl.Resources>
+        <Style x:Key="SettingLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="SettingDesc" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource BlueBrush}"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Margin" Value="0,20,0,12"/>
+        </Style>
+
+        <!-- Badge styles for permission actions -->
+        <Style x:Key="AllowBadge" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource GreenBrush}"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="DenyBadge" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource RedBrush}"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="AskBadge" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource YellowBrush}"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer Style="{StaticResource SlimScrollViewer}" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24,16,24,24" MaxWidth="700">
+
+            <!-- Page Title -->
+            <TextBlock Text="Permissions" FontSize="24" FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}"
+                       FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
+            <TextBlock Text="Control what CluadeX is allowed to access. Rules are evaluated top-down, first match wins."
+                       Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,0,0,8"/>
+
+            <!-- ═══════ RULES LIST ═══════ -->
+            <TextBlock Text="Active Rules" Style="{StaticResource SectionTitle}" Margin="0,4,0,12"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <ListBox ItemsSource="{Binding Rules}"
+                             SelectedItem="{Binding SelectedRule}"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             MinHeight="60"
+                             MaxHeight="350"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Padding" Value="4,6"/>
+                                <Setter Property="Margin" Value="0,1"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                                    CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface0Brush}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface0Brush}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Action Badge -->
+                                    <Border Grid.Column="0" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
+                                            VerticalAlignment="Center">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource YellowBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Action}" Value="Allow">
+                                                        <Setter Property="Background" Value="{StaticResource GreenBrush}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Action}" Value="Deny">
+                                                        <Setter Property="Background" Value="{StaticResource RedBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="{Binding Action}" FontSize="11" FontWeight="Bold"
+                                                   Foreground="{StaticResource BaseBrush}"/>
+                                    </Border>
+
+                                    <!-- Scope -->
+                                    <TextBlock Grid.Column="1" Text="{Binding Scope}" FontSize="12"
+                                               Foreground="{StaticResource Overlay0Brush}"
+                                               VerticalAlignment="Center" Margin="0,0,8,0"
+                                               FontFamily="{StaticResource MonoFont}"/>
+
+                                    <!-- Pattern -->
+                                    <TextBlock Grid.Column="2" Text="{Binding Pattern}" FontSize="13"
+                                               Foreground="{StaticResource TextBrush}"
+                                               VerticalAlignment="Center"
+                                               FontFamily="{StaticResource MonoFont}"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Empty state -->
+                    <TextBlock Text="No rules defined. All actions will prompt for confirmation."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="12"
+                               Margin="4,8,0,4" FontStyle="Italic">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Rules.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+
+                    <!-- Remove button -->
+                    <Button Content="Remove Selected Rule" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding RemoveRuleCommand}"
+                            HorizontalAlignment="Left" Margin="0,12,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══════ ADD RULE ═══════ -->
+            <TextBlock Text="Add Rule" Style="{StaticResource SectionTitle}"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <!-- Pattern -->
+                    <TextBlock Text="Pattern" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="Glob pattern to match resources. Use * as wildcard (e.g. *.exe, /home/user/*, https://*.example.com/*)"
+                               Style="{StaticResource SettingDesc}"/>
+                    <TextBox Text="{Binding NewPattern, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
+
+                    <!-- Scope -->
+                    <TextBlock Text="Scope" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="What type of access this rule applies to"
+                               Style="{StaticResource SettingDesc}"/>
+                    <ComboBox ItemsSource="{Binding ScopeOptions}"
+                              SelectedItem="{Binding NewScope}"
+                              Style="{StaticResource ModernComboBox}"
+                              Width="200" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+
+                    <!-- Action buttons -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <Button Content="Add as Allow" Style="{StaticResource PrimaryButton}"
+                                Command="{Binding AddAllowCommand}" Margin="0,0,12,0"/>
+                        <Button Content="Add as Deny" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding AddDenyCommand}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══════ ACTIONS ═══════ -->
+            <StackPanel Orientation="Horizontal" Margin="0,20,0,24">
+                <Button Content="Save" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding SaveCommand}" Margin="0,0,12,0"/>
+                <Button Content="Refresh" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding RefreshCommand}"/>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

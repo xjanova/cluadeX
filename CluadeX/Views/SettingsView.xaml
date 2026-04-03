@@ -1,0 +1,393 @@
+<UserControl x:Class="CluadeX.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:CluadeX.Converters"
+             xmlns:vm="clr-namespace:CluadeX.ViewModels">
+
+    <UserControl.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
+
+        <Style x:Key="SettingLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="SettingDesc" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource BlueBrush}"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Margin" Value="0,20,0,12"/>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer Style="{StaticResource SlimScrollViewer}" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24,16,24,24" MaxWidth="700">
+
+            <!-- Page Title -->
+            <TextBlock Text="Settings" FontSize="24" FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}"
+                       FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
+            <TextBlock Text="Configure CluadeX preferences and paths"
+                       Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,0,0,8"/>
+
+            <!-- Save Status -->
+            <TextBlock Text="{Binding SaveStatus}" Foreground="{StaticResource GreenBrush}"
+                       FontSize="13" FontWeight="SemiBold" Margin="0,0,0,8"/>
+
+            <!-- ═══════ AI PROVIDER ═══════ -->
+            <TextBlock Text="AI Provider" Style="{StaticResource SectionTitle}" Margin="0,4,0,12"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <!-- Provider Selection -->
+                    <TextBlock Text="Active Provider" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="Choose between local GGUF models, cloud APIs (OpenAI, Anthropic, Gemini), or Ollama"
+                               Style="{StaticResource SettingDesc}"/>
+                    <ComboBox ItemsSource="{Binding ProviderOptions}"
+                              SelectedItem="{Binding SelectedProvider}"
+                              Style="{StaticResource ModernComboBox}"
+                              Width="250" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+
+                    <!-- Local GGUF notice -->
+                    <TextBlock Text="Using local GGUF models via LLamaSharp. Load models from the Models tab."
+                               Foreground="{StaticResource TealBrush}" FontSize="12" TextWrapping="Wrap"
+                               Margin="0,0,0,8"
+                               Visibility="{Binding IsLocalSelected, Converter={StaticResource BoolVis}}"/>
+
+                    <!-- API Key (visible for OpenAI, Anthropic, Gemini) -->
+                    <StackPanel Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolVis}}">
+                        <TextBlock Text="API Key" Style="{StaticResource SettingLabel}"/>
+                        <TextBlock Style="{StaticResource SettingDesc}">
+                            <Run Text="Your API key for this provider. Stored locally in settings.json."/>
+                        </TextBlock>
+                        <TextBlock Margin="0,0,0,8" FontSize="11">
+                            <Hyperlink NavigateUri="{Binding ApiKeyLink}" RequestNavigate="Hyperlink_RequestNavigate"
+                                       Foreground="{StaticResource BlueBrush}">
+                                <Run Text="{Binding ApiKeyLinkText, Mode=OneWay}"/>
+                            </Hyperlink>
+                        </TextBlock>
+                        <TextBox Text="{Binding ProviderApiKey, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
+                    </StackPanel>
+
+                    <!-- Base URL (visible for all except Local) -->
+                    <StackPanel Visibility="{Binding SupportsBaseUrl, Converter={StaticResource BoolVis}}">
+                        <TextBlock Text="Base URL (optional)" Style="{StaticResource SettingLabel}"/>
+                        <TextBlock Text="Override for proxies, Azure OpenAI, or custom endpoints. Leave blank for default."
+                                   Style="{StaticResource SettingDesc}"/>
+                        <TextBox Text="{Binding ProviderBaseUrl, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
+                    </StackPanel>
+
+                    <!-- Model Selection (not shown for Local) -->
+                    <StackPanel Visibility="{Binding IsLocalSelected, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                        <TextBlock Text="Model" Style="{StaticResource SettingLabel}"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox ItemsSource="{Binding AvailableModels}"
+                                      SelectedItem="{Binding ProviderModel}"
+                                      Text="{Binding ProviderModel, UpdateSourceTrigger=LostFocus}"
+                                      IsEditable="True"
+                                      Style="{StaticResource ModernComboBox}"
+                                      HorizontalAlignment="Stretch"/>
+                            <Button Grid.Column="1" Content="&#xE72C;" Style="{StaticResource IconButton}"
+                                    FontFamily="Segoe MDL2 Assets"
+                                    Command="{Binding RefreshOllamaModelsCommand}"
+                                    ToolTip="Refresh available Ollama models"
+                                    Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}"
+                                    Margin="4,0,0,0"/>
+                        </Grid>
+
+                        <!-- Custom Model ID -->
+                        <CheckBox Content="Use custom model ID" IsChecked="{Binding UseCustomModel}"
+                                  Margin="0,4,0,4"/>
+                        <TextBox Text="{Binding ProviderCustomModel, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}"
+                                 IsEnabled="{Binding UseCustomModel}"
+                                 Margin="0,0,0,16"/>
+                    </StackPanel>
+
+                    <!-- Test Connection + Apply -->
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,8"
+                                Visibility="{Binding IsLocalSelected, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                        <Button Content="Test Connection" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding TestConnectionCommand}" Margin="0,0,12,0"/>
+                        <Button Content="Apply Provider" Style="{StaticResource PrimaryButton}"
+                                Command="{Binding ApplyProviderCommand}"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding ConnectionTestResult}"
+                               Foreground="{StaticResource TealBrush}" FontSize="12" TextWrapping="Wrap"
+                               Margin="0,0,0,4"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══════ GPU INFO ═══════ -->
+            <TextBlock Text="GPU Information" Style="{StaticResource SectionTitle}"/>
+            <Border Style="{StaticResource Card}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="{Binding GpuInfoDisplay}" Foreground="{StaticResource TextBrush}"
+                                   FontSize="13" FontFamily="{StaticResource MonoFont}" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding VramRecommendation}" Foreground="{StaticResource TealBrush}"
+                                   FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="&#xE72C;" Style="{StaticResource IconButton}"
+                            FontFamily="Segoe MDL2 Assets"
+                            Command="{Binding RefreshGpuCommand}"
+                            VerticalAlignment="Top" ToolTip="Refresh GPU info"/>
+                </Grid>
+            </Border>
+
+            <!-- ═══════ BACKEND SETTINGS ═══════ -->
+            <TextBlock Text="Backend Settings" Style="{StaticResource SectionTitle}"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <!-- GPU Backend -->
+                    <TextBlock Text="GPU Backend" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="Auto: tries CUDA first, falls back to CPU. Select CPU if you have no NVIDIA GPU." Style="{StaticResource SettingDesc}"/>
+                    <ComboBox ItemsSource="{Binding BackendOptions}"
+                              SelectedItem="{Binding GpuBackend}"
+                              Style="{StaticResource ModernComboBox}"
+                              Width="200" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+
+                    <!-- GPU Layers -->
+                    <TextBlock Style="{StaticResource SettingLabel}">
+                        <Run Text="GPU Layers: "/>
+                        <Run Text="{Binding GpuLayerCount, Mode=OneWay}"/>
+                    </TextBlock>
+                    <TextBlock Text="-1 = auto (all layers on GPU), 0 = CPU only. More layers = more VRAM used." Style="{StaticResource SettingDesc}"/>
+                    <TextBox Text="{Binding GpuLayerCount, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource ModernTextBox}" Width="120" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+
+                    <!-- Batch Size -->
+                    <TextBlock Text="Batch Size" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="Prompt processing batch size. Higher = faster but uses more VRAM." Style="{StaticResource SettingDesc}"/>
+                    <ComboBox ItemsSource="{Binding BatchSizeOptions}"
+                              SelectedItem="{Binding BatchSize}"
+                              Style="{StaticResource ModernComboBox}"
+                              Width="150" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+
+                    <!-- Thread Count -->
+                    <TextBlock Style="{StaticResource SettingLabel}">
+                        <Run Text="CPU Threads: "/>
+                        <Run Text="{Binding ThreadCount, Mode=OneWay}"/>
+                    </TextBlock>
+                    <TextBlock Text="Number of CPU threads for inference. 0 = auto-detect optimal count." Style="{StaticResource SettingDesc}"/>
+                    <TextBox Text="{Binding ThreadCount, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource ModernTextBox}" Width="120" HorizontalAlignment="Left"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══════ DIRECTORIES ═══════ -->
+            <TextBlock Text="Directories" Style="{StaticResource SectionTitle}"/>
+
+            <!-- Portable Mode Info -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,12"
+                    Visibility="{Binding IsPortable, Converter={StaticResource BoolVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE8CE;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               Foreground="{StaticResource TealBrush}" VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>
+                    <TextBlock Foreground="{StaticResource TealBrush}" FontSize="12" TextWrapping="Wrap">
+                        <Run Text="Portable Mode" FontWeight="SemiBold"/>
+                        <Run Text=" - All data stored at: "/>
+                        <Run Text="{Binding DataRootDisplay, Mode=OneWay}" FontFamily="{StaticResource MonoFont}"/>
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <!-- Model Directory -->
+            <TextBlock Text="Model Storage Directory" Style="{StaticResource SettingLabel}"/>
+            <TextBlock Text="Where downloaded GGUF models are stored" Style="{StaticResource SettingDesc}"/>
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding ModelDirectory, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource ModernTextBox}"/>
+                <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}"
+                        FontFamily="Segoe MDL2 Assets"
+                        Command="{Binding BrowseModelDirCommand}" Margin="4,0" ToolTip="Browse"/>
+                <Button Grid.Column="2" Content="&#xE838;" Style="{StaticResource IconButton}"
+                        FontFamily="Segoe MDL2 Assets"
+                        Command="{Binding OpenDirectoryCommand}"
+                        CommandParameter="{Binding ModelDirectory}" ToolTip="Open folder"/>
+            </Grid>
+
+            <!-- Cache Directory -->
+            <TextBlock Text="Cache Directory" Style="{StaticResource SettingLabel}"/>
+            <TextBlock Text="Temporary cache for model operations" Style="{StaticResource SettingDesc}"/>
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding CacheDirectory, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource ModernTextBox}"/>
+                <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}"
+                        FontFamily="Segoe MDL2 Assets"
+                        Command="{Binding BrowseCacheDirCommand}" Margin="4,0"/>
+            </Grid>
+
+            <!-- Log Directory -->
+            <TextBlock Text="Log Directory" Style="{StaticResource SettingLabel}"/>
+            <TextBlock Text="Where application logs are saved" Style="{StaticResource SettingDesc}"/>
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding LogDirectory, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource ModernTextBox}"/>
+                <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}"
+                        FontFamily="Segoe MDL2 Assets"
+                        Command="{Binding BrowseLogDirCommand}" Margin="4,0"/>
+            </Grid>
+
+            <!-- Temp Directory -->
+            <TextBlock Text="Temp Directory" Style="{StaticResource SettingLabel}"/>
+            <TextBlock Text="Temporary files for code execution" Style="{StaticResource SettingDesc}"/>
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBox Text="{Binding TempDirectory, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource ModernTextBox}"/>
+                <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}"
+                        FontFamily="Segoe MDL2 Assets"
+                        Command="{Binding BrowseTempDirCommand}" Margin="4,0"/>
+            </Grid>
+
+            <!-- ═══════ INFERENCE ═══════ -->
+            <TextBlock Text="Inference Settings" Style="{StaticResource SectionTitle}"/>
+
+            <Border Style="{StaticResource Card}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition/>
+                        <RowDefinition/>
+                        <RowDefinition/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Context Size -->
+                    <StackPanel Margin="0,0,12,16">
+                        <TextBlock Text="Context Size" Style="{StaticResource SettingLabel}"/>
+                        <TextBlock Text="Max tokens the model can process" Style="{StaticResource SettingDesc}"/>
+                        <ComboBox ItemsSource="{Binding ContextSizeOptions}"
+                                  SelectedItem="{Binding ContextSize}"
+                                  Style="{StaticResource ModernComboBox}"
+                                  Width="150" HorizontalAlignment="Left"/>
+                    </StackPanel>
+
+                    <!-- Max Tokens -->
+                    <StackPanel Grid.Column="1" Margin="12,0,0,16">
+                        <TextBlock Text="Max Output Tokens" Style="{StaticResource SettingLabel}"/>
+                        <TextBlock Text="Maximum tokens per response" Style="{StaticResource SettingDesc}"/>
+                        <TextBox Text="{Binding MaxTokens, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}" Width="150" HorizontalAlignment="Left"/>
+                    </StackPanel>
+
+                    <!-- Temperature -->
+                    <StackPanel Grid.Row="1" Margin="0,0,12,16">
+                        <TextBlock Style="{StaticResource SettingLabel}">
+                            <Run Text="Temperature: "/><Run Text="{Binding Temperature, StringFormat='{}{0:F2}', Mode=OneWay}"/>
+                        </TextBlock>
+                        <TextBlock Text="Higher = more creative, lower = more precise" Style="{StaticResource SettingDesc}"/>
+                        <Slider Value="{Binding Temperature}" Minimum="0" Maximum="2" TickFrequency="0.1"
+                                IsSnapToTickEnabled="True"/>
+                    </StackPanel>
+
+                    <!-- Top P -->
+                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="12,0,0,16">
+                        <TextBlock Style="{StaticResource SettingLabel}">
+                            <Run Text="Top P: "/><Run Text="{Binding TopP, StringFormat='{}{0:F2}', Mode=OneWay}"/>
+                        </TextBlock>
+                        <TextBlock Text="Nucleus sampling threshold" Style="{StaticResource SettingDesc}"/>
+                        <Slider Value="{Binding TopP}" Minimum="0" Maximum="1" TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"/>
+                    </StackPanel>
+
+                    <!-- Repeat Penalty -->
+                    <StackPanel Grid.Row="2" Margin="0,0,12,0">
+                        <TextBlock Style="{StaticResource SettingLabel}">
+                            <Run Text="Repeat Penalty: "/><Run Text="{Binding RepeatPenalty, StringFormat='{}{0:F2}', Mode=OneWay}"/>
+                        </TextBlock>
+                        <TextBlock Text="Penalize repetition in output" Style="{StaticResource SettingDesc}"/>
+                        <Slider Value="{Binding RepeatPenalty}" Minimum="1" Maximum="2" TickFrequency="0.05"
+                                IsSnapToTickEnabled="True"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ═══════ AGENT ═══════ -->
+            <TextBlock Text="Agent Settings" Style="{StaticResource SectionTitle}"/>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <CheckBox Content="Auto-Execute Code" IsChecked="{Binding AutoExecuteCode}"
+                              Margin="0,0,0,4"/>
+                    <TextBlock Text="When enabled, CluadeX will automatically run generated code and fix errors."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,16" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                        <TextBlock Text="Max Auto-Fix Attempts:" Foreground="{StaticResource TextBrush}"
+                                   FontSize="13" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <TextBox Text="{Binding MaxAutoFixAttempts, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}" Width="60"/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                        <TextBlock Text="Preferred Language:" Foreground="{StaticResource TextBrush}"
+                                   FontSize="13" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <ComboBox ItemsSource="{Binding LanguageOptions}"
+                                  SelectedItem="{Binding PreferredLanguage}"
+                                  Style="{StaticResource ModernComboBox}"
+                                  Width="150"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Stream Output (show tokens as they generate)" IsChecked="{Binding StreamOutput}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══════ HUGGINGFACE ═══════ -->
+            <TextBlock Text="HuggingFace" Style="{StaticResource SectionTitle}"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="API Token (optional)" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="Required only for private or gated models. Get your token from huggingface.co/settings/tokens" Style="{StaticResource SettingDesc}"/>
+                    <TextBox Text="{Binding HuggingFaceToken, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource ModernTextBox}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══════ BUTTONS ═══════ -->
+            <StackPanel Orientation="Horizontal" Margin="0,20,0,24">
+                <Button Content="Save Settings" Style="{StaticResource PrimaryButton}"
+                        Command="{Binding SaveCommand}" Margin="0,0,12,0"/>
+                <Button Content="Reset to Defaults" Style="{StaticResource SecondaryButton}"
+                        Command="{Binding ResetDefaultsCommand}"/>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

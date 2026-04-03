@@ -15,29 +15,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
 
       - name: Extract version
         id: version
         shell: pwsh
         run: |
-          $content = Get-Content "ClaudeClient/version.h" -Raw
-          $major = [regex]::Match($content, 'VERSION_MAJOR\s+(\d+)').Groups[1].Value
-          $minor = [regex]::Match($content, 'VERSION_MINOR\s+(\d+)').Groups[1].Value
-          $patch = [regex]::Match($content, 'VERSION_PATCH\s+(\d+)').Groups[1].Value
-          $version = "$major.$minor.$patch"
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-          echo "TAG=v$version" >> $env:GITHUB_OUTPUT
+          $content = Get-Content "CluadeX/CluadeX.csproj" -Raw
+          $ver = [regex]::Match($content, '<Version>(\d+\.\d+\.\d+)</Version>').Groups[1].Value
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          echo "TAG=v$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Restore dependencies
+        run: dotnet restore CluadeX.sln
 
       - name: Build Release
-        run: msbuild ClaudeClient.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m /nologo
+        run: dotnet build CluadeX.sln -c Release --no-restore --nologo
+
+      - name: Publish single-file
+        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o publish --nologo
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: CluadeX-x64
-          path: x64/Release/CluadeX.exe
+          path: publish/CluadeX.exe
 
       - name: Create Release (on merge to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -52,12 +57,21 @@ jobs:
             https://xman4289.com
 
             ### Download
-            Download `CluadeX.exe` below and run it directly — no installation required.
+            Download `CluadeX.exe` below — single-file, self-contained, no installation required.
+
+            ### Features
+            - Beautiful Catppuccin Mocha dark theme with metallic UI
+            - Multiple AI providers: Local GGUF, OpenAI, Anthropic Claude, Google Gemini, Ollama
+            - Markdown rendering with syntax highlighting
+            - SQLite chat persistence with full-text search
+            - HuggingFace model downloads with progress
+            - Git integration, code execution, file system tools
+            - GPU auto-detection and optimization
 
             ### Requirements
             - Windows 10 1809+ (x64)
-            - For local mode: [Ollama](https://ollama.com) installed and running
-          files: x64/Release/CluadeX.exe
+            - For local mode: [Ollama](https://ollama.com) or GGUF models
+          files: publish/CluadeX.exe
           draft: false
           prerelease: false
           make_latest: true
