@@ -103,6 +103,12 @@ public class RecommendedModel
     public string Category { get; set; } = "Coding";
     public string Url { get; set; } = string.Empty;
 
+    /// <summary>Star rating 1-5 for model quality. 5=best, 1=basic.</summary>
+    public int Stars { get; set; } = 3;
+
+    /// <summary>Star display string (e.g. "⭐⭐⭐⭐⭐").</summary>
+    public string StarDisplay => new string('⭐', Math.Clamp(Stars, 1, 5));
+
     /// <summary>Whether this model is already downloaded locally.</summary>
     public bool IsInstalled { get; set; }
 

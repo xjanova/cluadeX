@@ -804,7 +804,7 @@
                             Opacity="0.8" Margin="0,0,4,0">
                         <TextBlock Text="{Binding ContextLevelLabel}"
                                    FontSize="8" FontWeight="ExtraBold"
-                                   Foreground="{StaticResource BaseColor}"
+                                   Foreground="{StaticResource BaseBrush}"
                                    FontFamily="{StaticResource MonoFont}"/>
                     </Border>
 

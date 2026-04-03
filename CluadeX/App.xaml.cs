@@ -46,6 +46,9 @@ public partial class App : Application
         services.AddSingleton<BuddyService>();
         services.AddSingleton<LocalizationService>();
         services.AddSingleton<ActivationService>();
+        services.AddSingleton<XmanLicenseService>();
+        services.AddSingleton<BugReportService>();
+        services.AddSingleton<AutoUpdateService>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();
