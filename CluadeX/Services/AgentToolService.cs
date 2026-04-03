@@ -17,6 +17,8 @@ public class AgentToolService
     private readonly GitService _gitService;
     private readonly GitHubService _gitHubService;
     private readonly PermissionService _permissionService;
+    private readonly SettingsService _settingsService;
+    private readonly ActivationService _activationService;
 
     // Regex to match [ACTION: tool_name]...[/ACTION] blocks
     private static readonly Regex ActionRegex = new(
@@ -27,13 +29,16 @@ public class AgentToolService
     public event Func<string, string, Task<bool>>? OnPermissionRequired;
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
-        GitService gitService, GitHubService gitHubService, PermissionService permissionService)
+        GitService gitService, GitHubService gitHubService, PermissionService permissionService,
+        SettingsService settingsService, ActivationService activationService)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
         _gitService = gitService;
         _gitHubService = gitHubService;
         _permissionService = permissionService;
+        _settingsService = settingsService;
+        _activationService = activationService;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -80,6 +85,22 @@ public class AgentToolService
     {
         try
         {
+            // ── Feature toggle check ──
+            if (!IsToolAllowed(call.Type))
+            {
+                string featureName = call.Type switch
+                {
+                    ToolType.GitStatus or ToolType.GitAdd or ToolType.GitCommit or
+                    ToolType.GitPush or ToolType.GitPull or ToolType.GitBranch or
+                    ToolType.GitCheckout or ToolType.GitDiff or ToolType.GitLog or
+                    ToolType.GitClone or ToolType.GitInit or ToolType.GitStash => "Git",
+                    ToolType.GhPrCreate or ToolType.GhPrList or
+                    ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView => "GitHub",
+                    _ => call.ToolName,
+                };
+                return Fail(call, $"{featureName} tools are disabled. Enable in Features page or activate with a key.");
+            }
+
             // ── Permission check ──
             string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
             string scope = call.Type switch
@@ -196,10 +217,15 @@ public class AgentToolService
         return sb.ToString();
     }
 
-    // ─── Get Tool Definitions Prompt ───
+    // ─── Get Tool Definitions Prompt (feature-aware) ───
     public string GetToolDefinitionsPrompt()
     {
-        return """
+        var features = _settingsService.Settings.Features;
+        bool gitEnabled = features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git");
+        bool githubEnabled = features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github");
+
+        var sb = new StringBuilder();
+        sb.AppendLine("""
             AVAILABLE TOOLS:
             You can use tools to interact with the user's file system and project.
             To use a tool, write a tool call block in this exact format:
@@ -256,6 +282,11 @@ public class AgentToolService
                [ACTION: create_directory]
                path: new/directory/path
                [/ACTION]
+            """);
+
+        if (gitEnabled)
+        {
+            sb.AppendLine("""
 
             GIT TOOLS:
 
@@ -317,6 +348,12 @@ public class AgentToolService
                 message: WIP
                 [/ACTION]
                 Or pop: action: pop
+            """);
+        }
+
+        if (githubEnabled)
+        {
+            sb.AppendLine("""
 
             GITHUB TOOLS (requires gh CLI):
 
@@ -346,6 +383,10 @@ public class AgentToolService
             25. gh_repo_view - View repository info
                 [ACTION: gh_repo_view]
                 [/ACTION]
+            """);
+        }
+
+        sb.AppendLine("""
 
             RULES:
             - You can use multiple tools in a single response
@@ -354,10 +395,41 @@ public class AgentToolService
             - Explain what you're doing before and after using tools
             - Paths are relative to the project root
             - After making changes, verify them by reading the file or running tests
+            """);
+
+        if (gitEnabled)
+        {
+            sb.AppendLine("""
             - Use git tools to manage version control
             - Always check git_status before committing
             - Write meaningful commit messages
-            """;
+            """);
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Check if a tool type is allowed by current feature settings.</summary>
+    private bool IsToolAllowed(ToolType type)
+    {
+        var features = _settingsService.Settings.Features;
+        return type switch
+        {
+            // Git tools — require Git feature enabled + activation
+            ToolType.GitStatus or ToolType.GitAdd or ToolType.GitCommit or
+            ToolType.GitPush or ToolType.GitPull or ToolType.GitBranch or
+            ToolType.GitCheckout or ToolType.GitDiff or ToolType.GitLog or
+            ToolType.GitClone or ToolType.GitInit or ToolType.GitStash
+                => features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"),
+
+            // GitHub tools — require GitHub feature enabled + activation
+            ToolType.GhPrCreate or ToolType.GhPrList or
+            ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView
+                => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
+
+            // File/code tools — always available (core features)
+            _ => true,
+        };
     }
 
     // ════════════════════════════════════════════

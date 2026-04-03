@@ -18,47 +18,215 @@ public class CodeAgentService
     private readonly SettingsService _settingsService;
     private readonly SmartEditingService _smartEditingService;
     private readonly ContextMemoryService _contextMemoryService;
+    private readonly LocalizationService _localizationService;
+    private readonly ActivationService _activationService;
 
     private const int MaxAgentIterations = 15;
 
-    private const string BaseSystemPrompt = """
-        You are CluadeX, an expert AI coding assistant running locally. You help users write, debug, test, and improve code autonomously.
+    // ─── Dynamic System Prompt Builder ───────────────────────────────
+    // The prompt is generated dynamically based on:
+    //   1. Active language (Thai/English) — so the AI responds in the user's language
+    //   2. Enabled features — so the AI only uses tools that are unlocked
+    //   3. Project context — so the AI knows the working directory and file structure
 
-        CAPABILITIES:
-        - Write clean, production-quality code in any programming language
-        - Debug and fix errors based on compiler/runtime output
-        - Refactor and optimize existing code
-        - Explain code and architectural decisions
-        - Design complete applications and systems
-        - Read, write, and edit files directly on the user's machine
-        - Run shell commands to build, test, and execute code
-        - Full Git version control: status, add, commit, push, pull, branch, merge, diff, log, stash
-        - GitHub integration: create PRs, list issues, view repos (requires gh CLI)
-        - Smart code analysis: structure extraction, bracket validation, minimal diffs
+    private string BuildBaseSystemPrompt()
+    {
+        bool isThai = _localizationService.CurrentLanguage == "th";
+        var features = _settingsService.Settings.Features;
 
-        RULES:
-        1. Always write code inside markdown code blocks with the language specified: ```language
-        2. Write complete, runnable code - never use placeholders like "..."
-        3. Handle edge cases and errors properly
-        4. Follow best practices and idiomatic patterns for the language
-        5. When fixing errors, analyze the error message carefully and provide the complete corrected code
-        6. Add brief comments for complex logic only
-        7. When editing files, prefer minimal changes - use edit_file with precise find/replace over rewriting entire files
-        8. Validate your code mentally before writing - ensure brackets/braces balance
+        var sb = new StringBuilder();
 
-        PROBLEM-SOLVING APPROACH:
-        Think step by step like an expert software engineer:
-        1. Understand the requirement fully - ask clarifying questions if needed
-        2. Explore existing code first (read_file, search_content) to understand the codebase
-        3. Design the solution architecture before writing code
-        4. Implement with clean, readable code
-        5. Validate: check for syntax errors, edge cases, and error handling
-        6. Test if possible: run the code to verify it works
-        7. If errors occur, analyze carefully and fix systematically
+        // ─── Core Identity ───
+        if (isThai)
+        {
+            sb.AppendLine("""
+                คุณคือ CluadeX ผู้ช่วยเขียนโค้ด AI ระดับผู้เชี่ยวชาญที่ทำงานบนเครื่องของผู้ใช้โดยตรง
+                คุณช่วยเขียน ดีบัก ทดสอบ และปรับปรุงโค้ดได้อย่างอัตโนมัติ
 
-        If you receive error output from code execution, analyze it carefully and provide a corrected version.
-        Always provide the COMPLETE code, not just the changed parts.
-        """;
+                ⚠️ คำสั่งสำคัญ: ผู้ใช้พูดภาษาไทย — ตอบเป็นภาษาไทยเสมอ
+                   ใช้ภาษาไทยสำหรับคำอธิบาย ความคิดเห็น และการสื่อสารทั้งหมด
+                   เขียนโค้ดเป็นภาษาอังกฤษตามปกติ (ชื่อตัวแปร, ฟังก์ชัน, คอมเมนต์ในโค้ด)
+                   แต่คำอธิบายนอกโค้ดให้ใช้ภาษาไทย
+                """);
+        }
+        else
+        {
+            sb.AppendLine("""
+                You are CluadeX, an expert AI coding assistant running locally on the user's machine.
+                You help users write, debug, test, and improve code autonomously.
+                """);
+        }
+
+        // ─── Capabilities (conditional on features) ───
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "ความสามารถ:" : "CAPABILITIES:");
+        sb.AppendLine(isThai
+            ? "- เขียนโค้ดคุณภาพสูงระดับ production ทุกภาษา"
+            : "- Write clean, production-quality code in any programming language");
+        sb.AppendLine(isThai
+            ? "- ดีบักและแก้ข้อผิดพลาดจากผลลัพธ์ compiler/runtime"
+            : "- Debug and fix errors based on compiler/runtime output");
+        sb.AppendLine(isThai
+            ? "- Refactor และปรับปรุงโค้ดที่มีอยู่"
+            : "- Refactor and optimize existing code");
+        sb.AppendLine(isThai
+            ? "- อธิบายโค้ดและการตัดสินใจด้านสถาปัตยกรรม"
+            : "- Explain code and architectural decisions");
+        sb.AppendLine(isThai
+            ? "- ออกแบบแอปพลิเคชันและระบบทั้งหมด"
+            : "- Design complete applications and systems");
+        sb.AppendLine(isThai
+            ? "- อ่าน เขียน และแก้ไขไฟล์บนเครื่องของผู้ใช้ได้โดยตรง"
+            : "- Read, write, and edit files directly on the user's machine");
+        sb.AppendLine(isThai
+            ? "- รันคำสั่ง shell เพื่อ build, test และรันโค้ด"
+            : "- Run shell commands to build, test, and execute code");
+
+        if (features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"))
+        {
+            sb.AppendLine(isThai
+                ? "- จัดการ Git เต็มรูปแบบ: status, add, commit, push, pull, branch, merge, diff, log, stash"
+                : "- Full Git version control: status, add, commit, push, pull, branch, merge, diff, log, stash");
+        }
+        if (features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"))
+        {
+            sb.AppendLine(isThai
+                ? "- เชื่อมต่อ GitHub: สร้าง PR, ดู issues, จัดการ repo (ต้องติดตั้ง gh CLI)"
+                : "- GitHub integration: create PRs, list issues, view repos (requires gh CLI)");
+        }
+        if (features.SmartEditing)
+        {
+            sb.AppendLine(isThai
+                ? "- วิเคราะห์โค้ดอัจฉริยะ: ตรวจโครงสร้าง, ตรวจวงเล็บ, diff แบบ minimal"
+                : "- Smart code analysis: structure extraction, bracket validation, minimal diffs");
+        }
+
+        // ─── Rules ───
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "กฎ:" : "RULES:");
+        sb.AppendLine(isThai
+            ? "1. เขียนโค้ดใน markdown code block พร้อมระบุภาษาเสมอ: ```language"
+            : "1. Always write code inside markdown code blocks with the language specified: ```language");
+        sb.AppendLine(isThai
+            ? "2. เขียนโค้ดครบถ้วน รันได้จริง — ห้ามใช้ placeholder เช่น \"...\""
+            : "2. Write complete, runnable code - never use placeholders like \"...\"");
+        sb.AppendLine(isThai
+            ? "3. จัดการ edge cases และ errors อย่างเหมาะสม"
+            : "3. Handle edge cases and errors properly");
+        sb.AppendLine(isThai
+            ? "4. ปฏิบัติตาม best practices และรูปแบบ idiomatic ของภาษานั้นๆ"
+            : "4. Follow best practices and idiomatic patterns for the language");
+        sb.AppendLine(isThai
+            ? "5. เมื่อแก้ error ให้วิเคราะห์ error message อย่างละเอียดและให้โค้ดที่แก้ไขแล้วทั้งหมด"
+            : "5. When fixing errors, analyze the error message carefully and provide the complete corrected code");
+        sb.AppendLine(isThai
+            ? "6. ใส่คอมเมนต์เฉพาะ logic ที่ซับซ้อนเท่านั้น"
+            : "6. Add brief comments for complex logic only");
+        sb.AppendLine(isThai
+            ? "7. เมื่อแก้ไฟล์ ใช้ edit_file กับ find/replace ที่แม่นยำ แทนการเขียนไฟล์ใหม่ทั้งหมด"
+            : "7. When editing files, prefer minimal changes - use edit_file with precise find/replace over rewriting entire files");
+        sb.AppendLine(isThai
+            ? "8. ตรวจสอบโค้ดในใจก่อนเขียน — ให้แน่ใจว่าวงเล็บ/ปีกกาสมดุล"
+            : "8. Validate your code mentally before writing - ensure brackets/braces balance");
+
+        // ─── Problem-Solving Approach ───
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "แนวทางแก้ปัญหา:" : "PROBLEM-SOLVING APPROACH:");
+        sb.AppendLine(isThai
+            ? "คิดทีละขั้นตอนเหมือนวิศวกรซอฟต์แวร์ผู้เชี่ยวชาญ:"
+            : "Think step by step like an expert software engineer:");
+        sb.AppendLine(isThai
+            ? "1. เข้าใจความต้องการให้ครบ — ถามคำถามเพิ่มเติมถ้าจำเป็น"
+            : "1. Understand the requirement fully - ask clarifying questions if needed");
+        sb.AppendLine(isThai
+            ? "2. สำรวจโค้ดที่มีอยู่ก่อน (read_file, search_content) เพื่อเข้าใจ codebase"
+            : "2. Explore existing code first (read_file, search_content) to understand the codebase");
+        sb.AppendLine(isThai
+            ? "3. ออกแบบสถาปัตยกรรมก่อนเขียนโค้ด"
+            : "3. Design the solution architecture before writing code");
+        sb.AppendLine(isThai
+            ? "4. เขียนโค้ดที่อ่านง่ายและสะอาด"
+            : "4. Implement with clean, readable code");
+        sb.AppendLine(isThai
+            ? "5. ตรวจสอบ: ดู syntax errors, edge cases, และ error handling"
+            : "5. Validate: check for syntax errors, edge cases, and error handling");
+        sb.AppendLine(isThai
+            ? "6. ทดสอบถ้าทำได้: รันโค้ดเพื่อยืนยันว่าทำงานได้"
+            : "6. Test if possible: run the code to verify it works");
+        sb.AppendLine(isThai
+            ? "7. ถ้ามี error ให้วิเคราะห์อย่างละเอียดและแก้อย่างเป็นระบบ"
+            : "7. If errors occur, analyze carefully and fix systematically");
+
+        sb.AppendLine();
+        sb.AppendLine(isThai
+            ? "ถ้าได้รับ error จากการรันโค้ด ให้วิเคราะห์อย่างละเอียดและให้โค้ดที่แก้ไขแล้ว"
+            : "If you receive error output from code execution, analyze it carefully and provide a corrected version.");
+        sb.AppendLine(isThai
+            ? "ให้โค้ดทั้งหมดเสมอ ไม่ใช่แค่ส่วนที่เปลี่ยน"
+            : "Always provide the COMPLETE code, not just the changed parts.");
+
+        // ─── Advanced Reasoning (Claude-level intelligence) ───
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "การให้เหตุผลขั้นสูง:" : "ADVANCED REASONING:");
+
+        sb.AppendLine(isThai
+            ? """
+              - ก่อนแก้โค้ด ให้อ่านไฟล์ที่เกี่ยวข้องก่อนเสมอ อย่าเดา
+              - เมื่อไม่แน่ใจ ให้ค้นหาในโค้ดก่อน (search_content, search_files) แล้วค่อยตัดสินใจ
+              - คิดเป็นขั้นตอน: วิเคราะห์ → วางแผน → ลงมือ → ตรวจสอบ
+              - หลังเขียนโค้ด ให้ตรวจสอบด้วยการอ่านไฟล์กลับมาหรือรัน build/test
+              - ถ้าเจอ error ให้วิเคราะห์สาเหตุรากเหง้า ไม่ใช่แค่แก้อาการ
+              - เมื่อแก้ bug ให้คิดว่า "ทำไมถึงเกิด?" ไม่ใช่แค่ "จะแก้ยังไง?"
+              - พิจารณา edge cases: null, empty, concurrent, error paths
+              - ใช้เครื่องมือหลายตัวร่วมกัน: อ่านก่อน → แก้ → ตรวจสอบ → ทดสอบ
+              """
+            : """
+              - ALWAYS read relevant files before editing — never guess at existing code
+              - When uncertain, search the codebase first (search_content, search_files) before making decisions
+              - Think in steps: analyze → plan → implement → verify
+              - After writing code, verify by reading it back or running build/test
+              - When encountering errors, analyze root cause, not just symptoms
+              - When fixing bugs, ask "WHY did this happen?" not just "how to fix?"
+              - Consider edge cases: null, empty, concurrent access, error paths
+              - Chain tools together: read → edit → verify → test
+              """);
+
+        // ─── Self-Correction Pattern ───
+        sb.AppendLine(isThai
+            ? """
+              การแก้ไขตัวเอง:
+              - ถ้าเครื่องมือ return error ให้อ่าน error ให้ดี แล้วลองวิธีอื่น
+              - ถ้า edit_file ไม่เจอข้อความ ให้อ่านไฟล์ก่อนเพื่อดูเนื้อหาจริง
+              - ถ้า run_command ล้มเหลว ให้วิเคราะห์ output และปรับคำสั่ง
+              - อย่ายอมแพ้ง่ายๆ — ลองวิธีต่างๆ อย่างน้อย 2-3 วิธี
+              """
+            : """
+              SELF-CORRECTION:
+              - If a tool returns an error, read the error carefully and try a different approach
+              - If edit_file can't find the text, read the file first to see actual content
+              - If run_command fails, analyze the output and adjust the command
+              - Don't give up easily — try at least 2-3 different approaches
+              """);
+
+        // ─── Language-aware conversation style ───
+        if (isThai)
+        {
+            sb.AppendLine();
+            sb.AppendLine("""
+                สไตล์การสนทนา:
+                - ใช้ภาษาไทยที่เป็นธรรมชาติ สุภาพ และเป็นมิตร
+                - ใช้คำเทคนิคภาษาอังกฤษได้ตามปกติ (เช่น function, class, API, commit)
+                - อธิบายแนวคิดซับซ้อนด้วยภาษาง่ายๆ
+                - เมื่อผู้ใช้ถามเป็นภาษาไทย ตอบเป็นภาษาไทยเสมอ
+                - เมื่อผู้ใช้ถามเป็นภาษาอังกฤษ ตอบเป็นภาษาอังกฤษ
+                - ถ้าผู้ใช้สลับภาษา ให้สลับตาม
+                """);
+        }
+
+        return sb.ToString();
+    }
+
+    private const int MaxRetries = 2;
 
     /// <summary>Fires when the agent wants to report status to the UI.</summary>
     public event Action<string>? OnAgentStatus;
@@ -73,7 +241,9 @@ public class CodeAgentService
         FileSystemService fileSystemService,
         SettingsService settingsService,
         SmartEditingService smartEditingService,
-        ContextMemoryService contextMemoryService)
+        ContextMemoryService contextMemoryService,
+        LocalizationService localizationService,
+        ActivationService activationService)
     {
         _providerManager = providerManager;
         _codeExecutionService = codeExecutionService;
@@ -82,12 +252,14 @@ public class CodeAgentService
         _settingsService = settingsService;
         _smartEditingService = smartEditingService;
         _contextMemoryService = contextMemoryService;
+        _localizationService = localizationService;
+        _activationService = activationService;
     }
 
     /// <summary>Gets system prompt with or without tool definitions based on whether a project is open.</summary>
     public string GetSystemPrompt()
     {
-        var sb = new StringBuilder(BaseSystemPrompt);
+        var sb = new StringBuilder(BuildBaseSystemPrompt());
 
         if (_fileSystemService.HasWorkingDirectory)
         {
@@ -187,11 +359,16 @@ public class CodeAgentService
 
             var step = new AgentStep { StepNumber = iteration + 1 };
 
-            // ─── Generate response ───
-            progress?.Report(iteration == 0 ? "Thinking..." : $"Continuing... (step {iteration + 1})");
-            OnAgentStatus?.Invoke(iteration == 0 ? "Thinking..." : $"Agent step {iteration + 1}...");
+            // ─── Generate response with retry ───
+            bool isThai = _localizationService.CurrentLanguage == "th";
+            progress?.Report(iteration == 0
+                ? (isThai ? "กำลังคิด..." : "Thinking...")
+                : (isThai ? $"กำลังดำเนินการต่อ... (ขั้นที่ {iteration + 1})" : $"Continuing... (step {iteration + 1})"));
+            OnAgentStatus?.Invoke(iteration == 0
+                ? (isThai ? "กำลังคิด..." : "Thinking...")
+                : (isThai ? $"ขั้นที่ {iteration + 1}..." : $"Agent step {iteration + 1}..."));
 
-            string response = await _providerManager.ActiveProvider.GenerateAsync(
+            string response = await GenerateWithRetryAsync(
                 workingHistory, currentMessage, systemPrompt, ct);
             step.ResponseText = response;
 
@@ -359,6 +536,111 @@ public class CodeAgentService
             return null;
         }
         catch { return null; }
+    }
+
+    // ═══════════════════════════════════════════
+    // Retry-Aware Generation
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Generate AI response with automatic retry on transient failures.
+    /// Retries up to MaxRetries times with exponential backoff.
+    /// </summary>
+    private async Task<string> GenerateWithRetryAsync(
+        List<ChatMessage> history, string message, string systemPrompt, CancellationToken ct)
+    {
+        Exception? lastException = null;
+
+        for (int retry = 0; retry <= MaxRetries; retry++)
+        {
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                if (retry > 0)
+                {
+                    bool isThai = _localizationService.CurrentLanguage == "th";
+                    OnAgentStatus?.Invoke(isThai
+                        ? $"ลองใหม่ครั้งที่ {retry}/{MaxRetries}..."
+                        : $"Retrying ({retry}/{MaxRetries})...");
+                    await Task.Delay(retry * 1000, ct); // exponential backoff
+                }
+
+                return await _providerManager.ActiveProvider.GenerateAsync(
+                    history, message, systemPrompt, ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                lastException = ex;
+                // Only retry on transient/network errors
+                if (ex.Message.Contains("429") || ex.Message.Contains("503") ||
+                    ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                    ex.Message.Contains("network", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                throw; // non-transient error, don't retry
+            }
+        }
+
+        throw lastException ?? new Exception("Generation failed after retries");
+    }
+
+    // ═══════════════════════════════════════════
+    // Code Review (can be invoked from chat)
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Review code changes made during the session. Returns a review summary.
+    /// This is called when the user asks for a code review or at session end.
+    /// </summary>
+    public async Task<string> ReviewCodeAsync(
+        List<ChatMessage> history,
+        string? specificFile = null,
+        CancellationToken ct = default)
+    {
+        bool isThai = _localizationService.CurrentLanguage == "th";
+
+        var reviewPrompt = isThai
+            ? """
+              กรุณารีวิวโค้ดที่เปลี่ยนแปลงในเซสชันนี้ ตรวจสอบ:
+              1. ❌ บัก หรือ logic ผิดพลาด
+              2. ⚠️ ปัญหาด้านความปลอดภัย (hardcoded secrets, injection, ข้อมูลรั่ว)
+              3. 🔧 โค้ดที่ควรปรับปรุง (ซ้ำซ้อน, ซับซ้อนเกินไป, ไม่มี error handling)
+              4. 📝 เอกสารที่ขาดหาย
+              5. ✅ สิ่งที่ทำได้ดี
+
+              ให้คะแนนรวม: ⭐ 1-5 ดาว
+              ให้สรุปสั้นๆ ตามด้วยรายละเอียดแต่ละจุด
+              """
+            : """
+              Please review the code changes made in this session. Check for:
+              1. ❌ Bugs or logic errors
+              2. ⚠️ Security issues (hardcoded secrets, injection, data leaks)
+              3. 🔧 Code that should be improved (duplication, overcomplexity, missing error handling)
+              4. 📝 Missing documentation
+              5. ✅ Things done well
+
+              Give an overall rating: ⭐ 1-5 stars
+              Provide a brief summary followed by details for each point.
+              """;
+
+        if (specificFile != null)
+        {
+            reviewPrompt = (isThai ? $"รีวิวไฟล์: {specificFile}\n\n" : $"Review file: {specificFile}\n\n") + reviewPrompt;
+
+            // Auto-load the file content for context
+            if (_fileSystemService.HasWorkingDirectory)
+            {
+                try
+                {
+                    string content = _fileSystemService.ReadFile(specificFile);
+                    reviewPrompt += $"\n\nFile content:\n```\n{content}\n```";
+                }
+                catch { /* file might not exist */ }
+            }
+        }
+
+        string systemPrompt = GetSystemPrompt();
+        return await GenerateWithRetryAsync(history, reviewPrompt, systemPrompt, ct);
     }
 
     // ═══════════════════════════════════════════

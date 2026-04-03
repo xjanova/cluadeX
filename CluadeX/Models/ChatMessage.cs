@@ -45,6 +45,19 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_hasError != value) { _hasError = value; OnPropertyChanged(); } }
     }
 
+    // ─── Token Usage Tracking ───
+    /// <summary>Estimated tokens used for this message.</summary>
+    public int TokenCount { get; set; }
+
+    /// <summary>Time taken to generate this response (ms).</summary>
+    public long GenerationTimeMs { get; set; }
+
+    /// <summary>Tokens per second for this response.</summary>
+    public double TokensPerSecond => GenerationTimeMs > 0 ? TokenCount / (GenerationTimeMs / 1000.0) : 0;
+
+    /// <summary>Number of tool calls made in this turn (agentic mode).</summary>
+    public int ToolCallCount { get; set; }
+
     // ─── Tool Action Fields ───
     /// <summary>Tool name for ToolAction messages (e.g. "read_file", "write_file")</summary>
     public string? ToolName { get; set; }

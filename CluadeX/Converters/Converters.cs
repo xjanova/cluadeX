@@ -218,6 +218,25 @@ public class ContextUsageBrushConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
+/// <summary>
+/// LED segment gate converter: returns true if ContextUsagePercent >= threshold.
+/// Parameter is the threshold (e.g. "0", "20", "40", "60", "80").
+/// Used to light up individual LED segments in the context bar.
+/// </summary>
+public class ContextLedGateConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        double percent = value is double d ? d : 0;
+        double threshold = 0;
+        if (parameter is string s && double.TryParse(s, out var t)) threshold = t;
+        return percent > threshold;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
 public class NullToCollapsedConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)

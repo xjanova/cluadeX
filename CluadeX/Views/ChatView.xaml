@@ -17,6 +17,7 @@
         <conv:InverseBoolConverter x:Key="InvertBool"/>
         <conv:BoolToStringConverter x:Key="BoolStr"/>
         <conv:ContextUsageBrushConverter x:Key="CtxBrush"/>
+        <conv:ContextLedGateConverter x:Key="CtxLedGate"/>
     </UserControl.Resources>
 
     <Grid>
@@ -684,43 +685,160 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Context Usage (always visible, compact) -->
+                <!-- LED-Style Context Bar -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0"
-                            VerticalAlignment="Center"
-                            ToolTip="AI Context Memory — how much the AI remembers from this chat">
-                    <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets"
-                               FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"
-                               Foreground="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}"/>
-                    <ProgressBar Value="{Binding ContextUsagePercent}" Maximum="100"
-                                 Width="100" Height="6"
-                                 Style="{StaticResource ContextProgressBar}"
-                                 Foreground="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}"
-                                 VerticalAlignment="Center"/>
+                            VerticalAlignment="Center">
+                    <!-- 5-segment LED bar -->
+                    <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
+                                ToolTip="Context Memory — AI quality degrades as this fills up">
+                        <!-- Segment 1: 0-20% (Green) -->
+                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=0}" Value="True">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.9"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                        <!-- Segment 2: 20-40% (Green) -->
+                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=20}" Value="True">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.9"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                        <!-- Segment 3: 40-60% (Yellow) -->
+                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.15"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=40}" Value="True">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.9"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                        <!-- Segment 4: 60-80% (Peach) -->
+                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.15"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=60}" Value="True">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.9"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                        <!-- Segment 5: 80-100% (Red) -->
+                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.15"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=80}" Value="True">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.9"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Level Label -->
+                    <Border CornerRadius="3" Padding="4,1" VerticalAlignment="Center"
+                            Background="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}"
+                            Opacity="0.8" Margin="0,0,4,0">
+                        <TextBlock Text="{Binding ContextLevelLabel}"
+                                   FontSize="8" FontWeight="ExtraBold"
+                                   Foreground="{StaticResource BaseColor}"
+                                   FontFamily="{StaticResource MonoFont}"/>
+                    </Border>
+
+                    <!-- Percentage -->
                     <TextBlock Foreground="{StaticResource Overlay0Brush}"
                                FontSize="10" FontFamily="{StaticResource MonoFont}"
-                               VerticalAlignment="Center" Margin="6,0,0,0">
+                               VerticalAlignment="Center">
                         <TextBlock.Text>
-                            <MultiBinding StringFormat="{}{0} ({1:F0}%)">
-                                <Binding Path="ContextUsageText"/>
-                                <Binding Path="ContextUsagePercent"/>
-                            </MultiBinding>
+                            <Binding Path="ContextUsagePercent" StringFormat="{}{0:F0}%"/>
                         </TextBlock.Text>
                     </TextBlock>
                 </StackPanel>
 
-                <!-- Memory Usage -->
-                <TextBlock Grid.Column="3" Text="{Binding MemoryUsageText}"
+                <!-- Per-Turn Stats -->
+                <TextBlock Grid.Column="3" Text="{Binding LastTurnStats}"
                            Foreground="{StaticResource Overlay0Brush}"
-                           FontSize="10" FontFamily="{StaticResource MonoFont}"
-                           VerticalAlignment="Center" Margin="4,0"/>
+                           FontSize="9" FontFamily="{StaticResource MonoFont}"
+                           VerticalAlignment="Center" Margin="6,0"
+                           ToolTip="Last turn: tokens · time · speed"/>
 
-                <!-- Auto-Execute Checkbox -->
-                <CheckBox Grid.Column="4" Content="Auto-Execute"
-                          IsChecked="{Binding AutoExecute}"
-                          Foreground="{StaticResource Subtext0Brush}"
-                          FontSize="10" VerticalAlignment="Center"
-                          Margin="8,0"
-                          ToolTip="Automatically run code blocks and fix errors"/>
+                <!-- Review + Auto-Execute -->
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource IconButton}"
+                            Command="{Binding ReviewCodeCommand}"
+                            ToolTip="Review code changes"
+                            FontSize="10" Padding="4,3" Margin="0,0,4,0"
+                            Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
+                        <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                    </Button>
+                    <CheckBox Content="Auto" IsChecked="{Binding AutoExecute}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="9" VerticalAlignment="Center"
+                              ToolTip="Automatically run code blocks and fix errors"/>
+                </StackPanel>
 
                 <!-- New Chat quick button -->
                 <Button Grid.Column="5" Style="{StaticResource IconButton}"

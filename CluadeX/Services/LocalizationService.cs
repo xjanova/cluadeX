@@ -139,6 +139,27 @@ public class LocalizationService
         ["feature.taskManager"] = new() { ["en"] = "Task Manager", ["th"] = "จัดการงาน" },
         ["feature.taskManager.desc"] = new() { ["en"] = "Run background shell commands with status tracking, output capture, and stop/kill.", ["th"] = "รันคำสั่ง Shell เบื้องหลังพร้อมติดตามสถานะ บันทึกผลลัพธ์ และหยุด/ฆ่ากระบวนการ" },
 
+        // ═══════ PLUGIN MANAGER ═══════
+        ["plugins.title"] = new() { ["en"] = "Plugin Manager", ["th"] = "จัดการปลั๊กอิน" },
+        ["plugins.subtitle"] = new() { ["en"] = "Browse catalog, install, and manage plugins", ["th"] = "เรียกดูแค็ตตาล็อก ติดตั้ง และจัดการปลั๊กอิน" },
+        ["plugins.installed"] = new() { ["en"] = "Installed", ["th"] = "ติดตั้งแล้ว" },
+        ["plugins.catalog"] = new() { ["en"] = "Catalog", ["th"] = "แค็ตตาล็อก" },
+        ["plugins.install"] = new() { ["en"] = "Install", ["th"] = "ติดตั้ง" },
+        ["plugins.uninstall"] = new() { ["en"] = "Uninstall", ["th"] = "ถอนการติดตั้ง" },
+        ["plugins.enable"] = new() { ["en"] = "Enable", ["th"] = "เปิดใช้" },
+        ["plugins.disable"] = new() { ["en"] = "Disable", ["th"] = "ปิดใช้" },
+        ["plugins.search"] = new() { ["en"] = "Search plugins...", ["th"] = "ค้นหาปลั๊กอิน..." },
+        ["plugins.noPlugins"] = new() { ["en"] = "No plugins installed yet.\nBrowse the Catalog tab to get started!", ["th"] = "ยังไม่มีปลั๊กอินที่ติดตั้ง\nไปที่แท็บแค็ตตาล็อกเพื่อเริ่มต้น!" },
+        ["plugins.selectPlugin"] = new() { ["en"] = "Select a plugin to view details", ["th"] = "เลือกปลั๊กอินเพื่อดูรายละเอียด" },
+        ["plugins.hookEvents"] = new() { ["en"] = "Hook Events", ["th"] = "เหตุการณ์ Hook" },
+        ["plugins.whatItDoes"] = new() { ["en"] = "What it does", ["th"] = "ทำอะไรได้บ้าง" },
+        ["plugins.author"] = new() { ["en"] = "Author", ["th"] = "ผู้สร้าง" },
+        ["plugins.category"] = new() { ["en"] = "Category", ["th"] = "หมวดหมู่" },
+        ["plugins.version"] = new() { ["en"] = "Version", ["th"] = "เวอร์ชัน" },
+        ["plugins.status"] = new() { ["en"] = "Status", ["th"] = "สถานะ" },
+        ["plugins.installedBadge"] = new() { ["en"] = "INSTALLED", ["th"] = "ติดตั้งแล้ว" },
+        ["plugins.availableBadge"] = new() { ["en"] = "AVAILABLE", ["th"] = "พร้อมติดตั้ง" },
+
         // ═══════ CHAT VIEW ═══════
         ["chat.placeholder"] = new() { ["en"] = "Type a message...", ["th"] = "พิมพ์ข้อความ..." },
         ["chat.send"] = new() { ["en"] = "Send", ["th"] = "ส่ง" },

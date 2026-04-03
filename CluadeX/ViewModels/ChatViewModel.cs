@@ -91,6 +91,22 @@ public class ChatViewModel : ViewModelBase
     public string ContextUsageText { get => _contextUsageText; set => SetProperty(ref _contextUsageText, value); }
     public string MemoryUsageText { get => _memoryUsageText; set => SetProperty(ref _memoryUsageText, value); }
 
+    // ─── Per-Turn Stats ───
+    private string _lastTurnStats = "";
+    public string LastTurnStats { get => _lastTurnStats; set => SetProperty(ref _lastTurnStats, value); }
+
+    // ─── Session Token Total ───
+    private int _sessionTotalTokens;
+    public int SessionTotalTokens { get => _sessionTotalTokens; set => SetProperty(ref _sessionTotalTokens, value); }
+    private int _sessionTurnCount;
+    public int SessionTurnCount { get => _sessionTurnCount; set => SetProperty(ref _sessionTurnCount, value); }
+
+    // ─── Context Level for LED bar ───
+    private string _contextLevelLabel = "OK";
+    public string ContextLevelLabel { get => _contextLevelLabel; set => SetProperty(ref _contextLevelLabel, value); }
+    private string _contextLevelColor = "Green";
+    public string ContextLevelColor { get => _contextLevelColor; set => SetProperty(ref _contextLevelColor, value); }
+
     /// <summary>Short display name for the project folder.</summary>
     public string ProjectName => HasProject ? Path.GetFileName(WorkingDirectory) : "";
 
@@ -136,6 +152,7 @@ public class ChatViewModel : ViewModelBase
     public ICommand DeleteSessionCommand { get; }
     public ICommand ClearSearchCommand { get; }
     public ICommand LoadSearchResultCommand { get; }
+    public ICommand ReviewCodeCommand { get; }
 
     public event Action? ScrollToBottom;
 
@@ -182,6 +199,7 @@ public class ChatViewModel : ViewModelBase
         DeleteSessionCommand = new RelayCommand<string>(DeleteSession);
         ClearSearchCommand = new RelayCommand(ClearHistorySearch);
         LoadSearchResultCommand = new RelayCommand<string>(LoadSession);
+        ReviewCodeCommand = new AsyncRelayCommand(RunCodeReview);
 
         // Listen for tool execution events
         _agentService.OnToolExecuted += OnToolExecuted;
@@ -415,21 +433,45 @@ public class ChatViewModel : ViewModelBase
             ContextUsageText = $"{used:N0} / {max:N0}";
             MemoryUsageText = _contextMemoryService.GetMemoryUsageDisplay();
 
-            // Context warning levels
-            if (ContextUsagePercent >= 90)
+            // Session stats
+            SessionTurnCount = messages.Count(m => m.Role == MessageRole.Assistant);
+            SessionTotalTokens = messages.Where(m => m.Role == MessageRole.Assistant).Sum(m => m.TokenCount);
+
+            // LED-style context level — 5 levels with labels
+            if (ContextUsagePercent < 25)
             {
-                ShowContextWarning = true;
-                ContextWarningText = "⚠ Context almost full! Start a New Chat to avoid losing context.";
+                ContextLevelLabel = "FRESH";
+                ContextLevelColor = "Green";
+                ShowContextWarning = false;
+                ContextWarningText = "";
             }
-            else if (ContextUsagePercent >= 75)
+            else if (ContextUsagePercent < 50)
             {
+                ContextLevelLabel = "OK";
+                ContextLevelColor = "Teal";
+                ShowContextWarning = false;
+                ContextWarningText = "";
+            }
+            else if (ContextUsagePercent < 75)
+            {
+                ContextLevelLabel = "WARM";
+                ContextLevelColor = "Yellow";
+                ShowContextWarning = false;
+                ContextWarningText = "";
+            }
+            else if (ContextUsagePercent < 90)
+            {
+                ContextLevelLabel = "HOT";
+                ContextLevelColor = "Peach";
                 ShowContextWarning = true;
-                ContextWarningText = "Context getting full — consider starting a New Chat soon.";
+                ContextWarningText = "⚠ Context getting full — responses may lose quality. Consider starting a New Chat soon.";
             }
             else
             {
-                ShowContextWarning = false;
-                ContextWarningText = "";
+                ContextLevelLabel = "FULL";
+                ContextLevelColor = "Red";
+                ShowContextWarning = true;
+                ContextWarningText = "🔴 Context almost full! Start a New Chat NOW for best results. The AI is losing earlier context.";
             }
         }
         catch { /* ignore during initialization */ }
@@ -686,6 +728,9 @@ public class ChatViewModel : ViewModelBase
         ScrollToBottom?.Invoke();
 
         var sb = new StringBuilder();
+        int tokenCount = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
         var history = CurrentSession?.Messages
             .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
             .SkipLast(1)
@@ -694,9 +739,7 @@ public class ChatViewModel : ViewModelBase
         await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
         {
             sb.Append(token);
-            // ChatMessage implements INotifyPropertyChanged —
-            // setting Content fires PropertyChanged, so the UI updates in-place.
-            // No need to replace the item in the ObservableCollection.
+            tokenCount++;
             App.Current?.Dispatcher.Invoke(() =>
             {
                 assistantMsg.Content = sb.ToString();
@@ -704,10 +747,14 @@ public class ChatViewModel : ViewModelBase
             ScrollToBottom?.Invoke();
         }
 
+        sw.Stop();
+
         // Finalize
         App.Current?.Dispatcher.Invoke(() =>
         {
             assistantMsg.IsStreaming = false;
+            assistantMsg.TokenCount = tokenCount;
+            assistantMsg.GenerationTimeMs = sw.ElapsedMilliseconds;
             string responseText = sb.ToString().Trim();
 
             if (string.IsNullOrWhiteSpace(responseText))
@@ -720,7 +767,12 @@ public class ChatViewModel : ViewModelBase
             {
                 assistantMsg.Content = responseText;
                 assistantMsg.CodeBlocks = _codeExecutionService.ExtractCodeBlocks(responseText);
-                StatusText = "Ready";
+
+                // Show per-turn stats
+                double tps = assistantMsg.TokensPerSecond;
+                double secs = sw.ElapsedMilliseconds / 1000.0;
+                StatusText = $"Ready · {tokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
+                LastTurnStats = $"{tokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
             }
         });
 
@@ -961,6 +1013,65 @@ public class ChatViewModel : ViewModelBase
         CurrentSession?.Messages.Clear();
         _isDirty = true;
         StatusText = "Chat cleared.";
+    }
+
+    // ─── Code Review ───
+    private async Task RunCodeReview()
+    {
+        if (!HasProject)
+        {
+            StatusText = "Open a project folder first to review code.";
+            return;
+        }
+        if (IsGenerating) return;
+
+        IsGenerating = true;
+        CanSend = false;
+        StatusText = "Reviewing code...";
+
+        try
+        {
+            _cts = new CancellationTokenSource();
+
+            var history = CurrentSession?.Messages
+                .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
+                .ToList() ?? new();
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var review = await _agentService.ReviewCodeAsync(history, null, _cts.Token);
+            sw.Stop();
+
+            int tokenEst = review.Length / 4; // rough estimate
+            var reviewMsg = new ChatMessage
+            {
+                Role = MessageRole.Assistant,
+                Content = review,
+                TokenCount = tokenEst,
+                GenerationTimeMs = sw.ElapsedMilliseconds,
+            };
+
+            Messages.Add(reviewMsg);
+            CurrentSession?.Messages.Add(reviewMsg);
+            StatusText = $"Review complete · {tokenEst} tokens · {sw.ElapsedMilliseconds / 1000.0:F1}s";
+            LastTurnStats = $"{tokenEst} tokens · {sw.ElapsedMilliseconds / 1000.0:F1}s";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Review cancelled.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Review failed: {SanitizeErrorMessage(ex.Message)}";
+        }
+        finally
+        {
+            IsGenerating = false;
+            CanSend = true;
+            _cts?.Dispose();
+            _cts = null;
+            UpdateContextInfo();
+            SaveNow();
+        }
     }
 
     /// <summary>Strip raw exception prefixes and sensitive info from error messages.</summary>

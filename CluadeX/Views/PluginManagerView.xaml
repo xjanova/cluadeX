@@ -7,21 +7,101 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Page Header -->
-        <StackPanel Margin="24,16,24,12">
-            <TextBlock Text="Plugin Manager" FontSize="24" FontWeight="Bold"
+        <StackPanel Margin="24,16,24,8">
+            <TextBlock Text="{Binding PageTitle}" FontSize="24" FontWeight="Bold"
                        Foreground="{StaticResource TextBrush}"
                        FontFamily="{StaticResource MainFont}"/>
-            <TextBlock Text="Install, enable, and manage plugins"
+            <TextBlock Text="{Binding PageSubtitle}"
                        Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,2,0,0"/>
         </StackPanel>
 
-        <!-- Main Content: Left List + Right Details -->
-        <Grid Grid.Row="1" Margin="24,0,24,0">
+        <!-- Tab Selector -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="24,4,24,8">
+            <!-- Installed Tab -->
+            <RadioButton x:Name="TabInstalled" GroupName="PluginTab"
+                         IsChecked="True" Cursor="Hand" Margin="0,0,4,0">
+                <RadioButton.Template>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="TabBorder" CornerRadius="6,6,0,0" Padding="16,8"
+                                Background="Transparent" BorderThickness="0,0,0,2"
+                                BorderBrush="Transparent">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"
+                                           Foreground="{StaticResource Subtext0Brush}"/>
+                                <TextBlock x:Name="TabText" Text="{Binding InstalledLabel}"
+                                           FontSize="13" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="TabBorder" Property="BorderBrush"
+                                        Value="{StaticResource BlueBrush}"/>
+                                <Setter TargetName="TabText" Property="Foreground"
+                                        Value="{StaticResource BlueBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabBorder" Property="Background"
+                                        Value="{StaticResource Surface0Brush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </RadioButton.Template>
+            </RadioButton>
+
+            <!-- Catalog Tab -->
+            <RadioButton x:Name="TabCatalog" GroupName="PluginTab"
+                         Cursor="Hand">
+                <RadioButton.Template>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="TabBorder" CornerRadius="6,6,0,0" Padding="16,8"
+                                Background="Transparent" BorderThickness="0,0,0,2"
+                                BorderBrush="Transparent">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE719;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"
+                                           Foreground="{StaticResource Subtext0Brush}"/>
+                                <TextBlock x:Name="TabText" Text="{Binding CatalogLabel}"
+                                           FontSize="13" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}"/>
+                                <!-- Plugin count badge -->
+                                <Border CornerRadius="8" Padding="6,1" Margin="6,0,0,0"
+                                        VerticalAlignment="Center">
+                                    <Border.Background>
+                                        <SolidColorBrush Color="{StaticResource MauveColor}" Opacity="0.2"/>
+                                    </Border.Background>
+                                    <TextBlock Text="{Binding CatalogPlugins.Count}" FontSize="10"
+                                               FontWeight="Bold" Foreground="{StaticResource MauveBrush}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="TabBorder" Property="BorderBrush"
+                                        Value="{StaticResource MauveBrush}"/>
+                                <Setter TargetName="TabText" Property="Foreground"
+                                        Value="{StaticResource MauveBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabBorder" Property="Background"
+                                        Value="{StaticResource Surface0Brush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </RadioButton.Template>
+            </RadioButton>
+        </StackPanel>
+
+        <!-- ═══════════════ INSTALLED TAB ═══════════════ -->
+        <Grid Grid.Row="2" Margin="24,0,24,0"
+              Visibility="{Binding IsChecked, ElementName=TabInstalled, Converter={StaticResource BoolToVis}}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="300"/>
                 <ColumnDefinition Width="16"/>
@@ -29,8 +109,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- Left Panel: Plugin List -->
-            <Border Background="{StaticResource Surface0Brush}" CornerRadius="8"
-                    Padding="0">
+            <Border Background="{StaticResource Surface0Brush}" CornerRadius="8">
                 <ListBox ItemsSource="{Binding Plugins}"
                          SelectedItem="{Binding SelectedPlugin}"
                          Background="Transparent" BorderThickness="0"
@@ -81,7 +160,6 @@
                                     <TextBlock Text="{Binding Version}" FontSize="11"
                                                Foreground="{StaticResource Overlay0Brush}" Margin="0,2,0,0"/>
                                 </StackPanel>
-                                <!-- ON/OFF Badge -->
                                 <Border Grid.Column="1" CornerRadius="4" Padding="8,3"
                                         VerticalAlignment="Center">
                                     <Border.Style>
@@ -127,32 +205,24 @@
             <Border Grid.Column="2" Background="{StaticResource Surface0Brush}"
                     CornerRadius="8" Padding="24,20">
                 <Grid>
-                    <!-- Empty state when nothing selected -->
                     <TextBlock Text="Select a plugin to view details"
                                Foreground="{StaticResource Overlay0Brush}"
                                FontSize="14" HorizontalAlignment="Center"
                                VerticalAlignment="Center"
                                Visibility="{Binding SelectedPlugin, Converter={StaticResource NullToCollapsed}, ConverterParameter=Invert}"/>
 
-                    <!-- Plugin details -->
                     <StackPanel DataContext="{Binding SelectedPlugin}"
                                 Visibility="{Binding DataContext.SelectedPlugin, RelativeSource={RelativeSource AncestorType=UserControl},
                                              Converter={StaticResource NullToCollapsed}}">
-
-                        <!-- Plugin Name -->
                         <TextBlock Text="{Binding Name}" FontSize="22" FontWeight="Bold"
                                    Foreground="{StaticResource TextBrush}"
                                    FontFamily="{StaticResource MainFont}" Margin="0,0,0,8"/>
-
-                        <!-- Version -->
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                             <TextBlock Text="Version:" Foreground="{StaticResource Overlay0Brush}"
                                        FontSize="13" Margin="0,0,8,0"/>
                             <TextBlock Text="{Binding Version}" Foreground="{StaticResource TextBrush}"
                                        FontSize="13" FontFamily="{StaticResource MonoFont}"/>
                         </StackPanel>
-
-                        <!-- Status -->
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                             <TextBlock Text="Status:" Foreground="{StaticResource Overlay0Brush}"
                                        FontSize="13" Margin="0,0,8,0"/>
@@ -191,14 +261,10 @@
                                 </TextBlock>
                             </Border>
                         </StackPanel>
-
-                        <!-- Description -->
                         <TextBlock Text="Description" Foreground="{StaticResource BlueBrush}"
                                    FontSize="14" FontWeight="SemiBold" Margin="0,8,0,6"/>
                         <TextBlock Text="{Binding Description}" Foreground="{StaticResource TextBrush}"
                                    FontSize="13" TextWrapping="Wrap" Margin="0,0,0,16"/>
-
-                        <!-- Path -->
                         <TextBlock Text="Location" Foreground="{StaticResource BlueBrush}"
                                    FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
                         <TextBlock Text="{Binding Path}" Foreground="{StaticResource Overlay0Brush}"
@@ -209,33 +275,233 @@
             </Border>
         </Grid>
 
+        <!-- ═══════════════ CATALOG TAB ═══════════════ -->
+        <Grid Grid.Row="2" Margin="24,0,24,0"
+              Visibility="{Binding IsChecked, ElementName=TabCatalog, Converter={StaticResource BoolToVis}}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Search Bar -->
+            <Border Background="{StaticResource Surface0Brush}" CornerRadius="8"
+                    Padding="12,8" Margin="0,0,0,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               Foreground="{StaticResource Overlay0Brush}"
+                               VerticalAlignment="Center" Margin="4,0,8,0"/>
+                    <TextBox Grid.Column="1" Text="{Binding CatalogFilter, UpdateSourceTrigger=PropertyChanged}"
+                             Background="Transparent" BorderThickness="0"
+                             Foreground="{StaticResource TextBrush}" FontSize="13"
+                             VerticalAlignment="Center" CaretBrush="{StaticResource TextBrush}"/>
+                </Grid>
+            </Border>
+
+            <!-- Catalog Grid -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl ItemsSource="{Binding CatalogPlugins}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Width="340" Margin="0,0,12,12" CornerRadius="10"
+                                    Padding="16,14" Cursor="Hand"
+                                    MouseLeftButtonDown="CatalogCard_Click">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="{StaticResource Surface0Brush}"/>
+                                        <Style.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                            </Trigger>
+                                            <DataTrigger Binding="{Binding IsInstalled}" Value="True">
+                                                <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}"/>
+                                                <Setter Property="BorderThickness" Value="1"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <!-- Row 0: Icon + Name + Badge -->
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Text="{Binding Icon}" FontSize="24"
+                                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
+
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="Bold"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Author}" FontSize="11"
+                                                       Foreground="{StaticResource Overlay0Brush}"/>
+                                        </StackPanel>
+
+                                        <!-- Installed / Available Badge -->
+                                        <Border Grid.Column="2" CornerRadius="4" Padding="6,2"
+                                                VerticalAlignment="Top" Margin="4,0,0,0">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background">
+                                                        <Setter.Value>
+                                                            <SolidColorBrush Color="{StaticResource BlueColor}" Opacity="0.15"/>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsInstalled}" Value="True">
+                                                            <Setter Property="Background">
+                                                                <Setter.Value>
+                                                                    <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock FontSize="9" FontWeight="Bold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="AVAILABLE"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource BlueBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsInstalled}" Value="True">
+                                                                <Setter Property="Text" Value="INSTALLED"/>
+                                                                <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Border>
+                                    </Grid>
+
+                                    <!-- Row 1: Description -->
+                                    <TextBlock Grid.Row="1" Text="{Binding Description}"
+                                               Foreground="{StaticResource Subtext0Brush}"
+                                               FontSize="12" TextWrapping="Wrap"
+                                               MaxHeight="48" TextTrimming="CharacterEllipsis"
+                                               Margin="0,8,0,0"/>
+
+                                    <!-- Row 2: Tags -->
+                                    <ItemsControl Grid.Row="2" ItemsSource="{Binding Tags}" Margin="0,8,0,0">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border CornerRadius="4" Padding="6,2" Margin="0,0,4,4">
+                                                    <Border.Background>
+                                                        <SolidColorBrush Color="{StaticResource Surface0Color}" Opacity="0.5"/>
+                                                    </Border.Background>
+                                                    <TextBlock Text="{Binding}" FontSize="10"
+                                                               Foreground="{StaticResource Overlay0Brush}"/>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <!-- Row 3: Hook events + Version -->
+                                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Text="{Binding Version}" FontSize="10"
+                                                   Foreground="{StaticResource Overlay0Brush}"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text=" · " Foreground="{StaticResource Overlay0Brush}"
+                                                   FontSize="10" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Category}" FontSize="10"
+                                                   Foreground="{StaticResource MauveBrush}"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+
         <!-- Bottom Toolbar -->
-        <Border Grid.Row="2" Background="{StaticResource Surface0Brush}"
+        <Border Grid.Row="3" Background="{StaticResource Surface0Brush}"
                 CornerRadius="8" Margin="24,12,24,16" Padding="16,12">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                <Button Content="Enable" Style="{StaticResource PrimaryButton}"
-                        Command="{Binding EnableCommand}" Margin="0,0,8,0"/>
-                <Button Content="Disable" Style="{StaticResource SecondaryButton}"
-                        Command="{Binding DisableCommand}" Margin="0,0,8,0"/>
-                <Button Content="Add Plugin" Style="{StaticResource SecondaryButton}"
-                        Command="{Binding AddPluginCommand}" Margin="0,0,8,0"/>
-                <Button Style="{StaticResource SecondaryButton}"
-                        Command="{Binding OpenFolderCommand}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <TextBlock Text="Open Folder" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Button>
-                <Button Style="{StaticResource SecondaryButton}"
-                        Command="{Binding RefreshCommand}" Margin="8,0,0,0">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <TextBlock Text="Refresh" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Button>
-            </StackPanel>
+            <Grid>
+                <!-- Installed tab toolbar -->
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsChecked, ElementName=TabInstalled, Converter={StaticResource BoolToVis}}">
+                    <Button Content="Enable" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding EnableCommand}" Margin="0,0,8,0"/>
+                    <Button Content="Disable" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding DisableCommand}" Margin="0,0,8,0"/>
+                    <Button Content="Add Plugin" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding AddPluginCommand}" Margin="0,0,8,0"/>
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding OpenFolderCommand}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Open Folder" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding RefreshCommand}" Margin="8,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Refresh" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <!-- Catalog tab toolbar -->
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsChecked, ElementName=TabCatalog, Converter={StaticResource BoolToVis}}">
+                    <Button Style="{StaticResource PrimaryButton}"
+                            Command="{Binding InstallCatalogCommand}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Install Selected" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding UninstallCatalogCommand}" Margin="8,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Uninstall" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding RefreshCommand}" Margin="8,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="Refresh" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </UserControl>
