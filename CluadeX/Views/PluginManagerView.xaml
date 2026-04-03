@@ -101,7 +101,7 @@
 
         <!-- ═══════════════ INSTALLED TAB ═══════════════ -->
         <Grid Grid.Row="2" Margin="24,0,24,0"
-              Visibility="{Binding IsChecked, ElementName=TabInstalled, Converter={StaticResource BoolToVis}}">
+              Visibility="{Binding IsChecked, ElementName=TabInstalled, Converter={StaticResource BoolVis}}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="300"/>
                 <ColumnDefinition Width="16"/>
@@ -277,7 +277,7 @@
 
         <!-- ═══════════════ CATALOG TAB ═══════════════ -->
         <Grid Grid.Row="2" Margin="24,0,24,0"
-              Visibility="{Binding IsChecked, ElementName=TabCatalog, Converter={StaticResource BoolToVis}}">
+              Visibility="{Binding IsChecked, ElementName=TabCatalog, Converter={StaticResource BoolVis}}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -448,7 +448,7 @@
             <Grid>
                 <!-- Installed tab toolbar -->
                 <StackPanel Orientation="Horizontal"
-                            Visibility="{Binding IsChecked, ElementName=TabInstalled, Converter={StaticResource BoolToVis}}">
+                            Visibility="{Binding IsChecked, ElementName=TabInstalled, Converter={StaticResource BoolVis}}">
                     <Button Content="Enable" Style="{StaticResource PrimaryButton}"
                             Command="{Binding EnableCommand}" Margin="0,0,8,0"/>
                     <Button Content="Disable" Style="{StaticResource SecondaryButton}"
@@ -475,7 +475,7 @@
 
                 <!-- Catalog tab toolbar -->
                 <StackPanel Orientation="Horizontal"
-                            Visibility="{Binding IsChecked, ElementName=TabCatalog, Converter={StaticResource BoolToVis}}">
+                            Visibility="{Binding IsChecked, ElementName=TabCatalog, Converter={StaticResource BoolVis}}">
                     <Button Style="{StaticResource PrimaryButton}"
                             Command="{Binding InstallCatalogCommand}">
                         <StackPanel Orientation="Horizontal">
