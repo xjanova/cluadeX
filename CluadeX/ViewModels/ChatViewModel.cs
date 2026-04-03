@@ -226,11 +226,7 @@ public class ChatViewModel : ViewModelBase
         _agentService.OnToolExecuted += OnToolExecuted;
 
         // Update context info when messages change
-        Messages.CollectionChanged += (_, _) =>
-        {
-            UpdateContextInfo();
-            _isDirty = true;
-        };
+        Messages.CollectionChanged += OnMessagesChanged;
 
         // Periodic RAM/context/GPU refresh every 5 seconds
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -398,17 +394,19 @@ public class ChatViewModel : ViewModelBase
     private void LoadSession(string? sessionId)
     {
         if (string.IsNullOrEmpty(sessionId)) return;
-
-        // Don't reload current session
         if (CurrentSession?.Id == sessionId) return;
 
-        // Save current first
-        AutoSave();
+        // Force save current session before switching
+        if (CurrentSession != null && CurrentSession.Messages.Count > 0)
+        {
+            _isDirty = true;
+            AutoSave();
+        }
 
-        // Try loading from database (full messages)
+        // Load from database
         var session = _persistenceService.LoadSession(sessionId);
 
-        // Fallback: check in-memory Sessions collection
+        // Fallback: in-memory
         session ??= Sessions.FirstOrDefault(s => s.Id == sessionId);
 
         if (session == null)
@@ -417,25 +415,25 @@ public class ChatViewModel : ViewModelBase
             return;
         }
 
-        App.Current?.Dispatcher.Invoke(() =>
-        {
-            CurrentSession = session;
-            Messages.Clear();
-            foreach (var msg in session.Messages)
-                Messages.Add(msg);
+        // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
+        var prevSession = CurrentSession;
+        CurrentSession = session;
 
-            if (session.Messages.Count == 0)
-            {
-                StatusText = $"Empty session: {session.Title}";
-            }
-            else
-            {
-                StatusText = $"Loaded: {session.Title} ({session.Messages.Count} messages)";
-            }
-            _isDirty = false;
-            UpdateContextInfo();
-            ScrollToBottom?.Invoke();
-        });
+        // Temporarily stop dirty tracking during load
+        Messages.CollectionChanged -= OnMessagesChanged;
+        Messages.Clear();
+        foreach (var msg in session.Messages)
+            Messages.Add(msg);
+        Messages.CollectionChanged += OnMessagesChanged;
+
+        _isDirty = false;
+
+        StatusText = session.Messages.Count > 0
+            ? $"Loaded: {session.Title} ({session.Messages.Count} messages)"
+            : $"Empty session: {session.Title}";
+
+        UpdateContextInfo();
+        ScrollToBottom?.Invoke();
     }
 
     private void DeleteSession(string? sessionId)
@@ -475,6 +473,12 @@ public class ChatViewModel : ViewModelBase
 
             StatusText = "Session deleted";
         });
+    }
+
+    private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        UpdateContextInfo();
+        _isDirty = true;
     }
 
     // ─── Context Tracking ───
@@ -637,17 +641,24 @@ public class ChatViewModel : ViewModelBase
     private void NewSession()
     {
         // Save current session before creating new
-        AutoSave();
+        if (CurrentSession != null && CurrentSession.Messages.Count > 0)
+        {
+            _isDirty = true;
+            AutoSave();
+        }
 
+        // Create new session
         var session = new ChatSession();
-        Sessions.Insert(0, session);
         CurrentSession = session;
         Messages.Clear();
+        Sessions.Insert(0, session);
         _isDirty = false;
 
-        // Persist immediately so LoadSession can find it
+        // Persist immediately so LoadSession can find it later
         try { _persistenceService.SaveSession(session); }
-        catch { /* ignore if save fails */ }
+        catch { /* ignore */ }
+
+        StatusText = "Ready";
     }
 
     // ─── Send Message ───

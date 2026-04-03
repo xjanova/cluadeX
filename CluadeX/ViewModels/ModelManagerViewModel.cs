@@ -47,6 +47,24 @@ public class ModelManagerViewModel : ViewModelBase
     public string GpuRecommendation { get => _gpuRecommendation; set => SetProperty(ref _gpuRecommendation, value); }
     public int AvailableVramMB { get => _availableVramMB; set => SetProperty(ref _availableVramMB, value); }
     public string SearchResultInfo { get => _searchResultInfo; set => SetProperty(ref _searchResultInfo, value); }
+
+    // ─── Pagination for Recommended Models ───
+    private int _currentPage = 1;
+    private int _itemsPerPage = 12;
+    public int CurrentPage { get => _currentPage; set { if (SetProperty(ref _currentPage, value)) FilterRecommendedModels(); } }
+    public int TotalPages => Math.Max(1, (int)Math.Ceiling(_filteredCount / (double)_itemsPerPage));
+    private int _filteredCount;
+    public string PageInfo => $"{_currentPage} / {TotalPages}";
+    public ICommand NextPageCommand => new RelayCommand(() => { if (_currentPage < TotalPages) CurrentPage++; }, () => _currentPage < TotalPages);
+    public ICommand PrevPageCommand => new RelayCommand(() => { if (_currentPage > 1) CurrentPage--; }, () => _currentPage > 1);
+
+    // ─── Search Pagination ───
+    private int _searchPage = 1;
+    private int _searchTotalPages = 1;
+    public int SearchPage { get => _searchPage; set => SetProperty(ref _searchPage, value); }
+    public int SearchTotalPages { get => _searchTotalPages; set => SetProperty(ref _searchTotalPages, value); }
+    public string SearchPageInfo => $"{_searchPage} / {_searchTotalPages}";
+
     public string SelectedCategory
     {
         get => _selectedCategory;
@@ -136,16 +154,28 @@ public class ModelManagerViewModel : ViewModelBase
             }
         }
 
-        RecommendedModels.Clear();
         var filtered = _selectedCategory == "All"
             ? _allRecommended
             : _allRecommended.Where(m => m.Category == _selectedCategory).ToList();
-        foreach (var model in filtered)
+
+        _filteredCount = filtered.Count;
+
+        // Apply pagination
+        var paged = filtered
+            .Skip((_currentPage - 1) * _itemsPerPage)
+            .Take(_itemsPerPage)
+            .ToList();
+
+        RecommendedModels.Clear();
+        foreach (var model in paged)
         {
             model.IsInstalled = localFiles.Contains(model.FileName);
             model.InstalledPath = model.IsInstalled && localPaths.TryGetValue(model.FileName, out var p) ? p : null;
             RecommendedModels.Add(model);
         }
+
+        OnPropertyChanged(nameof(TotalPages));
+        OnPropertyChanged(nameof(PageInfo));
     }
 
     private void RefreshLocalModels()

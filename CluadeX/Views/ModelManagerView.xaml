@@ -246,6 +246,9 @@
                                                    Foreground="{StaticResource Subtext0Brush}"
                                                    FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <!-- Star rating -->
+                                            <TextBlock Text="{Binding StarDisplay}" FontSize="11"
+                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
                                             <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
                                                 <Run Text="VRAM: "/><Run Text="{Binding RequiredVramMB, StringFormat='{}{0:N0} MB'}"/>
                                                 <Run Text="  |  Size: "/>
@@ -280,6 +283,17 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+
+                <!-- Pagination Controls -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,4">
+                    <Button Content="◀ Prev" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding PrevPageCommand}" Padding="12,4" FontSize="11"/>
+                    <TextBlock Text="{Binding PageInfo}" Foreground="{StaticResource TextBrush}"
+                               FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Margin="16,0" FontFamily="{StaticResource MonoFont}"/>
+                    <Button Content="Next ▶" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding NextPageCommand}" Padding="12,4" FontSize="11"/>
+                </StackPanel>
 
                 <!-- Empty state for filtered -->
                 <TextBlock Text="No models match this category for your GPU VRAM."
