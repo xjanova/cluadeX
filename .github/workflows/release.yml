@@ -35,14 +35,18 @@ jobs:
       - name: Build Release
         run: dotnet build CluadeX.sln -c Release --no-restore --nologo
 
-      - name: Publish single-file
-        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o publish --nologo
+      - name: Publish
+        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo
+
+      - name: Create zip
+        shell: pwsh
+        run: Compress-Archive -Path publish/* -DestinationPath CluadeX-win-x64.zip
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: CluadeX-x64
-          path: publish/CluadeX.exe
+          path: CluadeX-win-x64.zip
 
       - name: Create Release (on merge to main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -57,7 +61,7 @@ jobs:
             https://xman4289.com
 
             ### Download
-            Download `CluadeX.exe` below — single-file, self-contained, no installation required.
+            Download `CluadeX-win-x64.zip` below, extract, and run `CluadeX.exe`.
 
             ### Features
             - Beautiful Catppuccin Mocha dark theme with metallic UI
@@ -71,7 +75,7 @@ jobs:
             ### Requirements
             - Windows 10 1809+ (x64)
             - For local mode: [Ollama](https://ollama.com) or GGUF models
-          files: publish/CluadeX.exe
+          files: CluadeX-win-x64.zip
           draft: false
           prerelease: false
           make_latest: true
