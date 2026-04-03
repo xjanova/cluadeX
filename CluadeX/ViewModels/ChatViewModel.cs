@@ -23,6 +23,7 @@ public class ChatViewModel : ViewModelBase
     private readonly ChatPersistenceService _persistenceService;
     private readonly HuggingFaceService _huggingFaceService;
     private readonly LlamaInferenceService _llamaService;
+    private readonly GpuDetectionService _gpuDetection;
     private CancellationTokenSource? _cts;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _autoSaveTimer;
@@ -107,6 +108,24 @@ public class ChatViewModel : ViewModelBase
     private string _contextLevelColor = "Green";
     public string ContextLevelColor { get => _contextLevelColor; set => SetProperty(ref _contextLevelColor, value); }
 
+    // ─── GPU Live Stats ───
+    private string _gpuStatsText = "";
+    public string GpuStatsText { get => _gpuStatsText; set => SetProperty(ref _gpuStatsText, value); }
+    private int _gpuTempC;
+    public int GpuTempC { get => _gpuTempC; set => SetProperty(ref _gpuTempC, value); }
+    private int _gpuUsagePercent;
+    public int GpuUsagePercent { get => _gpuUsagePercent; set => SetProperty(ref _gpuUsagePercent, value); }
+
+    // ─── Plan Mode ───
+    private bool _isPlanMode;
+    public bool IsPlanMode { get => _isPlanMode; set => SetProperty(ref _isPlanMode, value); }
+
+    // ─── TODO List ───
+    private string _todoListText = "";
+    public string TodoListText { get => _todoListText; set => SetProperty(ref _todoListText, value); }
+    private bool _showTodoPanel;
+    public bool ShowTodoPanel { get => _showTodoPanel; set => SetProperty(ref _showTodoPanel, value); }
+
     /// <summary>Short display name for the project folder.</summary>
     public string ProjectName => HasProject ? Path.GetFileName(WorkingDirectory) : "";
 
@@ -168,7 +187,8 @@ public class ChatViewModel : ViewModelBase
         ContextMemoryService contextMemoryService,
         ChatPersistenceService persistenceService,
         HuggingFaceService huggingFaceService,
-        LlamaInferenceService llamaService)
+        LlamaInferenceService llamaService,
+        GpuDetectionService gpuDetection)
     {
         _providerManager = providerManager;
         _agentService = agentService;
@@ -182,6 +202,7 @@ public class ChatViewModel : ViewModelBase
         _persistenceService = persistenceService;
         _huggingFaceService = huggingFaceService;
         _llamaService = llamaService;
+        _gpuDetection = gpuDetection;
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
 
@@ -211,9 +232,13 @@ public class ChatViewModel : ViewModelBase
             _isDirty = true;
         };
 
-        // Periodic RAM/context refresh every 5 seconds
+        // Periodic RAM/context/GPU refresh every 5 seconds
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
-        _memoryTimer.Tick += (_, _) => UpdateContextInfo();
+        _memoryTimer.Tick += (_, _) =>
+        {
+            UpdateContextInfo();
+            UpdateGpuStats();
+        };
         _memoryTimer.Start();
 
         // Auto-save every 10 seconds if dirty
@@ -475,6 +500,32 @@ public class ChatViewModel : ViewModelBase
             }
         }
         catch { /* ignore during initialization */ }
+    }
+
+    // ─── GPU Live Stats ───
+    private void UpdateGpuStats()
+    {
+        try
+        {
+            var stats = _gpuDetection.GetLiveStats();
+            if (stats != null)
+            {
+                GpuStatsText = stats.StatusBarDisplay;
+                GpuTempC = stats.TemperatureC;
+                GpuUsagePercent = stats.GpuUtilization;
+            }
+            else
+            {
+                var info = _gpuDetection.DetectGpu();
+                GpuStatsText = info.VramTotalBytes > 0
+                    ? $"💾 {info.VramDisplay} ({info.GpuBrand})"
+                    : "CPU Mode";
+            }
+        }
+        catch
+        {
+            GpuStatsText = "";
+        }
     }
 
     // ─── Open / Close Project Folder ───

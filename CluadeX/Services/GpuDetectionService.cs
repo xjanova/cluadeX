@@ -262,4 +262,52 @@ public class GpuDetectionService
     }
 
     public void ClearCache() => _cachedInfo = null;
+
+    // ─── Real-Time GPU Monitoring ─────────────────────────────────────
+    // Uses nvidia-smi for NVIDIA GPUs. Returns null for AMD/Intel (not supported).
+
+    /// <summary>Get real-time GPU stats: temperature, utilization, VRAM used/free, power.</summary>
+    public GpuLiveStats? GetLiveStats()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "nvidia-smi",
+                Arguments = "--query-gpu=temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.free,memory.total,power.draw,power.limit,fan.speed --format=csv,noheader,nounits",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            using var process = Process.Start(psi);
+            if (process == null) return null;
+
+            string output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(3000);
+
+            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+                return null;
+
+            string[] parts = output.Trim().Split(',');
+            if (parts.Length >= 6)
+            {
+                return new GpuLiveStats
+                {
+                    TemperatureC = int.TryParse(parts[0].Trim(), out var t) ? t : 0,
+                    GpuUtilization = int.TryParse(parts[1].Trim(), out var gu) ? gu : 0,
+                    MemoryUtilization = int.TryParse(parts[2].Trim(), out var mu) ? mu : 0,
+                    VramUsedMB = int.TryParse(parts[3].Trim(), out var vu) ? vu : 0,
+                    VramFreeMB = int.TryParse(parts[4].Trim(), out var vf) ? vf : 0,
+                    VramTotalMB = int.TryParse(parts[5].Trim(), out var vt) ? vt : 0,
+                    PowerDrawW = parts.Length > 6 && double.TryParse(parts[6].Trim(), out var pw) ? pw : 0,
+                    PowerLimitW = parts.Length > 7 && double.TryParse(parts[7].Trim(), out var pl) ? pl : 0,
+                    FanSpeedPercent = parts.Length > 8 && int.TryParse(parts[8].Trim(), out var fs) ? fs : -1,
+                };
+            }
+        }
+        catch { }
+
+        return null;
+    }
 }

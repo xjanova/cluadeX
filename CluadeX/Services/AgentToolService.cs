@@ -19,6 +19,12 @@ public class AgentToolService
     private readonly PermissionService _permissionService;
     private readonly SettingsService _settingsService;
     private readonly ActivationService _activationService;
+    private readonly WebFetchService _webFetchService;
+
+    // ─── TODO List State ───
+    private readonly List<TodoItem> _todoItems = new();
+    public IReadOnlyList<TodoItem> TodoItems => _todoItems;
+    public event Action? TodoChanged;
 
     // Regex to match [ACTION: tool_name]...[/ACTION] blocks
     private static readonly Regex ActionRegex = new(
@@ -30,7 +36,8 @@ public class AgentToolService
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
-        SettingsService settingsService, ActivationService activationService)
+        SettingsService settingsService, ActivationService activationService,
+        WebFetchService webFetchService)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -39,6 +46,7 @@ public class AgentToolService
         _permissionService = permissionService;
         _settingsService = settingsService;
         _activationService = activationService;
+        _webFetchService = webFetchService;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -152,6 +160,13 @@ public class AgentToolService
                 ToolType.GhIssueCreate => await ExecuteGhIssueCreateAsync(call),
                 ToolType.GhIssueList => await ExecuteGhIssueListAsync(call),
                 ToolType.GhRepoView => await ExecuteGhRepoViewAsync(call),
+
+                // Web tools
+                ToolType.WebFetch => await ExecuteWebFetchAsync(call, ct),
+
+                // Agent meta-tools
+                ToolType.TodoWrite => ExecuteTodoWrite(call),
+                ToolType.PlanMode => ExecutePlanMode(call),
 
                 _ => new ToolResult
                 {
@@ -386,6 +401,44 @@ public class AgentToolService
             """);
         }
 
+        // Web tools (always available if feature unlocked)
+        if (_activationService.IsFeatureUnlocked("feature.webFetch")
+            && _settingsService.Settings.Features.WebFetch)
+        {
+            sb.AppendLine("""
+
+            WEB TOOLS:
+
+            26. web_fetch - Fetch a URL and get text content
+                [ACTION: web_fetch]
+                url: https://example.com/api/data
+                [/ACTION]
+            """);
+        }
+
+        // Agent meta-tools (always available)
+        sb.AppendLine("""
+
+            AGENT META-TOOLS:
+
+            27. todo_write - Manage a TODO list for tracking progress
+                [ACTION: todo_write]
+                action: add
+                content: Implement authentication system
+                [/ACTION]
+                Actions: add, complete (index: N or content: text), list, clear
+
+            28. plan_mode - Create an execution plan before implementing
+                [ACTION: plan_mode]
+                action: create
+                plan:
+                1. Read existing code
+                2. Design the solution
+                3. Implement changes
+                4. Verify and test
+                [/ACTION]
+        """);
+
         sb.AppendLine("""
 
             RULES:
@@ -395,6 +448,8 @@ public class AgentToolService
             - Explain what you're doing before and after using tools
             - Paths are relative to the project root
             - After making changes, verify them by reading the file or running tests
+            - For complex tasks, use plan_mode first to outline your approach
+            - Use todo_write to track progress on multi-step tasks
             """);
 
         if (gitEnabled)
@@ -426,6 +481,13 @@ public class AgentToolService
             ToolType.GhPrCreate or ToolType.GhPrList or
             ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView
                 => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
+
+            // Web fetch — require activation
+            ToolType.WebFetch
+                => features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"),
+
+            // Agent meta-tools (todo, plan) — always available
+            ToolType.TodoWrite or ToolType.PlanMode => true,
 
             // File/code tools — always available (core features)
             _ => true,
@@ -928,6 +990,151 @@ public class AgentToolService
     }
 
     // ════════════════════════════════════════════
+    // Web Fetch Tool
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteWebFetchAsync(ToolCall call, CancellationToken ct)
+    {
+        string url = call.GetArg("url");
+        if (string.IsNullOrEmpty(url))
+            return Fail(call, "Missing 'url' argument");
+
+        try
+        {
+            string content = await _webFetchService.FetchAsync(url, ct);
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = content.Length > 4000 ? content[..4000] + "\n... (truncated)" : content,
+                Summary = $"Fetched {url} ({content.Length} chars)",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Fetch failed: {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
+    // TODO & Plan Mode Tools
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteTodoWrite(ToolCall call)
+    {
+        string action = call.GetArg("action", "add");
+        string content = call.GetArg("content", call.GetArg("text", call.GetArg("item")));
+        string status = call.GetArg("status", "pending");
+
+        switch (action.ToLowerInvariant())
+        {
+            case "add":
+                if (string.IsNullOrEmpty(content))
+                    return Fail(call, "Missing 'content' for todo item");
+                _todoItems.Add(new TodoItem { Content = content, Status = status });
+                TodoChanged?.Invoke();
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = $"Added: {content} [{status}]",
+                    Summary = $"Added TODO: {content}",
+                };
+
+            case "complete" or "done":
+                int idx = int.TryParse(call.GetArg("index", "-1"), out var i) ? i : -1;
+                if (idx >= 0 && idx < _todoItems.Count)
+                {
+                    _todoItems[idx].Status = "completed";
+                    TodoChanged?.Invoke();
+                    return new ToolResult
+                    {
+                        Type = call.Type, ToolName = call.ToolName, Success = true,
+                        Output = $"Completed: {_todoItems[idx].Content}",
+                        Summary = $"Completed TODO #{idx}",
+                    };
+                }
+                // Try matching by content
+                var match = _todoItems.FirstOrDefault(t =>
+                    t.Content.Contains(content ?? "", StringComparison.OrdinalIgnoreCase) && t.Status != "completed");
+                if (match != null)
+                {
+                    match.Status = "completed";
+                    TodoChanged?.Invoke();
+                    return new ToolResult
+                    {
+                        Type = call.Type, ToolName = call.ToolName, Success = true,
+                        Output = $"Completed: {match.Content}",
+                        Summary = $"Completed TODO: {match.Content}",
+                    };
+                }
+                return Fail(call, "TODO item not found");
+
+            case "list":
+                if (_todoItems.Count == 0)
+                    return new ToolResult
+                    {
+                        Type = call.Type, ToolName = call.ToolName, Success = true,
+                        Output = "No TODOs in list.",
+                        Summary = "TODO list empty",
+                    };
+                var sb = new StringBuilder();
+                for (int j = 0; j < _todoItems.Count; j++)
+                {
+                    var t = _todoItems[j];
+                    string icon = t.Status == "completed" ? "✅" : t.Status == "in_progress" ? "🔄" : "⬜";
+                    sb.AppendLine($"{j}. {icon} [{t.Status}] {t.Content}");
+                }
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = sb.ToString(),
+                    Summary = $"TODO: {_todoItems.Count} items ({_todoItems.Count(t => t.Status == "completed")} done)",
+                };
+
+            case "clear":
+                _todoItems.Clear();
+                TodoChanged?.Invoke();
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = "TODO list cleared.",
+                    Summary = "Cleared TODO list",
+                };
+
+            default:
+                return Fail(call, $"Unknown action: {action}. Use: add, complete, list, clear");
+        }
+    }
+
+    private ToolResult ExecutePlanMode(ToolCall call)
+    {
+        string planContent = call.GetArg("plan", call.GetArg("content", ""));
+        string action = call.GetArg("action", "create");
+
+        if (action == "create" || !string.IsNullOrEmpty(planContent))
+        {
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = $"📋 PLAN:\n{planContent}\n\nI will now execute this plan step by step.",
+                Summary = "Created execution plan",
+            };
+        }
+
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = "Plan mode activated. Create a plan with action: create and plan: <your plan>",
+            Summary = "Plan mode ready",
+        };
+    }
+
+    // ════════════════════════════════════════════
     // Helpers
     // ════════════════════════════════════════════
 
@@ -965,6 +1172,13 @@ public class AgentToolService
             "gh_issue_create" or "ghissuecreate" or "issue_create" => ToolType.GhIssueCreate,
             "gh_issue_list" or "ghissuelist" or "issue_list" => ToolType.GhIssueList,
             "gh_repo_view" or "ghrepoview" or "repo_view" => ToolType.GhRepoView,
+
+            // Web tools
+            "web_fetch" or "webfetch" or "fetch_url" or "fetch" => ToolType.WebFetch,
+
+            // Agent meta-tools
+            "todo_write" or "todowrite" or "todo" or "update_todo" => ToolType.TodoWrite,
+            "plan_mode" or "planmode" or "plan" or "enter_plan" => ToolType.PlanMode,
 
             _ => null,
         };

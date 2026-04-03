@@ -127,3 +127,32 @@ public class ModelSizeRecommendation
     public string RecommendedQuantization { get; set; } = "Q4_K_M";
     public string Description { get; set; } = string.Empty;
 }
+
+/// <summary>Real-time GPU stats from nvidia-smi.</summary>
+public class GpuLiveStats
+{
+    public int TemperatureC { get; set; }
+    public int GpuUtilization { get; set; }   // 0-100%
+    public int MemoryUtilization { get; set; } // 0-100%
+    public int VramUsedMB { get; set; }
+    public int VramFreeMB { get; set; }
+    public int VramTotalMB { get; set; }
+    public double PowerDrawW { get; set; }
+    public double PowerLimitW { get; set; }
+    public int FanSpeedPercent { get; set; } = -1; // -1 = N/A
+
+    public double VramUsedGB => Math.Round(VramUsedMB / 1024.0, 1);
+    public double VramTotalGB => Math.Round(VramTotalMB / 1024.0, 1);
+    public int VramUsagePercent => VramTotalMB > 0 ? (int)(VramUsedMB * 100.0 / VramTotalMB) : 0;
+
+    /// <summary>Temperature color: Green < 60°C, Yellow < 80°C, Red ≥ 80°C</summary>
+    public string TempColor => TemperatureC < 60 ? "Green" : TemperatureC < 80 ? "Yellow" : "Red";
+
+    /// <summary>Compact display: "45°C · GPU 23% · VRAM 4.2/8.0 GB"</summary>
+    public string CompactDisplay =>
+        $"{TemperatureC}°C · GPU {GpuUtilization}% · VRAM {VramUsedGB:F1}/{VramTotalGB:F1} GB";
+
+    /// <summary>One-line status for status bar</summary>
+    public string StatusBarDisplay =>
+        $"🌡️{TemperatureC}°C ⚡{GpuUtilization}% 💾{VramUsedGB:F1}/{VramTotalGB:F1}GB";
+}

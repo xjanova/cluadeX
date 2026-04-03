@@ -35,6 +35,13 @@ public enum ToolType
     GhIssueCreate,
     GhIssueList,
     GhRepoView,
+
+    // Web operations
+    WebFetch,
+
+    // Agent meta-tools
+    TodoWrite,
+    PlanMode,
 }
 
 /// <summary>
@@ -75,4 +82,12 @@ public class AgentStep
     public List<ToolCall> ToolCalls { get; set; } = new();
     public List<ToolResult> ToolResults { get; set; } = new();
     public string? ResponseText { get; set; }
+}
+
+/// <summary>A TODO item managed by the agent's todo_write tool.</summary>
+public class TodoItem
+{
+    public string Content { get; set; } = "";
+    public string Status { get; set; } = "pending"; // pending, in_progress, completed
+    public DateTime CreatedAt { get; set; } = DateTime.Now;
 }
