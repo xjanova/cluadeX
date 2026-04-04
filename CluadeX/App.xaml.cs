@@ -1,6 +1,7 @@
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using CluadeX.Services;
+using CluadeX.Services.Mcp;
 using CluadeX.ViewModels;
 
 namespace CluadeX;
@@ -50,6 +51,7 @@ public partial class App : Application
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
         services.AddSingleton<LspClientService>();
+        services.AddSingleton<McpServerManager>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();

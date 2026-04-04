@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using CluadeX.Models;
+using CluadeX.Services.Mcp;
 
 namespace CluadeX.Services;
 
@@ -21,6 +22,7 @@ public class AgentToolService
     private readonly ActivationService _activationService;
     private readonly WebFetchService _webFetchService;
     private readonly TaskManagerService _taskManager;
+    private readonly McpServerManager _mcpManager;
 
     // ─── TODO List State ───
     private readonly List<TodoItem> _todoItems = new();
@@ -45,7 +47,8 @@ public class AgentToolService
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
-        WebFetchService webFetchService, TaskManagerService taskManager)
+        WebFetchService webFetchService, TaskManagerService taskManager,
+        McpServerManager mcpManager)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -56,6 +59,7 @@ public class AgentToolService
         _activationService = activationService;
         _webFetchService = webFetchService;
         _taskManager = taskManager;
+        _mcpManager = mcpManager;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -73,13 +77,26 @@ public class AgentToolService
 
             var args = ParseArguments(body, toolType.Value);
 
-            calls.Add(new ToolCall
+            var call = new ToolCall
             {
                 Type = toolType.Value,
                 ToolName = toolName,
                 Arguments = args,
                 RawText = match.Value,
-            });
+            };
+
+            // Set MCP metadata if it's an MCP tool
+            if (toolType == ToolType.McpTool)
+            {
+                var mcpTool = _mcpManager.ToolRegistry.ResolveTool(toolName);
+                if (mcpTool != null)
+                {
+                    call.McpServerName = mcpTool.ServerName;
+                    call.McpToolName = mcpTool.Name;
+                }
+            }
+
+            calls.Add(call);
         }
 
         return calls;
@@ -189,6 +206,9 @@ public class AgentToolService
 
                 // Agent sub-task
                 ToolType.AgentSpawn => await ExecuteAgentSpawnAsync(call, ct),
+
+                // MCP tools
+                ToolType.McpTool => await ExecuteMcpToolAsync(call, ct),
 
                 // Agent meta-tools
                 ToolType.TodoWrite => ExecuteTodoWrite(call),
@@ -527,6 +547,14 @@ public class AgentToolService
                 [/ACTION]
         """);
 
+        // MCP server tools (dynamically discovered)
+        if (_settingsService.Settings.Features.McpServers)
+        {
+            string mcpPrompt = _mcpManager.ToolRegistry.GetToolDefinitionsPrompt();
+            if (!string.IsNullOrEmpty(mcpPrompt))
+                sb.AppendLine(mcpPrompt);
+        }
+
         sb.AppendLine("""
 
             RULES:
@@ -543,6 +571,7 @@ public class AgentToolService
         if (gitEnabled)
         {
             sb.AppendLine("""
+            - For MCP tools, use the fully qualified name (mcp__server__tool)
             - Use git tools to manage version control
             - Always check git_status before committing
             - Write meaningful commit messages
@@ -600,6 +629,9 @@ public class AgentToolService
 
             // Agent sub-task — always available
             ToolType.AgentSpawn => true,
+
+            // MCP tools — require MCP feature enabled
+            ToolType.McpTool => features.McpServers,
 
             // Agent meta-tools (todo, plan) — always available
             ToolType.TodoWrite or ToolType.PlanMode => true,
@@ -1507,11 +1539,63 @@ public class AgentToolService
     }
 
     // ════════════════════════════════════════════
+    // MCP Tool Execution
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteMcpToolAsync(ToolCall call, CancellationToken ct)
+    {
+        string serverName = call.McpServerName ?? "";
+        string toolName = call.McpToolName ?? call.ToolName;
+
+        if (string.IsNullOrEmpty(serverName))
+        {
+            // Try to resolve from qualified name
+            var mcpTool = _mcpManager.ToolRegistry.ResolveTool(call.ToolName);
+            if (mcpTool == null)
+                return Fail(call, $"MCP tool not found: {call.ToolName}");
+            serverName = mcpTool.ServerName;
+            toolName = mcpTool.Name;
+        }
+
+        if (!_mcpManager.IsServerRunning(serverName))
+            return Fail(call, $"MCP server '{serverName}' is not running. Start it first.");
+
+        try
+        {
+            var result = await _mcpManager.CallToolAsync(serverName, toolName, call.Arguments, ct);
+            string output = result.GetTextOutput();
+
+            if (output.Length > 4000)
+                output = output[..4000] + "\n... (truncated)";
+
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = !result.IsError,
+                Output = output,
+                Error = result.IsError ? output : "",
+                Summary = result.IsError
+                    ? $"MCP error ({serverName}/{toolName}): {output[..Math.Min(80, output.Length)]}"
+                    : $"MCP ({serverName}/{toolName}): OK",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"MCP call failed ({serverName}/{toolName}): {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
     // Helpers
     // ════════════════════════════════════════════
 
-    private static ToolType? ResolveToolType(string toolName)
+    private ToolType? ResolveToolType(string toolName)
     {
+        // Check MCP tools first (qualified names: mcp__server__tool)
+        if (toolName.StartsWith("mcp__") && _mcpManager.ToolRegistry.ResolveTool(toolName) != null)
+            return ToolType.McpTool;
+
         return toolName switch
         {
             // File tools

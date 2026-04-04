@@ -56,6 +56,9 @@ public enum ToolType
     // Agent sub-task
     AgentSpawn,
 
+    // MCP (external tool servers)
+    McpTool,
+
     // Agent meta-tools
     TodoWrite,
     PlanMode,
@@ -70,6 +73,11 @@ public class ToolCall
     public string ToolName { get; set; } = string.Empty;
     public Dictionary<string, string> Arguments { get; set; } = new();
     public string RawText { get; set; } = string.Empty;
+
+    /// <summary>For MCP tools: the server that provides this tool.</summary>
+    public string? McpServerName { get; set; }
+    /// <summary>For MCP tools: the original tool name on the server.</summary>
+    public string? McpToolName { get; set; }
 
     public string GetArg(string key, string defaultValue = "")
         => Arguments.TryGetValue(key, out var val) ? val : defaultValue;

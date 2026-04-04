@@ -78,6 +78,9 @@ public class FeatureToggles
     public bool MarkdownRendering { get; set; } = true;
     public bool SyntaxHighlighting { get; set; } = true;
 
+    // MCP Servers
+    public bool McpServers { get; set; } = true;
+
     // Security
     public bool PermissionSystem { get; set; } = true;
     public bool DangerousCommandBlocking { get; set; } = true;
