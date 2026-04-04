@@ -34,6 +34,13 @@ public class AppSettings
     public int BatchSize { get; set; } = 512;
     public int ThreadCount { get; set; } = 0;
 
+    /// <summary>
+    /// Path to a custom llama.cpp backend directory containing llama.dll, ggml.dll, etc.
+    /// When set, overrides the bundled LLamaSharp backend DLLs.
+    /// Use this to support newer model architectures (e.g., Gemma 4) before LLamaSharp updates.
+    /// </summary>
+    public string? CustomLlamaCppBackendPath { get; set; }
+
     // Agent settings
     public bool AutoExecuteCode { get; set; } = false;
     public int MaxAutoFixAttempts { get; set; } = 3;

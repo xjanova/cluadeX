@@ -1,9 +1,11 @@
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using LLama;
 using LLama.Common;
 using LLama.Exceptions;
+using LLama.Native;
 using CluadeX.Models;
 
 namespace CluadeX.Services;
@@ -18,6 +20,7 @@ public class LlamaInferenceService : IDisposable
     private string? _loadedModelPath;
     private bool _isLoading;
     private bool _disposed;
+    private static bool _backendConfigured;
 
     public bool IsModelLoaded => _model != null;
     public bool IsLoading => _isLoading;
@@ -31,6 +34,48 @@ public class LlamaInferenceService : IDisposable
     public LlamaInferenceService(SettingsService settingsService)
     {
         _settingsService = settingsService;
+        ConfigureCustomBackend();
+    }
+
+    /// <summary>
+    /// Configure a custom llama.cpp backend if specified in settings.
+    /// This allows using a newer llama.cpp build that supports newer architectures
+    /// (e.g., Gemma 4) before LLamaSharp officially updates.
+    /// </summary>
+    private void ConfigureCustomBackend()
+    {
+        if (_backendConfigured) return;
+        _backendConfigured = true;
+
+        try
+        {
+            string? customPath = _settingsService.Settings.CustomLlamaCppBackendPath;
+
+            if (!string.IsNullOrEmpty(customPath) && Directory.Exists(customPath))
+            {
+                // Check if the custom directory has the required DLLs
+                string llamaDll = Path.Combine(customPath, "llama.dll");
+                if (File.Exists(llamaDll))
+                {
+                    NativeLibraryConfig.All.WithSearchDirectory(customPath);
+                    System.Diagnostics.Debug.WriteLine($"Custom llama.cpp backend: {customPath}");
+                    return;
+                }
+            }
+
+            // Auto-detect: check for a "llama-backend" folder next to the app
+            string appDir = AppDomain.CurrentDomain.BaseDirectory;
+            string autoBackendDir = Path.Combine(appDir, "llama-backend");
+            if (Directory.Exists(autoBackendDir) && File.Exists(Path.Combine(autoBackendDir, "llama.dll")))
+            {
+                NativeLibraryConfig.All.WithSearchDirectory(autoBackendDir);
+                System.Diagnostics.Debug.WriteLine($"Auto-detected custom backend: {autoBackendDir}");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Custom backend config failed: {ex.Message}");
+        }
     }
 
     public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
@@ -225,8 +270,17 @@ public class LlamaInferenceService : IDisposable
             msg.Contains("unknown model", StringComparison.OrdinalIgnoreCase) ||
             msg.Contains("architecture", StringComparison.OrdinalIgnoreCase))
         {
-            reasons.AppendLine("Possible cause: Model architecture not supported by this version of LLamaSharp.");
-            reasons.AppendLine("Try a different quantization or a model from a supported architecture.");
+            reasons.AppendLine("Possible cause: Model architecture not supported by the bundled llama.cpp backend.");
+            reasons.AppendLine();
+            reasons.AppendLine("FIX: Download the latest llama.cpp release from:");
+            reasons.AppendLine("  https://github.com/ggml-org/llama.cpp/releases");
+            reasons.AppendLine("Extract it and either:");
+            reasons.AppendLine("  1. Place DLLs in a 'llama-backend' folder next to CluadeX.exe");
+            reasons.AppendLine("  2. Set CustomLlamaCppBackendPath in Settings");
+            reasons.AppendLine("  3. Run: Scripts/update-llama-backend.ps1");
+            reasons.AppendLine();
+            reasons.AppendLine("This happens because LLamaSharp bundles an older llama.cpp");
+            reasons.AppendLine("that doesn't recognize newer models like Gemma 4.");
         }
         else if (msg.Contains("memory", StringComparison.OrdinalIgnoreCase) ||
                  msg.Contains("alloc", StringComparison.OrdinalIgnoreCase) ||
