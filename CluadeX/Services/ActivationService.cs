@@ -13,7 +13,7 @@ public class ActivationService
     private string _activationTier = "free";
     private DateTime? _expiresAt;
 
-    public bool IsActivated => _isActivated;
+    public bool IsActivated => _isActivated && (_expiresAt == null || _expiresAt > DateTime.UtcNow);
     public string ActivationTier => _activationTier;
     public string TierDisplayName => _activationTier switch
     {
@@ -100,12 +100,13 @@ public class ActivationService
         return (false, !string.IsNullOrEmpty(message) ? message : "Invalid activation key. Please check and try again.");
     }
 
-    /// <summary>Synchronous activation (legacy compat — wraps async).</summary>
+    /// <summary>Synchronous activation (legacy compat — wraps async safely to avoid SynchronizationContext deadlock).</summary>
     public (bool success, string message) Activate(string key)
     {
         try
         {
-            return ActivateAsync(key).GetAwaiter().GetResult();
+            // Use Task.Run to escape UI SynchronizationContext and prevent deadlock
+            return Task.Run(() => ActivateAsync(key)).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -130,7 +131,17 @@ public class ActivationService
     /// <summary>Deactivate sync (legacy compat).</summary>
     public void Deactivate()
     {
-        _ = DeactivateAsync();
+        // Clear local state first (even if server call fails)
+        _isActivated = false;
+        _activationTier = "free";
+        _expiresAt = null;
+        var key = _settingsService.Settings.ActivationKey;
+        _settingsService.UpdateSettings(s => s.ActivationKey = null);
+        ActivationChanged?.Invoke();
+
+        // Best-effort server deactivation in background
+        if (!string.IsNullOrEmpty(key))
+            _ = Task.Run(() => _licenseService.DeactivateAsync(key));
     }
 
     /// <summary>Check if a specific feature requires activation.</summary>

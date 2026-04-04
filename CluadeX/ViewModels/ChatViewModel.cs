@@ -146,7 +146,7 @@ public class ChatViewModel : ViewModelBase
         set
         {
             if (SetProperty(ref _showThinking, value))
-                _settingsService.UpdateSettings(s => s.AutoExecuteCode = s.AutoExecuteCode); // trigger save
+                _settingsService.UpdateSettings(s => s.ShowThinkingSteps = value);
         }
     }
 
@@ -240,6 +240,7 @@ public class ChatViewModel : ViewModelBase
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
+        _showThinking = settingsService.Settings.ShowThinkingSteps;
 
         RefreshModelsCommand = new RelayCommand(RefreshLocalModelsList);
         SendMessageCommand = new AsyncRelayCommand(SendMessage);

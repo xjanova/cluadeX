@@ -52,6 +52,7 @@ public class AppSettings
     public bool ExtendedThinkingEnabled { get; set; } = false;
     public int ThinkingBudgetTokens { get; set; } = 10000; // default 10K thinking tokens
     public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
+    public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 
     // UI settings
     public double FontSize { get; set; } = 14;

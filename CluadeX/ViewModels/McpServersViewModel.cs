@@ -7,9 +7,10 @@ using CluadeX.Services.Mcp;
 
 namespace CluadeX.ViewModels;
 
-public class McpServersViewModel : ViewModelBase
+public class McpServersViewModel : ViewModelBase, IDisposable
 {
     private readonly McpServerManager _mcpManager;
+    private bool _disposed;
     private readonly LocalizationService _loc;
 
     private McpServerDisplayItem? _selectedServer;
@@ -198,13 +199,13 @@ public class McpServersViewModel : ViewModelBase
         StatusText = $"Added server: {name}";
     }
 
-    private void RemoveServer()
+    private async void RemoveServer()
     {
         if (SelectedServer == null) return;
         string name = SelectedServer.Name;
 
         if (_mcpManager.IsServerRunning(name))
-            _ = _mcpManager.StopServerAsync(name);
+            await _mcpManager.StopServerAsync(name);
 
         _mcpManager.RemoveConfig(name);
         _mcpManager.SaveConfig();
@@ -266,6 +267,9 @@ public class McpServersViewModel : ViewModelBase
             {
                 string ts = DateTime.Now.ToString("HH:mm:ss");
                 item.LogOutput += $"[{ts}] {message}\n";
+                // Trim log to last 10KB to prevent unbounded growth
+                if (item.LogOutput.Length > 10240)
+                    item.LogOutput = "... (trimmed)\n" + item.LogOutput[^8192..];
             }
         });
     }
@@ -278,5 +282,13 @@ public class McpServersViewModel : ViewModelBase
                 s.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(s.Name).Count;
             RefreshSelectedTools();
         });
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _mcpManager.OnServerLog -= OnServerLog;
+        _mcpManager.OnToolsChanged -= OnToolsChanged;
     }
 }

@@ -1372,13 +1372,16 @@ public class CodeAgentService
                     await Task.Delay(retry * 1000, ct); // exponential backoff
                 }
 
+                // Use unique step ID per retry so UI creates fresh bubble (avoids appending to partial content)
+                int effectiveStep = stepNumber * 100 + retry;
+
                 // Use streaming (ChatAsync) to fire tokens in real-time to UI
                 var sb = new System.Text.StringBuilder();
                 await foreach (var token in _providerManager.ActiveProvider.ChatAsync(
                     history, message, systemPrompt, ct))
                 {
                     sb.Append(token);
-                    OnAgenticStreamingToken?.Invoke(token, stepNumber);
+                    OnAgenticStreamingToken?.Invoke(token, effectiveStep);
                 }
                 return sb.ToString();
             }

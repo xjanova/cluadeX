@@ -10,6 +10,9 @@ public class PluginService
     private readonly string _pluginsDir;
     private readonly string _configPath;
 
+    /// <summary>Fires when plugins are installed, enabled, or disabled. Subscribers (e.g. HookService) should reload.</summary>
+    public event Action? PluginsChanged;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -73,6 +76,7 @@ public class PluginService
         {
             enabled.Add(name);
             SaveEnabledPluginNames(enabled);
+            PluginsChanged?.Invoke();
         }
     }
 
@@ -82,6 +86,7 @@ public class PluginService
         var enabled = LoadEnabledPluginNames();
         enabled.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
         SaveEnabledPluginNames(enabled);
+        PluginsChanged?.Invoke();
     }
 
     /// <summary>Copies a plugin directory into the plugins folder.</summary>

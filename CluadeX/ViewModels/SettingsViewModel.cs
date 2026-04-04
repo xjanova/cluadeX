@@ -627,6 +627,14 @@ public class SettingsViewModel : ViewModelBase
     {
         if (SelectedMemory == null) return;
 
+        // Confirmation dialog for destructive operation
+        var confirm = System.Windows.MessageBox.Show(
+            $"Delete memory '{SelectedMemory.Name}'?\n\nThis cannot be undone.",
+            "Delete Memory",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
         try
         {
             bool isProject = SelectedMemory.Scope == "project";

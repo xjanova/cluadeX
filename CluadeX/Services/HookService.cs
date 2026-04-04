@@ -40,6 +40,9 @@ public class HookService
         _fileSystemService = fileSystemService;
         _settingsService = settingsService;
         _pluginService = pluginService;
+
+        // Auto-reload hooks when plugins change
+        _pluginService.PluginsChanged += ReloadHooks;
     }
 
     /// <summary>Execute pre-tool hooks. Returns false if any hook blocks execution.</summary>
