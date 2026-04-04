@@ -49,6 +49,7 @@ public partial class App : Application
         services.AddSingleton<XmanLicenseService>();
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
+        services.AddSingleton<LspClientService>();
 
         // ViewModels
         services.AddSingleton<MainViewModel>();

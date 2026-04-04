@@ -38,6 +38,23 @@ public enum ToolType
 
     // Web operations
     WebFetch,
+    WebSearch,
+
+    // Interactive REPL
+    Repl,
+
+    // Task management
+    TaskCreate,
+    TaskList,
+    TaskStop,
+    TaskOutput,
+
+    // Git worktree
+    GitWorktreeCreate,
+    GitWorktreeRemove,
+
+    // Agent sub-task
+    AgentSpawn,
 
     // Agent meta-tools
     TodoWrite,

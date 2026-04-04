@@ -20,11 +20,19 @@ public class AgentToolService
     private readonly SettingsService _settingsService;
     private readonly ActivationService _activationService;
     private readonly WebFetchService _webFetchService;
+    private readonly TaskManagerService _taskManager;
 
     // ─── TODO List State ───
     private readonly List<TodoItem> _todoItems = new();
     public IReadOnlyList<TodoItem> TodoItems => _todoItems;
     public event Action? TodoChanged;
+
+    // ─── REPL Session State ───
+    private readonly Dictionary<string, ReplSession> _replSessions = new();
+
+    // ─── Agent Sub-task Spawning ───
+    /// <summary>Raised when agent requests a sub-task spawn. Returns sub-agent result.</summary>
+    public event Func<string, string, CancellationToken, Task<string>>? OnAgentSpawnRequested;
 
     // Regex to match [ACTION: tool_name]...[/ACTION] blocks
     private static readonly Regex ActionRegex = new(
@@ -37,7 +45,7 @@ public class AgentToolService
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
-        WebFetchService webFetchService)
+        WebFetchService webFetchService, TaskManagerService taskManager)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -47,6 +55,7 @@ public class AgentToolService
         _settingsService = settingsService;
         _activationService = activationService;
         _webFetchService = webFetchService;
+        _taskManager = taskManager;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -163,6 +172,23 @@ public class AgentToolService
 
                 // Web tools
                 ToolType.WebFetch => await ExecuteWebFetchAsync(call, ct),
+                ToolType.WebSearch => await ExecuteWebSearchAsync(call, ct),
+
+                // Interactive REPL
+                ToolType.Repl => await ExecuteReplAsync(call, ct),
+
+                // Task management
+                ToolType.TaskCreate => ExecuteTaskCreate(call),
+                ToolType.TaskList => ExecuteTaskList(call),
+                ToolType.TaskStop => ExecuteTaskStop(call),
+                ToolType.TaskOutput => ExecuteTaskOutput(call),
+
+                // Git worktree
+                ToolType.GitWorktreeCreate => await ExecuteGitWorktreeCreateAsync(call),
+                ToolType.GitWorktreeRemove => await ExecuteGitWorktreeRemoveAsync(call),
+
+                // Agent sub-task
+                ToolType.AgentSpawn => await ExecuteAgentSpawnAsync(call, ct),
 
                 // Agent meta-tools
                 ToolType.TodoWrite => ExecuteTodoWrite(call),
@@ -413,6 +439,62 @@ public class AgentToolService
                 [ACTION: web_fetch]
                 url: https://example.com/api/data
                 [/ACTION]
+
+            27. web_search - Search the web and get results
+                [ACTION: web_search]
+                query: how to implement binary search in C#
+                max_results: 5
+                [/ACTION]
+            """);
+        }
+
+        // REPL tool (always available)
+        sb.AppendLine("""
+
+            INTERACTIVE REPL:
+
+            28. repl - Execute code in a persistent Python or Node.js REPL session
+                State persists between calls (variables, imports, etc.)
+                [ACTION: repl]
+                language: python
+                code:
+                import math
+                print(math.sqrt(144))
+                [/ACTION]
+                Or Node.js:
+                [ACTION: repl]
+                language: node
+                code: console.log(Array.from({length: 5}, (_, i) => i * 2))
+                [/ACTION]
+                Close session: action: close, language: python
+        """);
+
+        // Task management tools
+        if (_settingsService.Settings.Features.TaskManager)
+        {
+            sb.AppendLine("""
+
+            TASK MANAGEMENT (Background Jobs):
+
+            29. task_create - Start a background task (long-running commands)
+                [ACTION: task_create]
+                name: Run tests
+                command: dotnet test
+                [/ACTION]
+
+            30. task_list - List all background tasks and their status
+                [ACTION: task_list]
+                [/ACTION]
+
+            31. task_stop - Stop a running background task
+                [ACTION: task_stop]
+                id: 1
+                [/ACTION]
+
+            32. task_output - Get the output of a background task
+                [ACTION: task_output]
+                id: 1
+                [/ACTION]
             """);
         }
 
@@ -421,14 +503,14 @@ public class AgentToolService
 
             AGENT META-TOOLS:
 
-            27. todo_write - Manage a TODO list for tracking progress
+            33. todo_write - Manage a TODO list for tracking progress
                 [ACTION: todo_write]
                 action: add
                 content: Implement authentication system
                 [/ACTION]
                 Actions: add, complete (index: N or content: text), list, clear
 
-            28. plan_mode - Create an execution plan before implementing
+            34. plan_mode - Create an execution plan before implementing
                 [ACTION: plan_mode]
                 action: create
                 plan:
@@ -436,6 +518,12 @@ public class AgentToolService
                 2. Design the solution
                 3. Implement changes
                 4. Verify and test
+                [/ACTION]
+
+            35. agent_spawn - Spawn a sub-agent for parallel or complex subtasks
+                [ACTION: agent_spawn]
+                task: Research the best sorting algorithm for this dataset
+                context: The dataset has 10M records with mostly sorted data
                 [/ACTION]
         """);
 
@@ -458,6 +546,19 @@ public class AgentToolService
             - Use git tools to manage version control
             - Always check git_status before committing
             - Write meaningful commit messages
+
+            GIT WORKTREE (isolated branches):
+
+            36. git_worktree_create - Create an isolated worktree for a new branch
+                [ACTION: git_worktree_create]
+                branch: feature-x
+                path: ../.worktrees/feature-x
+                [/ACTION]
+
+            37. git_worktree_remove - Remove a worktree when done
+                [ACTION: git_worktree_remove]
+                path: ../.worktrees/feature-x
+                [/ACTION]
             """);
         }
 
@@ -482,9 +583,23 @@ public class AgentToolService
             ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView
                 => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
 
-            // Web fetch — require activation
-            ToolType.WebFetch
+            // Web tools — require activation
+            ToolType.WebFetch or ToolType.WebSearch
                 => features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"),
+
+            // Task management — require TaskManager feature
+            ToolType.TaskCreate or ToolType.TaskList or ToolType.TaskStop or ToolType.TaskOutput
+                => features.TaskManager,
+
+            // REPL — always available (core tool)
+            ToolType.Repl => true,
+
+            // Worktree — requires Git
+            ToolType.GitWorktreeCreate or ToolType.GitWorktreeRemove
+                => features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"),
+
+            // Agent sub-task — always available
+            ToolType.AgentSpawn => true,
 
             // Agent meta-tools (todo, plan) — always available
             ToolType.TodoWrite or ToolType.PlanMode => true,
@@ -1135,6 +1250,263 @@ public class AgentToolService
     }
 
     // ════════════════════════════════════════════
+    // Web Search Tool
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteWebSearchAsync(ToolCall call, CancellationToken ct)
+    {
+        string query = call.GetArg("query", call.GetArg("q"));
+        if (string.IsNullOrEmpty(query))
+            return Fail(call, "Missing 'query' argument");
+
+        int maxResults = 10;
+        if (int.TryParse(call.GetArg("max_results", "10"), out int mr)) maxResults = mr;
+
+        try
+        {
+            string results = await _webFetchService.SearchAsync(query, maxResults, ct);
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = results.Length > 4000 ? results[..4000] + "\n... (truncated)" : results,
+                Summary = $"Web search: {query}",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Search failed: {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
+    // REPL Tool (Persistent Python/Node.js sessions)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteReplAsync(ToolCall call, CancellationToken ct)
+    {
+        string language = call.GetArg("language", call.GetArg("lang", "python")).ToLowerInvariant();
+        string code = call.GetArg("code", call.GetArg("input", call.GetArg("command")));
+        string action = call.GetArg("action", "exec").ToLowerInvariant();
+
+        if (action == "close" || action == "stop")
+        {
+            if (_replSessions.TryGetValue(language, out var existing))
+            {
+                existing.Dispose();
+                _replSessions.Remove(language);
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = $"{language} REPL session closed.",
+                    Summary = $"Closed {language} REPL",
+                };
+            }
+            return Fail(call, $"No active {language} REPL session");
+        }
+
+        if (string.IsNullOrEmpty(code))
+            return Fail(call, "Missing 'code' argument");
+
+        // Get or create REPL session
+        if (!_replSessions.TryGetValue(language, out var session) || session.HasExited)
+        {
+            string exe = language switch
+            {
+                "python" or "py" => OperatingSystem.IsWindows() ? "python" : "python3",
+                "node" or "nodejs" or "javascript" or "js" => "node",
+                _ => language,
+            };
+
+            string args = language switch
+            {
+                "python" or "py" => "-i -u", // Interactive, unbuffered
+                "node" or "nodejs" or "javascript" or "js" => "-i",
+                _ => "",
+            };
+
+            try
+            {
+                session = new ReplSession(exe, args, _fileSystem.WorkingDirectory);
+                _replSessions[language] = session;
+            }
+            catch (Exception ex)
+            {
+                return Fail(call, $"Failed to start {language} REPL: {ex.Message}");
+            }
+        }
+
+        try
+        {
+            string output = await session.ExecuteAsync(code, ct, timeoutMs: 15000);
+
+            // Truncate long output
+            if (output.Length > 4000)
+                output = output[..4000] + "\n... (truncated)";
+
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = output,
+                Summary = $"REPL ({language}): executed {code.Split('\n').Length} line(s)",
+            };
+        }
+        catch (TimeoutException)
+        {
+            return Fail(call, "REPL execution timed out (15s limit). The session is still active.");
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"REPL error: {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
+    // Task Management Tools (wrapping TaskManagerService)
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteTaskCreate(ToolCall call)
+    {
+        string name = call.GetArg("name", call.GetArg("title", "Task"));
+        string command = call.GetArg("command");
+        if (string.IsNullOrEmpty(command))
+            return Fail(call, "Missing 'command' argument");
+
+        int taskId = _taskManager.CreateTask(name, command);
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = $"Task #{taskId} created: {name}\nCommand: {command}\nStatus: running",
+            Summary = $"Created task #{taskId}: {name}",
+        };
+    }
+
+    private ToolResult ExecuteTaskList(ToolCall call)
+    {
+        var tasks = _taskManager.Tasks;
+        if (tasks.Count == 0)
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = "No tasks.",
+                Summary = "No tasks",
+            };
+
+        var sb = new StringBuilder();
+        foreach (var t in tasks)
+        {
+            string icon = t.Status switch { "running" => "🔄", "completed" => "✅", "failed" => "❌", "stopped" => "⏹", _ => "?" };
+            sb.AppendLine($"{icon} #{t.Id} [{t.Status}] {t.Name} — {t.Command}");
+        }
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = sb.ToString().TrimEnd(),
+            Summary = $"Listed {tasks.Count} task(s)",
+        };
+    }
+
+    private ToolResult ExecuteTaskStop(ToolCall call)
+    {
+        if (!int.TryParse(call.GetArg("id", call.GetArg("task_id")), out int taskId))
+            return Fail(call, "Missing or invalid 'id' argument");
+
+        _taskManager.StopTask(taskId);
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = $"Task #{taskId} stop requested.",
+            Summary = $"Stopped task #{taskId}",
+        };
+    }
+
+    private ToolResult ExecuteTaskOutput(ToolCall call)
+    {
+        if (!int.TryParse(call.GetArg("id", call.GetArg("task_id")), out int taskId))
+            return Fail(call, "Missing or invalid 'id' argument");
+
+        var task = _taskManager.Tasks.FirstOrDefault(t => t.Id == taskId);
+        if (task == null)
+            return Fail(call, $"Task #{taskId} not found");
+
+        string output = task.Output ?? "(no output yet)";
+        if (output.Length > 4000)
+            output = output[^4000..]; // Show last 4KB
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = $"Task #{taskId} [{task.Status}]:\n{output}",
+            Summary = $"Output of task #{taskId} ({task.Status})",
+        };
+    }
+
+    // ════════════════════════════════════════════
+    // Git Worktree Tools
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteGitWorktreeCreateAsync(ToolCall call)
+    {
+        string branch = call.GetArg("branch", call.GetArg("name"));
+        string path = call.GetArg("path", "");
+
+        if (string.IsNullOrEmpty(branch))
+            return Fail(call, "Missing 'branch' argument");
+
+        if (string.IsNullOrEmpty(path))
+            path = $"../.worktrees/{branch}";
+
+        var r = await _gitService.RunGitAsync($"worktree add \"{path}\" -b \"{branch}\"");
+        return GitToToolResult(call, r, $"Created worktree: {path} (branch: {branch})");
+    }
+
+    private async Task<ToolResult> ExecuteGitWorktreeRemoveAsync(ToolCall call)
+    {
+        string path = call.GetArg("path", call.GetArg("name"));
+        if (string.IsNullOrEmpty(path))
+            return Fail(call, "Missing 'path' argument");
+
+        var r = await _gitService.RunGitAsync($"worktree remove \"{path}\" --force");
+        return GitToToolResult(call, r, $"Removed worktree: {path}");
+    }
+
+    // ════════════════════════════════════════════
+    // Agent Sub-task Spawn
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteAgentSpawnAsync(ToolCall call, CancellationToken ct)
+    {
+        string task = call.GetArg("task", call.GetArg("prompt"));
+        string context = call.GetArg("context", "");
+
+        if (string.IsNullOrEmpty(task))
+            return Fail(call, "Missing 'task' argument");
+
+        if (OnAgentSpawnRequested == null)
+            return Fail(call, "Agent spawning not available — no handler registered");
+
+        try
+        {
+            string result = await OnAgentSpawnRequested.Invoke(task, context, ct);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = result.Length > 4000 ? result[..4000] + "\n... (truncated)" : result,
+                Summary = $"Sub-agent completed: {task[..Math.Min(50, task.Length)]}",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Sub-agent failed: {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
     // Helpers
     // ════════════════════════════════════════════
 
@@ -1175,6 +1547,23 @@ public class AgentToolService
 
             // Web tools
             "web_fetch" or "webfetch" or "fetch_url" or "fetch" => ToolType.WebFetch,
+            "web_search" or "websearch" or "search" or "search_web" => ToolType.WebSearch,
+
+            // Interactive REPL
+            "repl" or "python" or "node" or "repl_exec" => ToolType.Repl,
+
+            // Task management tools
+            "task_create" or "taskcreate" or "create_task" => ToolType.TaskCreate,
+            "task_list" or "tasklist" or "list_tasks" => ToolType.TaskList,
+            "task_stop" or "taskstop" or "stop_task" => ToolType.TaskStop,
+            "task_output" or "taskoutput" or "get_task_output" => ToolType.TaskOutput,
+
+            // Git worktree
+            "git_worktree_create" or "worktree_create" or "enter_worktree" => ToolType.GitWorktreeCreate,
+            "git_worktree_remove" or "worktree_remove" or "exit_worktree" => ToolType.GitWorktreeRemove,
+
+            // Agent sub-task
+            "agent_spawn" or "spawn_agent" or "sub_agent" => ToolType.AgentSpawn,
 
             // Agent meta-tools
             "todo_write" or "todowrite" or "todo" or "update_todo" => ToolType.TodoWrite,
@@ -1200,6 +1589,18 @@ public class AgentToolService
         if (toolType == ToolType.EditFile)
         {
             return ParseEditFileArgs(body);
+        }
+
+        // For REPL, handle "code:" specially since it can be multi-line
+        if (toolType == ToolType.Repl)
+        {
+            return ParseReplArgs(body);
+        }
+
+        // For plan_mode, handle "plan:" multi-line
+        if (toolType == ToolType.PlanMode)
+        {
+            return ParseWriteFileArgs(body.Replace("plan:", "content:"));
         }
 
         // Standard key: value parsing for single-line args
@@ -1323,6 +1724,49 @@ public class AgentToolService
         // Save last key
         if (currentKey != null)
             args[currentKey] = valueBuilder.ToString().TrimEnd('\r', '\n');
+
+        return args;
+    }
+
+    private Dictionary<string, string> ParseReplArgs(string body)
+    {
+        var args = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var lines = body.Split('\n');
+
+        bool inCode = false;
+        var codeBuilder = new StringBuilder();
+
+        foreach (var line in lines)
+        {
+            if (inCode)
+            {
+                codeBuilder.AppendLine(line);
+                continue;
+            }
+
+            string trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed)) continue;
+
+            if (trimmed.StartsWith("code:", StringComparison.OrdinalIgnoreCase))
+            {
+                string afterKey = trimmed["code:".Length..].TrimStart();
+                if (!string.IsNullOrEmpty(afterKey))
+                    codeBuilder.AppendLine(afterKey);
+                inCode = true;
+                continue;
+            }
+
+            int colonIdx = trimmed.IndexOf(':');
+            if (colonIdx > 0)
+            {
+                string key = trimmed[..colonIdx].Trim().ToLowerInvariant();
+                string value = trimmed[(colonIdx + 1)..].Trim();
+                args[key] = value;
+            }
+        }
+
+        if (codeBuilder.Length > 0)
+            args["code"] = codeBuilder.ToString().TrimEnd('\r', '\n');
 
         return args;
     }

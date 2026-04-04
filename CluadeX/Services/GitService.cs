@@ -364,7 +364,8 @@ public class GitService
     // Core Git Runner
     // ═══════════════════════════════════════════
 
-    private async Task<GitResult> RunGitAsync(string arguments, int timeoutMs = 30000)
+    /// <summary>Run an arbitrary git command in the current working directory.</summary>
+    public async Task<GitResult> RunGitAsync(string arguments, int timeoutMs = 30000)
     {
         if (!_fileSystem.HasWorkingDirectory)
             return new GitResult { Success = false, Error = "No working directory set." };

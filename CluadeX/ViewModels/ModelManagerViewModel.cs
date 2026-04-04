@@ -61,9 +61,17 @@ public class ModelManagerViewModel : ViewModelBase
     // ─── Search Pagination ───
     private int _searchPage = 1;
     private int _searchTotalPages = 1;
-    public int SearchPage { get => _searchPage; set => SetProperty(ref _searchPage, value); }
+    private int _searchItemsPerPage = 12;
+    private List<ModelInfo> _allSearchResults = new();
+    public int SearchPage
+    {
+        get => _searchPage;
+        set { if (SetProperty(ref _searchPage, value)) ApplySearchPagination(); }
+    }
     public int SearchTotalPages { get => _searchTotalPages; set => SetProperty(ref _searchTotalPages, value); }
     public string SearchPageInfo => $"{_searchPage} / {_searchTotalPages}";
+    public ICommand NextSearchPageCommand => new RelayCommand(() => { if (_searchPage < SearchTotalPages) SearchPage++; }, () => _searchPage < SearchTotalPages);
+    public ICommand PrevSearchPageCommand => new RelayCommand(() => { if (_searchPage > 1) SearchPage--; }, () => _searchPage > 1);
 
     public string SelectedCategory
     {
@@ -336,7 +344,9 @@ public class ModelManagerViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(SearchQuery)) return;
         IsSearching = true;
         SearchResults.Clear();
+        _allSearchResults.Clear();
         SearchResultInfo = "";
+        _searchPage = 1;
         try
         {
             var results = await _huggingFaceService.SearchModelsAsync(SearchQuery);
@@ -361,7 +371,7 @@ public class ModelManagerViewModel : ViewModelBase
                             ? LocalModels.First(lm => string.Equals(lm.FileName, file.RFilename, StringComparison.OrdinalIgnoreCase)).LocalPath
                             : null;
 
-                        SearchResults.Add(new ModelInfo
+                        _allSearchResults.Add(new ModelInfo
                         {
                             Id = $"{result.ModelId}/{file.RFilename}",
                             Name = shortName,
@@ -383,12 +393,30 @@ public class ModelManagerViewModel : ViewModelBase
                 }
                 catch { }
             }
+
+            // Apply pagination
+            SearchTotalPages = Math.Max(1, (int)Math.Ceiling(_allSearchResults.Count / (double)_searchItemsPerPage));
+            ApplySearchPagination();
+
             SearchResultInfo = fileCount > 0
                 ? $"Found {fileCount} GGUF files from {results.Count} repositories"
                 : "No GGUF files found. Try a different search term.";
         }
         catch (Exception ex) { SearchResultInfo = $"Search failed: {ex.Message}"; }
         finally { IsSearching = false; }
+    }
+
+    private void ApplySearchPagination()
+    {
+        SearchResults.Clear();
+        var paged = _allSearchResults
+            .Skip((_searchPage - 1) * _searchItemsPerPage)
+            .Take(_searchItemsPerPage);
+        foreach (var item in paged)
+            SearchResults.Add(item);
+
+        SearchTotalPages = Math.Max(1, (int)Math.Ceiling(_allSearchResults.Count / (double)_searchItemsPerPage));
+        OnPropertyChanged(nameof(SearchPageInfo));
     }
 
     private static string ExtractQuantFromFile(string filename)

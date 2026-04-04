@@ -17,13 +17,66 @@ public class ContextMemoryService
     }
 
     /// <summary>
-    /// Estimate token count for a string.
-    /// Uses ~3.5 chars per token heuristic (similar to GPT tokenization).
+    /// Estimate token count for a string using a word-based heuristic.
+    /// More accurate than simple char division:
+    /// - Average English word ≈ 1.3 tokens (subword tokenization)
+    /// - Code tokens are shorter (operators, brackets count as separate tokens)
+    /// - Whitespace/newlines are generally free or merged
     /// </summary>
     public int EstimateTokens(string text)
     {
         if (string.IsNullOrEmpty(text)) return 0;
-        return (int)Math.Ceiling(text.Length / 3.5);
+
+        int tokens = 0;
+
+        // Count words (sequences of alphanumeric/underscore chars)
+        bool inWord = false;
+        int wordCount = 0;
+        int punctCount = 0;
+        int digitRunCount = 0;
+        bool inDigitRun = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+
+            if (char.IsLetterOrDigit(c) || c == '_')
+            {
+                if (!inWord) { wordCount++; inWord = true; }
+                if (char.IsDigit(c))
+                {
+                    if (!inDigitRun) { digitRunCount++; inDigitRun = true; }
+                }
+                else
+                {
+                    inDigitRun = false;
+                }
+            }
+            else
+            {
+                inWord = false;
+                inDigitRun = false;
+
+                // Punctuation/operators each typically become their own token
+                if (!char.IsWhiteSpace(c))
+                    punctCount++;
+            }
+        }
+
+        // Words: ~1.3 tokens each (subword tokenization splits long/uncommon words)
+        tokens += (int)(wordCount * 1.3);
+
+        // Each punctuation/operator is roughly 1 token
+        tokens += punctCount;
+
+        // Newlines: roughly 1 token per newline
+        int newlines = 0;
+        for (int i = 0; i < text.Length; i++)
+            if (text[i] == '\n') newlines++;
+        tokens += newlines;
+
+        // Minimum: at least 1 token for non-empty text
+        return Math.Max(1, tokens);
     }
 
     /// <summary>

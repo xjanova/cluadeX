@@ -98,7 +98,7 @@ public class AutoUpdateService
             string tagName = root.GetProperty("tag_name").GetString() ?? "";
             string version = tagName.TrimStart('v', 'V');
 
-            if (string.Compare(version, CurrentVersion, StringComparison.OrdinalIgnoreCase) > 0)
+            if (IsNewerVersion(version, CurrentVersion))
             {
                 // Find zip asset
                 string downloadUrl = "";
@@ -144,6 +144,19 @@ public class AutoUpdateService
         }
         catch { /* silently fail */ }
         return null;
+    }
+
+    /// <summary>Semantic version comparison: returns true if candidate > current.</summary>
+    private static bool IsNewerVersion(string candidate, string current)
+    {
+        if (string.IsNullOrEmpty(candidate)) return false;
+
+        // Try proper System.Version parsing
+        if (Version.TryParse(candidate, out var candidateVer) && Version.TryParse(current, out var currentVer))
+            return candidateVer > currentVer;
+
+        // Fallback: lexicographic (shouldn't reach here for well-formed versions)
+        return string.Compare(candidate, current, StringComparison.OrdinalIgnoreCase) > 0;
     }
 
     /// <summary>Download update zip with progress reporting.</summary>

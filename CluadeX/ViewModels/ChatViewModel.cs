@@ -333,15 +333,36 @@ public class ChatViewModel : ViewModelBase
             // Restore the most recent session, or create new
             if (savedSessions.Count > 0)
             {
-                // LoadSessionList returns metadata only, load full session with messages
+                // LoadSessionList returns metadata only — load the full session with messages
                 var lastId = savedSessions.First().Id;
-                var lastSession = _persistenceService.LoadSession(lastId) ?? savedSessions.First();
-                CurrentSession = lastSession;
+                var lastSession = _persistenceService.LoadSession(lastId);
 
-                foreach (var msg in lastSession.Messages)
-                    Messages.Add(msg);
+                if (lastSession != null && lastSession.Messages.Count > 0)
+                {
+                    CurrentSession = lastSession;
 
-                StatusText = $"Restored session: {lastSession.Title}";
+                    // Replace the metadata-only entry in Sessions with the full one
+                    for (int i = 0; i < Sessions.Count; i++)
+                    {
+                        if (Sessions[i].Id == lastId)
+                        {
+                            Sessions[i] = lastSession;
+                            break;
+                        }
+                    }
+
+                    foreach (var msg in lastSession.Messages)
+                        Messages.Add(msg);
+
+                    StatusText = $"Restored session: {lastSession.Title}";
+                }
+                else
+                {
+                    // Most recent session has no messages — use it as empty current session
+                    CurrentSession = lastSession ?? savedSessions.First();
+                    StatusText = "Ready";
+                }
+
                 _isDirty = false;
             }
             else
@@ -349,8 +370,9 @@ public class ChatViewModel : ViewModelBase
                 NewSession();
             }
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"RestoreSessions failed: {ex.Message}");
             NewSession();
         }
     }
@@ -361,6 +383,10 @@ public class ChatViewModel : ViewModelBase
 
         try
         {
+            // Sync CurrentSession.Messages from the UI Messages collection
+            // to ensure they are never out of sync when saving to DB
+            CurrentSession.Messages = Messages.ToList();
+
             // Auto-generate title from first user message
             if (CurrentSession.Title == "New Chat" && CurrentSession.Messages.Count > 0)
             {
@@ -381,7 +407,10 @@ public class ChatViewModel : ViewModelBase
             _persistenceService.SaveSession(CurrentSession);
             _isDirty = false;
         }
-        catch { /* ignore save errors silently */ }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"AutoSave failed: {ex.Message}");
+        }
     }
 
     /// <summary>Force save the current session immediately.</summary>
@@ -393,30 +422,39 @@ public class ChatViewModel : ViewModelBase
 
     private void LoadSession(string? sessionId)
     {
-        if (string.IsNullOrEmpty(sessionId)) return;
+        if (string.IsNullOrEmpty(sessionId))
+        {
+            System.Diagnostics.Debug.WriteLine("LoadSession: sessionId is null/empty");
+            return;
+        }
+
         if (CurrentSession?.Id == sessionId) return;
 
         // Force save current session before switching
-        if (CurrentSession != null && CurrentSession.Messages.Count > 0)
+        if (CurrentSession != null && Messages.Count > 0)
         {
             _isDirty = true;
             AutoSave();
         }
 
-        // Load from database
+        // Load from database (full session with messages)
         var session = _persistenceService.LoadSession(sessionId);
-
-        // Fallback: in-memory
-        session ??= Sessions.FirstOrDefault(s => s.Id == sessionId);
 
         if (session == null)
         {
-            StatusText = "Session not found";
-            return;
+            // Fallback: find in-memory session and try to reload from DB one more time
+            var inMemory = Sessions.FirstOrDefault(s => s.Id == sessionId);
+            if (inMemory == null)
+            {
+                StatusText = "Session not found";
+                return;
+            }
+
+            // Use the in-memory session but warn if it has no messages
+            session = inMemory;
         }
 
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
-        var prevSession = CurrentSession;
         CurrentSession = session;
 
         // Temporarily stop dirty tracking during load
@@ -426,7 +464,20 @@ public class ChatViewModel : ViewModelBase
             Messages.Add(msg);
         Messages.CollectionChanged += OnMessagesChanged;
 
+        // Sync CurrentSession.Messages to point to the same data as what's displayed
+        CurrentSession.Messages = Messages.ToList();
+
         _isDirty = false;
+
+        // Update the Sessions list entry to reference the full loaded session
+        for (int i = 0; i < Sessions.Count; i++)
+        {
+            if (Sessions[i].Id == sessionId)
+            {
+                Sessions[i] = session;
+                break;
+            }
+        }
 
         StatusText = session.Messages.Count > 0
             ? $"Loaded: {session.Title} ({session.Messages.Count} messages)"
