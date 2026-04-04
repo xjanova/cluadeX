@@ -38,3 +38,4 @@ launchSettings.json
 *.tmp
 Thumbs.db
 desktop.ini
+publish/
