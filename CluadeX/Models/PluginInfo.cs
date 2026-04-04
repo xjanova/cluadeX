@@ -27,10 +27,22 @@ public class CatalogPlugin
     public string[] Tags { get; set; } = [];
     public bool IsInstalled { get; set; }
 
-    /// <summary>Hook events this plugin registers for (informational).</summary>
+    /// <summary>Hook events this plugin registers for.</summary>
     public string[] HookEvents { get; set; } = [];
 
     /// <summary>Brief explanation of what the plugin's hooks/commands do.</summary>
     public string HookSummary { get; set; } = "";
     public string HookSummaryTh { get; set; } = "";
+
+    /// <summary>Shell commands to execute for each hook. Supports {path}, {command}, {tool} vars.</summary>
+    public List<PluginHookEntry> Hooks { get; set; } = [];
+}
+
+/// <summary>A concrete hook command entry for a plugin.</summary>
+public class PluginHookEntry
+{
+    public string Phase { get; set; } = "PostToolUse"; // PreToolUse, PostToolUse
+    public string Matcher { get; set; } = "*"; // Tool name pattern
+    public string Command { get; set; } = ""; // Shell command
+    public int TimeoutMs { get; set; } = 15000;
 }

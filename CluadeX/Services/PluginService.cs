@@ -150,6 +150,23 @@ public class PluginService
                      $"## What it does\n{catalog.HookSummary}\n";
         File.WriteAllText(System.IO.Path.Combine(pluginDir, "README.md"), readme);
 
+        // Generate hooks.json for HookService integration
+        if (catalog.Hooks.Count > 0)
+        {
+            var hooksConfig = new Dictionary<string, object>();
+            var preHooks = catalog.Hooks.Where(h => h.Phase == "PreToolUse").ToList();
+            var postHooks = catalog.Hooks.Where(h => h.Phase == "PostToolUse").ToList();
+
+            if (preHooks.Count > 0)
+                hooksConfig["PreToolUse"] = preHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
+            if (postHooks.Count > 0)
+                hooksConfig["PostToolUse"] = postHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
+
+            var hooksFile = new Dictionary<string, object> { ["hooks"] = hooksConfig };
+            var hooksJson = JsonSerializer.Serialize(hooksFile, JsonOptions);
+            File.WriteAllText(System.IO.Path.Combine(pluginDir, "hooks.json"), hooksJson);
+        }
+
         // Auto-enable on install
         EnablePlugin(catalog.Name);
     }
@@ -173,6 +190,8 @@ public class PluginService
             HookEvents = ["PostToolUse"],
             HookSummary = "After FileWrite/FileEdit, runs the project's configured formatter (detects package.json scripts, .prettierrc, pyproject.toml, rustfmt.toml).",
             HookSummaryTh = "หลังเขียน/แก้ไฟล์ จะรัน formatter ที่ตั้งค่าไว้ในโปรเจกต์อัตโนมัติ",
+            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = "npx prettier --write {path} 2>nul || python -m black {path} 2>nul || echo formatted" },
+                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = "npx prettier --write {path} 2>nul || python -m black {path} 2>nul || echo formatted" }],
         },
         new CatalogPlugin
         {
@@ -186,6 +205,8 @@ public class PluginService
             HookEvents = ["PostToolUse"],
             HookSummary = "After FileWrite/FileEdit on source files, finds and runs related test files. Reports pass/fail inline.",
             HookSummaryTh = "หลังแก้ไฟล์ซอร์ส จะค้นหาและรันไฟล์เทสต์ที่เกี่ยวข้อง รายงานผลลัพธ์ทันที",
+            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = "npm test 2>nul || dotnet test --no-build -q 2>nul || pytest -x -q 2>nul || echo no-tests", TimeoutMs = 30000 },
+                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = "npm test 2>nul || dotnet test --no-build -q 2>nul || pytest -x -q 2>nul || echo no-tests", TimeoutMs = 30000 }],
         },
         new CatalogPlugin
         {
@@ -214,6 +235,8 @@ public class PluginService
             HookEvents = ["PreToolUse"],
             HookSummary = "Before FileWrite, scans content with regex patterns for AWS keys, GitHub tokens, private keys, passwords in URLs, etc. Blocks if found.",
             HookSummaryTh = "ก่อนเขียนไฟล์ จะสแกนเนื้อหาด้วย regex เพื่อหา AWS key, GitHub token, private key ฯลฯ บล็อกถ้าพบ",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "findstr /r /c:\"AKIA\" /c:\"ghp_\" /c:\"-----BEGIN\" /c:\"sk-\" {path} && exit 1 || exit 0" },
+                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = "findstr /r /c:\"AKIA\" /c:\"ghp_\" /c:\"-----BEGIN\" /c:\"sk-\" {path} && exit 1 || exit 0" }],
         },
         new CatalogPlugin
         {

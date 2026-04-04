@@ -31,13 +31,15 @@ public class HookService
 {
     private readonly FileSystemService _fileSystemService;
     private readonly SettingsService _settingsService;
+    private readonly PluginService _pluginService;
 
     private List<HookDefinition>? _cachedHooks;
 
-    public HookService(FileSystemService fileSystemService, SettingsService settingsService)
+    public HookService(FileSystemService fileSystemService, SettingsService settingsService, PluginService pluginService)
     {
         _fileSystemService = fileSystemService;
         _settingsService = settingsService;
+        _pluginService = pluginService;
     }
 
     /// <summary>Execute pre-tool hooks. Returns false if any hook blocks execution.</summary>
@@ -175,6 +177,36 @@ public class HookService
             ".cluadex", "hooks.json");
         if (File.Exists(globalHooksFile))
             hooks.AddRange(ParseHooksFile(globalHooksFile));
+
+        // Enabled plugin hooks (from {plugins_dir}/{plugin_id}/hooks.json)
+        try
+        {
+            var enabledPlugins = _pluginService.GetEnabledPlugins();
+            string pluginsDir = Path.Combine(_settingsService.DataRoot, "plugins");
+            foreach (var pluginName in enabledPlugins)
+            {
+                // Find plugin directory by scanning subdirectories
+                if (!Directory.Exists(pluginsDir)) continue;
+                foreach (var dir in Directory.GetDirectories(pluginsDir))
+                {
+                    string pluginHooksFile = Path.Combine(dir, "hooks.json");
+                    string manifestFile = Path.Combine(dir, "manifest.json");
+                    if (!File.Exists(pluginHooksFile) || !File.Exists(manifestFile)) continue;
+
+                    // Check if this plugin's name matches an enabled plugin
+                    try
+                    {
+                        var manifestJson = File.ReadAllText(manifestFile);
+                        using var doc = System.Text.Json.JsonDocument.Parse(manifestJson);
+                        string name = doc.RootElement.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                        if (enabledPlugins.Contains(name))
+                            hooks.AddRange(ParseHooksFile(pluginHooksFile));
+                    }
+                    catch { /* skip malformed manifests */ }
+                }
+            }
+        }
+        catch { /* plugin loading is best-effort */ }
 
         _cachedHooks = hooks;
         return hooks;

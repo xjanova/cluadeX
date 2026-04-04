@@ -24,6 +24,10 @@ public class AgentToolService
     private readonly TaskManagerService _taskManager;
     private readonly McpServerManager _mcpManager;
 
+    // ─── Skill AllowedTools Filter ───
+    /// <summary>When set, only these tools can be called. Set by skill execution context. Null = all allowed.</summary>
+    public List<string>? ActiveSkillAllowedTools { get; set; }
+
     // ─── TODO List State ───
     private readonly List<TodoItem> _todoItems = new();
     public IReadOnlyList<TodoItem> TodoItems => _todoItems;
@@ -127,6 +131,15 @@ public class AgentToolService
     {
         try
         {
+            // ── Skill AllowedTools enforcement ──
+            if (ActiveSkillAllowedTools is { Count: > 0 })
+            {
+                bool toolAllowedBySkill = ActiveSkillAllowedTools.Any(t =>
+                    t.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase));
+                if (!toolAllowedBySkill)
+                    return Fail(call, $"Tool '{call.ToolName}' is not allowed by the current skill. Allowed: {string.Join(", ", ActiveSkillAllowedTools)}");
+            }
+
             // ── Feature toggle check ──
             if (!IsToolAllowed(call.Type))
             {

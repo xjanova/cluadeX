@@ -776,6 +776,7 @@ public class ChatViewModel : ViewModelBase
 
         // ─── Slash Command / Skill Interception ───
         string skillPromptOverride = "";
+        SkillDefinition? activeSkill = null;
         if (input.StartsWith("/"))
         {
             var parts = input.TrimStart('/').Split(' ', 2);
@@ -785,6 +786,7 @@ public class ChatViewModel : ViewModelBase
 
             if (skill != null && skill.UserInvocable)
             {
+                activeSkill = skill;
                 // Replace input with skill prompt + user args
                 skillPromptOverride = skill.PromptContent;
                 if (!string.IsNullOrEmpty(skillArgs))
@@ -806,6 +808,10 @@ public class ChatViewModel : ViewModelBase
 
         try
         {
+            // Set AllowedTools constraint for skill execution
+            if (activeSkill?.AllowedTools is { Count: > 0 })
+                _agentToolService.ActiveSkillAllowedTools = activeSkill.AllowedTools;
+
             // Skills always run in agentic mode
             if (!string.IsNullOrEmpty(skillPromptOverride) && HasProject)
                 await RunAgentic(input, _cts.Token);
@@ -835,6 +841,9 @@ public class ChatViewModel : ViewModelBase
         }
         finally
         {
+            // Clear skill AllowedTools constraint
+            _agentToolService.ActiveSkillAllowedTools = null;
+
             IsGenerating = false;
             CanSend = true;
             _cts?.Dispose();

@@ -21,6 +21,15 @@ public partial class App : Application
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
 
+        // Ensure skill directories exist
+        try
+        {
+            string skillsDir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "skills");
+            System.IO.Directory.CreateDirectory(skillsDir);
+        }
+        catch { }
+
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
