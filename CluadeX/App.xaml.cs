@@ -20,6 +20,17 @@ public partial class App : Application
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
+
+        // Initialize MCP servers in background (non-blocking)
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
+                await mcpManager.InitializeAsync();
+            }
+            catch { /* MCP init is best-effort */ }
+        });
     }
 
     private static void ConfigureServices(IServiceCollection services)
@@ -66,6 +77,7 @@ public partial class App : Application
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<FeaturesViewModel>();
+        services.AddSingleton<McpServersViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();

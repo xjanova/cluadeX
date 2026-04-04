@@ -417,6 +417,73 @@
                 </StackPanel>
             </Border>
 
+            <!-- ═══════ MEMORY MANAGEMENT ═══════ -->
+            <TextBlock Text="Memory Management" Style="{StaticResource SectionTitle}"/>
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Persistent memories saved by the AI agent. These survive across chat sessions."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"/>
+
+                    <!-- Memory List -->
+                    <ListBox ItemsSource="{Binding Memories}" SelectedItem="{Binding SelectedMemory}"
+                             Background="Transparent" BorderThickness="0"
+                             MaxHeight="200" Margin="0,0,0,8">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="2">
+                                    <Border Background="{StaticResource Surface0Brush}" CornerRadius="3"
+                                            Padding="4,1" Margin="0,0,6,0">
+                                        <TextBlock Text="{Binding Type}" FontSize="10" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource MauveBrush}"/>
+                                    </Border>
+                                    <TextBlock Text="{Binding Name}" FontSize="12"
+                                               Foreground="{StaticResource TextBrush}"
+                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock Text="{Binding Description}" FontSize="11"
+                                               Foreground="{StaticResource Overlay0Brush}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" MaxWidth="300"/>
+                                    <Border Background="{StaticResource Surface0Brush}" CornerRadius="3"
+                                            Padding="4,1" Margin="8,0,0,0">
+                                        <TextBlock Text="{Binding Scope}" FontSize="9"
+                                                   Foreground="{StaticResource Subtext0Brush}"/>
+                                    </Border>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Selected Memory Preview -->
+                    <TextBox Text="{Binding SelectedMemoryContent, Mode=OneWay}" IsReadOnly="True"
+                             Style="{StaticResource ModernTextBox}"
+                             TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto"
+                             Margin="0,0,0,8" FontSize="11"
+                             Visibility="{Binding SelectedMemory, Converter={StaticResource NullToCollapsed}}"/>
+
+                    <!-- Actions -->
+                    <StackPanel Orientation="Horizontal">
+                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding RefreshMemoriesCommand}"
+                                Padding="8,4" Margin="0,0,8,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBlock Text="Refresh" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding DeleteMemoryCommand}"
+                                Padding="8,4" Foreground="{StaticResource RedBrush}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBlock Text="Delete Selected" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="{Binding MemoryStatusText}" Foreground="{StaticResource Subtext0Brush}"
+                                   FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <!-- ═══════ BUTTONS ═══════ -->
             <StackPanel Orientation="Horizontal" Margin="0,20,0,24" VerticalAlignment="Center">
                 <Button Content="💾 Save Settings" Style="{StaticResource PrimaryButton}"

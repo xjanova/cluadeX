@@ -44,6 +44,9 @@
         <DataTemplate DataType="{x:Type vm:FeaturesViewModel}">
             <views:FeaturesView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:McpServersViewModel}">
+            <views:McpServersView/>
+        </DataTemplate>
     </Window.Resources>
 
     <Border x:Name="RootBorder">
@@ -207,6 +210,10 @@
                             <RadioButton Content="{Binding NavTasks}" Style="{StaticResource NavButton}" Tag="&#xE9D5;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
+                                         GroupName="Nav"/>
+                            <RadioButton Content="{Binding NavMcpServers}" Style="{StaticResource NavButton}" Tag="&#xECAA;"
+                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=McpServers, Mode=OneWay}"
+                                         Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
                                          GroupName="Nav"/>
 
                             <!-- Separator -->

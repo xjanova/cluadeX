@@ -13,6 +13,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;
     private readonly LocalizationService _localizationService;
+    private readonly MemoryService _memoryService;
 
     private string _modelDirectory = string.Empty;
     private string _cacheDirectory = string.Empty;
@@ -95,6 +96,24 @@ public class SettingsViewModel : ViewModelBase
     }
 
     public List<string> UiLanguageOptions { get; } = new() { "English", "ไทย" };
+
+    // ─── Memory Management ───
+    public ObservableCollection<MemoryEntry> Memories { get; } = new();
+    private MemoryEntry? _selectedMemory;
+    public MemoryEntry? SelectedMemory
+    {
+        get => _selectedMemory;
+        set
+        {
+            if (SetProperty(ref _selectedMemory, value))
+                OnPropertyChanged(nameof(SelectedMemoryContent));
+        }
+    }
+    public string SelectedMemoryContent => _selectedMemory?.Content ?? "";
+    private string _memoryStatusText = "";
+    public string MemoryStatusText { get => _memoryStatusText; set => SetProperty(ref _memoryStatusText, value); }
+    public ICommand RefreshMemoriesCommand { get; private set; } = null!;
+    public ICommand DeleteMemoryCommand { get; private set; } = null!;
 
     // AI Provider properties
     public AiProviderType SelectedProvider
@@ -188,12 +207,14 @@ public class SettingsViewModel : ViewModelBase
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
-        LocalizationService localizationService)
+        LocalizationService localizationService,
+        MemoryService memoryService)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
         _localizationService = localizationService;
+        _memoryService = memoryService;
 
         BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder("Model Directory", ModelDirectory); if (p != null) ModelDirectory = p; });
         BrowseCacheDirCommand = new RelayCommand(() => { var p = BrowseFolder("Cache Directory", CacheDirectory); if (p != null) CacheDirectory = p; });
@@ -206,9 +227,12 @@ public class SettingsViewModel : ViewModelBase
         TestConnectionCommand = new AsyncRelayCommand(TestConnection);
         ApplyProviderCommand = new AsyncRelayCommand(ApplyProvider);
         RefreshOllamaModelsCommand = new AsyncRelayCommand(RefreshOllamaModels);
+        RefreshMemoriesCommand = new RelayCommand(RefreshMemories);
+        DeleteMemoryCommand = new RelayCommand(DeleteSelectedMemory);
 
         LoadFromSettings();
         DetectGpuInfo();
+        RefreshMemories();
     }
 
     private void LoadProviderConfig(AiProviderType type)
@@ -566,5 +590,47 @@ public class SettingsViewModel : ViewModelBase
             });
         }
         catch { }
+    }
+
+    // ─── Memory Management ───
+
+    private void RefreshMemories()
+    {
+        try
+        {
+            Memories.Clear();
+            var all = _memoryService.ListAllMemories();
+            foreach (var m in all)
+                Memories.Add(m);
+            MemoryStatusText = all.Count > 0 ? $"{all.Count} memories" : "No memories saved";
+        }
+        catch (Exception ex)
+        {
+            MemoryStatusText = $"Error: {ex.Message}";
+        }
+    }
+
+    private void DeleteSelectedMemory()
+    {
+        if (SelectedMemory == null) return;
+
+        try
+        {
+            bool isProject = SelectedMemory.Scope == "project";
+            bool deleted = _memoryService.RemoveMemory(SelectedMemory.Name, isProject);
+            if (deleted)
+            {
+                MemoryStatusText = $"Deleted: {SelectedMemory.Name}";
+                RefreshMemories();
+            }
+            else
+            {
+                MemoryStatusText = $"Could not delete: {SelectedMemory.Name}";
+            }
+        }
+        catch (Exception ex)
+        {
+            MemoryStatusText = $"Error: {ex.Message}";
+        }
     }
 }

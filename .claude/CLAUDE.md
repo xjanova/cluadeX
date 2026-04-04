@@ -50,15 +50,26 @@ The Claude Code source is at `E:\Code\src\src` (TypeScript/Node.js) — use it a
 - Permission pattern ignored → checks both tool + resource
 - Missing native schemas → added git_clone/init/worktree/agent_spawn
 
+## Completed in Session (2026-04-04)
+- [x] Implement SkillInvoke tool — now resolves skill by name, returns prompt content + allowed tools
+- [x] Add Extended Thinking toggle in ChatView status bar — checkbox with brain icon, persists to settings
+- [x] Add Memory management UI in SettingsView — list/preview/delete memories with refresh
+- [x] Fix notebook_edit multi-line parsing — `new_source:` now handled like `code:` in ParseNotebookEditArgs
+- [x] Wire MCP tools into native schemas — dynamic schema generation from MCP tool registry
+- [x] MCP initialization at startup — `McpServerManager.InitializeAsync()` called in App.OnStartup
+- [x] Added `skill_invoke` native schema + system prompt tool definition (#47)
+- [x] MCP Server Management page — full UI (add/remove/start/stop/edit/toggle/logs/tools)
+- [x] McpServerDisplayItem model with observable status/toolCount/logOutput
+- [x] McpServerManager.SetConfig/RemoveConfig for UI config management
+- [x] Navigation wired: nav button, DataTemplate, localization (en/th)
+
 ## Remaining Work (for next session)
-- [ ] Wire `ChatWithToolsAsync` native loop into actual production use (currently dual-mode dispatch exists but needs real-world testing)
-- [ ] Add UI for Memory management (list/save/delete memories from Settings or dedicated view)
-- [ ] Add Extended Thinking toggle visible in ChatView status bar
-- [ ] Implement SkillInvoke tool (currently returns "not yet configured")
-- [ ] Add notebook_edit multi-line parsing in `ParseArguments`
+- [ ] Wire `ChatWithToolsAsync` native loop into actual production use (needs real-world testing)
 - [ ] Consider Microcompact (tool result optimization — clearing images, compressing timestamps)
 - [ ] Consider Session Memory (background extraction into persistent memory files)
 - [ ] Run full integration test with Anthropic API
+- [ ] Localization: page content labels still hardcoded English (Settings, Features views)
+- [ ] Model Catalog: List/Grid view toggle
 
 ## Build & Run
 ```bash

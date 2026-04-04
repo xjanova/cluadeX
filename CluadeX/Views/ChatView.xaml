@@ -852,6 +852,16 @@
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center"
                               ToolTip="Automatically run code blocks and fix errors"/>
+                    <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
+                              Foreground="{StaticResource MauveBrush}"
+                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
+                              ToolTip="Extended Thinking — enables deeper reasoning with thinking blocks (Anthropic only)">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                       VerticalAlignment="Center" Margin="0,0,3,0"/>
+                            <TextBlock Text="Think" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </CheckBox>
                 </StackPanel>
 
                 <!-- New Chat quick button -->

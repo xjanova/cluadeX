@@ -127,11 +127,19 @@
 - AgentToolService fires event; CodeAgentService can handle spawning
 - Tool format: task + context args
 
-### 7. MCP Server Integration ❌ NOT DONE
-- Claude Code: Full MCP client (stdio, SSE, HTTP, WebSocket)
-- CluadeX: NOT IMPLEMENTED
-- Need: MCP client service + tool registration from MCP servers
-- This is a BIG feature — may need its own development cycle
+### 7. MCP Server Integration ✅ DONE (Core)
+- McpServerManager: stdio JSON-RPC 2.0 transport, server lifecycle management
+- McpStdioTransport: subprocess stdio communication with 30s timeout
+- McpToolRegistry: qualified name resolution (mcp__server__tool), prompt generation
+- Auto-initialization at App startup (non-blocking)
+- Dynamic native schema generation for Anthropic tool_use API
+- System prompt injection of MCP tool definitions
+- Tool dispatch: resolve → call → format result
+- Config: `mcp_servers.json` with per-server enable/disable
+- Full management UI: McpServersView (add/remove/start/stop/edit/toggle/logs/tools)
+- McpServerDisplayItem observable model for UI binding
+- Navigation integrated (nav button, DataTemplate, localization en/th)
+- NOT yet done: SSE, HTTP, WebSocket transports (only stdio)
 
 ### 8. Task Scheduling (Background Jobs) ✅ DONE
 - Added `task_create`, `task_list`, `task_stop`, `task_output` tools

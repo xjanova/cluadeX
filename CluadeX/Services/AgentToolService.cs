@@ -46,12 +46,14 @@ public class AgentToolService
 
     private readonly HookService _hookService;
     private readonly MemoryService _memoryService;
+    private readonly SkillService _skillService;
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
         WebFetchService webFetchService, TaskManagerService taskManager,
-        McpServerManager mcpManager, HookService hookService, MemoryService memoryService)
+        McpServerManager mcpManager, HookService hookService, MemoryService memoryService,
+        SkillService skillService)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -65,6 +67,7 @@ public class AgentToolService
         _mcpManager = mcpManager;
         _hookService = hookService;
         _memoryService = memoryService;
+        _skillService = skillService;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -234,7 +237,7 @@ public class AgentToolService
                 ToolType.PowerShell => await ExecutePowerShellAsync(call, ct),
 
                 // Phase 4: Skills
-                ToolType.SkillInvoke => Fail(call, "Skills system not yet configured."),
+                ToolType.SkillInvoke => ExecuteSkillInvoke(call),
 
                 // Memory tools
                 ToolType.MemorySave => ExecuteMemorySave(call),
@@ -418,11 +421,42 @@ public class AgentToolService
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
         schemas.Add(new() { Name = "agent_spawn", Description = "Spawn a sub-agent for a complex sub-task", InputSchema = MakeSchema(("task", "string", "Task description", true), ("context", "string", "Additional context", false)) });
+        schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Memory tools
         schemas.Add(new() { Name = "memory_save", Description = "Save persistent memory that survives across sessions", InputSchema = MakeSchema(("name", "string", "Memory name", true), ("content", "string", "Memory content", true), ("type", "string", "user|feedback|project|reference", false), ("description", "string", "Short description", false), ("scope", "string", "global|project", false)) });
         schemas.Add(new() { Name = "memory_list", Description = "List all saved memories", InputSchema = MakeSchema() });
         schemas.Add(new() { Name = "memory_delete", Description = "Delete a saved memory", InputSchema = MakeSchema(("name", "string", "Memory name to delete", true), ("scope", "string", "global|project", false)) });
+
+        // MCP server tools (dynamically discovered)
+        if (features.McpServers)
+        {
+            foreach (var mcpTool in _mcpManager.ToolRegistry.GetAllTools())
+            {
+                // Convert MCP tool's JSON Schema to native format
+                var paramsList = new List<(string name, string type, string desc, bool required)>();
+                if (mcpTool.InputSchema.HasValue)
+                {
+                    try
+                    {
+                        var schema = mcpTool.InputSchema.Value;
+                        var props = schema.GetProperty("properties");
+                        var reqList = schema.TryGetProperty("required", out var reqEl)
+                            ? reqEl.EnumerateArray().Select(e => e.GetString() ?? "").ToHashSet()
+                            : new HashSet<string>();
+
+                        foreach (var prop in props.EnumerateObject())
+                        {
+                            string pType = prop.Value.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "string" : "string";
+                            string pDesc = prop.Value.TryGetProperty("description", out var descEl) ? descEl.GetString() ?? "" : "";
+                            paramsList.Add((prop.Name, pType, pDesc, reqList.Contains(prop.Name)));
+                        }
+                    }
+                    catch { /* skip malformed schemas */ }
+                }
+                schemas.Add(new() { Name = mcpTool.QualifiedName, Description = mcpTool.Description ?? mcpTool.Name, InputSchema = MakeSchema(paramsList.ToArray()) });
+            }
+        }
 
         return schemas;
     }
@@ -764,6 +798,13 @@ public class AgentToolService
                 name: user_preference
                 scope: global
                 [/ACTION]
+
+            47. skill_invoke - Invoke a skill (reusable prompt template) by name
+                [ACTION: skill_invoke]
+                skill: commit
+                args: fix login bug
+                [/ACTION]
+                Available skills: commit, review-pr, simplify (+ any user/project skills)
         """);
 
         // MCP server tools (dynamically discovered)
@@ -1938,6 +1979,12 @@ public class AgentToolService
             return ParseWriteFileArgs(body.Replace("plan:", "content:"));
         }
 
+        // For notebook_edit, handle "new_source:" as multi-line (cell content can span lines)
+        if (toolType == ToolType.NotebookEdit)
+        {
+            return ParseNotebookEditArgs(body);
+        }
+
         // Standard key: value parsing for single-line args
         foreach (var line in body.Split('\n'))
         {
@@ -2106,6 +2153,49 @@ public class AgentToolService
         return args;
     }
 
+    private Dictionary<string, string> ParseNotebookEditArgs(string body)
+    {
+        var args = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var lines = body.Split('\n');
+
+        bool inSource = false;
+        var sourceBuilder = new StringBuilder();
+
+        foreach (var line in lines)
+        {
+            if (inSource)
+            {
+                sourceBuilder.AppendLine(line);
+                continue;
+            }
+
+            string trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed)) continue;
+
+            if (trimmed.StartsWith("new_source:", StringComparison.OrdinalIgnoreCase))
+            {
+                string afterKey = trimmed["new_source:".Length..].TrimStart();
+                if (!string.IsNullOrEmpty(afterKey))
+                    sourceBuilder.AppendLine(afterKey);
+                inSource = true;
+                continue;
+            }
+
+            int colonIdx = trimmed.IndexOf(':');
+            if (colonIdx > 0)
+            {
+                string key = trimmed[..colonIdx].Trim().ToLowerInvariant();
+                string value = trimmed[(colonIdx + 1)..].Trim();
+                args[key] = value;
+            }
+        }
+
+        if (sourceBuilder.Length > 0)
+            args["new_source"] = sourceBuilder.ToString().TrimEnd('\r', '\n');
+
+        return args;
+    }
+
     private static ToolResult Fail(ToolCall call, string error)
     {
         return new ToolResult
@@ -2201,6 +2291,65 @@ public class AgentToolService
         {
             return Fail(call, $"Failed to delete memory: {ex.Message}");
         }
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 4: SkillInvoke Tool
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteSkillInvoke(ToolCall call)
+    {
+        string skillName = call.GetArg("skill");
+        if (string.IsNullOrEmpty(skillName))
+        {
+            // If no skill specified, list available skills
+            var allSkills = _skillService.GetAllSkills();
+            if (allSkills.Count == 0)
+                return Fail(call, "No skills available.");
+
+            var sb = new StringBuilder("Available skills:\n\n");
+            foreach (var s in allSkills)
+                sb.AppendLine($"- **{s.Name}**: {s.Description}{(s.IsBuiltIn ? " (built-in)" : "")}");
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = sb.ToString(),
+                Summary = $"Listed {allSkills.Count} available skills",
+            };
+        }
+
+        var skill = _skillService.GetSkillByName(skillName);
+        if (skill == null)
+        {
+            var allSkills = _skillService.GetAllSkills();
+            var names = string.Join(", ", allSkills.Select(s => s.Name));
+            return Fail(call, $"Skill '{skillName}' not found. Available: {names}");
+        }
+
+        string args = call.GetArg("args", "");
+
+        // Build the skill prompt
+        var prompt = new StringBuilder();
+        prompt.AppendLine($"# Executing Skill: {skill.Name}");
+        prompt.AppendLine($"Description: {skill.Description}");
+        if (skill.AllowedTools.Count > 0)
+            prompt.AppendLine($"Allowed tools: {string.Join(", ", skill.AllowedTools)}");
+        prompt.AppendLine();
+        prompt.AppendLine(skill.PromptContent);
+        if (!string.IsNullOrEmpty(args))
+        {
+            prompt.AppendLine();
+            prompt.AppendLine($"User arguments: {args}");
+        }
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = prompt.ToString(),
+            Summary = $"Skill '{skill.Name}' prompt loaded — execute it now",
+            // The caller (CodeAgentService) should feed this prompt back into the agentic loop
+        };
     }
 
     private static string FormatSize(long bytes)

@@ -96,6 +96,16 @@ public sealed class McpServerManager : IDisposable
         }
     }
 
+    /// <summary>Add or update a server configuration.</summary>
+    public void SetConfig(string name, McpServerConfig config)
+    {
+        config.Name = name;
+        _configs[name] = config;
+    }
+
+    /// <summary>Remove a server configuration by name.</summary>
+    public bool RemoveConfig(string name) => _configs.Remove(name);
+
     /// <summary>Start all enabled MCP servers.</summary>
     public async Task StartAllEnabledAsync(CancellationToken ct = default)
     {

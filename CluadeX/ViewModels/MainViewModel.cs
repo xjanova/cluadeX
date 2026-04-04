@@ -34,6 +34,7 @@ public class MainViewModel : ViewModelBase
     public string NavPermissions => _loc.T("nav.permissions");
     public string NavTasks => _loc.T("nav.tasks");
     public string NavFeatures => _loc.T("nav.features");
+    public string NavMcpServers => _loc.T("nav.mcpServers");
     public string TitleSubtitle => _loc.T("title.subtitle");
 
     private void RefreshNavLabels()
@@ -45,6 +46,7 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(NavPermissions));
         OnPropertyChanged(nameof(NavTasks));
         OnPropertyChanged(nameof(NavFeatures));
+        OnPropertyChanged(nameof(NavMcpServers));
         OnPropertyChanged(nameof(TitleSubtitle));
     }
 
@@ -73,6 +75,7 @@ public class MainViewModel : ViewModelBase
     public PermissionsViewModel PermissionsVM { get; }
     public TaskManagerViewModel TaskManagerVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
+    public McpServersViewModel McpServersVM { get; }
 
     public ICommand NavigateToCommand { get; }
     public ICommand PetBuddyCommand { get; }
@@ -88,6 +91,7 @@ public class MainViewModel : ViewModelBase
         PermissionsViewModel permissionsVM,
         TaskManagerViewModel taskManagerVM,
         FeaturesViewModel featuresVM,
+        McpServersViewModel mcpServersVM,
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
@@ -103,6 +107,7 @@ public class MainViewModel : ViewModelBase
         PermissionsVM = permissionsVM;
         TaskManagerVM = taskManagerVM;
         FeaturesVM = featuresVM;
+        McpServersVM = mcpServersVM;
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
@@ -203,6 +208,7 @@ public class MainViewModel : ViewModelBase
             "Permissions" => PermissionsVM,
             "Tasks" => TaskManagerVM,
             "Features" => FeaturesVM,
+            "McpServers" => McpServersVM,
             _ => ChatVM,
         };
 

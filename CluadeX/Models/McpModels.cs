@@ -168,7 +168,7 @@ public class McpClientInfo
     public string Name { get; set; } = "CluadeX";
 
     [JsonPropertyName("version")]
-    public string Version { get; set; } = "2.1.0";
+    public string Version { get; set; } = "2.2.0";
 }
 
 public class McpClientCapabilities
@@ -217,4 +217,97 @@ public class McpInitializeResult
 
     [JsonPropertyName("serverInfo")]
     public McpClientInfo? ServerInfo { get; set; }
+}
+
+// ════════════════════════════════════════════
+// MCP Server Display Model (for UI binding)
+// ════════════════════════════════════════════
+
+/// <summary>Observable wrapper around McpServerConfig for UI data binding.</summary>
+public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
+{
+    private string _status = "stopped";
+    private int _toolCount;
+    private string _logOutput = "";
+    private bool _enabled = true;
+
+    public string Name { get; set; } = "";
+    public string Command { get; set; } = "";
+    public string ArgsString { get; set; } = "";
+    public string EnvString { get; set; } = "";
+
+    public bool Enabled
+    {
+        get => _enabled;
+        set { if (_enabled != value) { _enabled = value; OnPropertyChanged(nameof(Enabled)); } }
+    }
+
+    public string Status
+    {
+        get => _status;
+        set { if (_status != value) { _status = value; OnPropertyChanged(nameof(Status)); } }
+    }
+
+    public int ToolCount
+    {
+        get => _toolCount;
+        set { if (_toolCount != value) { _toolCount = value; OnPropertyChanged(nameof(ToolCount)); } }
+    }
+
+    public string LogOutput
+    {
+        get => _logOutput;
+        set { if (_logOutput != value) { _logOutput = value; OnPropertyChanged(nameof(LogOutput)); } }
+    }
+
+    /// <summary>Convert back to McpServerConfig for persistence.</summary>
+    public McpServerConfig ToConfig()
+    {
+        var args = string.IsNullOrWhiteSpace(ArgsString)
+            ? new List<string>()
+            : ArgsString.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+        Dictionary<string, string>? env = null;
+        if (!string.IsNullOrWhiteSpace(EnvString))
+        {
+            env = new Dictionary<string, string>();
+            foreach (var line in EnvString.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var idx = line.IndexOf('=');
+                if (idx > 0)
+                    env[line[..idx].Trim()] = line[(idx + 1)..].Trim();
+            }
+        }
+
+        return new McpServerConfig
+        {
+            Name = Name,
+            Command = Command,
+            Args = args,
+            Env = env,
+            Enabled = Enabled,
+        };
+    }
+
+    /// <summary>Create a display item from config + runtime status.</summary>
+    public static McpServerDisplayItem FromConfig(string name, McpServerConfig config, bool isRunning, int toolCount)
+    {
+        var envLines = config.Env != null
+            ? string.Join("\n", config.Env.Select(kv => $"{kv.Key}={kv.Value}"))
+            : "";
+
+        return new McpServerDisplayItem
+        {
+            Name = name,
+            Command = config.Command,
+            ArgsString = string.Join(" ", config.Args),
+            EnvString = envLines,
+            Enabled = config.Enabled,
+            Status = isRunning ? "running" : "stopped",
+            ToolCount = toolCount,
+        };
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new(name));
 }

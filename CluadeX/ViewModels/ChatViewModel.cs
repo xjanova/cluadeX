@@ -126,6 +126,18 @@ public class ChatViewModel : ViewModelBase
     private bool _isPlanMode;
     public bool IsPlanMode { get => _isPlanMode; set => SetProperty(ref _isPlanMode, value); }
 
+    // ─── Extended Thinking Toggle (Anthropic) ───
+    private bool _extendedThinkingEnabled;
+    public bool ExtendedThinkingEnabled
+    {
+        get => _extendedThinkingEnabled;
+        set
+        {
+            if (SetProperty(ref _extendedThinkingEnabled, value))
+                _settingsService.UpdateSettings(s => s.ExtendedThinkingEnabled = value);
+        }
+    }
+
     // ─── Thinking Display ───
     private bool _showThinking = true;
     public bool ShowThinking
@@ -227,6 +239,7 @@ public class ChatViewModel : ViewModelBase
         _costTracker = costTracker;
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
+        _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
 
         RefreshModelsCommand = new RelayCommand(RefreshLocalModelsList);
         SendMessageCommand = new AsyncRelayCommand(SendMessage);

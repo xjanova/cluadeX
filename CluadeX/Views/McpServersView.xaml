@@ -1,0 +1,322 @@
+<UserControl x:Class="CluadeX.Views.McpServersView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource MantleBrush}">
+    <Grid Margin="24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ═══════ HEADER ═══════ -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="{Binding PageTitle}" FontSize="22" FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}"
+                       FontFamily="{StaticResource MainFont}"/>
+            <TextBlock Text="{Binding PageSubtitle}" FontSize="12"
+                       Foreground="{StaticResource Overlay0Brush}"
+                       FontFamily="{StaticResource MainFont}" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- ═══════ MASTER-DETAIL ═══════ -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT: Server List -->
+            <Border Background="{StaticResource BaseBrush}" CornerRadius="8" Padding="8">
+                <ListBox ItemsSource="{Binding Servers}" SelectedItem="{Binding SelectedServer}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0,0,0,4"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Bd" Background="{StaticResource Surface0Brush}"
+                                                CornerRadius="8" Padding="12,10" Cursor="Hand">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource MauveBrush}"/>
+                                                <Setter TargetName="Bd" Property="BorderThickness" Value="1"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextBrush}"/>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource Overlay0Brush}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis">
+                                        <Run Text="{Binding Command, Mode=OneWay}"/>
+                                        <Run Text=" "/>
+                                        <Run Text="{Binding ArgsString, Mode=OneWay}"/>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding ToolCount, StringFormat='{}{0} tools'}"
+                                               FontSize="10" Foreground="{StaticResource Subtext0Brush}"
+                                               Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <!-- Status Badge -->
+                                <Border Grid.Column="1" CornerRadius="8" Padding="8,3"
+                                        VerticalAlignment="Center">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource Overlay0Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Status}" Value="running">
+                                                    <Setter Property="Background" Value="{StaticResource GreenBrush}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Status}" Value="stopped">
+                                                    <Setter Property="Background" Value="{StaticResource YellowBrush}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Status}" Value="error">
+                                                    <Setter Property="Background" Value="{StaticResource RedBrush}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Status}" Value="starting">
+                                                    <Setter Property="Background" Value="{StaticResource BlueBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding Status}" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{StaticResource CrustBrush}"/>
+                                </Border>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+
+            <!-- RIGHT: Detail Panel -->
+            <Border Grid.Column="2" Background="{StaticResource BaseBrush}" CornerRadius="8" Padding="16">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Style="{StaticResource SlimScrollViewer}">
+                    <StackPanel>
+                        <!-- Empty State (hidden when server selected) -->
+
+                        <!-- Server Detail (when selected) -->
+                        <StackPanel Visibility="{Binding SelectedServer, Converter={StaticResource NullToCollapsed}}">
+
+                            <!-- Server Name Header -->
+                            <TextBlock Text="{Binding SelectedServer.Name}" FontSize="18" FontWeight="Bold"
+                                       Foreground="{StaticResource TextBrush}" Margin="0,0,0,12"/>
+
+                            <!-- View Mode -->
+                            <StackPanel Visibility="{Binding IsEditing, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                <TextBlock Text="Command" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
+                                <Border Background="{StaticResource Surface0Brush}" CornerRadius="4"
+                                        Padding="8,6" Margin="0,0,0,12">
+                                    <TextBlock Foreground="{StaticResource TextBrush}" FontSize="12"
+                                               FontFamily="Cascadia Code,Consolas,monospace" TextWrapping="Wrap">
+                                        <Run Text="{Binding SelectedServer.Command, Mode=OneWay}"/>
+                                        <Run Text=" "/>
+                                        <Run Text="{Binding SelectedServer.ArgsString, Mode=OneWay}"/>
+                                    </TextBlock>
+                                </Border>
+
+                                <!-- Discovered Tools -->
+                                <TextBlock FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4">
+                                    <Run Text="Discovered Tools ("/>
+                                    <Run Text="{Binding SelectedServerTools.Count, Mode=OneWay}"/>
+                                    <Run Text=")"/>
+                                </TextBlock>
+                                <ItemsControl ItemsSource="{Binding SelectedServerTools}" Margin="0,0,0,12">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{StaticResource Surface0Brush}" CornerRadius="4"
+                                                    Padding="8,4" Margin="0,0,0,3">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource MauveBrush}"/>
+                                                    <TextBlock Text="{Binding Description}" FontSize="10"
+                                                               Foreground="{StaticResource Overlay0Brush}"
+                                                               TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                                               MaxHeight="32"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- Server Log -->
+                                <TextBlock Text="Server Log" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
+                                <Border Background="{StaticResource CrustBrush}" CornerRadius="4">
+                                    <TextBox Text="{Binding SelectedServer.LogOutput, Mode=OneWay}"
+                                             IsReadOnly="True" TextWrapping="Wrap"
+                                             Background="Transparent"
+                                             Foreground="{StaticResource Subtext0Brush}"
+                                             BorderThickness="0"
+                                             Padding="8,6" MaxHeight="180"
+                                             FontSize="10" FontFamily="Cascadia Code,Consolas,monospace"
+                                             VerticalScrollBarVisibility="Auto"/>
+                                </Border>
+                            </StackPanel>
+
+                            <!-- Edit Mode -->
+                            <StackPanel Visibility="{Binding IsEditing, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="Command" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
+                                <TextBox Text="{Binding SelectedServer.Command, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource ModernTextBox}" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="Arguments (space-separated)" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
+                                <TextBox Text="{Binding SelectedServer.ArgsString, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource ModernTextBox}" Margin="0,0,0,12"/>
+
+                                <TextBlock Text="Environment Variables (KEY=VALUE per line)" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
+                                <TextBox Text="{Binding SelectedServer.EnvString, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource ModernTextBox}" AcceptsReturn="True"
+                                         TextWrapping="Wrap" MinHeight="60" Margin="0,0,0,12"/>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Save" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding SaveEditCommand}" Margin="0,0,8,0" Padding="16,6"/>
+                                    <Button Content="Cancel" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding CancelEditCommand}" Padding="16,6"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <!-- ═══════ ADD SERVER FORM ═══════ -->
+        <Border Grid.Row="2" Background="{StaticResource BaseBrush}" CornerRadius="8"
+                Padding="16,12" Margin="0,12,0,0"
+                Visibility="{Binding IsAddingServer, Converter={StaticResource BoolVis}}">
+            <StackPanel>
+                <TextBlock Text="Add MCP Server" FontSize="14" FontWeight="Bold"
+                           Foreground="{StaticResource TextBrush}" Margin="0,0,0,10"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="1.5*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Name" FontSize="10" Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,3"/>
+                        <TextBox Text="{Binding NewServerName, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="Command" FontSize="10" Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,3"/>
+                        <TextBox Text="{Binding NewServerCommand, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="4">
+                        <TextBlock Text="Arguments" FontSize="10" Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,3"/>
+                        <TextBox Text="{Binding NewServerArgs, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource ModernTextBox}"/>
+                    </StackPanel>
+                    <Button Grid.Column="6" Content="Add" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding AddServerCommand}" VerticalAlignment="Bottom"
+                            Padding="20,6"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- ═══════ TOOLBAR ═══════ -->
+        <Border Grid.Row="3" Margin="0,12,0,0">
+            <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource PrimaryButton}" Command="{Binding StartServerCommand}"
+                        Padding="12,6" Margin="0,0,6,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Start" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding StopServerCommand}"
+                        Padding="12,6" Margin="0,0,6,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Stop" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding RestartServerCommand}"
+                        Padding="12,6" Margin="0,0,6,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Restart" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
+                <Border Width="1" Background="{StaticResource Surface0Brush}" Margin="6,2"/>
+
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding BeginEditCommand}"
+                        Padding="12,6" Margin="6,0,6,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Edit" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding ToggleEnabledCommand}"
+                        Padding="12,6" Margin="0,0,6,0" Content="Toggle"/>
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding RemoveServerCommand}"
+                        Padding="12,6" Margin="0,0,6,0" Foreground="{StaticResource RedBrush}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Remove" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
+                <Border Width="1" Background="{StaticResource Surface0Brush}" Margin="6,2"/>
+
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding ShowAddFormCommand}"
+                        Padding="12,6" Margin="6,0,6,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Add Server" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding StartAllCommand}"
+                        Padding="12,6" Margin="0,0,6,0" Content="Start All"/>
+                <Button Style="{StaticResource IconButton}" Command="{Binding RefreshCommand}"
+                        Padding="6,6" ToolTip="Refresh">
+                    <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="14"/>
+                </Button>
+
+                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource Subtext0Brush}"
+                           FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

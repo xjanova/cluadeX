@@ -24,6 +24,9 @@ public class LocalizationService
         ["nav.permissions"] = new() { ["en"] = "Permissions", ["th"] = "สิทธิ์" },
         ["nav.tasks"] = new() { ["en"] = "Tasks", ["th"] = "งาน" },
         ["nav.features"] = new() { ["en"] = "Features", ["th"] = "ฟีเจอร์" },
+        ["nav.mcpServers"] = new() { ["en"] = "MCP Servers", ["th"] = "เซิร์ฟเวอร์ MCP" },
+        ["mcp.title"] = new() { ["en"] = "MCP Servers", ["th"] = "เซิร์ฟเวอร์ MCP" },
+        ["mcp.subtitle"] = new() { ["en"] = "Manage Model Context Protocol servers — add tools and integrations for the AI agent", ["th"] = "จัดการเซิร์ฟเวอร์ MCP — เพิ่มเครื่องมือและการเชื่อมต่อสำหรับ AI agent" },
 
         // ═══════ SIDEBAR ═══════
         ["sidebar.newChat"] = new() { ["en"] = "New Chat", ["th"] = "แชทใหม่" },
