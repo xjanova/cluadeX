@@ -234,6 +234,9 @@ public class CodeAgentService
     /// <summary>Fires when a tool action completes (for adding to chat UI).</summary>
     public event Action<ToolResult>? OnToolExecuted;
 
+    /// <summary>Fires when the agent produces thinking/reasoning text (real-time display).</summary>
+    public event Action<string, int>? OnThinkingUpdate; // text, stepNumber
+
     public CodeAgentService(
         AiProviderManager providerManager,
         CodeExecutionService codeExecutionService,
@@ -384,6 +387,7 @@ public class CodeAgentService
                 {
                     // Code has issues — ask model to fix
                     step.ThinkingText = _agentToolService.StripToolCalls(response);
+                    OnThinkingUpdate?.Invoke(step.ThinkingText ?? "", iteration + 1);
                     result.Steps.Add(step);
 
                     workingHistory.Add(new ChatMessage { Role = MessageRole.Assistant, Content = response });
@@ -401,7 +405,10 @@ public class CodeAgentService
             // ─── Execute tools ───
             string cleanText = _agentToolService.StripToolCalls(response);
             if (!string.IsNullOrWhiteSpace(cleanText))
+            {
                 step.ThinkingText = cleanText;
+                OnThinkingUpdate?.Invoke(cleanText, iteration + 1);
+            }
 
             progress?.Report($"Running {toolCalls.Count} tool(s)...");
             OnAgentStatus?.Invoke($"Executing {toolCalls.Count} tool(s)...");

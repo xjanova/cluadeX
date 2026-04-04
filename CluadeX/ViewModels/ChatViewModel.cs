@@ -120,6 +120,18 @@ public class ChatViewModel : ViewModelBase
     private bool _isPlanMode;
     public bool IsPlanMode { get => _isPlanMode; set => SetProperty(ref _isPlanMode, value); }
 
+    // ─── Thinking Display ───
+    private bool _showThinking = true;
+    public bool ShowThinking
+    {
+        get => _showThinking;
+        set
+        {
+            if (SetProperty(ref _showThinking, value))
+                _settingsService.UpdateSettings(s => s.AutoExecuteCode = s.AutoExecuteCode); // trigger save
+        }
+    }
+
     // ─── TODO List ───
     private string _todoListText = "";
     public string TodoListText { get => _todoListText; set => SetProperty(ref _todoListText, value); }
@@ -799,25 +811,27 @@ public class ChatViewModel : ViewModelBase
             .SkipLast(1)  // Skip the user message just added — it's passed separately as `input`
             .ToList() ?? new();
 
-        var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
-
-        // Add step-by-step results to chat
-        foreach (var step in result.Steps)
+        // Listen for real-time thinking updates during agent execution
+        void OnThinking(string text, int step)
         {
-            if (!string.IsNullOrWhiteSpace(step.ThinkingText))
+            if (string.IsNullOrWhiteSpace(text) || !ShowThinking) return;
+            App.Current?.Dispatcher.Invoke(() =>
             {
                 var thinkingMsg = new ChatMessage
                 {
                     Role = MessageRole.Assistant,
-                    Content = step.ThinkingText,
+                    Content = $"\U0001F4AD **Step {step}**\n{text}",
                 };
-                App.Current?.Dispatcher.Invoke(() =>
-                {
-                    Messages.Add(thinkingMsg);
-                    CurrentSession?.Messages.Add(thinkingMsg);
-                });
-            }
+                Messages.Add(thinkingMsg);
+                CurrentSession?.Messages.Add(thinkingMsg);
+                ScrollToBottom?.Invoke();
+            });
         }
+
+        _agentService.OnThinkingUpdate += OnThinking;
+        try
+        {
+            var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
 
         // Add final response
         if (!string.IsNullOrWhiteSpace(result.FinalResponse))
@@ -841,6 +855,11 @@ public class ChatViewModel : ViewModelBase
 
         StatusText = result.Success ? "Ready" : "Agent loop complete";
         ScrollToBottom?.Invoke();
+        }
+        finally
+        {
+            _agentService.OnThinkingUpdate -= OnThinking;
+        }
     }
 
     private void OnToolExecuted(ToolResult toolResult)

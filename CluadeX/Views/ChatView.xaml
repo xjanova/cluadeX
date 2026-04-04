@@ -75,6 +75,13 @@
                           FontSize="10" VerticalAlignment="Center"
                           ToolTip="Enable agentic mode (file access, commands, Git)"/>
 
+                <!-- Thinking Toggle -->
+                <CheckBox Grid.Column="3" Content="Thinking" Margin="4,0"
+                          IsChecked="{Binding ShowThinking}"
+                          Foreground="{StaticResource Subtext0Brush}"
+                          FontSize="10" VerticalAlignment="Center"
+                          ToolTip="Show AI thinking/reasoning steps in real-time"/>
+
                 <Button Grid.Column="4" Content="&#xE711;"
                         FontFamily="Segoe MDL2 Assets"
                         Style="{StaticResource IconButton}"

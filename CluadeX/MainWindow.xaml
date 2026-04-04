@@ -568,6 +568,31 @@
                                 <TextBlock Text="{Binding GpuStatus}"
                                            Foreground="{StaticResource Overlay0Brush}"
                                            FontSize="10" TextTrimming="CharacterEllipsis"/>
+
+                                <!-- Version + Check Update -->
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding AppVersion}"
+                                               Foreground="{StaticResource Overlay0Brush}"
+                                               FontSize="10" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                            Command="{Binding CheckUpdateCommand}"
+                                            ToolTip="Check for updates"
+                                            Padding="4,2" Opacity="0.7">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="10" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource BlueBrush}"
+                                                       Margin="0,0,4,0"/>
+                                            <TextBlock Text="Update" FontSize="10"
+                                                       Foreground="{StaticResource BlueBrush}"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </Grid>
