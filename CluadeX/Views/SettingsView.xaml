@@ -339,6 +339,31 @@
                 </Grid>
             </Border>
 
+            <!-- ═══════ ANTHROPIC ADVANCED ═══════ -->
+            <TextBlock Text="Anthropic Advanced" Style="{StaticResource SectionTitle}"/>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <CheckBox Content="Extended Thinking" IsChecked="{Binding ExtendedThinkingEnabled}"
+                              Margin="0,0,0,4"/>
+                    <TextBlock Text="Enable Claude's extended thinking mode for complex reasoning. Uses additional tokens for internal reasoning before responding."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,12" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="Thinking Budget: " VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding ThinkingBudgetTokens, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" Margin="4,0,8,0"/>
+                        <TextBlock Text="tokens" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Overlay0Brush}"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Prompt Caching" IsChecked="{Binding PromptCachingEnabled}"
+                              Margin="0,12,0,4"/>
+                    <TextBlock Text="Cache the system prompt across API calls to reduce costs. Recommended for Anthropic."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
             <!-- ═══════ AGENT ═══════ -->
             <TextBlock Text="Agent Settings" Style="{StaticResource SectionTitle}"/>
 

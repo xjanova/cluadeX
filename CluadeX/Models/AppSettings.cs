@@ -46,6 +46,13 @@ public class AppSettings
     public int MaxAutoFixAttempts { get; set; } = 3;
     public string PreferredLanguage { get; set; } = "C#";
 
+    // Extended Thinking (Anthropic Claude)
+    // Note: budget_tokens must be < max_tokens when thinking is enabled.
+    // When thinking is on, MaxTokens is auto-raised to 16384 if lower.
+    public bool ExtendedThinkingEnabled { get; set; } = false;
+    public int ThinkingBudgetTokens { get; set; } = 10000; // default 10K thinking tokens
+    public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
+
     // UI settings
     public double FontSize { get; set; } = 14;
     public bool StreamOutput { get; set; } = true;

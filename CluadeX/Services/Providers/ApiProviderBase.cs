@@ -152,6 +152,20 @@ public abstract class ApiProviderBase : IAiProvider
 
     public abstract Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default);
 
+    // Phase 5: Native tool use support (default: not supported)
+    public virtual bool SupportsNativeToolUse => false;
+
+    public virtual Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages,
+        string systemPrompt,
+        List<ToolSchema> tools,
+        CancellationToken ct = default)
+        => Task.FromResult(new NativeToolResponse
+        {
+            TextContent = "Native tool use not supported by this provider.",
+            StopReason = "end_turn",
+        });
+
     public virtual void Dispose()
     {
         _httpClient.Dispose();

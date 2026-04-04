@@ -24,6 +24,8 @@ public class ChatViewModel : ViewModelBase
     private readonly HuggingFaceService _huggingFaceService;
     private readonly LlamaInferenceService _llamaService;
     private readonly GpuDetectionService _gpuDetection;
+    private readonly SkillService _skillService;
+    private readonly CostTrackingService _costTracker;
     private CancellationTokenSource? _cts;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _autoSaveTimer;
@@ -41,6 +43,7 @@ public class ChatViewModel : ViewModelBase
     private double _contextUsagePercent;
     private string _contextUsageText = "0 / 4,096 tokens";
     private string _memoryUsageText = "RAM: --";
+    private string _costText = "";
     private bool _isDirty; // track unsaved changes
     private string _historySearchQuery = string.Empty;
     private bool _isSearchingHistory;
@@ -91,6 +94,9 @@ public class ChatViewModel : ViewModelBase
     public double ContextUsagePercent { get => _contextUsagePercent; set => SetProperty(ref _contextUsagePercent, value); }
     public string ContextUsageText { get => _contextUsageText; set => SetProperty(ref _contextUsageText, value); }
     public string MemoryUsageText { get => _memoryUsageText; set => SetProperty(ref _memoryUsageText, value); }
+
+    // ─── API Cost Tracking ───
+    public string CostText { get => _costText; set => SetProperty(ref _costText, value); }
 
     // ─── Per-Turn Stats ───
     private string _lastTurnStats = "";
@@ -200,7 +206,9 @@ public class ChatViewModel : ViewModelBase
         ChatPersistenceService persistenceService,
         HuggingFaceService huggingFaceService,
         LlamaInferenceService llamaService,
-        GpuDetectionService gpuDetection)
+        GpuDetectionService gpuDetection,
+        SkillService skillService,
+        CostTrackingService costTracker)
     {
         _providerManager = providerManager;
         _agentService = agentService;
@@ -215,6 +223,8 @@ public class ChatViewModel : ViewModelBase
         _huggingFaceService = huggingFaceService;
         _llamaService = llamaService;
         _gpuDetection = gpuDetection;
+        _skillService = skillService;
+        _costTracker = costTracker;
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
 
@@ -246,6 +256,7 @@ public class ChatViewModel : ViewModelBase
         {
             UpdateContextInfo();
             UpdateGpuStats();
+            CostText = _costTracker.FormatCost();
         };
         _memoryTimer.Start();
 
@@ -750,6 +761,25 @@ public class ChatViewModel : ViewModelBase
             return;
         }
 
+        // ─── Slash Command / Skill Interception ───
+        string skillPromptOverride = "";
+        if (input.StartsWith("/"))
+        {
+            var parts = input.TrimStart('/').Split(' ', 2);
+            string skillName = parts[0];
+            string skillArgs = parts.Length > 1 ? parts[1] : "";
+            var skill = _skillService.GetSkillByName(skillName);
+
+            if (skill != null && skill.UserInvocable)
+            {
+                // Replace input with skill prompt + user args
+                skillPromptOverride = skill.PromptContent;
+                if (!string.IsNullOrEmpty(skillArgs))
+                    skillPromptOverride += $"\n\nUser arguments: {skillArgs}";
+                input = skillPromptOverride;
+            }
+        }
+
         var userMsg = new ChatMessage { Role = MessageRole.User, Content = input };
         Messages.Add(userMsg);
         CurrentSession?.Messages.Add(userMsg);
@@ -763,7 +793,10 @@ public class ChatViewModel : ViewModelBase
 
         try
         {
-            if (AgenticMode && HasProject)
+            // Skills always run in agentic mode
+            if (!string.IsNullOrEmpty(skillPromptOverride) && HasProject)
+                await RunAgentic(input, _cts.Token);
+            else if (AgenticMode && HasProject)
                 await RunAgentic(input, _cts.Token);
             else if (AutoExecute)
                 await RunWithAutoExecution(input, _cts.Token);

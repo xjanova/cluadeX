@@ -62,6 +62,22 @@ public enum ToolType
     // Agent meta-tools
     TodoWrite,
     PlanMode,
+
+    // Phase 3: New tools (Claude Code parity)
+    GlobSearch,      // Pattern-based file matching (e.g., **/*.cs)
+    Grep,            // Regex content search with context lines
+    AskUser,         // Ask user a question via UI dialog
+    Config,          // Get/set CluadeX settings from chat
+    NotebookEdit,    // Edit Jupyter .ipynb notebook cells
+    PowerShell,      // Explicit PowerShell execution
+
+    // Skills system (Phase 4)
+    SkillInvoke,     // Invoke a skill by name
+
+    // Memory tools
+    MemorySave,      // Save a memory entry
+    MemoryList,      // List all memories
+    MemoryDelete,    // Delete a memory
 }
 
 /// <summary>
@@ -81,6 +97,34 @@ public class ToolCall
 
     public string GetArg(string key, string defaultValue = "")
         => Arguments.TryGetValue(key, out var val) ? val : defaultValue;
+
+    /// <summary>Whether this tool is safe to execute concurrently with other tools.
+    /// Read-only tools and queries are safe; write/execute tools are not.</summary>
+    public bool IsConcurrencySafe => Type switch
+    {
+        ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles
+        or ToolType.SearchContent or ToolType.GlobSearch or ToolType.Grep
+        or ToolType.GitStatus or ToolType.GitLog
+        or ToolType.GitDiff or ToolType.GitBranch
+        or ToolType.GhPrList or ToolType.GhIssueList or ToolType.GhRepoView
+        or ToolType.WebSearch or ToolType.WebFetch
+        or ToolType.TaskList or ToolType.TaskOutput
+        or ToolType.AskUser or ToolType.MemoryList => true,
+        _ => false,
+    };
+
+    /// <summary>Whether this tool only reads data (no side effects).</summary>
+    public bool IsReadOnly => Type switch
+    {
+        ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles
+        or ToolType.SearchContent or ToolType.GlobSearch or ToolType.Grep
+        or ToolType.GitStatus or ToolType.GitLog
+        or ToolType.GitDiff or ToolType.GitBranch
+        or ToolType.GhPrList or ToolType.GhIssueList or ToolType.GhRepoView
+        or ToolType.TaskList or ToolType.TaskOutput
+        or ToolType.AskUser or ToolType.MemoryList => true,
+        _ => false,
+    };
 }
 
 /// <summary>

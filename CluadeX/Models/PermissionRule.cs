@@ -8,5 +8,13 @@ public class PermissionRule
     public string Scope { get; set; } = "*";  // "file", "command", "network", "*"
     public PermAction Action { get; set; } = PermAction.Ask;
 
-    public override string ToString() => $"[{Action}] {Scope}: {Pattern}";
+    /// <summary>Optional tool name constraint. When set, rule only applies to this tool.
+    /// Supports Claude Code-style patterns like "run_command", "Bash(npm:*)", etc.</summary>
+    public string? ToolName { get; set; }
+
+    public override string ToString()
+    {
+        string tool = string.IsNullOrEmpty(ToolName) ? "" : $" [{ToolName}]";
+        return $"[{Action}] {Scope}{tool}: {Pattern}";
+    }
 }

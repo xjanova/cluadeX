@@ -44,11 +44,14 @@ public class AgentToolService
     /// <summary>Raised when a tool requires user confirmation (PermAction.Ask).</summary>
     public event Func<string, string, Task<bool>>? OnPermissionRequired;
 
+    private readonly HookService _hookService;
+    private readonly MemoryService _memoryService;
+
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
         WebFetchService webFetchService, TaskManagerService taskManager,
-        McpServerManager mcpManager)
+        McpServerManager mcpManager, HookService hookService, MemoryService memoryService)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -60,6 +63,8 @@ public class AgentToolService
         _webFetchService = webFetchService;
         _taskManager = taskManager;
         _mcpManager = mcpManager;
+        _hookService = hookService;
+        _memoryService = memoryService;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -144,7 +149,7 @@ public class AgentToolService
                 ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
                 _ => "execute",
             };
-            var perm = _permissionService.CheckPermission(resource, scope);
+            var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
             if (perm == PermAction.Deny)
                 return Fail(call, $"Permission denied for {scope}: {resource}");
             if (perm == PermAction.Ask)
@@ -154,7 +159,13 @@ public class AgentToolService
                 if (!allowed)
                     return Fail(call, $"User denied permission for {scope}: {resource}");
             }
-            return call.Type switch
+
+            // ── PreToolUse hooks ──
+            var hookResult = await _hookService.ExecutePreToolHooksAsync(call, ct);
+            if (!hookResult.Success)
+                return Fail(call, $"PreToolUse hook blocked execution: {hookResult.Message}");
+
+            var toolResult = call.Type switch
             {
                 // File tools
                 ToolType.ReadFile => ExecuteReadFile(call),
@@ -214,6 +225,22 @@ public class AgentToolService
                 ToolType.TodoWrite => ExecuteTodoWrite(call),
                 ToolType.PlanMode => ExecutePlanMode(call),
 
+                // Phase 3: New tools
+                ToolType.GlobSearch => ExecuteGlobSearch(call),
+                ToolType.Grep => ExecuteGrepSearch(call),
+                ToolType.AskUser => await ExecuteAskUserAsync(call),
+                ToolType.Config => ExecuteConfig(call),
+                ToolType.NotebookEdit => ExecuteNotebookEdit(call),
+                ToolType.PowerShell => await ExecutePowerShellAsync(call, ct),
+
+                // Phase 4: Skills
+                ToolType.SkillInvoke => Fail(call, "Skills system not yet configured."),
+
+                // Memory tools
+                ToolType.MemorySave => ExecuteMemorySave(call),
+                ToolType.MemoryList => ExecuteMemoryList(call),
+                ToolType.MemoryDelete => ExecuteMemoryDelete(call),
+
                 _ => new ToolResult
                 {
                     Type = call.Type,
@@ -222,6 +249,11 @@ public class AgentToolService
                     Error = $"Unknown tool: {call.ToolName}",
                 },
             };
+
+            // ── PostToolUse hooks ──
+            _ = _hookService.ExecutePostToolHooksAsync(call, toolResult, ct);
+
+            return toolResult;
         }
         catch (Exception ex)
         {
@@ -276,6 +308,123 @@ public class AgentToolService
 
         sb.AppendLine("[/TOOL RESULTS]");
         return sb.ToString();
+    }
+
+    // ─── Build Native Tool Schemas (for Anthropic tool_use API) ───
+    public List<Providers.ToolSchema> BuildNativeToolSchemas()
+    {
+        var schemas = new List<Providers.ToolSchema>();
+        var features = _settingsService.Settings.Features;
+        bool gitEnabled = features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git");
+        bool githubEnabled = features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github");
+
+        // Helper to create a JSON schema from parameter definitions
+        static System.Text.Json.JsonElement MakeSchema(params (string name, string type, string desc, bool required)[] props)
+        {
+            var properties = new Dictionary<string, object>();
+            var required = new List<string>();
+            foreach (var (name, type, desc, req) in props)
+            {
+                properties[name] = new Dictionary<string, string> { ["type"] = type, ["description"] = desc };
+                if (req) required.Add(name);
+            }
+            var schema = new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = properties,
+                ["required"] = required,
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(schema);
+            return System.Text.Json.JsonDocument.Parse(json).RootElement.Clone();
+        }
+
+        // File tools
+        schemas.Add(new() { Name = "read_file", Description = "Read the contents of a file",
+            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true)) });
+        schemas.Add(new() { Name = "write_file", Description = "Create or overwrite a file",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("content", "string", "File content", true)) });
+        schemas.Add(new() { Name = "edit_file", Description = "Find and replace text in an existing file",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Text to find", true), ("replace", "string", "Replacement text", true)) });
+        schemas.Add(new() { Name = "list_files", Description = "List files and directories",
+            InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
+        schemas.Add(new() { Name = "search_files", Description = "Find files matching a pattern",
+            InputSchema = MakeSchema(("pattern", "string", "File glob pattern", true), ("path", "string", "Search directory", false)) });
+        schemas.Add(new() { Name = "search_content", Description = "Search for text in file contents",
+            InputSchema = MakeSchema(("query", "string", "Search text", true), ("path", "string", "Search directory", false), ("pattern", "string", "File pattern filter", false)) });
+        schemas.Add(new() { Name = "run_command", Description = "Execute a shell command",
+            InputSchema = MakeSchema(("command", "string", "Shell command to run", true)) });
+        schemas.Add(new() { Name = "create_directory", Description = "Create a directory",
+            InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
+
+        // Glob + Grep
+        schemas.Add(new() { Name = "glob", Description = "Find files matching glob patterns (e.g., **/*.cs)",
+            InputSchema = MakeSchema(("pattern", "string", "Glob pattern", true), ("path", "string", "Base directory", false)) });
+        schemas.Add(new() { Name = "grep_search", Description = "Regex content search with context lines",
+            InputSchema = MakeSchema(("pattern", "string", "Regex pattern", true), ("path", "string", "Search directory", false), ("glob", "string", "File filter", false), ("output_mode", "string", "content|files_with_matches|count", false), ("context", "string", "Context lines", false)) });
+
+        // Git tools
+        if (gitEnabled)
+        {
+            schemas.Add(new() { Name = "git_status", Description = "Show git working tree status", InputSchema = MakeSchema() });
+            schemas.Add(new() { Name = "git_add", Description = "Stage files for commit", InputSchema = MakeSchema(("paths", "string", "Files to stage (space-separated)", true)) });
+            schemas.Add(new() { Name = "git_commit", Description = "Create a git commit", InputSchema = MakeSchema(("message", "string", "Commit message", true)) });
+            schemas.Add(new() { Name = "git_diff", Description = "Show changes", InputSchema = MakeSchema(("args", "string", "Diff arguments", false)) });
+            schemas.Add(new() { Name = "git_log", Description = "Show commit history", InputSchema = MakeSchema(("args", "string", "Log arguments", false)) });
+            schemas.Add(new() { Name = "git_branch", Description = "List or create branches", InputSchema = MakeSchema(("args", "string", "Branch arguments", false)) });
+            schemas.Add(new() { Name = "git_push", Description = "Push to remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
+            schemas.Add(new() { Name = "git_pull", Description = "Pull from remote", InputSchema = MakeSchema(("args", "string", "Pull arguments", false)) });
+            schemas.Add(new() { Name = "git_checkout", Description = "Switch branches or restore files", InputSchema = MakeSchema(("target", "string", "Branch or file", true)) });
+            schemas.Add(new() { Name = "git_stash", Description = "Stash changes", InputSchema = MakeSchema(("action", "string", "push|pop|list|drop", false)) });
+            schemas.Add(new() { Name = "git_clone", Description = "Clone a repository", InputSchema = MakeSchema(("url", "string", "Repository URL", true), ("path", "string", "Target directory", false)) });
+            schemas.Add(new() { Name = "git_init", Description = "Initialize a git repository", InputSchema = MakeSchema() });
+            schemas.Add(new() { Name = "git_worktree_create", Description = "Create an isolated git worktree", InputSchema = MakeSchema(("branch", "string", "Branch name", true), ("path", "string", "Worktree path", true)) });
+            schemas.Add(new() { Name = "git_worktree_remove", Description = "Remove a git worktree", InputSchema = MakeSchema(("path", "string", "Worktree path", true)) });
+        }
+
+        // GitHub tools
+        if (githubEnabled)
+        {
+            schemas.Add(new() { Name = "gh_pr_create", Description = "Create a GitHub pull request", InputSchema = MakeSchema(("title", "string", "PR title", true), ("body", "string", "PR body", false), ("base", "string", "Base branch", false)) });
+            schemas.Add(new() { Name = "gh_pr_list", Description = "List pull requests", InputSchema = MakeSchema() });
+            schemas.Add(new() { Name = "gh_issue_create", Description = "Create a GitHub issue", InputSchema = MakeSchema(("title", "string", "Issue title", true), ("body", "string", "Issue body", false)) });
+            schemas.Add(new() { Name = "gh_issue_list", Description = "List issues", InputSchema = MakeSchema() });
+        }
+
+        // Web tools
+        if (features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"))
+        {
+            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a URL", InputSchema = MakeSchema(("url", "string", "URL to fetch", true)) });
+            schemas.Add(new() { Name = "web_search", Description = "Search the web", InputSchema = MakeSchema(("query", "string", "Search query", true)) });
+        }
+
+        // REPL
+        schemas.Add(new() { Name = "repl", Description = "Run code in a persistent REPL session (Python/Node.js)",
+            InputSchema = MakeSchema(("language", "string", "python or node", true), ("code", "string", "Code to execute", true), ("action", "string", "exec or close", false)) });
+
+        // Task management
+        if (features.TaskManager)
+        {
+            schemas.Add(new() { Name = "task_create", Description = "Start a background command", InputSchema = MakeSchema(("command", "string", "Shell command", true)) });
+            schemas.Add(new() { Name = "task_list", Description = "List background tasks", InputSchema = MakeSchema() });
+            schemas.Add(new() { Name = "task_stop", Description = "Stop a background task", InputSchema = MakeSchema(("task_id", "string", "Task ID", true)) });
+            schemas.Add(new() { Name = "task_output", Description = "Get task output", InputSchema = MakeSchema(("task_id", "string", "Task ID", true)) });
+        }
+
+        // Meta tools
+        schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("content", "string", "Todo item", true), ("status", "string", "pending|in_progress|completed", false)) });
+        schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
+        schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
+        schemas.Add(new() { Name = "powershell", Description = "Execute a PowerShell command", InputSchema = MakeSchema(("command", "string", "PowerShell command", true)) });
+        schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
+        schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Spawn a sub-agent for a complex sub-task", InputSchema = MakeSchema(("task", "string", "Task description", true), ("context", "string", "Additional context", false)) });
+
+        // Memory tools
+        schemas.Add(new() { Name = "memory_save", Description = "Save persistent memory that survives across sessions", InputSchema = MakeSchema(("name", "string", "Memory name", true), ("content", "string", "Memory content", true), ("type", "string", "user|feedback|project|reference", false), ("description", "string", "Short description", false), ("scope", "string", "global|project", false)) });
+        schemas.Add(new() { Name = "memory_list", Description = "List all saved memories", InputSchema = MakeSchema() });
+        schemas.Add(new() { Name = "memory_delete", Description = "Delete a saved memory", InputSchema = MakeSchema(("name", "string", "Memory name to delete", true), ("scope", "string", "global|project", false)) });
+
+        return schemas;
     }
 
     // ─── Get Tool Definitions Prompt (feature-aware) ───
@@ -547,6 +696,76 @@ public class AgentToolService
                 [/ACTION]
         """);
 
+        // Phase 3: New tools
+        sb.AppendLine("""
+
+            38. glob - Find files matching glob patterns (faster than search_files for patterns)
+                [ACTION: glob]
+                pattern: **/*.cs
+                path: src
+                [/ACTION]
+
+            39. grep_search - Regex-based content search with context lines
+                [ACTION: grep_search]
+                pattern: class\s+\w+Service
+                path: .
+                glob: *.cs
+                output_mode: content
+                context: 2
+                ignore_case: true
+                [/ACTION]
+                output_mode options: content (shows matching lines), files_with_matches (file paths only), count
+
+            40. ask_user - Ask the user a question when you need clarification
+                [ACTION: ask_user]
+                question: Which database should we use?
+                options: PostgreSQL, SQLite, MySQL
+                [/ACTION]
+
+            41. config - View CluadeX configuration settings
+                [ACTION: config]
+                action: get
+                key: language
+                [/ACTION]
+
+            42. notebook_edit - Edit Jupyter notebook (.ipynb) cells
+                [ACTION: notebook_edit]
+                notebook_path: analysis.ipynb
+                cell_number: 2
+                edit_mode: replace
+                cell_type: code
+                new_source: import pandas as pd
+                [/ACTION]
+                edit_mode options: replace, insert, delete
+
+            43. powershell - Execute PowerShell commands (Windows)
+                [ACTION: powershell]
+                command: Get-Process | Sort-Object CPU -Descending | Select-Object -First 5
+                timeout: 30000
+                [/ACTION]
+
+            44. memory_save - Save persistent memory (survives across sessions)
+                [ACTION: memory_save]
+                name: user_preference
+                type: user
+                description: User's coding preferences
+                content: User prefers TypeScript with strict mode, uses pnpm
+                scope: global
+                [/ACTION]
+                type options: user, feedback, project, reference
+                scope options: global (all projects), project (this project only)
+
+            45. memory_list - List all saved memories
+                [ACTION: memory_list]
+                [/ACTION]
+
+            46. memory_delete - Delete a saved memory
+                [ACTION: memory_delete]
+                name: user_preference
+                scope: global
+                [/ACTION]
+        """);
+
         // MCP server tools (dynamically discovered)
         if (_settingsService.Settings.Features.McpServers)
         {
@@ -635,6 +854,19 @@ public class AgentToolService
 
             // Agent meta-tools (todo, plan) — always available
             ToolType.TodoWrite or ToolType.PlanMode => true,
+
+            // Phase 3: New tools — always available (core tools)
+            ToolType.GlobSearch or ToolType.Grep or ToolType.AskUser
+            or ToolType.Config or ToolType.NotebookEdit => true,
+
+            // PowerShell — always available on Windows
+            ToolType.PowerShell => true,
+
+            // Phase 4: Skills — always available
+            ToolType.SkillInvoke => true,
+
+            // Memory tools — always available
+            ToolType.MemorySave or ToolType.MemoryList or ToolType.MemoryDelete => true,
 
             // File/code tools — always available (core features)
             _ => true,
@@ -1590,6 +1822,9 @@ public class AgentToolService
     // Helpers
     // ════════════════════════════════════════════
 
+    /// <summary>Public wrapper for ResolveToolType (used by native tool_use loop).</summary>
+    public ToolType? ResolveToolTypePublic(string toolName) => ResolveToolType(toolName);
+
     private ToolType? ResolveToolType(string toolName)
     {
         // Check MCP tools first (qualified names: mcp__server__tool)
@@ -1604,7 +1839,7 @@ public class AgentToolService
             "edit_file" or "editfile" => ToolType.EditFile,
             "list_files" or "listfiles" or "list_directory" or "ls" => ToolType.ListFiles,
             "search_files" or "searchfiles" or "find_files" => ToolType.SearchFiles,
-            "search_content" or "searchcontent" or "grep" => ToolType.SearchContent,
+            "search_content" or "searchcontent" => ToolType.SearchContent,
             "run_command" or "runcommand" or "shell" or "exec" or "run" => ToolType.RunCommand,
             "create_directory" or "mkdir" or "create_dir" => ToolType.CreateDirectory,
 
@@ -1652,6 +1887,22 @@ public class AgentToolService
             // Agent meta-tools
             "todo_write" or "todowrite" or "todo" or "update_todo" => ToolType.TodoWrite,
             "plan_mode" or "planmode" or "plan" or "enter_plan" => ToolType.PlanMode,
+
+            // Phase 3: New tools
+            "glob" or "glob_search" or "search_glob" or "find_glob" => ToolType.GlobSearch,
+            "grep" or "grep_search" or "grep_content" or "regex_search" => ToolType.Grep,
+            "ask_user" or "ask_question" or "ask_user_question" => ToolType.AskUser,
+            "config" or "get_config" or "set_config" => ToolType.Config,
+            "notebook_edit" or "notebookedit" or "edit_notebook" => ToolType.NotebookEdit,
+            "powershell" or "pwsh" or "ps" => ToolType.PowerShell,
+
+            // Phase 4: Skills
+            "skill" or "skill_invoke" or "invoke_skill" => ToolType.SkillInvoke,
+
+            // Memory tools
+            "memory_save" or "save_memory" or "remember" => ToolType.MemorySave,
+            "memory_list" or "list_memories" or "memories" => ToolType.MemoryList,
+            "memory_delete" or "delete_memory" or "forget" => ToolType.MemoryDelete,
 
             _ => null,
         };
@@ -1867,10 +2118,570 @@ public class AgentToolService
         };
     }
 
+    // ════════════════════════════════════════════
+    // Memory Tools
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteMemorySave(ToolCall call)
+    {
+        string name = call.GetArg("name");
+        string content = call.GetArg("content");
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(content))
+            return Fail(call, "Missing 'name' and 'content' arguments");
+
+        string type = call.GetArg("type", "user"); // user, feedback, project, reference
+        string description = call.GetArg("description", name);
+        bool projectScope = call.GetArg("scope", "global") == "project";
+
+        try
+        {
+            _memoryService.SaveMemory(name, type, description, content, projectScope);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = $"Memory saved: {name} ({type}, {(projectScope ? "project" : "global")} scope)",
+                Summary = $"Saved memory: {name}",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Failed to save memory: {ex.Message}");
+        }
+    }
+
+    private ToolResult ExecuteMemoryList(ToolCall call)
+    {
+        try
+        {
+            var memories = _memoryService.ListAllMemories();
+            if (memories.Count == 0)
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = "No memories saved yet.",
+                    Summary = "No memories",
+                };
+
+            var sb = new StringBuilder($"Found {memories.Count} memory/memories:\n\n");
+            foreach (var m in memories)
+                sb.AppendLine($"- [{m.Type}] {m.Name}: {m.Description} ({m.Scope})");
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = sb.ToString(),
+                Summary = $"Listed {memories.Count} memories",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Failed to list memories: {ex.Message}");
+        }
+    }
+
+    private ToolResult ExecuteMemoryDelete(ToolCall call)
+    {
+        string name = call.GetArg("name");
+        if (string.IsNullOrEmpty(name))
+            return Fail(call, "Missing 'name' argument");
+
+        bool projectScope = call.GetArg("scope", "global") == "project";
+
+        try
+        {
+            bool deleted = _memoryService.RemoveMemory(name, projectScope);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = deleted ? $"Memory deleted: {name}" : $"Memory not found: {name}",
+                Summary = deleted ? $"Deleted: {name}" : $"Not found: {name}",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Failed to delete memory: {ex.Message}");
+        }
+    }
+
     private static string FormatSize(long bytes)
     {
         if (bytes < 1024) return $"{bytes}B";
         if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.#}KB";
         return $"{bytes / (1024.0 * 1024.0):0.##}MB";
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 3: GlobSearch Tool
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteGlobSearch(ToolCall call)
+    {
+        string pattern = call.GetArg("pattern");
+        if (string.IsNullOrEmpty(pattern))
+            return Fail(call, "Missing 'pattern' argument (e.g., **/*.cs, src/**/*.ts)");
+
+        string path = call.GetArg("path", ".");
+        string fullPath = _fileSystem.ResolveSafePath(path);
+
+        try
+        {
+            var matcher = new Microsoft.Extensions.FileSystemGlobbing.Matcher();
+            matcher.AddInclude(pattern);
+            var result = matcher.Execute(
+                new Microsoft.Extensions.FileSystemGlobbing.Abstractions.DirectoryInfoWrapper(
+                    new DirectoryInfo(fullPath)));
+
+            var files = result.Files
+                .Select(f => f.Path)
+                .OrderByDescending(f =>
+                {
+                    try { return File.GetLastWriteTime(Path.Combine(fullPath, f)); }
+                    catch { return DateTime.MinValue; }
+                })
+                .Take(100)
+                .ToList();
+
+            if (files.Count == 0)
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = $"No files matched pattern '{pattern}' in {path}",
+                    Summary = "Glob: 0 matches",
+                };
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Found {files.Count} file(s) matching '{pattern}':");
+            foreach (var f in files)
+                sb.AppendLine(f);
+            if (result.Files.Count() > 100)
+                sb.AppendLine($"... ({result.Files.Count() - 100} more files not shown)");
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = sb.ToString(),
+                Summary = $"Glob: {files.Count} match(es) for '{pattern}'",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Glob search failed: {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 3: Grep Tool
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteGrepSearch(ToolCall call)
+    {
+        string pattern = call.GetArg("pattern");
+        if (string.IsNullOrEmpty(pattern))
+            return Fail(call, "Missing 'pattern' argument (regex pattern to search for)");
+
+        string path = call.GetArg("path", ".");
+        string glob = call.GetArg("glob", "*");
+        string outputMode = call.GetArg("output_mode", "files_with_matches");
+        int context = int.TryParse(call.GetArg("context", "0"), out int c) ? c : 0;
+        int headLimit = int.TryParse(call.GetArg("head_limit", "250"), out int h) ? h : 250;
+        bool ignoreCase = call.GetArg("ignore_case", "true") == "true";
+
+        string fullPath = _fileSystem.ResolveSafePath(path);
+
+        try
+        {
+            var regex = new Regex(pattern,
+                (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None) | RegexOptions.Compiled);
+
+            var allFiles = _fileSystem.SearchFiles(glob, path);
+            var sb = new StringBuilder();
+            int matchCount = 0;
+            int fileMatchCount = 0;
+
+            foreach (var filePath in allFiles)
+            {
+                if (matchCount >= headLimit) break;
+
+                try
+                {
+                    string resolvedFile = _fileSystem.ResolveSafePath(filePath);
+                    // Skip binary files
+                    if (IsBinaryFile(resolvedFile)) continue;
+
+                    string content = File.ReadAllText(resolvedFile);
+                    var lines = content.Split('\n');
+                    bool fileHasMatch = false;
+
+                    for (int i = 0; i < lines.Length && matchCount < headLimit; i++)
+                    {
+                        if (regex.IsMatch(lines[i]))
+                        {
+                            if (!fileHasMatch)
+                            {
+                                fileHasMatch = true;
+                                fileMatchCount++;
+                                if (outputMode == "files_with_matches")
+                                {
+                                    sb.AppendLine(filePath);
+                                    matchCount++;
+                                    break;
+                                }
+                            }
+
+                            if (outputMode == "content")
+                            {
+                                // Show context lines
+                                int start = Math.Max(0, i - context);
+                                int end = Math.Min(lines.Length - 1, i + context);
+                                if (matchCount > 0) sb.AppendLine("--");
+                                sb.AppendLine($"{filePath}:");
+                                for (int j = start; j <= end; j++)
+                                {
+                                    string prefix = j == i ? ">" : " ";
+                                    sb.AppendLine($"{prefix}{j + 1}: {lines[j]}");
+                                }
+                                matchCount++;
+                            }
+                            else if (outputMode == "count")
+                            {
+                                matchCount++;
+                            }
+                        }
+                    }
+                }
+                catch { /* skip unreadable files */ }
+            }
+
+            if (outputMode == "count")
+                sb.AppendLine($"Found {matchCount} match(es) in {fileMatchCount} file(s)");
+
+            if (matchCount == 0)
+                return new ToolResult
+                {
+                    Type = call.Type, ToolName = call.ToolName, Success = true,
+                    Output = $"No matches found for pattern '{pattern}'",
+                    Summary = "Grep: 0 matches",
+                };
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = sb.ToString(),
+                Summary = $"Grep: {matchCount} match(es) for '{pattern}'",
+            };
+        }
+        catch (RegexParseException ex)
+        {
+            return Fail(call, $"Invalid regex pattern: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Grep search failed: {ex.Message}");
+        }
+    }
+
+    private static bool IsBinaryFile(string filePath)
+    {
+        try
+        {
+            using var stream = File.OpenRead(filePath);
+            var buffer = new byte[Math.Min(8192, stream.Length)];
+            int read = stream.Read(buffer, 0, buffer.Length);
+            for (int i = 0; i < read; i++)
+                if (buffer[i] == 0) return true;
+            return false;
+        }
+        catch { return true; }
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 3: AskUser Tool
+    // ════════════════════════════════════════════
+
+    /// <summary>Raised when agent needs to ask user a question via UI dialog.</summary>
+    public event Func<string, List<string>, Task<string>>? OnAskUserQuestion;
+
+    private async Task<ToolResult> ExecuteAskUserAsync(ToolCall call)
+    {
+        string question = call.GetArg("question", call.GetArg("q"));
+        if (string.IsNullOrEmpty(question))
+            return Fail(call, "Missing 'question' argument");
+
+        string optionsStr = call.GetArg("options", "");
+        var options = string.IsNullOrWhiteSpace(optionsStr)
+            ? new List<string>()
+            : optionsStr.Split(',').Select(o => o.Trim()).Where(o => !string.IsNullOrEmpty(o)).ToList();
+
+        if (OnAskUserQuestion == null)
+            return Fail(call, "AskUser not available — no UI handler connected");
+
+        try
+        {
+            string answer = await OnAskUserQuestion.Invoke(question, options);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = $"User answered: {answer}",
+                Summary = $"Asked user: {question.Substring(0, Math.Min(50, question.Length))}...",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Failed to ask user: {ex.Message}");
+        }
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 3: Config Tool
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteConfig(ToolCall call)
+    {
+        string action = call.GetArg("action", "get");
+        string key = call.GetArg("key");
+
+        if (string.IsNullOrEmpty(key))
+        {
+            // List all config
+            var settings = _settingsService.Settings;
+            var sb = new StringBuilder("Current configuration:\n");
+            sb.AppendLine($"  language: {settings.Language}");
+            sb.AppendLine($"  active_provider: {settings.ActiveProvider}");
+            sb.AppendLine($"  features.git: {settings.Features.GitIntegration}");
+            sb.AppendLine($"  features.github: {settings.Features.GitHubIntegration}");
+            sb.AppendLine($"  features.web_fetch: {settings.Features.WebFetch}");
+            sb.AppendLine($"  features.smart_editing: {settings.Features.SmartEditing}");
+            sb.AppendLine($"  features.plugins: {settings.Features.PluginSystem}");
+            sb.AppendLine($"  features.mcp_servers: {settings.Features.McpServers}");
+            sb.AppendLine($"  features.task_manager: {settings.Features.TaskManager}");
+            sb.AppendLine($"  features.permissions: {settings.Features.PermissionSystem}");
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = sb.ToString(),
+                Summary = "Listed configuration",
+            };
+        }
+
+        if (action == "get")
+        {
+            string? value = key.ToLowerInvariant() switch
+            {
+                "language" => _settingsService.Settings.Language,
+                "active_provider" or "provider" => _settingsService.Settings.ActiveProvider.ToString(),
+                _ => null,
+            };
+
+            if (value == null)
+                return Fail(call, $"Unknown config key: {key}");
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = $"{key} = {value}",
+                Summary = $"Config: {key}",
+            };
+        }
+
+        // Set is read-only for security — only get is supported
+        return Fail(call, "Config set is not supported via tool. Use the Settings page.");
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 3: NotebookEdit Tool
+    // ════════════════════════════════════════════
+
+    private ToolResult ExecuteNotebookEdit(ToolCall call)
+    {
+        string notebookPath = call.GetArg("notebook_path", call.GetArg("path"));
+        if (string.IsNullOrEmpty(notebookPath))
+            return Fail(call, "Missing 'notebook_path' argument");
+
+        string newSource = call.GetArg("new_source", call.GetArg("source", call.GetArg("content")));
+        string cellType = call.GetArg("cell_type", "code");
+        string editMode = call.GetArg("edit_mode", "replace");
+        int cellNumber = int.TryParse(call.GetArg("cell_number", "0"), out int cn) ? cn : 0;
+
+        string resolvedPath = _fileSystem.ResolveSafePath(notebookPath);
+
+        try
+        {
+            string json = File.ReadAllText(resolvedPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("cells", out var cells) || cells.GetArrayLength() == 0)
+                return Fail(call, "Notebook has no cells or is not a valid .ipynb file");
+
+            // Use System.Text.Json to modify the notebook
+            using var stream = new MemoryStream();
+            using (var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions { Indented = true }))
+            {
+                writer.WriteStartObject();
+
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Name == "cells")
+                    {
+                        writer.WritePropertyName("cells");
+                        writer.WriteStartArray();
+
+                        int index = 0;
+                        foreach (var cell in cells.EnumerateArray())
+                        {
+                            if (editMode == "delete" && index == cellNumber)
+                            {
+                                index++;
+                                continue; // skip this cell
+                            }
+
+                            if (editMode == "insert" && index == cellNumber)
+                            {
+                                // Insert new cell before
+                                WriteNewCell(writer, newSource, cellType);
+                            }
+
+                            if (editMode == "replace" && index == cellNumber)
+                            {
+                                // Write modified cell
+                                WriteNewCell(writer, newSource, cellType);
+                            }
+                            else
+                            {
+                                cell.WriteTo(writer); // keep original
+                            }
+
+                            index++;
+                        }
+
+                        if (editMode == "insert" && cellNumber >= cells.GetArrayLength())
+                        {
+                            // Append at end
+                            WriteNewCell(writer, newSource, cellType);
+                        }
+
+                        writer.WriteEndArray();
+                    }
+                    else
+                    {
+                        prop.WriteTo(writer);
+                    }
+                }
+
+                writer.WriteEndObject();
+            }
+
+            File.WriteAllText(resolvedPath, System.Text.Encoding.UTF8.GetString(stream.ToArray()));
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = $"Notebook {editMode}d cell {cellNumber} in {notebookPath}",
+                Summary = $"Notebook: {editMode} cell {cellNumber}",
+            };
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"Notebook edit failed: {ex.Message}");
+        }
+    }
+
+    private static void WriteNewCell(System.Text.Json.Utf8JsonWriter writer, string source, string cellType)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("cell_type", cellType);
+        writer.WritePropertyName("source");
+        writer.WriteStartArray();
+        var lines = source.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+            writer.WriteStringValue(i < lines.Length - 1 ? lines[i] + "\n" : lines[i]);
+        writer.WriteEndArray();
+        writer.WritePropertyName("metadata");
+        writer.WriteStartObject();
+        writer.WriteEndObject();
+        if (cellType == "code")
+        {
+            writer.WritePropertyName("outputs");
+            writer.WriteStartArray();
+            writer.WriteEndArray();
+            writer.WriteNumber("execution_count", 0);
+        }
+        writer.WriteEndObject();
+    }
+
+    // ════════════════════════════════════════════
+    // Phase 3: PowerShell Tool
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecutePowerShellAsync(ToolCall call, CancellationToken ct)
+    {
+        string command = call.GetArg("command", call.GetArg("script"));
+        if (string.IsNullOrEmpty(command))
+            return Fail(call, "Missing 'command' argument");
+
+        int timeoutMs = int.TryParse(call.GetArg("timeout", "30000"), out int t) ? t : 30000;
+        timeoutMs = Math.Min(timeoutMs, 120000); // Cap at 2 minutes
+
+        System.Diagnostics.Process? proc = null;
+        try
+        {
+            // Find PowerShell executable
+            string psExe = File.Exists(@"C:\Program Files\PowerShell\7\pwsh.exe")
+                ? @"C:\Program Files\PowerShell\7\pwsh.exe"
+                : "powershell.exe";
+
+            var psi = new System.Diagnostics.ProcessStartInfo(psExe, $"-NoProfile -NonInteractive -Command \"{command.Replace("\"", "\\\"")}\"")
+            {
+                WorkingDirectory = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+
+            proc = System.Diagnostics.Process.Start(psi);
+            if (proc == null)
+                return Fail(call, "Failed to start PowerShell process");
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeoutMs);
+
+            // Read stdout/stderr concurrently to avoid pipe deadlock
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderrTask = proc.StandardError.ReadToEndAsync(cts.Token);
+            await proc.WaitForExitAsync(cts.Token);
+            string stdout = await stdoutTask;
+            string stderr = await stderrTask;
+
+            string output = stdout;
+            if (!string.IsNullOrWhiteSpace(stderr))
+                output += $"\n[stderr]: {stderr}";
+
+            if (output.Length > 5000)
+                output = output[..5000] + "\n... (truncated)";
+
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName,
+                Success = proc.ExitCode == 0,
+                Output = output,
+                Error = proc.ExitCode != 0 ? $"Exit code: {proc.ExitCode}" : "",
+                Summary = $"PowerShell: {command[..Math.Min(60, command.Length)]}",
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc?.Kill(true); } catch { }
+            return Fail(call, $"PowerShell timed out after {timeoutMs}ms");
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"PowerShell failed: {ex.Message}");
+        }
+        finally
+        {
+            proc?.Dispose();
+        }
     }
 }

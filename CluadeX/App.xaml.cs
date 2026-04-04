@@ -51,6 +51,10 @@ public partial class App : Application
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
         services.AddSingleton<LspClientService>();
+        services.AddSingleton<SkillService>();
+        services.AddSingleton<CostTrackingService>();
+        services.AddSingleton<MemoryService>();
+        services.AddSingleton<HookService>();
         services.AddSingleton<McpServerManager>();
 
         // ViewModels

@@ -58,6 +58,14 @@ public class SettingsViewModel : ViewModelBase
     public float TopP { get => _topP; set => SetProperty(ref _topP, value); }
     public int MaxTokens { get => _maxTokens; set => SetProperty(ref _maxTokens, value); }
     public float RepeatPenalty { get => _repeatPenalty; set => SetProperty(ref _repeatPenalty, value); }
+    // Anthropic Advanced
+    private bool _extendedThinkingEnabled;
+    private int _thinkingBudgetTokens = 10000;
+    private bool _promptCachingEnabled = true;
+    public bool ExtendedThinkingEnabled { get => _extendedThinkingEnabled; set => SetProperty(ref _extendedThinkingEnabled, value); }
+    public int ThinkingBudgetTokens { get => _thinkingBudgetTokens; set => SetProperty(ref _thinkingBudgetTokens, value); }
+    public bool PromptCachingEnabled { get => _promptCachingEnabled; set => SetProperty(ref _promptCachingEnabled, value); }
+
     public bool AutoExecuteCode { get => _autoExecuteCode; set => SetProperty(ref _autoExecuteCode, value); }
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public string PreferredLanguage { get => _preferredLanguage; set => SetProperty(ref _preferredLanguage, value); }
@@ -425,6 +433,9 @@ public class SettingsViewModel : ViewModelBase
         GpuBackend = s.GpuBackend;
         BatchSize = s.BatchSize;
         ThreadCount = s.ThreadCount;
+        ExtendedThinkingEnabled = s.ExtendedThinkingEnabled;
+        ThinkingBudgetTokens = s.ThinkingBudgetTokens;
+        PromptCachingEnabled = s.PromptCachingEnabled;
 
         // Load provider settings
         SelectedProvider = s.ActiveProvider;
@@ -492,6 +503,9 @@ public class SettingsViewModel : ViewModelBase
             s.GpuBackend = GpuBackend;
             s.BatchSize = BatchSize;
             s.ThreadCount = ThreadCount;
+            s.ExtendedThinkingEnabled = ExtendedThinkingEnabled;
+            s.ThinkingBudgetTokens = ThinkingBudgetTokens;
+            s.PromptCachingEnabled = PromptCachingEnabled;
 
             // Provider config in same save
             s.ActiveProvider = SelectedProvider;

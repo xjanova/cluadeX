@@ -25,7 +25,8 @@ public class AiProviderManager : IDisposable
 
     public AiProviderManager(
         SettingsService settingsService,
-        LlamaInferenceService llamaService)
+        LlamaInferenceService llamaService,
+        CostTrackingService costTracker)
     {
         _settingsService = settingsService;
 
@@ -33,7 +34,7 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.Local] = new LocalGgufProvider(llamaService);
         _providers[AiProviderType.LlamaServer] = new LlamaServerProvider(settingsService);
         _providers[AiProviderType.OpenAI] = new OpenAiProvider(settingsService);
-        _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService);
+        _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService, costTracker);
         _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService);
         _providers[AiProviderType.Ollama] = new OllamaProvider(settingsService);
 

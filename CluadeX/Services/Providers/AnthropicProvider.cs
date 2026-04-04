@@ -9,6 +9,8 @@ namespace CluadeX.Services.Providers;
 
 public class AnthropicProvider : ApiProviderBase
 {
+    private readonly CostTrackingService? _costTracker;
+
     public override string ProviderId => "Anthropic";
     public override string DisplayName => "Anthropic Claude";
 
@@ -18,7 +20,11 @@ public class AnthropicProvider : ApiProviderBase
         "claude-haiku-3-5-20241022", "claude-3-5-sonnet-20241022",
     ];
 
-    public AnthropicProvider(SettingsService settingsService) : base(settingsService) { }
+    public AnthropicProvider(SettingsService settingsService, CostTrackingService? costTracker = null)
+        : base(settingsService)
+    {
+        _costTracker = costTracker;
+    }
 
     public override async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -152,18 +158,62 @@ public class AnthropicProvider : ApiProviderBase
             ["model"] = model,
             ["messages"] = messages,
             ["max_tokens"] = settings.MaxTokens,
-            ["temperature"] = (double)settings.Temperature,
-            ["top_p"] = (double)settings.TopP,
             ["stream"] = true,
         };
+
+        // Extended thinking: when enabled, send thinking parameter (disables temperature/top_p)
+        if (settings.ExtendedThinkingEnabled)
+        {
+            // Ensure max_tokens > budget_tokens (Anthropic API requirement)
+            int budgetTokens = settings.ThinkingBudgetTokens;
+            int maxTokens = settings.MaxTokens;
+            if (maxTokens <= budgetTokens)
+                maxTokens = budgetTokens + 4096; // Auto-raise max_tokens
+            requestObj["max_tokens"] = maxTokens;
+
+            requestObj["thinking"] = new Dictionary<string, object>
+            {
+                ["type"] = "enabled",
+                ["budget_tokens"] = budgetTokens,
+            };
+            // Note: temperature and top_p are not allowed with extended thinking
+        }
+        else
+        {
+            requestObj["temperature"] = (double)settings.Temperature;
+            requestObj["top_p"] = (double)settings.TopP;
+        }
+
+        // Prompt caching: wrap system prompt in cache_control blocks
         if (!string.IsNullOrWhiteSpace(systemPrompt))
-            requestObj["system"] = systemPrompt;
+        {
+            if (settings.PromptCachingEnabled)
+            {
+                requestObj["system"] = new[]
+                {
+                    new Dictionary<string, object>
+                    {
+                        ["type"] = "text",
+                        ["text"] = systemPrompt,
+                        ["cache_control"] = new Dictionary<string, string> { ["type"] = "ephemeral" },
+                    },
+                };
+            }
+            else
+            {
+                requestObj["system"] = systemPrompt;
+            }
+        }
 
         var body = JsonSerializer.Serialize(requestObj);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
         request.Headers.Add("x-api-key", config.ApiKey);
         request.Headers.Add("anthropic-version", "2023-06-01");
+        if (settings.ExtendedThinkingEnabled)
+            request.Headers.Add("anthropic-beta", "interleaved-thinking-2025-05-14");
+        if (settings.PromptCachingEnabled)
+            request.Headers.Add("anthropic-beta", "prompt-caching-2024-07-31");
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -203,8 +253,38 @@ public class AnthropicProvider : ApiProviderBase
                     string type = typeProp.GetString() ?? "";
                     if (type == "content_block_delta" && root.TryGetProperty("delta", out var delta))
                     {
-                        if (delta.TryGetProperty("text", out var textProp))
+                        string deltaType = delta.TryGetProperty("type", out var dt) ? dt.GetString() ?? "" : "";
+
+                        if (deltaType == "thinking_delta" && delta.TryGetProperty("thinking", out var thinkingProp))
+                        {
+                            // Extended thinking content — emit with marker for UI
+                            content = thinkingProp.GetString();
+                            if (content != null)
+                                content = $"<thinking>{content}</thinking>";
+                        }
+                        else if (delta.TryGetProperty("text", out var textProp))
+                        {
                             content = textProp.GetString();
+                        }
+                    }
+                    else if (type == "message_delta" && root.TryGetProperty("usage", out var usageDelta))
+                    {
+                        // Record output token usage (not a new request — input was recorded at message_start)
+                        int outTokens = usageDelta.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : 0;
+                        if (_costTracker != null && outTokens > 0)
+                            _costTracker.RecordUsage(model, 0, outTokens, isNewRequest: false);
+                    }
+                    else if (type == "message_start" && root.TryGetProperty("message", out var msgStart))
+                    {
+                        // Record input token usage from message_start event
+                        if (msgStart.TryGetProperty("usage", out var startUsage))
+                        {
+                            int inTokens = startUsage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0;
+                            int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) ? cr.GetInt32() : 0;
+                            int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) ? cc.GetInt32() : 0;
+                            if (_costTracker != null && inTokens > 0)
+                                _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate);
+                        }
                     }
                     else if (type == "message_stop")
                     {
@@ -238,6 +318,182 @@ public class AnthropicProvider : ApiProviderBase
         await foreach (var token in ChatAsync(history, userMessage, systemPrompt, ct))
             sb.Append(token);
         return sb.ToString();
+    }
+
+    // ═══════════════════════════════════════════
+    // Phase 5: Native Tool Use Support
+    // ═══════════════════════════════════════════
+
+    public override bool SupportsNativeToolUse => true;
+
+    public override async Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages,
+        string systemPrompt,
+        List<ToolSchema> tools,
+        CancellationToken ct = default)
+    {
+        var config = GetConfig();
+        string baseUrl = config.BaseUrl?.TrimEnd('/') ?? "https://api.anthropic.com";
+        string model = config.EffectiveModelId ?? "claude-sonnet-4-20250514";
+        var settings = _settingsService.Settings;
+
+        // Build tool definitions
+        var toolDefs = tools.Select(t => new Dictionary<string, object>
+        {
+            ["name"] = t.Name,
+            ["description"] = t.Description,
+            ["input_schema"] = t.InputSchema,
+        }).ToList();
+
+        // Build request
+        var requestObj = new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["messages"] = messages.Select(m => new Dictionary<string, object>
+            {
+                ["role"] = m.Role,
+                ["content"] = m.Content.Select<ContentBlock, object>(block => block.Type switch
+                {
+                    "text" => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
+                    "tool_use" => new Dictionary<string, object>
+                    {
+                        ["type"] = "tool_use",
+                        ["id"] = block.Id ?? "",
+                        ["name"] = block.Name ?? "",
+                        ["input"] = block.Input ?? JsonDocument.Parse("{}").RootElement,
+                    },
+                    "tool_result" => new Dictionary<string, object>
+                    {
+                        ["type"] = "tool_result",
+                        ["tool_use_id"] = block.ToolUseId ?? "",
+                        ["content"] = block.Content ?? "",
+                        ["is_error"] = block.IsError ?? false,
+                    },
+                    _ => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
+                }).ToList(),
+            }).ToList(),
+            ["max_tokens"] = settings.MaxTokens,
+            ["tools"] = toolDefs,
+        };
+
+        // Extended thinking for native tool use
+        if (settings.ExtendedThinkingEnabled)
+        {
+            requestObj["thinking"] = new Dictionary<string, object>
+            {
+                ["type"] = "enabled",
+                ["budget_tokens"] = settings.ThinkingBudgetTokens,
+            };
+        }
+
+        // Prompt caching for system prompt
+        if (!string.IsNullOrWhiteSpace(systemPrompt))
+        {
+            if (settings.PromptCachingEnabled)
+            {
+                requestObj["system"] = new[]
+                {
+                    new Dictionary<string, object>
+                    {
+                        ["type"] = "text",
+                        ["text"] = systemPrompt,
+                        ["cache_control"] = new Dictionary<string, string> { ["type"] = "ephemeral" },
+                    },
+                };
+            }
+            else
+            {
+                requestObj["system"] = systemPrompt;
+            }
+        }
+
+        var body = JsonSerializer.Serialize(requestObj, new JsonSerializerOptions { WriteIndented = false });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
+        request.Headers.Add("x-api-key", config.ApiKey);
+        request.Headers.Add("anthropic-version", "2023-06-01");
+        if (settings.ExtendedThinkingEnabled)
+            request.Headers.Add("anthropic-beta", "interleaved-thinking-2025-05-14");
+        if (settings.PromptCachingEnabled)
+            request.Headers.Add("anthropic-beta", "prompt-caching-2024-07-31");
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            if (!string.IsNullOrEmpty(config.ApiKey))
+                error = error.Replace(config.ApiKey, "[REDACTED]");
+
+            // Re-throw as HttpRequestException with status code for reactive compaction
+            throw new HttpRequestException(
+                $"Anthropic API error: {error}",
+                null,
+                response.StatusCode);
+        }
+
+        var responseText = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(responseText);
+        var root = doc.RootElement;
+
+        var result = new NativeToolResponse();
+
+        // Parse stop_reason
+        if (root.TryGetProperty("stop_reason", out var stopReasonProp))
+            result.StopReason = stopReasonProp.GetString() ?? "end_turn";
+
+        // Parse usage
+        if (root.TryGetProperty("usage", out var usage))
+        {
+            if (usage.TryGetProperty("input_tokens", out var inputTokens))
+                result.InputTokens = inputTokens.GetInt32();
+            if (usage.TryGetProperty("output_tokens", out var outputTokens))
+                result.OutputTokens = outputTokens.GetInt32();
+
+            // Record cost
+            int cacheRead = usage.TryGetProperty("cache_read_input_tokens", out var cr2) ? cr2.GetInt32() : 0;
+            int cacheCreate = usage.TryGetProperty("cache_creation_input_tokens", out var cc2) ? cc2.GetInt32() : 0;
+            _costTracker?.RecordUsage(model, result.InputTokens, result.OutputTokens, cacheRead, cacheCreate);
+        }
+
+        // Parse content blocks
+        if (root.TryGetProperty("content", out var contentArray))
+        {
+            var textParts = new List<string>();
+            var thinkingParts = new List<string>();
+
+            foreach (var block in contentArray.EnumerateArray())
+            {
+                string type = block.GetProperty("type").GetString() ?? "";
+
+                switch (type)
+                {
+                    case "text":
+                        textParts.Add(block.GetProperty("text").GetString() ?? "");
+                        break;
+
+                    case "tool_use":
+                        result.ToolCalls.Add(new NativeToolCall
+                        {
+                            Id = block.GetProperty("id").GetString() ?? "",
+                            Name = block.GetProperty("name").GetString() ?? "",
+                            Input = block.GetProperty("input").Clone(),
+                        });
+                        break;
+
+                    case "thinking":
+                        if (block.TryGetProperty("thinking", out var thinking))
+                            thinkingParts.Add(thinking.GetString() ?? "");
+                        break;
+                }
+            }
+
+            result.TextContent = textParts.Count > 0 ? string.Join("\n", textParts) : null;
+            result.ThinkingContent = thinkingParts.Count > 0 ? string.Join("\n", thinkingParts) : null;
+        }
+
+        return result;
     }
 
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)

@@ -832,6 +832,13 @@
                            VerticalAlignment="Center" Margin="6,0"
                            ToolTip="Last turn: tokens · time · speed"/>
 
+                <!-- API Cost -->
+                <TextBlock Grid.Column="3" Text="{Binding CostText}"
+                           Foreground="{StaticResource MauveBrush}"
+                           FontSize="9" FontFamily="{StaticResource MonoFont}"
+                           VerticalAlignment="Center" Margin="6,0"
+                           ToolTip="Session API cost (USD)"/>
+
                 <!-- Review + Auto-Execute -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource IconButton}"
