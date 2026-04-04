@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using CluadeX.Models;
 
 namespace CluadeX.Services;
@@ -163,10 +164,82 @@ public class ContextMemoryService
     }
 
     /// <summary>
-    /// Create a compact summary of older messages to free context space.
+    /// Build a compaction prompt for AI-powered summarization.
+    /// The AI provider should generate a summary using this prompt.
+    /// Returns null if no compaction needed.
+    /// </summary>
+    public string? BuildCompactPrompt(List<ChatMessage> messages, int keepRecent = 10)
+    {
+        if (messages.Count <= keepRecent + 1) return null;
+
+        var toSummarize = messages.Take(messages.Count - keepRecent).ToList();
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Summarize this conversation for context continuity. Include:");
+        sb.AppendLine("1. User's original request and intent");
+        sb.AppendLine("2. Key decisions made and approaches taken");
+        sb.AppendLine("3. File names, function signatures, and code patterns mentioned");
+        sb.AppendLine("4. Errors encountered and how they were resolved");
+        sb.AppendLine("5. User feedback and corrections");
+        sb.AppendLine("6. Current state of the work (what's done, what's remaining)");
+        sb.AppendLine();
+        sb.AppendLine("Be concise but preserve ALL technical details (file paths, function names, code snippets).");
+        sb.AppendLine("Do NOT lose any file names, error messages, or specific instructions.");
+        sb.AppendLine();
+        sb.AppendLine("--- CONVERSATION TO SUMMARIZE ---");
+
+        foreach (var msg in toSummarize)
+        {
+            string role = msg.Role switch
+            {
+                MessageRole.User => "User",
+                MessageRole.Assistant => "Assistant",
+                MessageRole.ToolAction => $"Tool({msg.ToolName})",
+                MessageRole.System => "System",
+                _ => msg.Role.ToString(),
+            };
+
+            // Truncate very long tool outputs to save compaction tokens
+            string content = msg.Content;
+            if (msg.Role == MessageRole.ToolAction && content.Length > 500)
+                content = content[..500] + "... [truncated]";
+            else if (content.Length > 1500)
+                content = content[..1500] + "... [truncated]";
+
+            sb.AppendLine($"[{role}]: {content}");
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Create a compacted history using an AI-generated summary.
+    /// Call BuildCompactPrompt first, send it to the AI, then pass the result here.
+    /// </summary>
+    public List<ChatMessage> CompactWithSummary(List<ChatMessage> messages, string aiSummary, int keepRecent = 10)
+    {
+        if (messages.Count <= keepRecent + 1)
+            return messages;
+
+        var toKeep = messages.Skip(messages.Count - keepRecent).ToList();
+
+        var summaryMsg = new ChatMessage
+        {
+            Role = MessageRole.System,
+            Content = $"[Conversation Summary — earlier messages compressed]\n{aiSummary}",
+        };
+
+        var result = new List<ChatMessage> { summaryMsg };
+        result.AddRange(toKeep);
+        return result;
+    }
+
+    /// <summary>
+    /// Fallback: Create a compact summary without AI (simple truncation).
+    /// Used when AI summarization is not available.
     /// Keeps the last N messages intact and compresses the rest.
     /// </summary>
-    public List<ChatMessage> CompactHistory(List<ChatMessage> messages, int keepRecent = 6)
+    public List<ChatMessage> CompactHistory(List<ChatMessage> messages, int keepRecent = 10)
     {
         if (messages.Count <= keepRecent + 1)
             return messages;
@@ -174,21 +247,68 @@ public class ContextMemoryService
         var toSummarize = messages.Take(messages.Count - keepRecent).ToList();
         var toKeep = messages.Skip(messages.Count - keepRecent).ToList();
 
-        var summaryParts = new List<string>();
+        // Smart summary: extract key info rather than blindly truncating
+        var userRequests = new List<string>();
+        var toolActions = new List<string>();
+        var keyDecisions = new List<string>();
+
         foreach (var msg in toSummarize)
         {
-            string role = msg.Role.ToString();
-            string content = msg.Content.Length > 200
-                ? msg.Content[..200] + "..."
-                : msg.Content;
-            summaryParts.Add($"[{role}]: {content}");
+            switch (msg.Role)
+            {
+                case MessageRole.User:
+                    // Keep full user requests (they're usually short and important)
+                    string userContent = msg.Content.Length > 300
+                        ? msg.Content[..300] + "..." : msg.Content;
+                    userRequests.Add(userContent);
+                    break;
+
+                case MessageRole.ToolAction:
+                    // Just keep summaries for tool actions
+                    toolActions.Add($"{msg.ToolName}: {msg.ToolSummary ?? msg.Content[..Math.Min(100, msg.Content.Length)]}");
+                    break;
+
+                case MessageRole.Assistant:
+                    // Extract first 200 chars of each assistant response
+                    string decision = msg.Content.Length > 200
+                        ? msg.Content[..200] + "..." : msg.Content;
+                    keyDecisions.Add(decision);
+                    break;
+            }
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"[Context Summary — {toSummarize.Count} earlier messages compressed]");
+
+        if (userRequests.Count > 0)
+        {
+            sb.AppendLine("\nUser requests:");
+            foreach (var r in userRequests)
+                sb.AppendLine($"  - {r}");
+        }
+
+        if (toolActions.Count > 0)
+        {
+            sb.AppendLine($"\nTool actions ({toolActions.Count}):");
+            // Keep last 10 tool actions, summarize the rest
+            var recent = toolActions.TakeLast(10);
+            if (toolActions.Count > 10)
+                sb.AppendLine($"  ... ({toolActions.Count - 10} earlier actions omitted)");
+            foreach (var t in recent)
+                sb.AppendLine($"  - {t}");
+        }
+
+        if (keyDecisions.Count > 0)
+        {
+            sb.AppendLine($"\nKey decisions ({keyDecisions.Count}):");
+            foreach (var d in keyDecisions.TakeLast(5))
+                sb.AppendLine($"  - {d}");
         }
 
         var summaryMsg = new ChatMessage
         {
             Role = MessageRole.System,
-            Content = $"[Context Summary - {toSummarize.Count} earlier messages compressed]\n" +
-                      string.Join("\n", summaryParts),
+            Content = sb.ToString(),
         };
 
         var result = new List<ChatMessage> { summaryMsg };

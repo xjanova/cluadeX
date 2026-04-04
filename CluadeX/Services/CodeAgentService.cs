@@ -340,7 +340,40 @@ public class CodeAgentService
         if (_contextMemoryService.ShouldSummarize(compactedHistory))
         {
             OnAgentStatus?.Invoke("Compacting conversation history...");
-            compactedHistory = _contextMemoryService.CompactHistory(compactedHistory);
+
+            // Try AI-powered compaction first
+            string? compactPrompt = _contextMemoryService.BuildCompactPrompt(compactedHistory);
+            if (compactPrompt != null)
+            {
+                try
+                {
+                    OnAgentStatus?.Invoke("Summarizing context with AI...");
+                    string aiSummary = await _providerManager.ActiveProvider.GenerateAsync(
+                        new List<ChatMessage>(),
+                        compactPrompt,
+                        "You are a conversation summarizer. Produce a concise but complete summary. Preserve ALL technical details.",
+                        ct);
+
+                    if (!string.IsNullOrWhiteSpace(aiSummary) && aiSummary.Length > 50)
+                    {
+                        compactedHistory = _contextMemoryService.CompactWithSummary(compactedHistory, aiSummary);
+                        OnAgentStatus?.Invoke("Context compacted with AI summary.");
+                    }
+                    else
+                    {
+                        compactedHistory = _contextMemoryService.CompactHistory(compactedHistory);
+                    }
+                }
+                catch
+                {
+                    // Fallback to simple compaction if AI fails
+                    compactedHistory = _contextMemoryService.CompactHistory(compactedHistory);
+                }
+            }
+            else
+            {
+                compactedHistory = _contextMemoryService.CompactHistory(compactedHistory);
+            }
         }
 
         // Build working history
