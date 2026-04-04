@@ -68,19 +68,19 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Agent Mode Toggle -->
-                <CheckBox Grid.Column="3" Content="Agent" Margin="8,0"
-                          IsChecked="{Binding AgenticMode}"
-                          Foreground="{StaticResource Subtext0Brush}"
-                          FontSize="10" VerticalAlignment="Center"
-                          ToolTip="Enable agentic mode (file access, commands, Git)"/>
-
-                <!-- Thinking Toggle -->
-                <CheckBox Grid.Column="3" Content="Thinking" Margin="4,0"
-                          IsChecked="{Binding ShowThinking}"
-                          Foreground="{StaticResource Subtext0Brush}"
-                          FontSize="10" VerticalAlignment="Center"
-                          ToolTip="Show AI thinking/reasoning steps in real-time"/>
+                <!-- Agent + Thinking Toggles -->
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <CheckBox Content="Agent" Margin="8,0,4,0"
+                              IsChecked="{Binding AgenticMode}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="10" VerticalAlignment="Center"
+                              ToolTip="Enable agentic mode (file access, commands, Git)"/>
+                    <CheckBox Content="Thinking" Margin="4,0"
+                              IsChecked="{Binding ShowThinking}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="10" VerticalAlignment="Center"
+                              ToolTip="Show AI thinking/reasoning steps in real-time"/>
+                </StackPanel>
 
                 <Button Grid.Column="4" Content="&#xE711;"
                         FontFamily="Segoe MDL2 Assets"

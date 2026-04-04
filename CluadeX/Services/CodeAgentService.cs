@@ -368,6 +368,9 @@ public class CodeAgentService
     /// <summary>Fires when the agent produces thinking/reasoning text (real-time display).</summary>
     public event Action<string, int>? OnThinkingUpdate; // text, stepNumber
 
+    /// <summary>Fires per-token during agentic generation for real-time streaming display.</summary>
+    public event Action<string, int>? OnAgenticStreamingToken; // token, stepNumber
+
     public CodeAgentService(
         AiProviderManager providerManager,
         CodeExecutionService codeExecutionService,
@@ -742,7 +745,7 @@ public class CodeAgentService
             try
             {
                 response = await GenerateWithRetryAsync(
-                    workingHistory, currentMessage, systemPrompt, ct);
+                    workingHistory, currentMessage, systemPrompt, ct, iteration + 1);
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
             {
@@ -1350,7 +1353,8 @@ public class CodeAgentService
     /// Retries up to MaxRetries times with exponential backoff.
     /// </summary>
     private async Task<string> GenerateWithRetryAsync(
-        List<ChatMessage> history, string message, string systemPrompt, CancellationToken ct)
+        List<ChatMessage> history, string message, string systemPrompt, CancellationToken ct,
+        int stepNumber = 0)
     {
         Exception? lastException = null;
 
@@ -1368,8 +1372,15 @@ public class CodeAgentService
                     await Task.Delay(retry * 1000, ct); // exponential backoff
                 }
 
-                return await _providerManager.ActiveProvider.GenerateAsync(
-                    history, message, systemPrompt, ct);
+                // Use streaming (ChatAsync) to fire tokens in real-time to UI
+                var sb = new System.Text.StringBuilder();
+                await foreach (var token in _providerManager.ActiveProvider.ChatAsync(
+                    history, message, systemPrompt, ct))
+                {
+                    sb.Append(token);
+                    OnAgenticStreamingToken?.Invoke(token, stepNumber);
+                }
+                return sb.ToString();
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)

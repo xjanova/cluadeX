@@ -857,27 +857,76 @@ public class ChatViewModel : ViewModelBase
             .SkipLast(1)  // Skip the user message just added — it's passed separately as `input`
             .ToList() ?? new();
 
+        // ─── Real-time streaming message for agentic loop ───
+        ChatMessage? streamingMsg = null;
+        int lastStreamStep = -1;
+        int scrollThrottle = 0;
+
+        void OnStreamToken(string token, int step)
+        {
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                // New step → create a new streaming bubble
+                if (step != lastStreamStep)
+                {
+                    // Finalize previous streaming message
+                    if (streamingMsg != null)
+                        streamingMsg.IsStreaming = false;
+
+                    streamingMsg = new ChatMessage
+                    {
+                        Role = MessageRole.Assistant,
+                        Content = "",
+                        IsStreaming = true,
+                    };
+                    Messages.Add(streamingMsg);
+                    lastStreamStep = step;
+                }
+
+                if (streamingMsg != null)
+                    streamingMsg.Content += token;
+
+                // Throttle scroll-to-bottom (every 20 tokens)
+                if (++scrollThrottle % 20 == 0)
+                    ScrollToBottom?.Invoke();
+            });
+        }
+
         // Listen for real-time thinking updates during agent execution
         void OnThinking(string text, int step)
         {
+            // Thinking text now comes via streaming — only add if no streaming msg
             if (string.IsNullOrWhiteSpace(text) || !ShowThinking) return;
+
             App.Current?.Dispatcher.Invoke(() =>
             {
-                var thinkingMsg = new ChatMessage
+                // Finalize streaming message before adding thinking
+                if (streamingMsg != null)
                 {
-                    Role = MessageRole.Assistant,
-                    Content = $"\U0001F4AD **Step {step}**\n{text}",
-                };
-                Messages.Add(thinkingMsg);
-                CurrentSession?.Messages.Add(thinkingMsg);
-                ScrollToBottom?.Invoke();
+                    streamingMsg.IsStreaming = false;
+                    streamingMsg = null;
+                }
             });
         }
 
         _agentService.OnThinkingUpdate += OnThinking;
+        _agentService.OnAgenticStreamingToken += OnStreamToken;
         try
         {
             var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
+
+        // Finalize streaming message
+        App.Current?.Dispatcher.Invoke(() =>
+        {
+            if (streamingMsg != null)
+            {
+                streamingMsg.IsStreaming = false;
+                // Remove the streaming msg — we'll add the final clean response below
+                Messages.Remove(streamingMsg);
+                CurrentSession?.Messages.Remove(streamingMsg);
+                streamingMsg = null;
+            }
+        });
 
         // Add final response
         if (!string.IsNullOrWhiteSpace(result.FinalResponse))
@@ -905,6 +954,7 @@ public class ChatViewModel : ViewModelBase
         finally
         {
             _agentService.OnThinkingUpdate -= OnThinking;
+            _agentService.OnAgenticStreamingToken -= OnStreamToken;
         }
     }
 

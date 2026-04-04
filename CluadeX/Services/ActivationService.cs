@@ -1,7 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-using CluadeX.Models;
-
 namespace CluadeX.Services;
 
 /// <summary>
@@ -12,8 +8,10 @@ namespace CluadeX.Services;
 public class ActivationService
 {
     private readonly SettingsService _settingsService;
+    private readonly XmanLicenseService _licenseService;
     private bool _isActivated;
     private string _activationTier = "free";
+    private DateTime? _expiresAt;
 
     public bool IsActivated => _isActivated;
     public string ActivationTier => _activationTier;
@@ -27,48 +25,70 @@ public class ActivationService
 
     public event Action? ActivationChanged;
 
-    // ─── Key Validation Rules ────────────────────────────────
-    // Format: CLUADEX-XXXX-XXXX-XXXX
-    // Keys are validated via xman4289.com API or local format check.
-    // No hardcoded dev/test keys in production.
-
-    private static readonly Dictionary<string, string> ValidKeyHashes = new()
-    {
-        // Production keys are validated via xman4289.com API
-        // No local test keys — all keys go through the license server
-    };
-
-    // Known valid key prefixes for format validation
-    private static readonly string[] ValidPrefixes = ["CLUADEX-", "CX-"];
-
-    public ActivationService(SettingsService settingsService)
+    public ActivationService(SettingsService settingsService, XmanLicenseService licenseService)
     {
         _settingsService = settingsService;
-        CheckSavedActivation();
+        _licenseService = licenseService;
+        // Optimistic: trust cached key at startup, then validate online in background
+        CheckSavedActivationLocal();
     }
 
-    /// <summary>Check if there's a saved activation key and validate it.</summary>
-    private void CheckSavedActivation()
+    /// <summary>Quick local check at startup (offline-safe). Online validation should follow.</summary>
+    private void CheckSavedActivationLocal()
     {
         var key = _settingsService.Settings.ActivationKey;
         if (!string.IsNullOrEmpty(key))
         {
-            var (valid, tier) = ValidateKey(key);
-            _isActivated = valid;
-            _activationTier = valid ? tier : "free";
+            // Optimistically trust cached key — ValidateOnlineAsync will correct if invalid
+            _isActivated = true;
+            _activationTier = "pro";
         }
     }
 
-    /// <summary>Attempt to activate with a key. Returns (success, message).</summary>
-    public (bool success, string message) Activate(string key)
+    /// <summary>Validate saved key against the license server. Call at startup after UI is ready.</summary>
+    public async Task ValidateOnlineAsync(CancellationToken ct = default)
+    {
+        var key = _settingsService.Settings.ActivationKey;
+        if (string.IsNullOrEmpty(key))
+        {
+            _isActivated = false;
+            _activationTier = "free";
+            return;
+        }
+
+        try
+        {
+            var (valid, tier, expires) = await _licenseService.ValidateAsync(key, ct);
+            _isActivated = valid;
+            _activationTier = valid ? tier : "free";
+            _expiresAt = expires;
+
+            if (!valid)
+            {
+                // Key is no longer valid on server — clear it
+                _settingsService.UpdateSettings(s => s.ActivationKey = null);
+            }
+
+            ActivationChanged?.Invoke();
+        }
+        catch
+        {
+            // Offline — keep cached activation (grace period)
+        }
+    }
+
+    /// <summary>Attempt to activate with a key via online API. Returns (success, message).</summary>
+    public async Task<(bool success, string message)> ActivateAsync(string key, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(key))
             return (false, "Please enter an activation key.");
 
         key = key.Trim();
-        var (valid, tier) = ValidateKey(key);
 
-        if (valid)
+        // Always validate via online API
+        var (success, tier, message) = await _licenseService.ActivateAsync(key, ct);
+
+        if (success)
         {
             _isActivated = true;
             _activationTier = tier;
@@ -77,16 +97,40 @@ public class ActivationService
             return (true, $"Activated! Tier: {TierDisplayName}");
         }
 
-        return (false, "Invalid activation key. Please check and try again.");
+        return (false, !string.IsNullOrEmpty(message) ? message : "Invalid activation key. Please check and try again.");
+    }
+
+    /// <summary>Synchronous activation (legacy compat — wraps async).</summary>
+    public (bool success, string message) Activate(string key)
+    {
+        try
+        {
+            return ActivateAsync(key).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Activation failed: {ex.Message}");
+        }
     }
 
     /// <summary>Deactivate and remove the saved key.</summary>
-    public void Deactivate()
+    public async Task DeactivateAsync(CancellationToken ct = default)
     {
+        var key = _settingsService.Settings.ActivationKey;
+        if (!string.IsNullOrEmpty(key))
+            await _licenseService.DeactivateAsync(key, ct);
+
         _isActivated = false;
         _activationTier = "free";
+        _expiresAt = null;
         _settingsService.UpdateSettings(s => s.ActivationKey = null);
         ActivationChanged?.Invoke();
+    }
+
+    /// <summary>Deactivate sync (legacy compat).</summary>
+    public void Deactivate()
+    {
+        _ = DeactivateAsync();
     }
 
     /// <summary>Check if a specific feature requires activation.</summary>
@@ -129,47 +173,14 @@ public class ActivationService
         };
     }
 
-    // ─── Key Validation ─────────────────────────────────────
-
-    private static (bool valid, string tier) ValidateKey(string key)
+    /// <summary>Check if a key has valid format (quick pre-check, not validation).</summary>
+    public static bool HasValidKeyFormat(string key)
     {
-        // Test key: "111"
-        string hash = ComputeHash(key);
-        if (ValidKeyHashes.TryGetValue(hash, out var tier))
-            return (true, tier);
-
-        // Format-based validation: CLUADEX-XXXX-XXXX-XXXX
-        if (ValidateFormattedKey(key))
-            return (true, "pro");
-
-        return (false, "free");
-    }
-
-    /// <summary>Validate formatted keys (CLUADEX-XXXX-XXXX-XXXX)</summary>
-    private static bool ValidateFormattedKey(string key)
-    {
-        foreach (var prefix in ValidPrefixes)
-        {
-            if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var remainder = key[prefix.Length..];
-            var parts = remainder.Split('-');
-            if (parts.Length != 3) continue;
-            if (parts.All(p => p.Length == 4 && p.All(c => char.IsLetterOrDigit(c))))
-            {
-                // Checksum: last 2 chars of part3 must equal first 2 chars of SHA1(part1+part2)
-                string check = ComputeHash(parts[0] + parts[1])[..2].ToUpperInvariant();
-                if (parts[2][2..].Equals(check, StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-        }
-        return false;
-    }
-
-    private static string ComputeHash(string input)
-    {
-        byte[] bytes = SHA1.HashData(Encoding.UTF8.GetBytes(input));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        key = key.Trim();
+        // Accept CLUADEX-XXXX-XXXX-XXXX or CX-XXXX-XXXX-XXXX format
+        return (key.StartsWith("CLUADEX-", StringComparison.OrdinalIgnoreCase)
+             || key.StartsWith("CX-", StringComparison.OrdinalIgnoreCase))
+            && key.Split('-').Length >= 4;
     }
 }

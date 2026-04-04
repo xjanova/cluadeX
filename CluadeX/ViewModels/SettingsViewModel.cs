@@ -14,6 +14,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly AiProviderManager _providerManager;
     private readonly LocalizationService _localizationService;
     private readonly MemoryService _memoryService;
+    private readonly ActivationService _activationService;
 
     private string _modelDirectory = string.Empty;
     private string _cacheDirectory = string.Empty;
@@ -208,13 +209,15 @@ public class SettingsViewModel : ViewModelBase
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
         LocalizationService localizationService,
-        MemoryService memoryService)
+        MemoryService memoryService,
+        ActivationService activationService)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
         _localizationService = localizationService;
         _memoryService = memoryService;
+        _activationService = activationService;
 
         BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder("Model Directory", ModelDirectory); if (p != null) ModelDirectory = p; });
         BrowseCacheDirCommand = new RelayCommand(() => { var p = BrowseFolder("Cache Directory", CacheDirectory); if (p != null) CacheDirectory = p; });
@@ -351,6 +354,16 @@ public class SettingsViewModel : ViewModelBase
 
     private async Task ApplyProvider()
     {
+        // Enforce activation for cloud providers
+        bool requiresActivation = SelectedProvider is AiProviderType.OpenAI
+            or AiProviderType.Anthropic or AiProviderType.Gemini;
+
+        if (requiresActivation && !_activationService.IsActivated)
+        {
+            ConnectionTestResult = "Activation required for cloud providers. Enter a license key in Features page.";
+            return;
+        }
+
         SaveProviderConfig();
         ConnectionTestResult = "Switching provider...";
         try

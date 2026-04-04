@@ -21,11 +21,20 @@ public partial class App : Application
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
 
-        // Initialize MCP servers in background (non-blocking)
+        // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
             try
             {
+                // Validate license key against online API
+                var activation = _serviceProvider.GetRequiredService<ActivationService>();
+                await activation.ValidateOnlineAsync();
+            }
+            catch { /* License validation is best-effort */ }
+
+            try
+            {
+                // Initialize MCP servers
                 var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
                 await mcpManager.InitializeAsync();
             }
