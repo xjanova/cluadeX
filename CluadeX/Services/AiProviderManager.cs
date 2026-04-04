@@ -31,6 +31,7 @@ public class AiProviderManager : IDisposable
 
         // Register all providers
         _providers[AiProviderType.Local] = new LocalGgufProvider(llamaService);
+        _providers[AiProviderType.LlamaServer] = new LlamaServerProvider(settingsService);
         _providers[AiProviderType.OpenAI] = new OpenAiProvider(settingsService);
         _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService);
         _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService);

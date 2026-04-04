@@ -50,26 +50,53 @@ public class LlamaInferenceService : IDisposable
         try
         {
             string? customPath = _settingsService.Settings.CustomLlamaCppBackendPath;
-
-            if (!string.IsNullOrEmpty(customPath) && Directory.Exists(customPath))
-            {
-                // Check if the custom directory has the required DLLs
-                string llamaDll = Path.Combine(customPath, "llama.dll");
-                if (File.Exists(llamaDll))
-                {
-                    NativeLibraryConfig.All.WithSearchDirectory(customPath);
-                    System.Diagnostics.Debug.WriteLine($"Custom llama.cpp backend: {customPath}");
-                    return;
-                }
-            }
-
-            // Auto-detect: check for a "llama-backend" folder next to the app
             string appDir = AppDomain.CurrentDomain.BaseDirectory;
             string autoBackendDir = Path.Combine(appDir, "llama-backend");
-            if (Directory.Exists(autoBackendDir) && File.Exists(Path.Combine(autoBackendDir, "llama.dll")))
+
+            // Determine which directory to use
+            string? backendDir = null;
+            if (!string.IsNullOrEmpty(customPath) && Directory.Exists(customPath)
+                && File.Exists(Path.Combine(customPath, "llama.dll")))
             {
-                NativeLibraryConfig.All.WithSearchDirectory(autoBackendDir);
-                System.Diagnostics.Debug.WriteLine($"Auto-detected custom backend: {autoBackendDir}");
+                backendDir = customPath;
+            }
+            else if (Directory.Exists(autoBackendDir) && File.Exists(Path.Combine(autoBackendDir, "llama.dll")))
+            {
+                backendDir = autoBackendDir;
+            }
+
+            if (backendDir != null)
+            {
+                string llamaDll = Path.Combine(backendDir, "llama.dll");
+                System.Diagnostics.Debug.WriteLine($"Custom llama.cpp backend: {backendDir}");
+                System.Diagnostics.Debug.WriteLine($"  llama.dll size: {new FileInfo(llamaDll).Length} bytes");
+
+                // Use WithLibrary for the most reliable override
+                NativeLibraryConfig.LLama.WithLibrary(llamaDll);
+
+                // Also set search directory for ggml-*.dll dependencies
+                NativeLibraryConfig.All.WithSearchDirectory(backendDir);
+
+                // Set DLL import resolver to ensure our DLLs are found first
+                NativeLibrary.SetDllImportResolver(typeof(LLamaWeights).Assembly,
+                    (name, assembly, searchPath) =>
+                    {
+                        // Try custom backend first
+                        string candidate = Path.Combine(backendDir, name);
+                        if (!candidate.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                            candidate += ".dll";
+
+                        if (File.Exists(candidate))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"  Loading from custom backend: {candidate}");
+                            return NativeLibrary.Load(candidate);
+                        }
+
+                        // Fallback to default resolution
+                        return IntPtr.Zero;
+                    });
+
+                return;
             }
         }
         catch (Exception ex)
