@@ -126,39 +126,45 @@ public class LlamaInferenceService : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    // If CUDA fails and backend is Auto, try CPU fallback
-                    if (settings.GpuBackend == "Auto" && gpuLayers > 0 &&
-                        (ex.Message.Contains("CUDA", StringComparison.OrdinalIgnoreCase) ||
-                         ex.Message.Contains("GPU", StringComparison.OrdinalIgnoreCase) ||
-                         ex.Message.Contains("out of memory", StringComparison.OrdinalIgnoreCase) ||
-                         ex.Message.Contains("VRAM", StringComparison.OrdinalIgnoreCase) ||
-                         ex.Message.Contains("cublas", StringComparison.OrdinalIgnoreCase) ||
-                         ex is DllNotFoundException))
-                    {
-                        App.Current?.Dispatcher.Invoke(() =>
-                            progress?.Report("GPU loading failed. Falling back to CPU..."));
+                    string errMsg = ex.Message + " " + (ex.InnerException?.Message ?? "");
 
-                        modelParams.GpuLayerCount = 0;
-                        return LLamaWeights.LoadFromFile(modelParams);
-                    }
-
-                    // If context size is too large, try with a smaller one
-                    if (ex.Message.Contains("memory", StringComparison.OrdinalIgnoreCase) ||
-                        ex.Message.Contains("alloc", StringComparison.OrdinalIgnoreCase))
+                    // Strategy 1: If GPU fails, try CPU fallback
+                    if (settings.GpuBackend == "Auto" && gpuLayers > 0)
                     {
-                        uint reducedContext = Math.Min((uint)settings.ContextSize, 2048);
-                        if (reducedContext < modelParams.ContextSize)
+                        try
                         {
                             App.Current?.Dispatcher.Invoke(() =>
-                                progress?.Report($"Memory issue. Retrying with reduced context ({reducedContext})..."));
+                                progress?.Report("GPU loading failed. Falling back to CPU..."));
+
+                            modelParams.GpuLayerCount = 0;
+                            return LLamaWeights.LoadFromFile(modelParams);
+                        }
+                        catch
+                        {
+                            // CPU also failed — continue to strategy 2
+                        }
+                    }
+
+                    // Strategy 2: Try reduced context size
+                    uint reducedContext = Math.Min((uint)settings.ContextSize, 2048);
+                    if (reducedContext < modelParams.ContextSize)
+                    {
+                        try
+                        {
+                            App.Current?.Dispatcher.Invoke(() =>
+                                progress?.Report($"Retrying with reduced context ({reducedContext})..."));
 
                             modelParams.ContextSize = reducedContext;
                             modelParams.GpuLayerCount = 0;
                             return LLamaWeights.LoadFromFile(modelParams);
                         }
+                        catch
+                        {
+                            // Still failed — throw original error
+                        }
                     }
 
-                    throw;
+                    throw; // Nothing worked
                 }
             }, ct);
 
