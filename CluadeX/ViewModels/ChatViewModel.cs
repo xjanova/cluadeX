@@ -912,6 +912,35 @@ public class ChatViewModel : ViewModelBase
     {
         App.Current?.Dispatcher.Invoke(() =>
         {
+            // Format arguments for display
+            string? argsDisplay = null;
+            string? inputSummary = null;
+            if (toolResult.Arguments is { Count: > 0 })
+            {
+                // Filter out large content values for the args display
+                var displayArgs = new List<string>();
+                string? primaryArg = null;
+                foreach (var (key, value) in toolResult.Arguments)
+                {
+                    // Truncate large values (file content, code blocks)
+                    string displayValue = value.Length > 120
+                        ? value[..120].Replace("\n", " ") + "..."
+                        : value.Replace("\n", "\\n");
+                    displayArgs.Add($"  {key}: {displayValue}");
+
+                    // Pick the primary argument for the one-line summary
+                    if (primaryArg == null && key is "path" or "command" or "query" or "pattern" or "url"
+                        or "name" or "skill" or "question" or "branch" or "task" or "notebook_path")
+                        primaryArg = $"{key}: {(value.Length > 80 ? value[..80] + "..." : value)}";
+                }
+                argsDisplay = string.Join("\n", displayArgs);
+                inputSummary = primaryArg;
+            }
+
+            int outputLines = string.IsNullOrEmpty(toolResult.Output)
+                ? 0
+                : toolResult.Output.Split('\n').Length;
+
             var msg = new ChatMessage
             {
                 Role = MessageRole.ToolAction,
@@ -921,6 +950,9 @@ public class ChatViewModel : ViewModelBase
                 ToolOutput = toolResult.Output,
                 ToolSuccess = toolResult.Success,
                 HasError = !toolResult.Success,
+                ToolArguments = argsDisplay,
+                ToolInputSummary = inputSummary,
+                ToolOutputLines = outputLines,
             };
             Messages.Add(msg);
             CurrentSession?.Messages.Add(msg);

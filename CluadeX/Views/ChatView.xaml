@@ -183,8 +183,32 @@
                                             </TextBlock>
                                         </StackPanel>
 
+                                        <!-- Tool Arguments (shown for ToolAction messages with arguments) -->
+                                        <Border Grid.Row="1" Margin="0,4,0,0"
+                                                Background="{StaticResource CrustBrush}"
+                                                CornerRadius="4" Padding="8,5">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                                                <Condition Binding="{Binding ToolArguments, Converter={StaticResource BoolVis}}" Value="Visible"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Text="{Binding ToolArguments}"
+                                                       Foreground="{StaticResource Subtext0Brush}"
+                                                       FontFamily="{StaticResource MonoFont}"
+                                                       FontSize="11" TextWrapping="Wrap"/>
+                                        </Border>
+
                                         <!-- Message Content with Markdown Rendering -->
-                                        <StackPanel Grid.Row="1"
+                                        <StackPanel Grid.Row="1" Margin="0,3,0,0"
                                                     helpers:MarkdownHelper.Markdown="{Binding Content}"/>
 
                                         <!-- Typing Indicator (shown ONLY when streaming AND content is still empty) -->
@@ -280,9 +304,12 @@
                                         <Expander Grid.Row="3" Margin="0,6,0,0"
                                                   IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
-                                                <TextBlock Text="Show details"
-                                                           Foreground="{StaticResource Overlay0Brush}"
-                                                           FontSize="11"/>
+                                                <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
+                                                    <Run Text="Show output"/>
+                                                    <Run Text=" ("/>
+                                                    <Run Text="{Binding ToolOutputLines, Mode=OneWay}"/>
+                                                    <Run Text=" lines)"/>
+                                                </TextBlock>
                                             </Expander.Header>
                                             <Border Background="{StaticResource Surface0Brush}"
                                                     CornerRadius="6" Padding="10,8" Margin="0,4,0,0"

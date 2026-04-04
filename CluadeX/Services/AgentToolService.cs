@@ -253,6 +253,9 @@ public class AgentToolService
                 },
             };
 
+            // ── Attach arguments for UI display ──
+            toolResult.Arguments = call.Arguments;
+
             // ── PostToolUse hooks ──
             _ = _hookService.ExecutePostToolHooksAsync(call, toolResult, ct);
 

@@ -67,6 +67,12 @@ public class ChatMessage : INotifyPropertyChanged
     public string? ToolOutput { get; set; }
     /// <summary>Whether the tool action succeeded</summary>
     public bool ToolSuccess { get; set; }
+    /// <summary>Tool input arguments formatted for display (key: value per line)</summary>
+    public string? ToolArguments { get; set; }
+    /// <summary>One-line input summary (e.g. "path: src/main.ts")</summary>
+    public string? ToolInputSummary { get; set; }
+    /// <summary>Output line count for display</summary>
+    public int ToolOutputLines { get; set; }
 
     /// <summary>Whether the tool details are expanded in UI</summary>
     public bool IsExpanded

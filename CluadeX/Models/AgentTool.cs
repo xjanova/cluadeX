@@ -139,6 +139,8 @@ public class ToolResult
     public string Error { get; set; } = string.Empty;
     /// <summary>Short description for display in the chat UI.</summary>
     public string Summary { get; set; } = string.Empty;
+    /// <summary>Input arguments passed to the tool (for UI display).</summary>
+    public Dictionary<string, string>? Arguments { get; set; }
 }
 
 /// <summary>
