@@ -41,14 +41,16 @@
     <PackageReference Include="System.Management" Version="9.0.0" />
   </ItemGroup>
 
-  <!-- Post-build: copy custom llama.cpp backend DLLs if llama-backend folder exists -->
-  <Target Name="CopyCustomLlamaBackend" AfterTargets="Build" Condition="Exists('$(ProjectDir)llama-backend')">
-    <Message Text="Copying custom llama.cpp backend DLLs for Gemma 4 support..." Importance="high" />
-    <ItemGroup>
-      <CustomBackendDlls Include="$(ProjectDir)llama-backend\*.dll" />
-    </ItemGroup>
-    <Copy SourceFiles="@(CustomBackendDlls)" DestinationFolder="$(OutputPath)runtimes\win-x64\native\cuda12\" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(CustomBackendDlls)" DestinationFolder="$(OutputPath)runtimes\win-x64\native\avx2\" SkipUnchangedFiles="true" Condition="!$([System.String]::new('%(Filename)').Contains('cuda'))" />
+  <!-- Post-build: copy llama-server.exe to output if llama-backend folder exists -->
+  <Target Name="CopyLlamaServer" AfterTargets="Build" Condition="Exists('$(ProjectDir)llama-backend\llama-server.exe')">
+    <Message Text="Copying llama-server.exe for Gemma 4 support..." Importance="high" />
+    <MakeDir Directories="$(OutputPath)llama-backend" />
+    <Copy SourceFiles="$(ProjectDir)llama-backend\llama-server.exe" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)llama-backend\llama.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml-base.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml-cuda.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml-cpu.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

@@ -1,11 +1,9 @@
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text;
 using LLama;
 using LLama.Common;
 using LLama.Exceptions;
-using LLama.Native;
 using CluadeX.Models;
 
 namespace CluadeX.Services;
@@ -20,7 +18,6 @@ public class LlamaInferenceService : IDisposable
     private string? _loadedModelPath;
     private bool _isLoading;
     private bool _disposed;
-    private static bool _backendConfigured;
 
     public bool IsModelLoaded => _model != null;
     public bool IsLoading => _isLoading;
@@ -34,75 +31,6 @@ public class LlamaInferenceService : IDisposable
     public LlamaInferenceService(SettingsService settingsService)
     {
         _settingsService = settingsService;
-        ConfigureCustomBackend();
-    }
-
-    /// <summary>
-    /// Configure a custom llama.cpp backend if specified in settings.
-    /// This allows using a newer llama.cpp build that supports newer architectures
-    /// (e.g., Gemma 4) before LLamaSharp officially updates.
-    /// </summary>
-    private void ConfigureCustomBackend()
-    {
-        if (_backendConfigured) return;
-        _backendConfigured = true;
-
-        try
-        {
-            string? customPath = _settingsService.Settings.CustomLlamaCppBackendPath;
-            string appDir = AppDomain.CurrentDomain.BaseDirectory;
-            string autoBackendDir = Path.Combine(appDir, "llama-backend");
-
-            // Determine which directory to use
-            string? backendDir = null;
-            if (!string.IsNullOrEmpty(customPath) && Directory.Exists(customPath)
-                && File.Exists(Path.Combine(customPath, "llama.dll")))
-            {
-                backendDir = customPath;
-            }
-            else if (Directory.Exists(autoBackendDir) && File.Exists(Path.Combine(autoBackendDir, "llama.dll")))
-            {
-                backendDir = autoBackendDir;
-            }
-
-            if (backendDir != null)
-            {
-                string llamaDll = Path.Combine(backendDir, "llama.dll");
-                System.Diagnostics.Debug.WriteLine($"Custom llama.cpp backend: {backendDir}");
-                System.Diagnostics.Debug.WriteLine($"  llama.dll size: {new FileInfo(llamaDll).Length} bytes");
-
-                // Use WithLibrary for the most reliable override
-                NativeLibraryConfig.LLama.WithLibrary(llamaDll);
-
-                // Also set search directory for ggml-*.dll dependencies
-                NativeLibraryConfig.All.WithSearchDirectory(backendDir);
-
-                // Set DLL import resolver to ensure our DLLs are found first
-                NativeLibrary.SetDllImportResolver(typeof(LLamaWeights).Assembly,
-                    (name, assembly, searchPath) =>
-                    {
-                        // Try custom backend first
-                        string candidate = Path.Combine(backendDir, name);
-                        if (!candidate.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                            candidate += ".dll";
-
-                        if (File.Exists(candidate))
-                        {
-                            System.Diagnostics.Debug.WriteLine($"  Loading from custom backend: {candidate}");
-                            return NativeLibrary.Load(candidate);
-                        }
-
-                        // Fallback to default resolution
-                        return IntPtr.Zero;
-                    });
-
-                return;
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Custom backend config failed: {ex.Message}");
-        }
     }
 
     public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
