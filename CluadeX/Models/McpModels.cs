@@ -168,7 +168,8 @@ public class McpClientInfo
     public string Name { get; set; } = "CluadeX";
 
     [JsonPropertyName("version")]
-    public string Version { get; set; } = "2.2.0";
+    public string Version { get; set; } = System.Reflection.Assembly.GetExecutingAssembly()
+        .GetName().Version?.ToString(3) ?? "2.0.0";
 }
 
 public class McpClientCapabilities
