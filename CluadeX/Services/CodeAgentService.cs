@@ -272,20 +272,119 @@ public class CodeAgentService
             sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
             sb.AppendLine();
 
-            // Include compact project tree for context
+            // Include project tree (up to 3 levels, larger budget)
             try
             {
-                string tree = _fileSystemService.GetProjectTree(2);
-                if (tree.Length < 2000)
-                {
-                    sb.AppendLine("PROJECT STRUCTURE:");
-                    sb.AppendLine(tree);
-                }
+                string tree = _fileSystemService.GetProjectTree(3);
+                if (tree.Length > 4000)
+                    tree = tree[..4000] + "\n... (truncated)";
+                sb.AppendLine("PROJECT STRUCTURE:");
+                sb.AppendLine(tree);
             }
             catch { /* ignore */ }
+
+            // Auto-read key project files for context (like Claude Code does)
+            sb.AppendLine();
+            sb.AppendLine("KEY PROJECT FILES:");
+            AppendKeyFileIfExists(sb, "CLAUDE.md");
+            AppendKeyFileIfExists(sb, ".claude/CLAUDE.md");
+            AppendKeyFileIfExists(sb, "README.md");
+            AppendKeyFileIfExists(sb, "package.json", 500);
+            AppendKeyFileIfExists(sb, "Cargo.toml", 300);
+            AppendKeyFileIfExists(sb, "pyproject.toml", 300);
+            AppendKeyFileIfExists(sb, ".gitignore", 200);
+
+            // Detect project type and add specific context
+            string projType = DetectProjectType();
+            if (!string.IsNullOrEmpty(projType))
+            {
+                sb.AppendLine();
+                sb.AppendLine($"DETECTED PROJECT TYPE: {projType}");
+            }
+
+            // Add important working instructions
+            bool isThai = _localizationService.CurrentLanguage == "th";
+            sb.AppendLine();
+            sb.AppendLine(isThai
+                ? """
+                  คำสั่งสำคัญสำหรับโปรเจคนี้:
+                  - ทุกเส้นทางไฟล์เป็น relative จาก project root
+                  - อ่านไฟล์ก่อนแก้ไขเสมอ (read_file ก่อน edit_file)
+                  - ใช้ search_content เพื่อหาโค้ดที่เกี่ยวข้อง
+                  - ใช้ list_files เพื่อดูโครงสร้างโฟลเดอร์
+                  - หลังเขียนไฟล์ ให้ verify ด้วยการอ่านกลับหรือรัน build
+                  - ถ้าไม่รู้ว่าไฟล์อยู่ไหน ให้ search_files หาก่อน
+                  """
+                : """
+                  IMPORTANT WORKING INSTRUCTIONS:
+                  - All file paths are relative to the project root
+                  - ALWAYS read a file before editing it (read_file before edit_file)
+                  - Use search_content to find relevant code
+                  - Use list_files to explore directory structure
+                  - After writing files, verify by reading back or running build
+                  - If you don't know where a file is, use search_files to find it first
+                  """);
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Read a key project file and append to system prompt if it exists.</summary>
+    private void AppendKeyFileIfExists(StringBuilder sb, string relativePath, int maxChars = 1000)
+    {
+        try
+        {
+            string content = _fileSystemService.ReadFile(relativePath);
+            if (string.IsNullOrWhiteSpace(content)) return;
+
+            if (content.Length > maxChars)
+                content = content[..maxChars] + "\n... (truncated)";
+
+            sb.AppendLine($"\n--- {relativePath} ---");
+            sb.AppendLine(content);
+        }
+        catch { /* file doesn't exist — skip */ }
+    }
+
+    /// <summary>Detect the project type based on key files.</summary>
+    private string DetectProjectType()
+    {
+        var types = new List<string>();
+
+        bool hasFile(string name)
+        {
+            try { _fileSystemService.ReadFile(name); return true; }
+            catch { return false; }
+        }
+
+        // .NET / C#
+        if (_fileSystemService.SearchFiles("*.csproj", ".").Count > 0 || _fileSystemService.SearchFiles("*.sln", ".").Count > 0)
+            types.Add("C# / .NET");
+
+        // Node.js / TypeScript
+        if (hasFile("package.json"))
+        {
+            types.Add("Node.js");
+            if (hasFile("tsconfig.json")) types.Add("TypeScript");
+        }
+
+        // Python
+        if (hasFile("pyproject.toml") || hasFile("setup.py") || hasFile("requirements.txt"))
+            types.Add("Python");
+
+        // Rust
+        if (hasFile("Cargo.toml")) types.Add("Rust");
+
+        // Go
+        if (hasFile("go.mod")) types.Add("Go");
+
+        // Java
+        if (hasFile("pom.xml") || hasFile("build.gradle")) types.Add("Java");
+
+        // Flutter / Dart
+        if (hasFile("pubspec.yaml")) types.Add("Flutter / Dart");
+
+        return string.Join(", ", types);
     }
 
     // ═══════════════════════════════════════════
