@@ -895,14 +895,14 @@ public class ChatViewModel : ViewModelBase
         _streamingTokenCount = 0;
 
         // ─── Live agent status messages in chat area (Claude Code-style) ───
-        // Each tool execution gets its own inline status line that persists,
-        // showing verb + target + elapsed time with a pulsing spinner.
+        // Each tool execution gets its own inline status line.
+        // Uses BeginInvoke (async) so the UI thread can render each status
+        // before the next one arrives — otherwise fast tools flash too quickly.
         ChatMessage? agentStatusMsg = null;
-        Stopwatch? toolStopwatch = null;
 
         void OnAgentStatusInChat(string status)
         {
-            App.Current?.Dispatcher.Invoke(() =>
+            App.Current?.Dispatcher.BeginInvoke(() =>
             {
                 // Skip terminal statuses — don't show "Ready" in chat
                 if (status is "Ready" or "Done" || status.StartsWith("Ready ·"))
@@ -912,16 +912,15 @@ public class ChatViewModel : ViewModelBase
                     {
                         agentStatusMsg.IsStreaming = false;
                         agentStatusMsg = null;
+                        _activeAgentStatusMsg = null;
                     }
                     return;
                 }
 
-                // Finalize the PREVIOUS status message — so each status persists as its own line
+                // Finalize the PREVIOUS status message (stop its spinner)
                 if (agentStatusMsg != null)
                     agentStatusMsg.IsStreaming = false;
 
-                // Start tracking tool elapsed time
-                toolStopwatch = Stopwatch.StartNew();
                 int totalElapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
                 string displayStatus = totalElapsed > 1 ? $"{status}  ({totalElapsed}s)" : status;
 
@@ -933,7 +932,7 @@ public class ChatViewModel : ViewModelBase
                     IsStreaming = true,
                 };
                 Messages.Add(agentStatusMsg);
-                _activeAgentStatusMsg = agentStatusMsg;  // sync for OnToolExecuted cleanup
+                _activeAgentStatusMsg = agentStatusMsg;
                 ScrollToBottom?.Invoke();
             });
         }
@@ -1089,7 +1088,6 @@ public class ChatViewModel : ViewModelBase
                 if (agentStatusMsg != null)
                 {
                     agentStatusMsg.IsStreaming = false;
-                    Messages.Remove(agentStatusMsg);
                     agentStatusMsg = null;
                 }
                 _activeAgentStatusMsg = null;
@@ -1099,13 +1097,12 @@ public class ChatViewModel : ViewModelBase
 
     private void OnToolExecuted(ToolResult toolResult)
     {
-        App.Current?.Dispatcher.Invoke(() =>
+        App.Current?.Dispatcher.BeginInvoke(() =>
         {
-            // Remove the active agent status message — the ToolAction result replaces it
-            // This prevents the status "Reading file..." from lingering alongside the result "✓ Read file"
+            // Finalize the active status message — stop spinner, show as completed
             if (_activeAgentStatusMsg != null)
             {
-                Messages.Remove(_activeAgentStatusMsg);
+                _activeAgentStatusMsg.IsStreaming = false;
                 _activeAgentStatusMsg = null;
             }
 
