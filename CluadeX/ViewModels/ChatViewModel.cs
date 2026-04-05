@@ -843,10 +843,11 @@ public class ChatViewModel : ViewModelBase
         // ─── Inline thinking indicator (Claude Code-style) ───
         // Shows in the chat area while the model is thinking/generating.
         // Works in ALL modes (streaming, agentic, auto-execute).
+        // Uses MessageRole.Assistant so it renders with the PROVEN chat bubble template.
         var thinkingMsg = new ChatMessage
         {
-            Role = MessageRole.AgentStatus,
-            Content = $"{initVerb}...",
+            Role = MessageRole.Assistant,
+            Content = $"⏳ *{initVerb}...*",
             IsStreaming = true,
         };
         Messages.Add(thinkingMsg);
@@ -1253,7 +1254,7 @@ public class ChatViewModel : ViewModelBase
                 StatusText = $"{_lastStatusBase} ({elapsed}s)";
             // Also update the inline thinking indicator with elapsed time
             if (_activeAgentStatusMsg is { IsStreaming: true })
-                _activeAgentStatusMsg.Content = $"{_lastStatusBase} ({elapsed}s)";
+                _activeAgentStatusMsg.Content = $"⏳ *{_lastStatusBase} ({elapsed}s)*";
         };
         _elapsedTimer.Start();
     }
