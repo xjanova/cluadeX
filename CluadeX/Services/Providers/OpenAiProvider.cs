@@ -15,7 +15,7 @@ public class OpenAiProvider : ApiProviderBase
     public static readonly string[] KnownModels =
     [
         "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",
-        "gpt-3.5-turbo", "o1", "o1-mini", "o1-pro", "o3", "o3-mini",
+        "gpt-3.5-turbo", "o1", "o1-mini", "o1-pro", "o3", "o3-mini", "o4-mini",
     ];
 
     /// <summary>
@@ -23,12 +23,13 @@ public class OpenAiProvider : ApiProviderBase
     /// </summary>
     private static readonly HashSet<string> ReasoningModels = new(StringComparer.OrdinalIgnoreCase)
     {
-        "o1", "o1-mini", "o1-pro", "o3", "o3-mini",
+        "o1", "o1-mini", "o1-pro", "o3", "o3-mini", "o4-mini",
     };
 
     private static bool IsReasoningModel(string model)
         => ReasoningModels.Contains(model) || model.StartsWith("o1", StringComparison.OrdinalIgnoreCase)
-           || model.StartsWith("o3", StringComparison.OrdinalIgnoreCase);
+           || model.StartsWith("o3", StringComparison.OrdinalIgnoreCase)
+           || model.StartsWith("o4", StringComparison.OrdinalIgnoreCase);
 
     public OpenAiProvider(SettingsService settingsService) : base(settingsService) { }
 

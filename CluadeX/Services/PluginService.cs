@@ -225,6 +225,8 @@ public class PluginService
             HookEvents = ["PostToolUse"],
             HookSummary = "After FileWrite/FileEdit on .ts/.tsx/.py files, runs type checker and reports errors.",
             HookSummaryTh = "หลังแก้ไฟล์ .ts/.tsx/.py จะรัน type checker และรายงาน error",
+            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = "npx tsc --noEmit 2>nul || python -m mypy {path} 2>nul || echo type-check-done", TimeoutMs = 30000 },
+                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = "npx tsc --noEmit 2>nul || python -m mypy {path} 2>nul || echo type-check-done", TimeoutMs = 30000 }],
         },
 
         // ═══ Security ═══
@@ -255,6 +257,7 @@ public class PluginService
             HookEvents = ["PostToolUse"],
             HookSummary = "After changes to dependency files, runs npm audit / pip-audit / cargo audit and reports vulnerabilities.",
             HookSummaryTh = "หลังแก้ไฟล์ dependency จะรัน npm audit / pip-audit / cargo audit และรายงานช่องโหว่",
+            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = "npm audit --production 2>nul || pip-audit 2>nul || echo audit-done", TimeoutMs = 30000 }],
         },
         new CatalogPlugin
         {
@@ -268,6 +271,9 @@ public class PluginService
             HookEvents = ["PreToolUse"],
             HookSummary = "Before FileRead/FileWrite/FileEdit, validates paths are within project root. Resolves symlinks and rejects traversal.",
             HookSummaryTh = "ก่อนอ่าน/เขียน/แก้ไฟล์ จะตรวจสอบว่า path อยู่ในโปรเจกต์ แก้ symlink และปฏิเสธ traversal",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "echo {path} | findstr /r \"\\.\\.\" && exit 1 || exit 0" },
+                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = "echo {path} | findstr /r \"\\.\\.\" && exit 1 || exit 0" },
+                     new() { Phase = "PreToolUse", Matcher = "read_file", Command = "echo {path} | findstr /r \"\\.\\.\" && exit 1 || exit 0" }],
         },
 
         // ═══ Git & Version Control ═══
@@ -296,6 +302,8 @@ public class PluginService
             HookEvents = ["PreToolUse"],
             HookSummary = "Before BashTool git commit/push, checks current branch. Blocks if on protected branch (main, master, develop).",
             HookSummaryTh = "ก่อน git commit/push จะตรวจ branch ปัจจุบัน บล็อกถ้าอยู่บน branch ที่ป้องกัน",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit", Command = "for /f %%b in ('git branch --show-current') do @if \"%%b\"==\"main\" exit 1 & if \"%%b\"==\"master\" exit 1 & if \"%%b\"==\"develop\" exit 1" },
+                     new() { Phase = "PreToolUse", Matcher = "git_push", Command = "for /f %%b in ('git branch --show-current') do @if \"%%b\"==\"main\" exit 1 & if \"%%b\"==\"master\" exit 1 & if \"%%b\"==\"develop\" exit 1" }],
         },
         new CatalogPlugin
         {
@@ -421,6 +429,8 @@ public class PluginService
             HookEvents = ["PreToolUse"],
             HookSummary = "Before FileWrite/FileEdit, copies the original file to .cluadex-backups/{timestamp}/{path}. Auto-cleans old backups (>7 days).",
             HookSummaryTh = "ก่อนเขียน/แก้ไฟล์ จะคัดลอกไฟล์ต้นฉบับไปที่ .cluadex-backups/ ลบสำเนาเก่าอัตโนมัติ (>7 วัน)",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "if exist {path} (mkdir .cluadex-backups 2>nul & copy /y {path} .cluadex-backups\\ >nul 2>nul)" },
+                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = "if exist {path} (mkdir .cluadex-backups 2>nul & copy /y {path} .cluadex-backups\\ >nul 2>nul)" }],
         },
         new CatalogPlugin
         {
@@ -434,6 +444,7 @@ public class PluginService
             HookEvents = ["PreToolUse"],
             HookSummary = "Before FileWrite, checks if content exceeds max file size (default 500KB). Warns or blocks oversized writes.",
             HookSummaryTh = "ก่อนเขียนไฟล์ จะตรวจว่าเนื้อหาเกินขนาดสูงสุด (ค่าเริ่มต้น 500KB) เตือนหรือบล็อกไฟล์ใหญ่เกิน",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "powershell -NoProfile -Command \"if ((Get-Item '{path}' -ErrorAction SilentlyContinue).Length -gt 512000) { exit 1 } else { exit 0 }\"" }],
         },
 
         // ═══ AI Enhancement ═══

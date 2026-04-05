@@ -120,6 +120,7 @@ public class CostTrackingService
             var m when m.Contains("gpt-4o") => new(2.5m, 10.0m, 0m, 0m),
             var m when m.Contains("o1") => new(15.0m, 60.0m, 0m, 0m),
             var m when m.Contains("o3") => new(10.0m, 40.0m, 0m, 0m),
+            var m when m.Contains("o4-mini") => new(1.10m, 4.40m, 0m, 0m),
             var m when m.Contains("gemini-2.5-pro") => new(1.25m, 10.0m, 0m, 0m),
             var m when m.Contains("gemini-2.5-flash") => new(0.15m, 0.6m, 0m, 0m),
             _ => new(3.0m, 15.0m, 0.3m, 3.75m), // Default to Sonnet pricing

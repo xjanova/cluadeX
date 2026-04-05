@@ -346,7 +346,20 @@ public class LlamaServerProvider : ApiProviderBase
 
     public override void Dispose()
     {
-        StopServerAsync().Wait(5000);
+        // Synchronous cleanup — kill the process directly to avoid sync-over-async deadlock
+        IsReady = false;
+        if (_serverProcess != null)
+        {
+            try
+            {
+                if (!_serverProcess.HasExited)
+                    _serverProcess.Kill(entireProcessTree: true);
+            }
+            catch { }
+            _serverProcess.Dispose();
+            _serverProcess = null;
+        }
+        _loadedModelPath = null;
         base.Dispose();
     }
 }
