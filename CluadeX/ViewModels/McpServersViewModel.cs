@@ -135,11 +135,53 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         SelectedServer.Status = "starting";
         StatusText = $"Starting {SelectedServer.Name}...";
 
-        bool ok = await _mcpManager.StartServerAsync(SelectedServer.Name);
-        SelectedServer.Status = ok ? "running" : "error";
-        SelectedServer.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(SelectedServer.Name).Count;
-        RefreshSelectedTools();
-        StatusText = ok ? $"{SelectedServer.Name} started ({SelectedServer.ToolCount} tools)" : $"{SelectedServer.Name} failed to start";
+        try
+        {
+            bool ok = await _mcpManager.StartServerAsync(SelectedServer.Name);
+            SelectedServer.Status = ok ? "running" : "error";
+            SelectedServer.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(SelectedServer.Name).Count;
+            RefreshSelectedTools();
+
+            if (ok)
+            {
+                StatusText = $"{SelectedServer.Name} started ({SelectedServer.ToolCount} tools)";
+            }
+            else
+            {
+                // Extract last error from log for display in status bar
+                string lastError = ExtractLastError(SelectedServer.LogOutput);
+                StatusText = !string.IsNullOrEmpty(lastError)
+                    ? $"Failed: {lastError}"
+                    : $"{SelectedServer.Name} failed to start — check logs";
+            }
+        }
+        catch (Exception ex)
+        {
+            SelectedServer.Status = "error";
+            StatusText = $"Error: {ex.Message}";
+        }
+    }
+
+    /// <summary>Extract the last meaningful error message from the server log.</summary>
+    private static string ExtractLastError(string logOutput)
+    {
+        if (string.IsNullOrEmpty(logOutput)) return "";
+        var lines = logOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = lines.Length - 1; i >= 0; i--)
+        {
+            string line = lines[i].Trim();
+            // Skip timestamp prefix: "[12:34:56] "
+            int bracketEnd = line.IndexOf(']');
+            if (bracketEnd > 0 && bracketEnd < line.Length - 1)
+                line = line[(bracketEnd + 1)..].Trim();
+
+            if (line.Contains("Failed") || line.Contains("failed") ||
+                line.Contains("Error") || line.Contains("error") ||
+                line.Contains("timed out") || line.Contains("died") ||
+                line.Contains("[stderr]"))
+                return line.Length > 120 ? line[..120] + "..." : line;
+        }
+        return "";
     }
 
     private async Task StopSelectedServer()

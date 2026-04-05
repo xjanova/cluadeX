@@ -145,10 +145,12 @@ public sealed class McpServerManager : IDisposable
                     _ = RefreshToolsAsync(name, CancellationToken.None);
             };
 
-            transport.Start(config);
+            // Start process and wait for read loop to be ready (prevents race condition)
+            await transport.StartAsync(config);
             _transports[name] = transport;
+            OnServerLog?.Invoke(name, "Process started. Sending initialize handshake...");
 
-            // Initialize handshake
+            // Initialize handshake (use 15s timeout instead of 30s default)
             var initParams = new McpInitializeParams
             {
                 ClientInfo = new McpClientInfo
@@ -158,11 +160,12 @@ public sealed class McpServerManager : IDisposable
                 },
             };
 
-            var initResponse = await transport.SendRequestAsync("initialize", initParams, ct: ct);
+            var initResponse = await transport.SendRequestAsync("initialize", initParams, timeoutMs: 15000, ct: ct);
 
             if (!initResponse.IsSuccess)
             {
-                OnServerLog?.Invoke(name, $"Initialize failed: {initResponse.Error?.Message}");
+                string errorMsg = initResponse.Error?.Message ?? "Unknown error";
+                OnServerLog?.Invoke(name, $"Initialize failed: {errorMsg}");
                 await transport.StopAsync();
                 transport.Dispose();
                 _transports.Remove(name);
@@ -177,8 +180,25 @@ public sealed class McpServerManager : IDisposable
             // Discover tools
             await RefreshToolsAsync(name, ct);
 
-            OnServerLog?.Invoke(name, $"Ready ({_toolRegistry.GetToolsForServer(name).Count} tools)");
+            int toolCount = _toolRegistry.GetToolsForServer(name).Count;
+            OnServerLog?.Invoke(name, $"Ready ({toolCount} tools)");
             return true;
+        }
+        catch (TimeoutException)
+        {
+            string stderrHint = "";
+            if (_transports.TryGetValue(name, out var timedOut))
+            {
+                stderrHint = timedOut.LastStartupError.Trim();
+                await timedOut.StopAsync();
+                timedOut.Dispose();
+                _transports.Remove(name);
+            }
+            string detail = !string.IsNullOrEmpty(stderrHint)
+                ? $"Handshake timed out. Server stderr:\n{stderrHint}"
+                : "Handshake timed out — server did not respond to initialize request within 15s.";
+            OnServerLog?.Invoke(name, detail);
+            return false;
         }
         catch (Exception ex)
         {

@@ -102,11 +102,76 @@
                         <DataTemplate>
                             <!-- Chat bubble wrapper (full width Grid so HorizontalAlignment works) -->
                             <Grid>
+                                <!-- ═══ AgentStatus: Claude Code-style inline tool indicator ═══ -->
+                                <Border HorizontalAlignment="Left"
+                                        Margin="12,2,200,2"
+                                        Background="{StaticResource Surface0Brush}"
+                                        CornerRadius="8"
+                                        Padding="10,6">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel Orientation="Horizontal">
+                                        <!-- Animated spinner dot (active) / static dot (finalized) -->
+                                        <Ellipse Width="9" Height="9" Margin="0,0,10,0"
+                                                 VerticalAlignment="Center">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Fill" Value="{StaticResource Overlay0Brush}"/>
+                                                    <Setter Property="Opacity" Value="0.5"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsStreaming}" Value="True">
+                                                            <Setter Property="Fill" Value="{StaticResource MauveBrush}"/>
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                            <DataTrigger.EnterActions>
+                                                                <BeginStoryboard x:Name="StatusPulse">
+                                                                    <Storyboard RepeatBehavior="Forever">
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                            From="0.4" To="1.0" Duration="0:0:0.5"
+                                                                            AutoReverse="True"/>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </DataTrigger.EnterActions>
+                                                            <DataTrigger.ExitActions>
+                                                                <StopStoryboard BeginStoryboardName="StatusPulse"/>
+                                                            </DataTrigger.ExitActions>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                        </Ellipse>
+                                        <!-- Status text — verb + target + elapsed -->
+                                        <TextBlock Text="{Binding Content}"
+                                                   Foreground="{StaticResource TextBrush}"
+                                                   FontSize="13"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Normal chat bubble (hidden for AgentStatus) ═══ -->
                                 <Border HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}"
                                         Margin="{Binding Role, Converter={StaticResource RoleMargin}}"
                                         Background="{Binding Role, Converter={StaticResource RoleBg}}"
                                         CornerRadius="{Binding Role, Converter={StaticResource RoleCorner}}"
                                         Padding="14,10">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>

@@ -333,7 +333,26 @@ public class CodeAgentService
               """);
 
         // ═══════════════════════════════════════════
-        // Section 10: Output Efficiency
+        // Section 10: Available Skills
+        // ═══════════════════════════════════════════
+        try
+        {
+            var allSkills = _agentToolService?.GetAvailableSkillNames();
+            if (allSkills is { Count: > 0 })
+            {
+                sb.AppendLine();
+                sb.AppendLine(isThai ? "# Skill ที่ใช้ได้" : "# Available Skills");
+                sb.AppendLine(isThai
+                    ? "คุณสามารถเรียกใช้ skill ผ่านเครื่องมือ `skill_invoke` เมื่อผู้ใช้พิมพ์ /command หรือเมื่อ skill เหมาะกับงาน:"
+                    : "You can invoke skills via the `skill_invoke` tool when the user types /command or when a skill fits the task:");
+                foreach (var (name, desc) in allSkills)
+                    sb.AppendLine($"- `{name}`: {desc}");
+                sb.AppendLine();
+            }
+        }
+        catch { /* Skills not available yet */ }
+
+        // Section 11: Output Efficiency
         // ═══════════════════════════════════════════
         sb.AppendLine();
         sb.AppendLine(isThai ? "# ประสิทธิภาพ Output" : "# Output Efficiency");
@@ -465,7 +484,7 @@ public class CodeAgentService
         return $"{verb}...";
     }
 
-    private string GetRandomSpinnerVerb()
+    public string GetRandomSpinnerVerb()
     {
         bool isThai = _localizationService.CurrentLanguage == "th";
         var verbs = isThai ? SpinnerVerbsTh : SpinnerVerbs;
@@ -1115,21 +1134,29 @@ public class CodeAgentService
     }
 
     /// <summary>
-    /// Force-compact the working history aggressively (for reactive compaction on 413).
-    /// Keeps only the last 5 messages and prepends a summary note.
+    /// Force-compact the working history for reactive compaction on 413.
+    /// Keeps the last 10 messages (or fewer if history is small) and prepends a summary note.
+    /// Technique from Claude Code: keep enough context for the agent to understand
+    /// the current task while reducing total token count.
     /// </summary>
     private List<ChatMessage> ForceCompactHistory(List<ChatMessage> history)
     {
-        if (history.Count <= 5) return history;
+        if (history.Count <= 10) return history;
 
-        int keepCount = Math.Min(5, history.Count);
+        // Keep last 10 messages — enough context for agent to continue working
+        int keepCount = Math.Min(10, history.Count);
         var kept = history.TakeLast(keepCount).ToList();
+
+        // Build a brief summary of what was compacted
+        int removedCount = history.Count - keepCount;
+        int removedToolCalls = history.Take(removedCount)
+            .Count(m => m.Role == MessageRole.ToolAction);
 
         kept.Insert(0, new ChatMessage
         {
             Role = MessageRole.System,
-            Content = "[Context was compacted due to length. Earlier conversation history has been summarized. " +
-                      $"Original history had {history.Count} messages.]",
+            Content = $"[Context was compacted due to length. {removedCount} earlier messages removed " +
+                      $"({removedToolCalls} tool results). The conversation continues with the most recent context.]",
         });
 
         return kept;
@@ -1152,6 +1179,9 @@ public class CodeAgentService
         var result = new AgentLoopResult();
         string systemPrompt = GetSystemPrompt();
         bool isThai = _localizationService.CurrentLanguage == "th";
+        int maxTokenRecoveryCount = 0;
+        const int MaxOutputTokenRecoveries = 3;
+        bool hasAttemptedReactiveCompact = false;
 
         // ─── Smart context enrichment (same as legacy loop) ───
         if (_fileSystemService.HasWorkingDirectory)
@@ -1220,15 +1250,29 @@ public class CodeAgentService
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
             {
-                // Keep only last 5 messages and retry
-                if (nativeMessages.Count > 5)
+                // ─── Reactive compaction on 413 (prompt too long) ───
+                if (!hasAttemptedReactiveCompact)
                 {
-                    nativeMessages = nativeMessages.TakeLast(5).ToList();
+                    hasAttemptedReactiveCompact = true;
+                    OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
+                    int keepCount = Math.Min(10, nativeMessages.Count);
+                    nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
+                    nativeMessages.Insert(0, new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = "[Context was compacted due to length. Earlier conversation history has been summarized.]",
+                        }},
+                    });
                     nativeMessages = EnsureAlternatingRoles(nativeMessages);
                     continue;
                 }
                 result.StopReason = "error";
-                result.FinalResponse = "Context too long. Please start a new session.";
+                result.FinalResponse = isThai
+                    ? "Context ยาวเกินไปแม้หลังบีบอัดแล้ว กรุณาเริ่ม session ใหม่"
+                    : "Context too long even after compaction. Please start a new session.";
                 break;
             }
 
@@ -1241,11 +1285,60 @@ public class CodeAgentService
 
             step.ResponseText = response.TextContent ?? "";
 
+            // ─── Max output token recovery ───
+            if (response.StopReason == "max_tokens" && maxTokenRecoveryCount < MaxOutputTokenRecoveries)
+            {
+                maxTokenRecoveryCount++;
+                OnAgentStatus?.Invoke(isThai
+                    ? $"คำตอบถูกตัด — กำลังขอต่อ... ({maxTokenRecoveryCount}/{MaxOutputTokenRecoveries})"
+                    : $"Response truncated — requesting continuation... ({maxTokenRecoveryCount}/{MaxOutputTokenRecoveries})");
+
+                // Add the partial response as assistant, then ask to continue
+                var partialAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                if (!string.IsNullOrEmpty(response.TextContent))
+                    partialAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = response.TextContent });
+                nativeMessages.Add(partialAssistant);
+                nativeMessages.Add(new Services.Providers.NativeMessage
+                {
+                    Role = "user",
+                    Content = { new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = "Your response was truncated due to max_tokens. Please continue from where you left off.",
+                    }},
+                });
+                nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                result.Steps.Add(step);
+                continue;
+            }
+
             // No tool calls = final response
             if (response.ToolCalls.Count == 0)
             {
+                // ─── Self-correction: validate code blocks in final response ───
+                string textContent = response.TextContent ?? "";
+                var validationFeedback = ValidateResponseCode(textContent);
+                if (validationFeedback != null && iteration < MaxAgentIterations - 1)
+                {
+                    // Code has issues — ask model to fix
+                    if (!string.IsNullOrWhiteSpace(textContent))
+                        OnThinkingUpdate?.Invoke(textContent, iteration + 1);
+                    result.Steps.Add(step);
+
+                    var codeFixAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    codeFixAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = textContent });
+                    nativeMessages.Add(codeFixAssistant);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock { Type = "text", Text = validationFeedback } },
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    continue; // re-generate
+                }
+
                 result.Steps.Add(step);
-                result.FinalResponse = response.TextContent ?? "";
+                result.FinalResponse = textContent;
                 result.Success = true;
                 result.StopReason = response.StopReason;
                 break;
@@ -1306,6 +1399,24 @@ public class CodeAgentService
                 progress?.Report(nativeCallStatus);
 
                 var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
+
+                // ─── Write validation for write/edit operations ───
+                if (call.Type is ToolType.WriteFile or ToolType.EditFile && toolResult.Success)
+                {
+                    var writeValidation = ValidateToolWrite(call);
+                    if (writeValidation != null)
+                    {
+                        toolResult = new ToolResult
+                        {
+                            ToolName = toolResult.ToolName,
+                            Type = toolResult.Type,
+                            Success = true,
+                            Output = toolResult.Output + $"\n⚠ Validation: {writeValidation}",
+                            Summary = toolResult.Summary + " (with warnings)",
+                        };
+                    }
+                }
+
                 lock (toolResults) { toolResults.Add(toolResult); }
                 OnToolExecuted?.Invoke(toolResult);
 

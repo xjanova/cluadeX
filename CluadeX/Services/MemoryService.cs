@@ -121,12 +121,14 @@ public class MemoryService
 
         File.Delete(filePath);
 
-        // Remove from MEMORY.md index
+        // Remove from MEMORY.md index — use exact markdown link target match
+        // e.g. "](filename.md)" to avoid accidentally removing unrelated lines
         string indexPath = Path.Combine(dir, "MEMORY.md");
         if (File.Exists(indexPath))
         {
+            string linkTarget = $"]({fileName})";
             var lines = File.ReadAllLines(indexPath)
-                .Where(l => !l.Contains($"({fileName})", StringComparison.OrdinalIgnoreCase))
+                .Where(l => !l.Contains(linkTarget, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             File.WriteAllLines(indexPath, lines);
         }

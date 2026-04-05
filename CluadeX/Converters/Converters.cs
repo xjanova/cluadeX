@@ -38,6 +38,7 @@ public class RoleToBrushConverter : IValueConverter
     private static readonly SolidColorBrush ExecBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)));
     private static readonly SolidColorBrush ToolBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x94, 0xE2, 0xD5)));
     private static readonly SolidColorBrush SystemBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xCB, 0xA6, 0xF7)));
+    private static readonly SolidColorBrush StatusBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x9C, 0x9C, 0xAC)));  // Overlay1 — muted
     private static readonly SolidColorBrush DefaultBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)));
     private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
 
@@ -49,6 +50,7 @@ public class RoleToBrushConverter : IValueConverter
             MessageRole.Assistant => AssistantBrush,
             MessageRole.CodeExecution => ExecBrush,
             MessageRole.ToolAction => ToolBrush,
+            MessageRole.AgentStatus => StatusBrush,
             MessageRole.System => SystemBrush,
             _ => DefaultBrush,
         };
@@ -64,6 +66,7 @@ public class RoleToBackgroundConverter : IValueConverter
     private static readonly SolidColorBrush AssistantBg = Freeze(new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44)));
     private static readonly SolidColorBrush ExecBg = Freeze(new SolidColorBrush(Color.FromRgb(0x3A, 0x35, 0x30)));
     private static readonly SolidColorBrush ToolBg = Freeze(new SolidColorBrush(Color.FromRgb(0x2D, 0x3A, 0x3E)));
+    private static readonly SolidColorBrush StatusBg = Freeze(new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x2E)));  // Base — near-transparent
     private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
 
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
@@ -74,6 +77,7 @@ public class RoleToBackgroundConverter : IValueConverter
             MessageRole.Assistant => AssistantBg,
             MessageRole.CodeExecution => ExecBg,
             MessageRole.ToolAction => ToolBg,
+            MessageRole.AgentStatus => StatusBg,
             _ => AssistantBg,
         };
     }
@@ -92,6 +96,7 @@ public class RoleToLabelConverter : IValueConverter
             MessageRole.Assistant => "\u2728 CluadeX",
             MessageRole.CodeExecution => "\u25B6 Execution",
             MessageRole.ToolAction => "\U0001F527 Tool",
+            MessageRole.AgentStatus => "\u2699 Agent",
             MessageRole.System => "\u2699 System",
             _ => "Unknown",
         };
@@ -119,6 +124,7 @@ public class RoleToMarginConverter : IValueConverter
         return value switch
         {
             MessageRole.User => new Thickness(100, 3, 12, 3),
+            MessageRole.AgentStatus => new Thickness(12, 1, 200, 1),  // compact, narrow
             _ => new Thickness(12, 3, 100, 3),
         };
     }

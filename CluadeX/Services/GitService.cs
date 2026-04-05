@@ -216,21 +216,34 @@ public class GitService
     /// <summary>git log with compact format.</summary>
     public async Task<GitResult> LogAsync(int count = 20, string format = "")
     {
-        string fmt = string.IsNullOrEmpty(format)
-            ? "--oneline --graph --decorate"
-            : $"--format=\"{format}\"";
+        string fmt;
+        if (string.IsNullOrEmpty(format))
+        {
+            fmt = "--oneline --graph --decorate";
+        }
+        else
+        {
+            // Validate format string — only allow git format placeholders, not shell metacharacters
+            if (!IsValidGitArg(format) || format.Contains('"'))
+                return new GitResult { Success = false, Error = "Invalid log format string." };
+            fmt = $"--format=\"{format}\"";
+        }
         return await RunGitAsync($"log {fmt} -n {count}");
     }
 
     /// <summary>git log for a specific file.</summary>
     public async Task<GitResult> LogFileAsync(string filePath, int count = 10)
     {
-        return await RunGitAsync($"log --oneline -n {count} -- {filePath}");
+        if (!IsValidGitArg(filePath))
+            return new GitResult { Success = false, Error = "Invalid file path characters." };
+        return await RunGitAsync($"log --oneline -n {count} -- \"{filePath}\"");
     }
 
     /// <summary>git show for a specific commit.</summary>
     public async Task<GitResult> ShowAsync(string commitHash)
     {
+        if (string.IsNullOrEmpty(commitHash) || !IsValidGitArg(commitHash))
+            return new GitResult { Success = false, Error = "Invalid commit hash." };
         return await RunGitAsync($"show {commitHash} --stat");
     }
 
@@ -247,7 +260,11 @@ public class GitService
     /// <summary>Add a remote.</summary>
     public async Task<GitResult> AddRemoteAsync(string name, string url)
     {
-        return await RunGitAsync($"remote add {name} {url}");
+        if (!IsValidGitArg(name))
+            return new GitResult { Success = false, Error = "Invalid remote name." };
+        if (!IsValidGitArg(url))
+            return new GitResult { Success = false, Error = "Invalid remote URL characters." };
+        return await RunGitAsync($"remote add {name} \"{url}\"");
     }
 
     /// <summary>Get the URL of a remote.</summary>
@@ -419,9 +436,14 @@ public class GitService
 
             try
             {
+                // Read stdout/stderr concurrently to avoid pipe buffer deadlock.
+                // If we await WaitForExitAsync first, the process may block filling
+                // the pipe buffer before exit, causing a deadlock.
+                var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+                var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
                 await process.WaitForExitAsync(cts.Token);
-                result.Output = await process.StandardOutput.ReadToEndAsync(cts.Token);
-                result.Error = await process.StandardError.ReadToEndAsync(cts.Token);
+                result.Output = await stdoutTask;
+                result.Error = await stderrTask;
                 result.ExitCode = process.ExitCode;
                 result.Success = process.ExitCode == 0;
             }

@@ -28,6 +28,19 @@ public class AgentToolService
     /// <summary>When set, only these tools can be called. Set by skill execution context. Null = all allowed.</summary>
     public List<string>? ActiveSkillAllowedTools { get; set; }
 
+    /// <summary>Returns list of available skill names + descriptions for system prompt injection.</summary>
+    public List<(string Name, string Description)> GetAvailableSkillNames()
+    {
+        try
+        {
+            return _skillService.GetAllSkills()
+                .Where(s => s.UserInvocable)
+                .Select(s => (s.Name, s.Description))
+                .ToList();
+        }
+        catch { return []; }
+    }
+
     // ─── TODO List State ───
     private readonly List<TodoItem> _todoItems = new();
     public IReadOnlyList<TodoItem> TodoItems => _todoItems;
@@ -302,6 +315,11 @@ public class AgentToolService
     }
 
     // ─── Format Tool Results for Model Feedback ───
+    /// <summary>
+    /// Format tool results for model feedback. Does NOT truncate — truncation is handled
+    /// by FormatToolResultsWithBudget() in CodeAgentService which applies per-tool (50K)
+    /// and aggregate (200K) budgets before calling this method.
+    /// </summary>
     public string FormatToolResults(List<ToolResult> results)
     {
         var sb = new StringBuilder();
@@ -312,11 +330,7 @@ public class AgentToolService
             sb.AppendLine($"--- {r.ToolName} ({(r.Success ? "OK" : "ERROR")}) ---");
             if (r.Success)
             {
-                string output = r.Output;
-                // Truncate very long outputs to keep context manageable
-                if (output.Length > 4000)
-                    output = output[..4000] + "\n... (truncated)";
-                sb.AppendLine(output);
+                sb.AppendLine(r.Output);
             }
             else
             {
@@ -1775,6 +1789,9 @@ public class AgentToolService
     // Git Worktree Tools
     // ════════════════════════════════════════════
 
+    private static readonly System.Text.RegularExpressions.Regex SafeBranchRegex = new(
+        @"^[a-zA-Z0-9_\-/.]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private async Task<ToolResult> ExecuteGitWorktreeCreateAsync(ToolCall call)
     {
         string branch = call.GetArg("branch", call.GetArg("name"));
@@ -1783,8 +1800,16 @@ public class AgentToolService
         if (string.IsNullOrEmpty(branch))
             return Fail(call, "Missing 'branch' argument");
 
+        // Validate branch name to prevent shell injection
+        if (!SafeBranchRegex.IsMatch(branch) || branch.Contains("..") || branch.Length > 255)
+            return Fail(call, "Invalid branch name. Use alphanumeric, hyphens, underscores, slashes only.");
+
         if (string.IsNullOrEmpty(path))
             path = $"../.worktrees/{branch}";
+
+        // Validate path too
+        if (path.Contains(';') || path.Contains('|') || path.Contains('&') || path.Contains('`') || path.Contains('$'))
+            return Fail(call, "Invalid path characters.");
 
         var r = await _gitService.RunGitAsync($"worktree add \"{path}\" -b \"{branch}\"");
         return GitToToolResult(call, r, $"Created worktree: {path} (branch: {branch})");
@@ -1795,6 +1820,10 @@ public class AgentToolService
         string path = call.GetArg("path", call.GetArg("name"));
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
+
+        // Validate path to prevent shell injection
+        if (path.Contains(';') || path.Contains('|') || path.Contains('&') || path.Contains('`') || path.Contains('$'))
+            return Fail(call, "Invalid path characters.");
 
         var r = await _gitService.RunGitAsync($"worktree remove \"{path}\" --force");
         return GitToToolResult(call, r, $"Removed worktree: {path}");
@@ -2349,6 +2378,14 @@ public class AgentToolService
 
         string args = call.GetArg("args", "");
 
+        // ─── Update AllowedTools constraint for nested skill execution ───
+        // When AI calls skill_invoke during an existing skill, the new skill's
+        // AllowedTools must be enforced. Otherwise constraints are silently bypassed.
+        if (skill.AllowedTools is { Count: > 0 })
+        {
+            ActiveSkillAllowedTools = skill.AllowedTools;
+        }
+
         // Build the skill prompt
         var prompt = new StringBuilder();
         prompt.AppendLine($"# Executing Skill: {skill.Name}");
@@ -2368,7 +2405,6 @@ public class AgentToolService
             Type = call.Type, ToolName = call.ToolName, Success = true,
             Output = prompt.ToString(),
             Summary = $"Skill '{skill.Name}' prompt loaded — execute it now",
-            // The caller (CodeAgentService) should feed this prompt back into the agentic loop
         };
     }
 

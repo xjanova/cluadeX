@@ -15,8 +15,8 @@ public class XmanLicenseService
     private readonly HttpClient _httpClient;
     private readonly SettingsService _settingsService;
 
-    private const string BaseUrl = "https://xman4289.com/api/v1/product/cluadex";
-    private const string ProductSlug = "cluadex";
+    private const string BaseUrl = "https://xman4289.com/api/v1/product/cluadex-ai-coding-assistant";
+    private const string ProductSlug = "cluadex-ai-coding-assistant";
 
     public event Action<string>? OnStatusChanged;
 
@@ -25,6 +25,7 @@ public class XmanLicenseService
         _settingsService = settingsService;
         _httpClient = new HttpClient();
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CluadeX/2.0");
+        _httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         _httpClient.Timeout = TimeSpan.FromSeconds(15);
     }
 
@@ -66,10 +67,12 @@ public class XmanLicenseService
         {
             OnStatusChanged?.Invoke("Activating license...");
 
+            var fingerprint = GetMachineFingerprint();
             var payload = new Dictionary<string, string>
             {
                 ["license_key"] = licenseKey.Trim(),
-                ["machine_id"] = GetMachineFingerprint(),
+                ["machine_id"] = fingerprint,
+                ["machine_fingerprint"] = fingerprint,
                 ["device_name"] = Environment.MachineName,
                 ["app_version"] = GetAppVersion(),
             };
@@ -166,6 +169,7 @@ public class XmanLicenseService
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/pricing");
+            request.Headers.Accept.ParseAdd("application/json");
             using var response = await _httpClient.SendAsync(request, ct);
             var json = await response.Content.ReadAsStringAsync(ct);
             var doc = JsonDocument.Parse(json);
