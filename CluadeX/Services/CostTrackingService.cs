@@ -108,22 +108,47 @@ public class CostTrackingService
     }
 
     /// <summary>Get per-model pricing (USD per million tokens).</summary>
+    /// <remarks>
+    /// Pricing updated April 2026. Based on Claude Code's utils/modelCost.ts.
+    /// Format: (InputPerMToken, OutputPerMToken, CacheReadPerMToken, CacheWritePerMToken)
+    /// Cache write = 1.25x input price; Cache read = 0.1x input price (Anthropic standard).
+    /// </remarks>
     private static ModelPricing GetPricing(string model)
     {
-        // Pricing as of 2025 (approximate)
-        return model switch
+        string m = model.ToLowerInvariant();
+        return m switch
         {
-            var m when m.Contains("opus") => new(15.0m, 75.0m, 1.5m, 18.75m),
-            var m when m.Contains("sonnet") => new(3.0m, 15.0m, 0.3m, 3.75m),
-            var m when m.Contains("haiku") => new(0.25m, 1.25m, 0.025m, 0.3m),
-            var m when m.Contains("gpt-4o-mini") => new(0.15m, 0.6m, 0m, 0m),
-            var m when m.Contains("gpt-4o") => new(2.5m, 10.0m, 0m, 0m),
-            var m when m.Contains("o1") => new(15.0m, 60.0m, 0m, 0m),
-            var m when m.Contains("o3") => new(10.0m, 40.0m, 0m, 0m),
-            var m when m.Contains("o4-mini") => new(1.10m, 4.40m, 0m, 0m),
-            var m when m.Contains("gemini-2.5-pro") => new(1.25m, 10.0m, 0m, 0m),
-            var m when m.Contains("gemini-2.5-flash") => new(0.15m, 0.6m, 0m, 0m),
-            _ => new(3.0m, 15.0m, 0.3m, 3.75m), // Default to Sonnet pricing
+            // ── Anthropic Models ──
+            // Opus 4/4.5/4.6: $15 input, $75 output
+            _ when m.Contains("opus") => new(15.0m, 75.0m, 1.5m, 18.75m),
+            // Sonnet 4/4.5/4.6: $3 input, $15 output
+            _ when m.Contains("sonnet") => new(3.0m, 15.0m, 0.3m, 3.75m),
+            // Haiku 4.5: $1 input, $5 output
+            _ when m.Contains("haiku-4") || m.Contains("haiku-3.5") => new(1.0m, 5.0m, 0.1m, 1.25m),
+            // Haiku 3 (legacy): $0.25 input, $1.25 output
+            _ when m.Contains("haiku") => new(0.25m, 1.25m, 0.025m, 0.3m),
+
+            // ── OpenAI Models ──
+            _ when m.Contains("gpt-4o-mini") => new(0.15m, 0.6m, 0m, 0m),
+            _ when m.Contains("gpt-4o") => new(2.5m, 10.0m, 0m, 0m),
+            _ when m.Contains("o4-mini") => new(1.10m, 4.40m, 0m, 0m),
+            _ when m.Contains("o3-mini") => new(1.10m, 4.40m, 0m, 0m),
+            _ when m.Contains("o3") => new(10.0m, 40.0m, 0m, 0m),
+            _ when m.Contains("o1-pro") => new(150.0m, 600.0m, 0m, 0m),
+            _ when m.Contains("o1") => new(15.0m, 60.0m, 0m, 0m),
+
+            // ── Google Gemini Models ──
+            _ when m.Contains("gemini-2.5-pro") => new(1.25m, 10.0m, 0m, 0m),
+            _ when m.Contains("gemini-2.5-flash") => new(0.15m, 0.6m, 0m, 0m),
+            _ when m.Contains("gemini-2.0") => new(0.10m, 0.40m, 0m, 0m),
+            _ when m.Contains("gemma") => new(0m, 0m, 0m, 0m), // Open-weight, free via API
+
+            // ── Local / Ollama (free) ──
+            _ when m.Contains("ollama") || m.Contains("local") || m.Contains("gguf")
+                => new(0m, 0m, 0m, 0m),
+
+            // Default to Sonnet pricing for unknown models
+            _ => new(3.0m, 15.0m, 0.3m, 3.75m),
         };
     }
 }

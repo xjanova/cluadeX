@@ -11,6 +11,10 @@ public class AnthropicProvider : ApiProviderBase
 {
     private readonly CostTrackingService? _costTracker;
 
+    // Pre-cached empty JSON object to avoid allocating a new JsonDocument on every tool_use block
+    private static readonly JsonElement _emptyJsonObject =
+        JsonDocument.Parse("{}").RootElement.Clone();
+
     public override string ProviderId => "Anthropic";
     public override string DisplayName => "Anthropic Claude";
 
@@ -365,7 +369,7 @@ public class AnthropicProvider : ApiProviderBase
                         ["type"] = "tool_use",
                         ["id"] = block.Id ?? "",
                         ["name"] = block.Name ?? "",
-                        ["input"] = block.Input ?? JsonDocument.Parse("{}").RootElement,
+                        ["input"] = block.Input ?? _emptyJsonObject,
                     },
                     "tool_result" => new Dictionary<string, object>
                     {
@@ -482,21 +486,29 @@ public class AnthropicProvider : ApiProviderBase
 
             foreach (var block in contentArray.EnumerateArray())
             {
-                string type = block.GetProperty("type").GetString() ?? "";
+                // Use TryGetProperty for safety — malformed blocks shouldn't crash parsing
+                if (!block.TryGetProperty("type", out var typeEl)) continue;
+                string type = typeEl.GetString() ?? "";
 
                 switch (type)
                 {
                     case "text":
-                        textParts.Add(block.GetProperty("text").GetString() ?? "");
+                        if (block.TryGetProperty("text", out var textEl))
+                            textParts.Add(textEl.GetString() ?? "");
                         break;
 
                     case "tool_use":
-                        result.ToolCalls.Add(new NativeToolCall
+                        if (block.TryGetProperty("id", out var idEl) &&
+                            block.TryGetProperty("name", out var nameEl) &&
+                            block.TryGetProperty("input", out var inputEl))
                         {
-                            Id = block.GetProperty("id").GetString() ?? "",
-                            Name = block.GetProperty("name").GetString() ?? "",
-                            Input = block.GetProperty("input").Clone(),
-                        });
+                            result.ToolCalls.Add(new NativeToolCall
+                            {
+                                Id = idEl.GetString() ?? "",
+                                Name = nameEl.GetString() ?? "",
+                                Input = inputEl.Clone(),
+                            });
+                        }
                         break;
 
                     case "thinking":

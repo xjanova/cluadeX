@@ -10,6 +10,7 @@ public enum MessageRole
     Assistant,
     CodeExecution,
     ToolAction,
+    AgentStatus,
 }
 
 public class ChatMessage : INotifyPropertyChanged

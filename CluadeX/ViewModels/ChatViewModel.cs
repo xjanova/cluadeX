@@ -57,6 +57,7 @@ public class ChatViewModel : ViewModelBase
     private readonly Stopwatch _generationStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
     private string _lastStatusBase = "";  // status without elapsed time suffix
+    private ChatMessage? _activeAgentStatusMsg;  // tracks the inline agent status for OnToolExecuted cleanup
     private int _streamingTokenCount;
 
     public ObservableCollection<ChatMessage> Messages { get; } = new();
@@ -799,6 +800,25 @@ public class ChatViewModel : ViewModelBase
                     skillPromptOverride += $"\n\nUser arguments: {skillArgs}";
                 input = skillPromptOverride;
             }
+            else if (skill != null && !skill.UserInvocable)
+            {
+                // Skill exists but not user-invocable — give feedback
+                StatusText = $"Skill '/{skillName}' is not available for direct invocation.";
+                return;
+            }
+            else if (skill == null && skillName.Length > 0)
+            {
+                // Skill not found — show available skills
+                var available = _skillService.GetAllSkills()
+                    .Where(s => s.UserInvocable)
+                    .Select(s => $"/{s.Name}")
+                    .ToList();
+                string skillList = available.Count > 0
+                    ? $"Available: {string.Join(", ", available)}"
+                    : "No skills available.";
+                StatusText = $"Unknown skill '/{skillName}'. {skillList}";
+                return;
+            }
         }
 
         var userMsg = new ChatMessage { Role = MessageRole.User, Content = input };
@@ -807,7 +827,12 @@ public class ChatViewModel : ViewModelBase
         UserInput = string.Empty;
         CanSend = false;
         IsGenerating = true;
-        StatusText = "Generating...";
+        // Use a random spinner verb instead of static "Generating..."
+        string initVerb = _agentService.GetRandomSpinnerVerb();
+        StatusText = $"{initVerb}...";
+        _lastStatusBase = $"{initVerb}...";
+        _generationStopwatch.Restart();
+        StartElapsedTimer();
         ScrollToBottom?.Invoke();
 
         _cts = new CancellationTokenSource();
@@ -852,6 +877,8 @@ public class ChatViewModel : ViewModelBase
 
             IsGenerating = false;
             CanSend = true;
+            _generationStopwatch.Stop();
+            StopElapsedTimer();
             _cts?.Dispose();
             _cts = null;
             UpdateContextInfo();
@@ -864,10 +891,52 @@ public class ChatViewModel : ViewModelBase
     // ─── Agentic Mode (tool use loop) ───
     private async Task RunAgentic(string input, CancellationToken ct)
     {
-        // Start elapsed time tracking
-        _generationStopwatch.Restart();
+        // Stopwatch & timer already started in SendMessage
         _streamingTokenCount = 0;
-        StartElapsedTimer();
+
+        // ─── Live agent status messages in chat area (Claude Code-style) ───
+        // Each tool execution gets its own inline status line that persists,
+        // showing verb + target + elapsed time with a pulsing spinner.
+        ChatMessage? agentStatusMsg = null;
+        Stopwatch? toolStopwatch = null;
+
+        void OnAgentStatusInChat(string status)
+        {
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                // Skip terminal statuses — don't show "Ready" in chat
+                if (status is "Ready" or "Done" || status.StartsWith("Ready ·"))
+                {
+                    // Finalize any active status message
+                    if (agentStatusMsg != null)
+                    {
+                        agentStatusMsg.IsStreaming = false;
+                        agentStatusMsg = null;
+                    }
+                    return;
+                }
+
+                // Finalize the PREVIOUS status message — so each status persists as its own line
+                if (agentStatusMsg != null)
+                    agentStatusMsg.IsStreaming = false;
+
+                // Start tracking tool elapsed time
+                toolStopwatch = Stopwatch.StartNew();
+                int totalElapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+                string displayStatus = totalElapsed > 1 ? $"{status}  ({totalElapsed}s)" : status;
+
+                // Create a NEW status message for this tool/step
+                agentStatusMsg = new ChatMessage
+                {
+                    Role = MessageRole.AgentStatus,
+                    Content = displayStatus,
+                    IsStreaming = true,
+                };
+                Messages.Add(agentStatusMsg);
+                _activeAgentStatusMsg = agentStatusMsg;  // sync for OnToolExecuted cleanup
+                ScrollToBottom?.Invoke();
+            });
+        }
 
         var progress = new Progress<string>(status =>
             App.Current?.Dispatcher.Invoke(() =>
@@ -946,9 +1015,21 @@ public class ChatViewModel : ViewModelBase
 
         _agentService.OnThinkingUpdate += OnThinking;
         _agentService.OnAgenticStreamingToken += OnStreamToken;
+        _agentService.OnAgentStatus += OnAgentStatusInChat;
         try
         {
             var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
+
+        // Remove live agent status message from chat
+        App.Current?.Dispatcher.Invoke(() =>
+        {
+            if (agentStatusMsg != null)
+            {
+                agentStatusMsg.IsStreaming = false;
+                Messages.Remove(agentStatusMsg);
+                agentStatusMsg = null;
+            }
+        });
 
         // Finalize streaming message
         App.Current?.Dispatcher.Invoke(() =>
@@ -1000,7 +1081,19 @@ public class ChatViewModel : ViewModelBase
         {
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
+            _agentService.OnAgentStatus -= OnAgentStatusInChat;
             StopElapsedTimer();
+            // Ensure status message is cleaned up on cancel/error too
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                if (agentStatusMsg != null)
+                {
+                    agentStatusMsg.IsStreaming = false;
+                    Messages.Remove(agentStatusMsg);
+                    agentStatusMsg = null;
+                }
+                _activeAgentStatusMsg = null;
+            });
         }
     }
 
@@ -1008,6 +1101,14 @@ public class ChatViewModel : ViewModelBase
     {
         App.Current?.Dispatcher.Invoke(() =>
         {
+            // Remove the active agent status message — the ToolAction result replaces it
+            // This prevents the status "Reading file..." from lingering alongside the result "✓ Read file"
+            if (_activeAgentStatusMsg != null)
+            {
+                Messages.Remove(_activeAgentStatusMsg);
+                _activeAgentStatusMsg = null;
+            }
+
             // Format arguments for display
             string? argsDisplay = null;
             string? inputSummary = null;
@@ -1181,17 +1282,37 @@ public class ChatViewModel : ViewModelBase
             App.Current?.Dispatcher.Invoke(() =>
             {
                 assistantMsg.Content = sb.ToString();
+
+                // Live status: token count + elapsed time
+                if (tokenCount % 15 == 0)
+                {
+                    int elapsed = (int)sw.Elapsed.TotalSeconds;
+                    double tps = elapsed > 0 ? tokenCount / (double)elapsed : 0;
+                    StatusText = tps > 0
+                        ? $"Generating... · {tokenCount} tokens · {elapsed}s · {tps:F0} tok/s"
+                        : $"Generating... · {tokenCount} tokens";
+                }
             });
-            ScrollToBottom?.Invoke();
+            if (tokenCount % 20 == 0)
+                ScrollToBottom?.Invoke();
         }
 
         sw.Stop();
 
-        // Finalize
+        // Finalize — use Ollama's accurate token counts when available
         App.Current?.Dispatcher.Invoke(() =>
         {
             assistantMsg.IsStreaming = false;
-            assistantMsg.TokenCount = tokenCount;
+
+            // Prefer provider's token counts (Ollama returns exact counts)
+            int finalTokenCount = tokenCount;
+            if (_providerManager.ActiveProvider is Services.Providers.OllamaProvider ollama
+                && ollama.LastCompletionTokens > 0)
+            {
+                finalTokenCount = ollama.LastCompletionTokens;
+            }
+
+            assistantMsg.TokenCount = finalTokenCount;
             assistantMsg.GenerationTimeMs = sw.ElapsedMilliseconds;
             string responseText = sb.ToString().Trim();
 
@@ -1209,8 +1330,8 @@ public class ChatViewModel : ViewModelBase
                 // Show per-turn stats
                 double tps = assistantMsg.TokensPerSecond;
                 double secs = sw.ElapsedMilliseconds / 1000.0;
-                StatusText = $"Ready · {tokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
-                LastTurnStats = $"{tokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
+                StatusText = $"Ready · {finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
+                LastTurnStats = $"{finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
             }
         });
 

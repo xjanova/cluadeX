@@ -31,10 +31,15 @@ public sealed class McpStdioTransport : IDisposable
     public event Action<string>? OnServerError; // stderr output
     public event Action<JsonRpcNotification>? OnNotification; // server→client notifications
 
-    /// <summary>Start the MCP server process.</summary>
-    public void Start(McpServerConfig config)
+    /// <summary>Collected stderr lines during startup for error diagnosis.</summary>
+    public string LastStartupError { get; private set; } = "";
+
+    /// <summary>Start the MCP server process and wait until the read loop is ready.</summary>
+    public async Task StartAsync(McpServerConfig config)
     {
         if (IsAlive) return;
+
+        LastStartupError = "";
 
         var psi = new ProcessStartInfo
         {
@@ -59,13 +64,23 @@ public sealed class McpStdioTransport : IDisposable
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _process.Exited += (_, _) => HandleProcessExit();
 
-        _process.Start();
+        try
+        {
+            _process.Start();
+        }
+        catch (Exception ex)
+        {
+            LastStartupError = $"Cannot start process: {ex.Message}";
+            _process.Dispose();
+            _process = null;
+            throw new InvalidOperationException(LastStartupError, ex);
+        }
 
         _writer = _process.StandardInput;
         _writer.AutoFlush = true;
         _reader = _process.StandardOutput;
 
-        // Read stderr in background for diagnostics
+        // Read stderr in background — capture early errors for diagnosis
         _ = Task.Run(async () =>
         {
             try
@@ -73,15 +88,34 @@ public sealed class McpStdioTransport : IDisposable
                 while (_process is { HasExited: false })
                 {
                     string? line = await _process.StandardError.ReadLineAsync();
-                    if (line != null) OnServerError?.Invoke(line);
+                    if (line != null)
+                    {
+                        LastStartupError += line + "\n";
+                        OnServerError?.Invoke(line);
+                    }
                 }
             }
             catch { }
         });
 
-        // Start reading responses
+        // Start reading responses — use a signal to ensure it's ready before returning
         _readCts = new CancellationTokenSource();
-        _ = Task.Run(() => ReadLoopAsync(_readCts.Token));
+        var readLoopReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Run(() => ReadLoopAsync(_readCts.Token, readLoopReady));
+
+        // Wait for read loop to be ready (max 2s) — prevents race condition
+        await Task.WhenAny(readLoopReady.Task, Task.Delay(2000));
+
+        // Verify process is still alive after starting
+        if (_process.HasExited)
+        {
+            string errInfo = LastStartupError.Length > 0
+                ? LastStartupError.Trim()
+                : $"Process exited immediately with code {_process.ExitCode}";
+            _process.Dispose();
+            _process = null;
+            throw new InvalidOperationException($"Server process died on startup: {errInfo}");
+        }
     }
 
     /// <summary>Send a JSON-RPC request and wait for the response.</summary>
@@ -173,12 +207,20 @@ public sealed class McpStdioTransport : IDisposable
 
     // ─── Internal ───
 
-    private async Task ReadLoopAsync(CancellationToken ct)
+    private async Task ReadLoopAsync(CancellationToken ct, TaskCompletionSource? readySignal = null)
     {
-        if (_reader == null) return;
+        if (_reader == null)
+        {
+            readySignal?.TrySetResult();
+            return;
+        }
 
         try
         {
+            // Signal ready AFTER entering the read loop — prevents race condition
+            // where requests are sent before the loop is actually reading.
+            readySignal?.TrySetResult();
+
             while (!ct.IsCancellationRequested && IsAlive)
             {
                 string? line = await _reader.ReadLineAsync(ct);
@@ -241,6 +283,28 @@ public sealed class McpStdioTransport : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        StopAsync().Wait(5000);
+        // Use async-safe pattern to avoid blocking the finalizer thread.
+        // StopAsync().Wait() can deadlock if called from a sync context with SynchronizationContext.
+        try
+        {
+            _readCts?.Cancel();
+            if (_process is { HasExited: false })
+            {
+                try { _process.Kill(true); } catch { }
+            }
+            _process?.Dispose();
+            _process = null;
+            _readCts?.Dispose();
+            _readCts = null;
+
+            // Fail all pending requests
+            lock (_lock)
+            {
+                foreach (var (_, tcs) in _pending)
+                    tcs.TrySetCanceled();
+                _pending.Clear();
+            }
+        }
+        catch { }
     }
 }

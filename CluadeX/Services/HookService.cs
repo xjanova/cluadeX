@@ -107,9 +107,19 @@ public class HookService
         string command = hook.Command;
 
         // Variable substitution — sanitize values to prevent command injection
+        // Supports {tool}, {path}, {command}, {arguments} (full JSON of all args)
         command = command.Replace("{tool}", SanitizeShellArg(call.ToolName));
         command = command.Replace("{path}", SanitizeShellArg(call.GetArg("path", "")));
         command = command.Replace("{command}", SanitizeShellArg(call.GetArg("command", "")));
+        if (command.Contains("{arguments}"))
+        {
+            try
+            {
+                string argsJson = System.Text.Json.JsonSerializer.Serialize(call.Arguments);
+                command = command.Replace("{arguments}", SanitizeShellArg(argsJson));
+            }
+            catch { command = command.Replace("{arguments}", "{}"); }
+        }
 
         Process? proc = null;
         try
@@ -248,25 +258,33 @@ public class HookService
     /// <summary>Clear cached hooks (for reload).</summary>
     public void ReloadHooks() => _cachedHooks = null;
 
-    /// <summary>Sanitize a value for safe shell argument insertion (prevent injection).</summary>
+    /// <summary>
+    /// Sanitize a value for safe shell argument insertion (prevent injection).
+    /// Uses proper escaping instead of stripping — preserves paths with spaces.
+    /// </summary>
     private static string SanitizeShellArg(string value)
     {
-        // Remove shell metacharacters that could allow injection
-        return value
-            .Replace("&", "")
-            .Replace("|", "")
-            .Replace(";", "")
-            .Replace("`", "")
-            .Replace("$(", "")
-            .Replace("$", "")
-            .Replace("%", "")  // Windows env var expansion
-            .Replace("<", "")
-            .Replace(">", "")
-            .Replace("\"", "")
-            .Replace("'", "")
-            .Replace("^", "")  // Windows cmd escape character
-            .Replace("\n", " ")
+        // Remove dangerous metacharacters that enable injection
+        var sanitized = value
+            .Replace("`", "")       // Backtick execution
+            .Replace("$(", "")      // Subshell expansion
+            .Replace("$", "")       // Variable expansion
+            .Replace("%", "")       // Windows env var expansion (%PATH%)
+            .Replace("^", "")       // Windows cmd escape character
+            .Replace("\n", " ")     // Newline injection
             .Replace("\r", "");
+
+        // Escape remaining metacharacters instead of removing them
+        // This preserves paths with spaces while blocking injection
+        sanitized = sanitized
+            .Replace("\"", "\\\"")  // Escape double quotes
+            .Replace("&", "^&")     // Escape ampersand (Windows)
+            .Replace("|", "^|")     // Escape pipe (Windows)
+            .Replace("<", "^<")     // Escape redirect
+            .Replace(">", "^>")     // Escape redirect
+            .Replace(";", "");      // Remove semicolons (cmd chaining)
+
+        return sanitized;
     }
 }
 
