@@ -268,6 +268,7 @@ public class ChatViewModel : ViewModelBase
 
         // Listen for tool execution events
         _agentService.OnToolExecuted += OnToolExecuted;
+        _agentService.OnToolStarting += OnToolStarting;
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;
@@ -899,48 +900,13 @@ public class ChatViewModel : ViewModelBase
         // Stopwatch & timer already started in SendMessage
         _streamingTokenCount = 0;
 
-        // ─── Live agent status messages in chat area (Claude Code-style) ───
-        // Each tool/step gets its own inline status line that persists.
-        // Uses the progress callback (which is proven to work via StatusBar)
-        // to also add inline messages to the chat.
-        ChatMessage? agentStatusMsg = null;
-
+        // ─── Status bar updates via progress callback ───
         var progress = new Progress<string>(status =>
-            App.Current?.Dispatcher.Invoke(() =>
-            {
-                // Always update the status bar
-                _lastStatusBase = status;
-                int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
-                StatusText = elapsed > 0 ? $"{status} ({elapsed}s)" : status;
-
-                // Skip terminal statuses for inline display
-                if (status is "Ready" or "Done" || status.StartsWith("Ready ·"))
-                {
-                    if (agentStatusMsg != null)
-                    {
-                        agentStatusMsg.IsStreaming = false;
-                        agentStatusMsg = null;
-                        _activeAgentStatusMsg = null;
-                    }
-                    return;
-                }
-
-                // Finalize previous inline status (stop its spinner)
-                if (agentStatusMsg != null)
-                    agentStatusMsg.IsStreaming = false;
-
-                // Create a NEW inline status message for this tool/step
-                string displayStatus = elapsed > 1 ? $"{status}  ({elapsed}s)" : status;
-                agentStatusMsg = new ChatMessage
-                {
-                    Role = MessageRole.AgentStatus,
-                    Content = displayStatus,
-                    IsStreaming = true,
-                };
-                Messages.Add(agentStatusMsg);
-                _activeAgentStatusMsg = agentStatusMsg;
-                ScrollToBottom?.Invoke();
-            }));
+        {
+            _lastStatusBase = status;
+            int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+            StatusText = elapsed > 0 ? $"{status} ({elapsed}s)" : status;
+        });
 
         var history = CurrentSession?.Messages
             .Where(m => m.Role is MessageRole.User or MessageRole.Assistant or MessageRole.ToolAction)
@@ -1015,13 +981,12 @@ public class ChatViewModel : ViewModelBase
         {
             var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
 
-        // Finalize the last status message (stop spinner, but keep visible as breadcrumb)
+        // Finalize any remaining inline status
         App.Current?.Dispatcher.Invoke(() =>
         {
-            if (agentStatusMsg != null)
+            if (_activeAgentStatusMsg != null)
             {
-                agentStatusMsg.IsStreaming = false;
-                agentStatusMsg = null;
+                _activeAgentStatusMsg.IsStreaming = false;
                 _activeAgentStatusMsg = null;
             }
         });
@@ -1077,17 +1042,43 @@ public class ChatViewModel : ViewModelBase
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
             StopElapsedTimer();
-            // Ensure status message is cleaned up on cancel/error too
+            // Ensure inline status is finalized on cancel/error
             App.Current?.Dispatcher.Invoke(() =>
             {
-                if (agentStatusMsg != null)
+                if (_activeAgentStatusMsg != null)
                 {
-                    agentStatusMsg.IsStreaming = false;
-                    agentStatusMsg = null;
+                    _activeAgentStatusMsg.IsStreaming = false;
+                    _activeAgentStatusMsg = null;
                 }
-                _activeAgentStatusMsg = null;
             });
         }
+    }
+
+    /// <summary>
+    /// Called when a tool is ABOUT to execute. Shows inline status in chat.
+    /// Uses the same BeginInvoke pattern as OnToolExecuted (which is proven to work).
+    /// </summary>
+    private void OnToolStarting(string toolName, string statusMessage)
+    {
+        App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            // Finalize previous status (stop spinner)
+            if (_activeAgentStatusMsg != null)
+                _activeAgentStatusMsg.IsStreaming = false;
+
+            int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+            string display = elapsed > 1 ? $"{statusMessage}  ({elapsed}s)" : statusMessage;
+
+            var statusMsg = new ChatMessage
+            {
+                Role = MessageRole.AgentStatus,
+                Content = display,
+                IsStreaming = true,
+            };
+            Messages.Add(statusMsg);
+            _activeAgentStatusMsg = statusMsg;
+            ScrollToBottom?.Invoke();
+        });
     }
 
     private void OnToolExecuted(ToolResult toolResult)

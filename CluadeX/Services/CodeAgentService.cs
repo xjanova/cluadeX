@@ -497,6 +497,9 @@ public class CodeAgentService
     /// <summary>Fires when a tool action completes (for adding to chat UI).</summary>
     public event Action<ToolResult>? OnToolExecuted;
 
+    /// <summary>Fires right before a tool starts executing (for inline status display).</summary>
+    public event Action<string, string>? OnToolStarting; // toolName, statusMessage
+
     /// <summary>Fires when the agent produces thinking/reasoning text (real-time display).</summary>
     public event Action<string, int>? OnThinkingUpdate; // text, stepNumber
 
@@ -1018,6 +1021,12 @@ public class CodeAgentService
         if (concurrent.Count > 0)
         {
             progress?.Report($"Running {concurrent.Count} read tool(s) in parallel...");
+            // Fire OnToolStarting for each concurrent tool
+            foreach (var call in concurrent)
+            {
+                string callStatus = GetToolStatusMessage(call.ToolName, call.Arguments);
+                OnToolStarting?.Invoke(call.ToolName, callStatus);
+            }
             var parallelTasks = concurrent.Select(async call =>
             {
                 ct.ThrowIfCancellationRequested();
@@ -1036,6 +1045,7 @@ public class CodeAgentService
             string callStatus = GetToolStatusMessage(call.ToolName, call.Arguments);
             progress?.Report(callStatus);
             OnAgentStatus?.Invoke(callStatus);
+            OnToolStarting?.Invoke(call.ToolName, callStatus);
 
             var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
 
@@ -1397,6 +1407,7 @@ public class CodeAgentService
                 string nativeCallStatus = GetToolStatusMessage(toolCall.Name, call.Arguments);
                 OnAgentStatus?.Invoke(nativeCallStatus);
                 progress?.Report(nativeCallStatus);
+                OnToolStarting?.Invoke(toolCall.Name, nativeCallStatus);
 
                 var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
 
