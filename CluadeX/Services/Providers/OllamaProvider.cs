@@ -42,8 +42,7 @@ public class OllamaProvider : ApiProviderBase
         try
         {
             using var response = await _httpClient.GetAsync($"{baseUrl}/api/tags", ct);
-            if (!response.IsSuccessStatusCode)
-                return _availableModels.ToList();
+            response.EnsureSuccessStatusCode();
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);

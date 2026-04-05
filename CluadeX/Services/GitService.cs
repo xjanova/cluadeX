@@ -91,6 +91,10 @@ public class GitService
     /// <summary>git push (with optional remote and branch)</summary>
     public async Task<GitResult> PushAsync(string remote = "", string branch = "")
     {
+        if (!string.IsNullOrEmpty(remote) && !IsValidGitArg(remote))
+            return new GitResult { Success = false, Error = "Invalid remote name" };
+        if (!string.IsNullOrEmpty(branch) && !IsValidGitArg(branch))
+            return new GitResult { Success = false, Error = "Invalid branch name" };
         string args = "push";
         if (!string.IsNullOrEmpty(remote)) args += $" {remote}";
         if (!string.IsNullOrEmpty(branch)) args += $" {branch}";
@@ -100,13 +104,21 @@ public class GitService
     /// <summary>git push with set-upstream for new branches.</summary>
     public async Task<GitResult> PushSetUpstreamAsync(string remote = "origin", string? branch = null)
     {
+        if (!IsValidGitArg(remote))
+            return new GitResult { Success = false, Error = "Invalid remote name" };
         branch ??= (await GetCurrentBranchAsync()).Output.Trim();
+        if (!string.IsNullOrEmpty(branch) && !IsValidGitArg(branch))
+            return new GitResult { Success = false, Error = "Invalid branch name" };
         return await RunGitAsync($"push -u {remote} {branch}");
     }
 
     /// <summary>git pull (with optional remote and branch)</summary>
     public async Task<GitResult> PullAsync(string remote = "", string branch = "")
     {
+        if (!string.IsNullOrEmpty(remote) && !IsValidGitArg(remote))
+            return new GitResult { Success = false, Error = "Invalid remote name" };
+        if (!string.IsNullOrEmpty(branch) && !IsValidGitArg(branch))
+            return new GitResult { Success = false, Error = "Invalid branch name" };
         string args = "pull";
         if (!string.IsNullOrEmpty(remote)) args += $" {remote}";
         if (!string.IsNullOrEmpty(branch)) args += $" {branch}";
@@ -116,6 +128,8 @@ public class GitService
     /// <summary>git fetch (all remotes)</summary>
     public async Task<GitResult> FetchAsync(string remote = "--all")
     {
+        if (!IsValidGitArg(remote))
+            return new GitResult { Success = false, Error = "Invalid remote name" };
         return await RunGitAsync($"fetch {remote}");
     }
 

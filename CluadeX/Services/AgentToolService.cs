@@ -407,6 +407,7 @@ public class AgentToolService
             schemas.Add(new() { Name = "gh_pr_list", Description = "List pull requests", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "gh_issue_create", Description = "Create a GitHub issue", InputSchema = MakeSchema(("title", "string", "Issue title", true), ("body", "string", "Issue body", false)) });
             schemas.Add(new() { Name = "gh_issue_list", Description = "List issues", InputSchema = MakeSchema() });
+            schemas.Add(new() { Name = "gh_repo_view", Description = "View repository info", InputSchema = MakeSchema(("repo", "string", "Repository (owner/name)", false)) });
         }
 
         // Web tools
@@ -1225,7 +1226,10 @@ public class AgentToolService
 
     private async Task<ToolResult> ExecuteGitAddAsync(ToolCall call)
     {
-        string path = call.GetArg("path", ".");
+        // Accept both "paths" (native schema) and "path" (legacy) for compatibility
+        string path = call.GetArg("paths", "");
+        if (string.IsNullOrEmpty(path))
+            path = call.GetArg("path", ".");
         var r = await _gitService.AddAsync(path);
         return GitToToolResult(call, r, $"Staged: {path}");
     }

@@ -11,8 +11,9 @@ namespace CluadeX.Services;
 /// before/after tool execution.
 ///
 /// Hook sources:
-///   - settings.json (user-configured)
 ///   - .cluadex/hooks.json (project-specific)
+///   - ~/.cluadex/hooks.json (user-global)
+///   - Enabled plugin hooks.json files
 ///
 /// Hook config format:
 /// {
@@ -184,19 +185,16 @@ public class HookService
         // Enabled plugin hooks (from {plugins_dir}/{plugin_id}/hooks.json)
         try
         {
-            var enabledPlugins = _pluginService.GetEnabledPlugins();
+            var enabledPlugins = new HashSet<string>(_pluginService.GetEnabledPlugins(), StringComparer.OrdinalIgnoreCase);
             string pluginsDir = Path.Combine(_settingsService.DataRoot, "plugins");
-            foreach (var pluginName in enabledPlugins)
+            if (Directory.Exists(pluginsDir))
             {
-                // Find plugin directory by scanning subdirectories
-                if (!Directory.Exists(pluginsDir)) continue;
                 foreach (var dir in Directory.GetDirectories(pluginsDir))
                 {
                     string pluginHooksFile = Path.Combine(dir, "hooks.json");
                     string manifestFile = Path.Combine(dir, "manifest.json");
                     if (!File.Exists(pluginHooksFile) || !File.Exists(manifestFile)) continue;
 
-                    // Check if this plugin's name matches an enabled plugin
                     try
                     {
                         var manifestJson = File.ReadAllText(manifestFile);
@@ -261,10 +259,12 @@ public class HookService
             .Replace("`", "")
             .Replace("$(", "")
             .Replace("$", "")
+            .Replace("%", "")  // Windows env var expansion
             .Replace("<", "")
             .Replace(">", "")
             .Replace("\"", "")
             .Replace("'", "")
+            .Replace("^", "")  // Windows cmd escape character
             .Replace("\n", " ")
             .Replace("\r", "");
     }

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows.Input;
@@ -53,6 +54,10 @@ public class ChatViewModel : ViewModelBase
     private bool _isLoadingModel;
     private bool _showContextWarning;
     private string _contextWarningText = "";
+    private readonly Stopwatch _generationStopwatch = new();
+    private DispatcherTimer? _elapsedTimer;
+    private string _lastStatusBase = "";  // status without elapsed time suffix
+    private int _streamingTokenCount;
 
     public ObservableCollection<ChatMessage> Messages { get; } = new();
     public ObservableCollection<ChatSession> Sessions { get; } = new();
@@ -859,8 +864,18 @@ public class ChatViewModel : ViewModelBase
     // ─── Agentic Mode (tool use loop) ───
     private async Task RunAgentic(string input, CancellationToken ct)
     {
+        // Start elapsed time tracking
+        _generationStopwatch.Restart();
+        _streamingTokenCount = 0;
+        StartElapsedTimer();
+
         var progress = new Progress<string>(status =>
-            App.Current?.Dispatcher.Invoke(() => StatusText = status));
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                _lastStatusBase = status;
+                int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+                StatusText = elapsed > 0 ? $"{status} ({elapsed}s)" : status;
+            }));
 
         var history = CurrentSession?.Messages
             .Where(m => m.Role is MessageRole.User or MessageRole.Assistant or MessageRole.ToolAction)
@@ -895,6 +910,16 @@ public class ChatViewModel : ViewModelBase
 
                 if (streamingMsg != null)
                     streamingMsg.Content += token;
+
+                // Track streaming tokens and update status
+                _streamingTokenCount++;
+                if (_streamingTokenCount % 25 == 0)
+                {
+                    int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+                    StatusText = elapsed > 0
+                        ? $"Generating... · {_streamingTokenCount} tokens · {elapsed}s"
+                        : $"Generating... · {_streamingTokenCount} tokens";
+                }
 
                 // Throttle scroll-to-bottom (every 20 tokens)
                 if (++scrollThrottle % 20 == 0)
@@ -958,13 +983,24 @@ public class ChatViewModel : ViewModelBase
             }
         }
 
-        StatusText = result.Success ? "Ready" : "Agent loop complete";
+        // Show completion stats with elapsed time and token count
+        _generationStopwatch.Stop();
+        StopElapsedTimer();
+        double totalSecs = _generationStopwatch.Elapsed.TotalSeconds;
+        int turns = result.TurnCount;
+        int toolCount = result.Steps.Sum(s => s.ToolResults?.Count ?? 0);
+        string statsLine = $"Ready · {totalSecs:F1}s";
+        if (toolCount > 0) statsLine += $" · {toolCount} tools";
+        if (turns > 1) statsLine += $" · {turns} steps";
+        if (_streamingTokenCount > 0) statsLine += $" · {_streamingTokenCount} tokens";
+        StatusText = result.Success ? statsLine : "Agent loop complete";
         ScrollToBottom?.Invoke();
         }
         finally
         {
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
+            StopElapsedTimer();
         }
     }
 
@@ -1001,12 +1037,16 @@ public class ChatViewModel : ViewModelBase
                 ? 0
                 : toolResult.Output.Split('\n').Length;
 
+            // Build a human-readable tool display name
+            // e.g. "Read src/main.cs" instead of just "read_file"
+            string displayName = FormatToolDisplayName(toolResult.ToolName, toolResult.Arguments);
+
             var msg = new ChatMessage
             {
                 Role = MessageRole.ToolAction,
-                Content = toolResult.Summary,
-                ToolName = toolResult.ToolName,
-                ToolSummary = toolResult.Summary,
+                Content = !string.IsNullOrEmpty(toolResult.Summary) ? toolResult.Summary : displayName,
+                ToolName = displayName,
+                ToolSummary = !string.IsNullOrEmpty(toolResult.Summary) ? toolResult.Summary : displayName,
                 ToolOutput = toolResult.Output,
                 ToolSuccess = toolResult.Success,
                 HasError = !toolResult.Success,
@@ -1018,6 +1058,99 @@ public class ChatViewModel : ViewModelBase
             CurrentSession?.Messages.Add(msg);
             ScrollToBottom?.Invoke();
         });
+    }
+
+    // ─── Tool Display Name Formatting ───
+    // Maps tool names to past-tense verbs for chat bubble display
+    private static readonly Dictionary<string, string> ToolDisplayVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["read_file"] = "Read",
+        ["write_file"] = "Wrote",
+        ["edit_file"] = "Edited",
+        ["list_files"] = "Listed",
+        ["search_files"] = "Searched",
+        ["search_content"] = "Searched",
+        ["glob"] = "Found",
+        ["grep"] = "Searched",
+        ["run_command"] = "Ran",
+        ["powershell"] = "Ran PowerShell",
+        ["git_status"] = "git status",
+        ["git_diff"] = "git diff",
+        ["git_log"] = "git log",
+        ["git_commit"] = "Committed",
+        ["git_push"] = "Pushed",
+        ["git_pull"] = "Pulled",
+        ["git_clone"] = "Cloned",
+        ["git_init"] = "Initialized",
+        ["git_checkout"] = "Checked out",
+        ["git_branch"] = "Branched",
+        ["git_add"] = "Staged",
+        ["git_stash"] = "Stashed",
+        ["web_fetch"] = "Fetched",
+        ["web_search"] = "Web search",
+        ["notebook_edit"] = "Edited notebook",
+        ["memory_save"] = "Saved memory",
+        ["memory_list"] = "Listed memories",
+        ["memory_delete"] = "Deleted memory",
+        ["skill_invoke"] = "Invoked skill",
+        ["ask_user"] = "Asked user",
+        ["create_directory"] = "Created directory",
+        ["repl"] = "REPL",
+        ["todo_write"] = "Updated tasks",
+        ["agent_spawn"] = "Spawned agent",
+    };
+
+    private static string FormatToolDisplayName(string toolName, Dictionary<string, string>? args)
+    {
+        string verb = ToolDisplayVerbs.GetValueOrDefault(toolName, toolName);
+
+        string? target = null;
+        if (args != null)
+        {
+            target = args.GetValueOrDefault("path")
+                  ?? args.GetValueOrDefault("file_path")
+                  ?? args.GetValueOrDefault("pattern")
+                  ?? args.GetValueOrDefault("url")
+                  ?? args.GetValueOrDefault("query")
+                  ?? args.GetValueOrDefault("skill")
+                  ?? args.GetValueOrDefault("branch");
+
+            if (target == null && args.TryGetValue("command", out var cmd))
+                target = cmd.Length > 50 ? cmd[..50] + "..." : cmd;
+        }
+
+        if (!string.IsNullOrEmpty(target))
+        {
+            if (target.Contains('/') || target.Contains('\\'))
+            {
+                string fileName = Path.GetFileName(target);
+                if (!string.IsNullOrEmpty(fileName))
+                    target = fileName;
+            }
+            return $"{verb} {target}";
+        }
+        return verb;
+    }
+
+    // ─── Elapsed Time Timer ───
+    private void StartElapsedTimer()
+    {
+        StopElapsedTimer();
+        _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _elapsedTimer.Tick += (_, _) =>
+        {
+            if (!_generationStopwatch.IsRunning || !IsGenerating) return;
+            int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+            if (!string.IsNullOrEmpty(_lastStatusBase))
+                StatusText = $"{_lastStatusBase} ({elapsed}s)";
+        };
+        _elapsedTimer.Start();
+    }
+
+    private void StopElapsedTimer()
+    {
+        _elapsedTimer?.Stop();
+        _elapsedTimer = null;
     }
 
     // ─── Streaming Mode ───

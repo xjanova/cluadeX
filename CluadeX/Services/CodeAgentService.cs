@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Text;
 using CluadeX.Models;
@@ -358,6 +359,118 @@ public class CodeAgentService
     }
 
     private const int MaxRetries = 2;
+
+    // ─── Claude Code-style Tool Verb Mapping ────────────────────────
+    // Maps tool names to human-readable verbs for status display.
+    // Pattern from Claude Code: sessionRunner.ts TOOL_VERBS
+    private static readonly Dictionary<string, string> ToolVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["read_file"] = "Reading",
+        ["write_file"] = "Writing",
+        ["edit_file"] = "Editing",
+        ["list_files"] = "Listing",
+        ["search_files"] = "Searching",
+        ["search_content"] = "Searching",
+        ["glob"] = "Searching",
+        ["grep"] = "Searching",
+        ["run_command"] = "Running",
+        ["powershell"] = "Running PowerShell",
+        ["git_status"] = "Checking git status",
+        ["git_diff"] = "Diffing",
+        ["git_log"] = "Reading git log",
+        ["git_commit"] = "Committing",
+        ["git_push"] = "Pushing",
+        ["git_pull"] = "Pulling",
+        ["git_clone"] = "Cloning",
+        ["git_init"] = "Initializing repo",
+        ["git_checkout"] = "Switching branch",
+        ["git_branch"] = "Branching",
+        ["git_add"] = "Staging",
+        ["git_stash"] = "Stashing",
+        ["git_worktree_create"] = "Creating worktree",
+        ["git_worktree_remove"] = "Removing worktree",
+        ["gh_pr_create"] = "Creating PR",
+        ["gh_pr_list"] = "Listing PRs",
+        ["gh_issue_create"] = "Creating issue",
+        ["gh_issue_list"] = "Listing issues",
+        ["gh_repo_view"] = "Viewing repo",
+        ["web_fetch"] = "Fetching",
+        ["web_search"] = "Searching web",
+        ["notebook_edit"] = "Editing notebook",
+        ["memory_save"] = "Saving memory",
+        ["memory_list"] = "Listing memories",
+        ["memory_delete"] = "Deleting memory",
+        ["skill_invoke"] = "Invoking skill",
+        ["ask_user"] = "Asking user",
+        ["create_directory"] = "Creating directory",
+        ["repl"] = "Running REPL",
+        ["todo_write"] = "Updating tasks",
+        ["plan_mode"] = "Planning",
+        ["agent_spawn"] = "Spawning agent",
+        ["config"] = "Reading config",
+    };
+
+    // Random spinner verbs for the thinking phase (inspired by Claude Code spinnerVerbs.ts)
+    private static readonly string[] SpinnerVerbs =
+    [
+        "Thinking", "Reasoning", "Analyzing", "Processing", "Computing",
+        "Evaluating", "Considering", "Formulating", "Crafting", "Brewing",
+        "Contemplating", "Architecting", "Calculating", "Synthesizing",
+        "Assembling", "Preparing", "Working", "Pondering",
+    ];
+
+    private static readonly string[] SpinnerVerbsTh =
+    [
+        "กำลังคิด", "กำลังวิเคราะห์", "กำลังประมวลผล", "กำลังพิจารณา",
+        "กำลังสังเคราะห์", "กำลังเตรียม", "กำลังสร้าง", "กำลังวางแผน",
+    ];
+
+    /// <summary>
+    /// Builds a human-readable status message for a tool execution.
+    /// E.g., "Reading main.cs" or "Running npm install" instead of "Tool: read_file..."
+    /// </summary>
+    private static string GetToolStatusMessage(string toolName, Dictionary<string, string>? args)
+    {
+        string verb = ToolVerbs.GetValueOrDefault(toolName, toolName);
+
+        // Extract the most relevant target from arguments
+        string? target = null;
+        if (args != null)
+        {
+            target = args.GetValueOrDefault("path")
+                  ?? args.GetValueOrDefault("file_path")
+                  ?? args.GetValueOrDefault("pattern")
+                  ?? args.GetValueOrDefault("url")
+                  ?? args.GetValueOrDefault("query")
+                  ?? args.GetValueOrDefault("skill")
+                  ?? args.GetValueOrDefault("branch")
+                  ?? args.GetValueOrDefault("notebook_path");
+
+            // For commands, take first 60 chars
+            if (target == null && args.TryGetValue("command", out var cmd))
+                target = cmd.Length > 60 ? cmd[..60] + "..." : cmd;
+        }
+
+        if (!string.IsNullOrEmpty(target))
+        {
+            // For file paths, show just the filename for brevity
+            if (target.Contains('/') || target.Contains('\\'))
+            {
+                string fileName = Path.GetFileName(target);
+                if (!string.IsNullOrEmpty(fileName))
+                    target = fileName;
+            }
+            return $"{verb} {target}";
+        }
+        return $"{verb}...";
+    }
+
+    private string GetRandomSpinnerVerb()
+    {
+        bool isThai = _localizationService.CurrentLanguage == "th";
+        var verbs = isThai ? SpinnerVerbsTh : SpinnerVerbs;
+        return verbs[Random.Shared.Next(verbs.Length)];
+    }
 
     /// <summary>Fires when the agent wants to report status to the UI.</summary>
     public event Action<string>? OnAgentStatus;
@@ -734,12 +847,12 @@ public class CodeAgentService
 
             // ─── Generate response with retry ───
             bool isThai = _localizationService.CurrentLanguage == "th";
-            progress?.Report(iteration == 0
-                ? (isThai ? "กำลังคิด..." : "Thinking...")
-                : (isThai ? $"กำลังดำเนินการต่อ... (ขั้นที่ {iteration + 1}/{MaxAgentIterations})" : $"Step {iteration + 1}/{MaxAgentIterations}..."));
-            OnAgentStatus?.Invoke(iteration == 0
-                ? (isThai ? "กำลังคิด..." : "Thinking...")
-                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations}..." : $"Step {iteration + 1}/{MaxAgentIterations}..."));
+            string thinkVerb = GetRandomSpinnerVerb();
+            string stepStatus = iteration == 0
+                ? $"{thinkVerb}..."
+                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations} · {thinkVerb}..." : $"Step {iteration + 1}/{MaxAgentIterations} · {thinkVerb}...");
+            progress?.Report(stepStatus);
+            OnAgentStatus?.Invoke(stepStatus);
 
             string response;
             try
@@ -821,8 +934,11 @@ public class CodeAgentService
                 OnThinkingUpdate?.Invoke(cleanText, iteration + 1);
             }
 
-            progress?.Report($"Running {toolCalls.Count} tool(s)...");
-            OnAgentStatus?.Invoke($"Executing {toolCalls.Count} tool(s)...");
+            string toolsStatus = toolCalls.Count == 1
+                ? GetToolStatusMessage(toolCalls[0].ToolName, toolCalls[0].Arguments)
+                : $"Running {toolCalls.Count} tools in parallel...";
+            progress?.Report(toolsStatus);
+            OnAgentStatus?.Invoke(toolsStatus);
 
             var toolResults = await ExecuteToolCallsAsync(toolCalls, progress, ct);
             step.ToolResults = toolResults;
@@ -898,8 +1014,9 @@ public class CodeAgentService
         foreach (var call in sequential)
         {
             ct.ThrowIfCancellationRequested();
-            progress?.Report($"Running: {call.ToolName}...");
-            OnAgentStatus?.Invoke($"Tool: {call.ToolName}...");
+            string callStatus = GetToolStatusMessage(call.ToolName, call.Arguments);
+            progress?.Report(callStatus);
+            OnAgentStatus?.Invoke(callStatus);
 
             var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
 
@@ -1087,12 +1204,12 @@ public class CodeAgentService
 
             var step = new AgentStep { StepNumber = iteration + 1 };
 
-            progress?.Report(iteration == 0
-                ? (isThai ? "กำลังคิด..." : "Thinking...")
-                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations}..." : $"Step {iteration + 1}/{MaxAgentIterations}..."));
-            OnAgentStatus?.Invoke(iteration == 0
-                ? (isThai ? "กำลังคิด..." : "Thinking...")
-                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations}..." : $"Step {iteration + 1}/{MaxAgentIterations}..."));
+            string nativeThinkVerb = GetRandomSpinnerVerb();
+            string nativeStepStatus = iteration == 0
+                ? $"{nativeThinkVerb}..."
+                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations} · {nativeThinkVerb}..." : $"Step {iteration + 1}/{MaxAgentIterations} · {nativeThinkVerb}...");
+            progress?.Report(nativeStepStatus);
+            OnAgentStatus?.Invoke(nativeStepStatus);
 
             // Call API with native tools
             Services.Providers.NativeToolResponse response;
@@ -1150,49 +1267,75 @@ public class CodeAgentService
             }
 
             // Execute tool calls and build tool_result blocks
+            // Partition into read-only (safe for parallel) and write tools
             var userResultMsg = new Services.Providers.NativeMessage { Role = "user" };
             var toolResults = new List<ToolResult>();
 
-            foreach (var toolCall in response.ToolCalls)
+            var readOnlyCalls = response.ToolCalls.Where(tc =>
+            {
+                var t = _agentToolService.ResolveToolTypePublic(tc.Name) ?? ToolType.RunCommand;
+                return new ToolCall { Type = t }.IsConcurrencySafe;
+            }).ToList();
+            var writeCalls = response.ToolCalls.Except(readOnlyCalls).ToList();
+
+            // Helper to execute a tool call and collect results
+            int aggregateChars = 0;
+            async Task ExecuteNativeToolCall(Services.Providers.NativeToolCall toolCall)
             {
                 // Add tool_use block to assistant message
-                assistantMsg.Content.Add(new Services.Providers.ContentBlock
+                lock (assistantMsg.Content)
                 {
-                    Type = "tool_use",
-                    Id = toolCall.Id,
-                    Name = toolCall.Name,
-                    Input = toolCall.Input,
-                });
+                    assistantMsg.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "tool_use",
+                        Id = toolCall.Id,
+                        Name = toolCall.Name,
+                        Input = toolCall.Input,
+                    });
+                }
 
-                // Resolve and execute tool
                 ct.ThrowIfCancellationRequested();
-                OnAgentStatus?.Invoke($"Tool: {toolCall.Name}...");
-                progress?.Report($"Running: {toolCall.Name}...");
-
                 var call = new ToolCall
                 {
                     ToolName = toolCall.Name,
                     Type = _agentToolService.ResolveToolTypePublic(toolCall.Name) ?? ToolType.RunCommand,
                     Arguments = ParseJsonInputToArgs(toolCall.Input),
                 };
+                string nativeCallStatus = GetToolStatusMessage(toolCall.Name, call.Arguments);
+                OnAgentStatus?.Invoke(nativeCallStatus);
+                progress?.Report(nativeCallStatus);
 
                 var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
-                toolResults.Add(toolResult);
+                lock (toolResults) { toolResults.Add(toolResult); }
                 OnToolExecuted?.Invoke(toolResult);
 
-                // Add tool_result block to user message
+                // Per-tool and aggregate budget enforcement
                 string resultContent = toolResult.Success ? toolResult.Output : toolResult.Error;
                 if (resultContent.Length > MaxPerToolOutputChars)
                     resultContent = resultContent[..MaxPerToolOutputChars] + "\n... (truncated)";
+                int currentAggregate = Interlocked.Add(ref aggregateChars, resultContent.Length);
+                if (currentAggregate > MaxAggregateOutputChars)
+                    resultContent = resultContent[..Math.Min(resultContent.Length, 500)] + "\n... (aggregate budget exceeded, truncated)";
 
-                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                lock (userResultMsg.Content)
                 {
-                    Type = "tool_result",
-                    ToolUseId = toolCall.Id,
-                    Content = resultContent,
-                    IsError = !toolResult.Success,
-                });
+                    userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "tool_result",
+                        ToolUseId = toolCall.Id,
+                        Content = resultContent,
+                        IsError = !toolResult.Success,
+                    });
+                }
             }
+
+            // Run read-only tools in parallel
+            if (readOnlyCalls.Count > 0)
+                await Task.WhenAll(readOnlyCalls.Select(ExecuteNativeToolCall));
+
+            // Run write tools sequentially
+            foreach (var toolCall in writeCalls)
+                await ExecuteNativeToolCall(toolCall);
 
             step.ToolResults = toolResults;
             step.ToolCalls = toolResults.Select(r => new ToolCall

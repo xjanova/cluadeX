@@ -210,10 +210,15 @@ public class AnthropicProvider : ApiProviderBase
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
         request.Headers.Add("x-api-key", config.ApiKey);
         request.Headers.Add("anthropic-version", "2023-06-01");
-        if (settings.ExtendedThinkingEnabled)
-            request.Headers.Add("anthropic-beta", "interleaved-thinking-2025-05-14");
-        if (settings.PromptCachingEnabled)
-            request.Headers.Add("anthropic-beta", "prompt-caching-2024-07-31");
+        {
+            var betaFeatures = new List<string>();
+            if (settings.ExtendedThinkingEnabled)
+                betaFeatures.Add("interleaved-thinking-2025-05-14");
+            if (settings.PromptCachingEnabled)
+                betaFeatures.Add("prompt-caching-2024-07-31");
+            if (betaFeatures.Count > 0)
+                request.Headers.Add("anthropic-beta", string.Join(",", betaFeatures));
+        }
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -379,10 +384,17 @@ public class AnthropicProvider : ApiProviderBase
         // Extended thinking for native tool use
         if (settings.ExtendedThinkingEnabled)
         {
+            int budgetTokens = settings.ThinkingBudgetTokens;
+            int maxTokens = settings.MaxTokens;
+            // Ensure max_tokens > budget_tokens (Anthropic API requirement)
+            if (maxTokens <= budgetTokens)
+                maxTokens = budgetTokens + 4096;
+            requestObj["max_tokens"] = maxTokens;
+
             requestObj["thinking"] = new Dictionary<string, object>
             {
                 ["type"] = "enabled",
-                ["budget_tokens"] = settings.ThinkingBudgetTokens,
+                ["budget_tokens"] = budgetTokens,
             };
         }
 
@@ -412,10 +424,15 @@ public class AnthropicProvider : ApiProviderBase
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
         request.Headers.Add("x-api-key", config.ApiKey);
         request.Headers.Add("anthropic-version", "2023-06-01");
-        if (settings.ExtendedThinkingEnabled)
-            request.Headers.Add("anthropic-beta", "interleaved-thinking-2025-05-14");
-        if (settings.PromptCachingEnabled)
-            request.Headers.Add("anthropic-beta", "prompt-caching-2024-07-31");
+        {
+            var betaFeatures = new List<string>();
+            if (settings.ExtendedThinkingEnabled)
+                betaFeatures.Add("interleaved-thinking-2025-05-14");
+            if (settings.PromptCachingEnabled)
+                betaFeatures.Add("prompt-caching-2024-07-31");
+            if (betaFeatures.Count > 0)
+                request.Headers.Add("anthropic-beta", string.Join(",", betaFeatures));
+        }
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, ct);
