@@ -839,6 +839,18 @@ public class ChatViewModel : ViewModelBase
         _lastStatusBase = $"{initVerb}...";
         _generationStopwatch.Restart();
         StartElapsedTimer();
+
+        // ─── Inline thinking indicator (Claude Code-style) ───
+        // Shows in the chat area while the model is thinking/generating.
+        // Works in ALL modes (streaming, agentic, auto-execute).
+        var thinkingMsg = new ChatMessage
+        {
+            Role = MessageRole.AgentStatus,
+            Content = $"{initVerb}...",
+            IsStreaming = true,
+        };
+        Messages.Add(thinkingMsg);
+        _activeAgentStatusMsg = thinkingMsg;
         ScrollToBottom?.Invoke();
 
         _cts = new CancellationTokenSource();
@@ -862,11 +874,15 @@ public class ChatViewModel : ViewModelBase
         catch (OperationCanceledException)
         {
             StatusText = "Generation cancelled.";
+            // Remove thinking indicator on cancel
+            if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
         }
         catch (Exception ex)
         {
             string safeMsg = SanitizeErrorMessage(ex.Message);
             StatusText = $"Error: {safeMsg}";
+            // Remove thinking indicator on error
+            if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
             var errorMsg = new ChatMessage
             {
                 Role = MessageRole.Assistant,
@@ -922,6 +938,14 @@ public class ChatViewModel : ViewModelBase
         {
             App.Current?.Dispatcher.Invoke(() =>
             {
+                // Remove thinking indicator on first token
+                if (_activeAgentStatusMsg != null)
+                {
+                    _activeAgentStatusMsg.IsStreaming = false;
+                    Messages.Remove(_activeAgentStatusMsg);
+                    _activeAgentStatusMsg = null;
+                }
+
                 // New step → create a new streaming bubble
                 if (step != lastStreamStep)
                 {
@@ -1227,6 +1251,9 @@ public class ChatViewModel : ViewModelBase
             int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
             if (!string.IsNullOrEmpty(_lastStatusBase))
                 StatusText = $"{_lastStatusBase} ({elapsed}s)";
+            // Also update the inline thinking indicator with elapsed time
+            if (_activeAgentStatusMsg is { IsStreaming: true })
+                _activeAgentStatusMsg.Content = $"{_lastStatusBase} ({elapsed}s)";
         };
         _elapsedTimer.Start();
     }
@@ -1240,6 +1267,14 @@ public class ChatViewModel : ViewModelBase
     // ─── Streaming Mode ───
     private async Task RunStreaming(string input, CancellationToken ct)
     {
+        // Remove the thinking indicator once we start streaming
+        if (_activeAgentStatusMsg != null)
+        {
+            _activeAgentStatusMsg.IsStreaming = false;
+            Messages.Remove(_activeAgentStatusMsg);
+            _activeAgentStatusMsg = null;
+        }
+
         var assistantMsg = new ChatMessage
         {
             Role = MessageRole.Assistant,
@@ -1325,6 +1360,14 @@ public class ChatViewModel : ViewModelBase
     // ─── Auto-Execute Mode ───
     private async Task RunWithAutoExecution(string input, CancellationToken ct)
     {
+        // Remove thinking indicator
+        if (_activeAgentStatusMsg != null)
+        {
+            _activeAgentStatusMsg.IsStreaming = false;
+            Messages.Remove(_activeAgentStatusMsg);
+            _activeAgentStatusMsg = null;
+        }
+
         var history = CurrentSession?.Messages
             .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
             .SkipLast(1)
