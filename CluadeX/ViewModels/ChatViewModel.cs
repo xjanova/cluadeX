@@ -210,6 +210,8 @@ public class ChatViewModel : ViewModelBase
     public ICommand ReviewCodeCommand { get; }
 
     public event Action? ScrollToBottom;
+    /// <summary>Raised when ChatVM needs to be the active view (e.g. user clicked chat history from another page).</summary>
+    public event Action? NavigateToChatRequested;
 
     public ChatViewModel(
         AiProviderManager providerManager,
@@ -472,6 +474,9 @@ public class ChatViewModel : ViewModelBase
         }
 
         if (CurrentSession?.Id == sessionId) return;
+
+        // Navigate to Chat page if we're on a different page
+        NavigateToChatRequested?.Invoke();
 
         // Force save current session before switching
         if (CurrentSession != null && Messages.Count > 0)

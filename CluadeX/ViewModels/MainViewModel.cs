@@ -116,6 +116,9 @@ public class MainViewModel : ViewModelBase
 
         CurrentView = chatVM;
 
+        // Auto-navigate to Chat when user clicks a session from another page
+        chatVM.NavigateToChatRequested += () => NavigateTo("Chat");
+
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
         PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);

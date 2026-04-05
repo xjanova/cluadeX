@@ -101,11 +101,7 @@
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
@@ -144,8 +140,13 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Row 1: New Chat + Project buttons -->
-                        <Border Grid.Row="1" Padding="8,0,8,6">
+                        <!-- Row 1: Scrollable area (nav + history + buddy) -->
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                      Style="{StaticResource SlimScrollViewer}">
+                        <StackPanel>
+
+                        <!-- New Chat + Project buttons -->
+                        <Border Padding="8,0,8,6">
                             <StackPanel>
                                 <!-- New Chat Button -->
                                 <Button Style="{StaticResource PrimaryButton}"
@@ -181,8 +182,8 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Row 2: Navigation -->
-                        <StackPanel Grid.Row="2" Margin="8,0,8,4">
+                        <!-- Navigation -->
+                        <StackPanel Margin="8,0,8,4">
                             <RadioButton Content="{Binding NavChat}" Style="{StaticResource NavButton}" Tag="&#xE8BD;"
                                          IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
                                          Command="{Binding NavigateToCommand}" CommandParameter="Chat"
@@ -225,8 +226,8 @@
                                          GroupName="Nav"/>
                         </StackPanel>
 
-                        <!-- Row 3: Chat History Header + Search -->
-                        <Border Grid.Row="3" Padding="8,8,8,4"
+                        <!-- Chat History Header + Search -->
+                        <Border Padding="8,8,8,4"
                                 BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}">
                             <StackPanel>
                                 <Grid Margin="6,0,6,6">
@@ -290,11 +291,8 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Row 4: Session List / Search Results (scrollable) -->
-                        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto"
-                                      Style="{StaticResource SlimScrollViewer}"
-                                      Margin="0,2,0,0">
-                            <Grid>
+                        <!-- Session List / Search Results -->
+                        <Grid Margin="0,2,0,0">
                                 <!-- Normal session list (hidden during search) -->
                                 <ItemsControl ItemsSource="{Binding ChatVM.Sessions}">
                                     <ItemsControl.Style>
@@ -446,10 +444,9 @@
                                     </TextBlock.Style>
                                 </TextBlock>
                             </Grid>
-                        </ScrollViewer>
 
-                        <!-- Row 5: Buddy Companion Widget -->
-                        <Border Grid.Row="5" Padding="8,6" BorderThickness="0,1,0,0"
+                        <!-- Buddy Companion Widget -->
+                        <Border Padding="8,6" BorderThickness="0,1,0,0"
                                 BorderBrush="{StaticResource Surface0Brush}"
                                 Visibility="{Binding IsBuddyEnabled, Converter={StaticResource BoolVis}}">
                             <Border Background="{StaticResource Surface0Brush}" CornerRadius="10" Padding="10,8"
@@ -532,8 +529,11 @@
                             </Border>
                         </Border>
 
-                        <!-- Row 6: Bottom Status -->
-                        <Border Grid.Row="6" Padding="14,10" BorderThickness="0,1,0,0"
+                        </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- Row 2: Bottom Status (pinned) -->
+                        <Border Grid.Row="2" Padding="14,10" BorderThickness="0,1,0,0"
                                 BorderBrush="{StaticResource Surface0Brush}">
                             <StackPanel>
                                 <!-- Project Name -->
