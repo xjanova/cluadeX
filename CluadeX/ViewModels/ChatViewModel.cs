@@ -1333,6 +1333,18 @@ public class ChatViewModel : ViewModelBase
         // Finalize — use Ollama's accurate token counts when available
         App.Current?.Dispatcher.Invoke(() =>
         {
+            // If no tokens were received, assistantMsg was never added — add it now
+            if (firstToken)
+            {
+                // Remove thinking indicator, replace with assistant message
+                if (_activeAgentStatusMsg != null)
+                {
+                    Messages.Remove(_activeAgentStatusMsg);
+                    _activeAgentStatusMsg = null;
+                }
+                Messages.Add(assistantMsg);
+            }
+
             assistantMsg.IsStreaming = false;
 
             // Prefer provider's token counts (Ollama returns exact counts)
@@ -1349,7 +1361,7 @@ public class ChatViewModel : ViewModelBase
 
             if (string.IsNullOrWhiteSpace(responseText))
             {
-                assistantMsg.Content = "⚠ No response was generated. The model may need to be reloaded, or try a different model.";
+                assistantMsg.Content = "(The model did not generate a response. Try reloading the model or using a different one.)";
                 assistantMsg.HasError = true;
                 StatusText = "No response generated";
                 // Remove inline status on error
