@@ -1268,13 +1268,8 @@ public class ChatViewModel : ViewModelBase
     // ─── Streaming Mode ───
     private async Task RunStreaming(string input, CancellationToken ct)
     {
-        // Remove the thinking indicator once we start streaming
-        if (_activeAgentStatusMsg != null)
-        {
-            _activeAgentStatusMsg.IsStreaming = false;
-            Messages.Remove(_activeAgentStatusMsg);
-            _activeAgentStatusMsg = null;
-        }
+        // DON'T remove thinking indicator here — it's sync and runs before UI renders.
+        // Instead, remove it when the first token arrives (after async await).
 
         var assistantMsg = new ChatMessage
         {
@@ -1282,11 +1277,11 @@ public class ChatViewModel : ViewModelBase
             Content = "",
             IsStreaming = true,
         };
-        Messages.Add(assistantMsg);
-        ScrollToBottom?.Invoke();
+        // Don't add assistant msg yet — wait for first token so thinking indicator stays visible
 
         var sb = new StringBuilder();
         int tokenCount = 0;
+        bool firstToken = true;
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         var history = CurrentSession?.Messages
@@ -1296,6 +1291,19 @@ public class ChatViewModel : ViewModelBase
 
         await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
         {
+            // On first token: remove thinking indicator, add assistant message
+            if (firstToken)
+            {
+                firstToken = false;
+                if (_activeAgentStatusMsg != null)
+                {
+                    Messages.Remove(_activeAgentStatusMsg);
+                    _activeAgentStatusMsg = null;
+                }
+                Messages.Add(assistantMsg);
+                ScrollToBottom?.Invoke();
+            }
+
             sb.Append(token);
             tokenCount++;
             App.Current?.Dispatcher.Invoke(() =>
@@ -1361,13 +1369,7 @@ public class ChatViewModel : ViewModelBase
     // ─── Auto-Execute Mode ───
     private async Task RunWithAutoExecution(string input, CancellationToken ct)
     {
-        // Remove thinking indicator
-        if (_activeAgentStatusMsg != null)
-        {
-            _activeAgentStatusMsg.IsStreaming = false;
-            Messages.Remove(_activeAgentStatusMsg);
-            _activeAgentStatusMsg = null;
-        }
+        // Don't remove thinking indicator here (sync) — remove after async completes
 
         var history = CurrentSession?.Messages
             .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
@@ -1378,6 +1380,13 @@ public class ChatViewModel : ViewModelBase
             App.Current?.Dispatcher.Invoke(() => StatusText = status));
 
         var result = await _agentService.ExecuteWithAutoFixAsync(history, input, progress, ct);
+
+        // Remove thinking indicator after async completes
+        if (_activeAgentStatusMsg != null)
+        {
+            Messages.Remove(_activeAgentStatusMsg);
+            _activeAgentStatusMsg = null;
+        }
 
         var assistantMsg = new ChatMessage
         {
