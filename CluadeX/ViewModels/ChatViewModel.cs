@@ -1300,33 +1300,45 @@ public class ChatViewModel : ViewModelBase
             sb.Append(token);
             tokenCount++;
 
-            App.Current?.Dispatcher.Invoke(() =>
+            // First token: sync update to guarantee bubble visible before more tokens arrive
+            if (firstToken)
             {
-                // On first token: convert thinking → generating, add assistant bubble
-                if (firstToken)
+                firstToken = false;
+                int capturedCount = tokenCount;
+                App.Current?.Dispatcher.Invoke(() =>
                 {
-                    firstToken = false;
                     if (_activeAgentStatusMsg != null)
                         _activeAgentStatusMsg.Content = "⚡ Generating...";
                     Messages.Add(assistantMsg);
+                    assistantMsg.Content = sb.ToString();
                     ScrollToBottom?.Invoke();
-                }
+                });
+                continue;
+            }
 
-                assistantMsg.Content = sb.ToString();
-
-                // Update inline generating status every 10 tokens
-                if (tokenCount % 10 == 0 && _activeAgentStatusMsg != null)
+            // Subsequent tokens: async fire-and-forget (non-blocking)
+            // Batch updates every 3 tokens to reduce UI thrash without feeling laggy
+            if (tokenCount % 3 == 0)
+            {
+                int capturedCount = tokenCount;
+                string snapshot = sb.ToString();
+                App.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    int elapsed = (int)sw.Elapsed.TotalSeconds;
-                    double tps = elapsed > 0 ? tokenCount / (double)elapsed : 0;
-                    _activeAgentStatusMsg.Content = tps > 0
-                        ? $"⚡ Generating · {tokenCount} tokens · {tps:F0} tok/s"
-                        : $"⚡ Generating · {tokenCount} tokens";
-                }
-            });
-            if (tokenCount % 20 == 0)
-                ScrollToBottom?.Invoke();
+                    assistantMsg.Content = snapshot;
+                    if (capturedCount % 15 == 0 && _activeAgentStatusMsg != null)
+                    {
+                        int elapsed = (int)sw.Elapsed.TotalSeconds;
+                        double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
+                        _activeAgentStatusMsg.Content = tps > 0
+                            ? $"⚡ Generating · {capturedCount} tokens · {tps:F0} tok/s"
+                            : $"⚡ Generating · {capturedCount} tokens";
+                    }
+                });
+            }
         }
+
+        // Final content flush — ensure last tokens are shown
+        App.Current?.Dispatcher.Invoke(() => assistantMsg.Content = sb.ToString());
 
         sw.Stop();
 
