@@ -1297,36 +1297,31 @@ public class ChatViewModel : ViewModelBase
 
         await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
         {
-            // On first token: convert thinking indicator to generating status, add assistant message
-            if (firstToken)
-            {
-                firstToken = false;
-                if (_activeAgentStatusMsg != null)
-                {
-                    // Transform thinking indicator into generating status (don't remove)
-                    _activeAgentStatusMsg.Content = "⚡ Generating...";
-                }
-                Messages.Add(assistantMsg);
-                ScrollToBottom?.Invoke();
-            }
-
             sb.Append(token);
             tokenCount++;
+
             App.Current?.Dispatcher.Invoke(() =>
             {
+                // On first token: convert thinking → generating, add assistant bubble
+                if (firstToken)
+                {
+                    firstToken = false;
+                    if (_activeAgentStatusMsg != null)
+                        _activeAgentStatusMsg.Content = "⚡ Generating...";
+                    Messages.Add(assistantMsg);
+                    ScrollToBottom?.Invoke();
+                }
+
                 assistantMsg.Content = sb.ToString();
 
-                // Update inline generating status every 15 tokens
-                if (tokenCount % 15 == 0)
+                // Update inline generating status every 10 tokens
+                if (tokenCount % 10 == 0 && _activeAgentStatusMsg != null)
                 {
                     int elapsed = (int)sw.Elapsed.TotalSeconds;
                     double tps = elapsed > 0 ? tokenCount / (double)elapsed : 0;
-                    string statsText = tps > 0
+                    _activeAgentStatusMsg.Content = tps > 0
                         ? $"⚡ Generating · {tokenCount} tokens · {tps:F0} tok/s"
                         : $"⚡ Generating · {tokenCount} tokens";
-                    if (_activeAgentStatusMsg != null)
-                        _activeAgentStatusMsg.Content = statsText;
-                    StatusText = statsText;
                 }
             });
             if (tokenCount % 20 == 0)
