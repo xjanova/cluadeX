@@ -1297,14 +1297,14 @@ public class ChatViewModel : ViewModelBase
 
         await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
         {
-            // On first token: remove thinking indicator, add assistant message
+            // On first token: convert thinking indicator to generating status, add assistant message
             if (firstToken)
             {
                 firstToken = false;
                 if (_activeAgentStatusMsg != null)
                 {
-                    Messages.Remove(_activeAgentStatusMsg);
-                    _activeAgentStatusMsg = null;
+                    // Transform thinking indicator into generating status (don't remove)
+                    _activeAgentStatusMsg.Content = "⚡ Generating...";
                 }
                 Messages.Add(assistantMsg);
                 ScrollToBottom?.Invoke();
@@ -1316,14 +1316,17 @@ public class ChatViewModel : ViewModelBase
             {
                 assistantMsg.Content = sb.ToString();
 
-                // Live status: token count + elapsed time
+                // Update inline generating status every 15 tokens
                 if (tokenCount % 15 == 0)
                 {
                     int elapsed = (int)sw.Elapsed.TotalSeconds;
                     double tps = elapsed > 0 ? tokenCount / (double)elapsed : 0;
-                    StatusText = tps > 0
-                        ? $"Generating... · {tokenCount} tokens · {elapsed}s · {tps:F0} tok/s"
-                        : $"Generating... · {tokenCount} tokens";
+                    string statsText = tps > 0
+                        ? $"⚡ Generating · {tokenCount} tokens · {tps:F0} tok/s"
+                        : $"⚡ Generating · {tokenCount} tokens";
+                    if (_activeAgentStatusMsg != null)
+                        _activeAgentStatusMsg.Content = statsText;
+                    StatusText = statsText;
                 }
             });
             if (tokenCount % 20 == 0)
@@ -1354,6 +1357,8 @@ public class ChatViewModel : ViewModelBase
                 assistantMsg.Content = "⚠ No response was generated. The model may need to be reloaded, or try a different model.";
                 assistantMsg.HasError = true;
                 StatusText = "No response generated";
+                // Remove inline status on error
+                if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
             }
             else
             {
@@ -1363,8 +1368,17 @@ public class ChatViewModel : ViewModelBase
                 // Show per-turn stats
                 double tps = assistantMsg.TokensPerSecond;
                 double secs = sw.ElapsedMilliseconds / 1000.0;
+                string statsLine = $"✓ {finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
                 StatusText = $"Ready · {finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
                 LastTurnStats = $"{finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
+
+                // Finalize inline status with completion stats
+                if (_activeAgentStatusMsg != null)
+                {
+                    _activeAgentStatusMsg.Content = statsLine;
+                    _activeAgentStatusMsg.IsStreaming = false;
+                    _activeAgentStatusMsg = null;
+                }
             }
         });
 
