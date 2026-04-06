@@ -917,12 +917,16 @@ public class ChatViewModel : ViewModelBase
         // Stopwatch & timer already started in SendMessage
         _streamingTokenCount = 0;
 
-        // ─── Status bar updates via progress callback ───
+        // ─── Status bar — minimal (inline chat handles detail) ───
         var progress = new Progress<string>(status =>
         {
             _lastStatusBase = status;
             int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
-            StatusText = elapsed > 0 ? $"{status} ({elapsed}s)" : status;
+            // Keep status bar minimal — tool details shown inline in chat
+            if (status is "Done" or "Ready")
+                StatusText = status;
+            else
+                StatusText = elapsed > 0 ? $"Working... ({elapsed}s)" : "Working...";
         });
 
         var history = CurrentSession?.Messages
@@ -1081,23 +1085,25 @@ public class ChatViewModel : ViewModelBase
 
     /// <summary>
     /// Called when a tool is ABOUT to execute. Shows inline status in chat.
-    /// Uses the same BeginInvoke pattern as OnToolExecuted (which is proven to work).
+    /// Claude Code-style: "⏵ Reading src/main.ts" stays visible as breadcrumb.
     /// </summary>
     private void OnToolStarting(string toolName, string statusMessage)
     {
         App.Current?.Dispatcher.BeginInvoke(() =>
         {
-            // Finalize previous status (stop spinner)
+            // Don't duplicate — if the same tool status is already showing, skip
+            if (_activeAgentStatusMsg?.Content == $"⏵ {statusMessage}")
+                return;
+
+            // Previous tool status stays visible (breadcrumb trail)
+            // Just stop its streaming animation
             if (_activeAgentStatusMsg != null)
                 _activeAgentStatusMsg.IsStreaming = false;
 
-            int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
-            string display = elapsed > 1 ? $"{statusMessage}  ({elapsed}s)" : statusMessage;
-
             var statusMsg = new ChatMessage
             {
-                Role = MessageRole.AgentStatus,
-                Content = display,
+                Role = MessageRole.Assistant,
+                Content = $"⏵ {statusMessage}",
                 IsStreaming = true,
             };
             Messages.Add(statusMsg);
@@ -1250,10 +1256,10 @@ public class ChatViewModel : ViewModelBase
         {
             if (!_generationStopwatch.IsRunning || !IsGenerating) return;
             int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
-            if (!string.IsNullOrEmpty(_lastStatusBase))
-                StatusText = $"{_lastStatusBase} ({elapsed}s)";
-            // Also update the inline thinking indicator with elapsed time
-            if (_activeAgentStatusMsg is { IsStreaming: true })
+            StatusText = $"Working... ({elapsed}s)";
+            // Update inline thinking indicator with elapsed time
+            if (_activeAgentStatusMsg is { IsStreaming: true } msg
+                && msg.Content.StartsWith("⏳"))
                 _activeAgentStatusMsg.Content = $"⏳ *{_lastStatusBase} ({elapsed}s)*";
         };
         _elapsedTimer.Start();
