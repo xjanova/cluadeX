@@ -91,7 +91,6 @@ public class FeatureToggles
     public bool ContextMemory { get; set; } = true;
     public bool SmartEditing { get; set; } = true;
     public bool MarkdownRendering { get; set; } = true;
-    public bool SyntaxHighlighting { get; set; } = true;
 
     // MCP Servers
     public bool McpServers { get; set; } = true;

@@ -11,6 +11,8 @@ public enum MessageRole
     CodeExecution,
     ToolAction,
     AgentStatus,
+    Thinking,
+    PermissionRequest,
 }
 
 public class ChatMessage : INotifyPropertyChanged
@@ -19,6 +21,11 @@ public class ChatMessage : INotifyPropertyChanged
     private bool _isStreaming;
     private bool _hasError;
     private bool _isExpanded;
+    private bool _isInterrupted;
+    private bool _isThinkingExpanded;
+    private string _thinkingContent = string.Empty;
+    private string? _retryCountdown;
+    private bool _isHovered;
 
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public MessageRole Role { get; set; }
@@ -46,41 +53,93 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_hasError != value) { _hasError = value; OnPropertyChanged(); } }
     }
 
+    /// <summary>Whether this message was interrupted by the user.</summary>
+    public bool IsInterrupted
+    {
+        get => _isInterrupted;
+        set { if (_isInterrupted != value) { _isInterrupted = value; OnPropertyChanged(); } }
+    }
+
+    // ─── Thinking Block ───
+    /// <summary>Extended thinking content (collapsible).</summary>
+    public string ThinkingContent
+    {
+        get => _thinkingContent;
+        set { if (_thinkingContent != value) { _thinkingContent = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasThinking)); } }
+    }
+
+    public bool HasThinking => !string.IsNullOrEmpty(_thinkingContent);
+
+    /// <summary>Whether the thinking block is expanded.</summary>
+    public bool IsThinkingExpanded
+    {
+        get => _isThinkingExpanded;
+        set { if (_isThinkingExpanded != value) { _isThinkingExpanded = value; OnPropertyChanged(); } }
+    }
+
+    // ─── Retry Countdown ───
+    /// <summary>Retry countdown text (e.g. "Retrying in 3s...").</summary>
+    public string? RetryCountdown
+    {
+        get => _retryCountdown;
+        set { if (_retryCountdown != value) { _retryCountdown = value; OnPropertyChanged(); OnPropertyChanged(nameof(IsRetrying)); } }
+    }
+
+    public bool IsRetrying => !string.IsNullOrEmpty(_retryCountdown);
+
+    // ─── Hover State (for action buttons) ───
+    public bool IsHovered
+    {
+        get => _isHovered;
+        set { if (_isHovered != value) { _isHovered = value; OnPropertyChanged(); } }
+    }
+
     // ─── Token Usage Tracking ───
-    /// <summary>Estimated tokens used for this message.</summary>
     public int TokenCount { get; set; }
-
-    /// <summary>Time taken to generate this response (ms).</summary>
     public long GenerationTimeMs { get; set; }
-
-    /// <summary>Tokens per second for this response.</summary>
     public double TokensPerSecond => GenerationTimeMs > 0 ? TokenCount / (GenerationTimeMs / 1000.0) : 0;
-
-    /// <summary>Number of tool calls made in this turn (agentic mode).</summary>
     public int ToolCallCount { get; set; }
 
     // ─── Tool Action Fields ───
-    /// <summary>Tool name for ToolAction messages (e.g. "read_file", "write_file")</summary>
     public string? ToolName { get; set; }
-    /// <summary>Short summary for display in collapsed view</summary>
     public string? ToolSummary { get; set; }
-    /// <summary>Full tool output for expanded view</summary>
     public string? ToolOutput { get; set; }
-    /// <summary>Whether the tool action succeeded</summary>
     public bool ToolSuccess { get; set; }
-    /// <summary>Tool input arguments formatted for display (key: value per line)</summary>
     public string? ToolArguments { get; set; }
-    /// <summary>One-line input summary (e.g. "path: src/main.ts")</summary>
     public string? ToolInputSummary { get; set; }
-    /// <summary>Output line count for display</summary>
     public int ToolOutputLines { get; set; }
 
-    /// <summary>Whether the tool details are expanded in UI</summary>
+    /// <summary>Whether the tool output contains diff content.</summary>
+    public bool IsDiffContent { get; set; }
+
+    /// <summary>Whether the tool details are expanded in UI.</summary>
     public bool IsExpanded
     {
         get => _isExpanded;
         set { if (_isExpanded != value) { _isExpanded = value; OnPropertyChanged(); } }
     }
+
+    /// <summary>Elapsed time for tool execution display (e.g. "1.2s").</summary>
+    public string? ToolElapsedTime { get; set; }
+
+    // ─── Tool Call Grouping ───
+    /// <summary>Whether this ToolAction is collapsed into a group summary.</summary>
+    private bool _isCollapsedGroup;
+    public bool IsCollapsedGroup
+    {
+        get => _isCollapsedGroup;
+        set { if (_isCollapsedGroup != value) { _isCollapsedGroup = value; OnPropertyChanged(); } }
+    }
+    /// <summary>Number of tool calls collapsed in this group.</summary>
+    public int CollapsedCount { get; set; }
+    /// <summary>Individual tool names in this collapsed group.</summary>
+    public List<string> CollapsedToolNames { get; set; } = new();
+
+    // ─── Permission Request Fields ───
+    /// <summary>Callback invoked when user clicks Allow/Deny on a permission request.</summary>
+    public Action<bool>? PermissionCallback { get; set; }
+    /// <summary>Whether this permission request has been answered.</summary>
+    public bool PermissionAnswered { get; set; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null)

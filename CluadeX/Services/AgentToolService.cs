@@ -169,24 +169,27 @@ public class AgentToolService
                 return Fail(call, $"{featureName} tools are disabled. Enable in Features page or activate with a key.");
             }
 
-            // ── Permission check ──
-            string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
-            string scope = call.Type switch
+            // ── Permission check (respects PermissionSystem toggle) ──
+            if (_settingsService.Settings.Features.PermissionSystem)
             {
-                ToolType.WriteFile or ToolType.EditFile or ToolType.CreateDirectory => "write",
-                ToolType.RunCommand => "execute",
-                ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
-                _ => "execute",
-            };
-            var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
-            if (perm == PermAction.Deny)
-                return Fail(call, $"Permission denied for {scope}: {resource}");
-            if (perm == PermAction.Ask)
-            {
-                bool allowed = OnPermissionRequired != null
-                    && await OnPermissionRequired.Invoke(call.ToolName, $"{scope}: {resource}");
-                if (!allowed)
-                    return Fail(call, $"User denied permission for {scope}: {resource}");
+                string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
+                string scope = call.Type switch
+                {
+                    ToolType.WriteFile or ToolType.EditFile or ToolType.CreateDirectory => "write",
+                    ToolType.RunCommand => "execute",
+                    ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
+                    _ => "execute",
+                };
+                var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
+                if (perm == PermAction.Deny)
+                    return Fail(call, $"Permission denied for {scope}: {resource}");
+                if (perm == PermAction.Ask)
+                {
+                    bool allowed = OnPermissionRequired != null
+                        && await OnPermissionRequired.Invoke(call.ToolName, $"{scope}: {resource}");
+                    if (!allowed)
+                        return Fail(call, $"User denied permission for {scope}: {resource}");
+                }
             }
 
             // ── PreToolUse hooks ──
@@ -907,9 +910,9 @@ public class AgentToolService
             ToolType.WebFetch or ToolType.WebSearch
                 => features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"),
 
-            // Task management — require TaskManager feature
+            // Task management — require TaskManager feature + activation
             ToolType.TaskCreate or ToolType.TaskList or ToolType.TaskStop or ToolType.TaskOutput
-                => features.TaskManager,
+                => features.TaskManager && _activationService.IsFeatureUnlocked("feature.taskManager"),
 
             // REPL — always available (core tool)
             ToolType.Repl => true,
@@ -1102,39 +1105,41 @@ public class AgentToolService
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
 
-        // Security: block dangerous commands with comprehensive patterns
-        string cmdLower = command.ToLowerInvariant().Trim();
-        string[] blockedPatterns = [
-            "rm -rf /", "rm -rf ~", "rm -rf .",
-            "format ", "format\t",
-            "del /s", "del /f", "del /q",
-            "rmdir /s", "rd /s",
-            "remove-item -recurse",
-            "shutdown", "restart-computer",
-            "reg delete", "reg add",
-            "net user", "net localgroup",
-            "takeown", "icacls",
-            "mkfs.", "dd if=",
-            "> /dev/", ">/dev/",
-        ];
-        // Also block shell escape patterns
-        string[] blockedContains = [
-            "| rm ", "| del ", "&& rm ", "&& del ",
-            "; rm ", "; del ", "` rm ", "` del ",
-            "invoke-webrequest", "invoke-restmethod",
-            "start-bitstransfer",
-            "certutil -urlcache",
-            "bitsadmin /transfer",
-        ];
-        foreach (var blocked in blockedPatterns)
+        // Security: block dangerous commands (respects DangerousCommandBlocking toggle)
+        if (_settingsService.Settings.Features.DangerousCommandBlocking)
         {
-            if (cmdLower.StartsWith(blocked))
-                return Fail(call, $"Command blocked for safety: {command}");
-        }
-        foreach (var blocked in blockedContains)
-        {
-            if (cmdLower.Contains(blocked))
-                return Fail(call, $"Command blocked for safety: {command}");
+            string cmdLower = command.ToLowerInvariant().Trim();
+            string[] blockedPatterns = [
+                "rm -rf /", "rm -rf ~", "rm -rf .",
+                "format ", "format\t",
+                "del /s", "del /f", "del /q",
+                "rmdir /s", "rd /s",
+                "remove-item -recurse",
+                "shutdown", "restart-computer",
+                "reg delete", "reg add",
+                "net user", "net localgroup",
+                "takeown", "icacls",
+                "mkfs.", "dd if=",
+                "> /dev/", ">/dev/",
+            ];
+            string[] blockedContains = [
+                "| rm ", "| del ", "&& rm ", "&& del ",
+                "; rm ", "; del ", "` rm ", "` del ",
+                "invoke-webrequest", "invoke-restmethod",
+                "start-bitstransfer",
+                "certutil -urlcache",
+                "bitsadmin /transfer",
+            ];
+            foreach (var blocked in blockedPatterns)
+            {
+                if (cmdLower.StartsWith(blocked))
+                    return Fail(call, $"Command blocked for safety: {command}");
+            }
+            foreach (var blocked in blockedContains)
+            {
+                if (cmdLower.Contains(blocked))
+                    return Fail(call, $"Command blocked for safety: {command}");
+            }
         }
 
         try

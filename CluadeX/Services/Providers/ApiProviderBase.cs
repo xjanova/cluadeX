@@ -25,7 +25,18 @@ public abstract class ApiProviderBase : IAiProvider
     protected ApiProviderBase(SettingsService settingsService)
     {
         _settingsService = settingsService;
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+            MaxConnectionsPerServer = 4,
+            EnableMultipleHttp2Connections = true,
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+            ConnectTimeout = TimeSpan.FromSeconds(15),
+        };
+        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
     }
 
     protected ProviderConfig GetConfig()
@@ -52,13 +63,16 @@ public abstract class ApiProviderBase : IAiProvider
         OnError?.Invoke(message);
     }
 
+    // Simple record to avoid reflection on anonymous types
+    protected record ChatMsg(string role, string content);
+
     protected List<object> BuildChatMessages(List<ChatMessage> history, string userMessage, string? systemPrompt,
         string systemRole = "system", string userRole = "user", string assistantRole = "assistant")
     {
         var messages = new List<object>();
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
-            messages.Add(new { role = systemRole, content = systemPrompt });
+            messages.Add(new ChatMsg(systemRole, systemPrompt));
 
         // Build history ensuring strict user/assistant alternation.
         // ToolAction and CodeExecution are merged into adjacent messages
@@ -102,13 +116,13 @@ public abstract class ApiProviderBase : IAiProvider
             // Merge consecutive same-role messages
             if (role == lastRole && messages.Count > 0)
             {
-                var prev = messages[^1];
-                string prevContent = GetContentFromAnonymous(prev);
-                messages[^1] = new { role, content = prevContent + "\n" + content };
+                var prev = (ChatMsg)messages[^1];
+                string prevContent = prev.content;
+                messages[^1] = new ChatMsg(role, prevContent + "\n" + content);
             }
             else
             {
-                messages.Add(new { role, content });
+                messages.Add(new ChatMsg(role, content));
             }
             lastRole = role;
         }
@@ -117,24 +131,18 @@ public abstract class ApiProviderBase : IAiProvider
         if (lastRole == userRole && messages.Count > 0)
         {
             // Merge with the last user message
-            var prev = messages[^1];
-            string prevContent = GetContentFromAnonymous(prev);
-            messages[^1] = new { role = userRole, content = prevContent + "\n" + userMessage };
+            var prev = (ChatMsg)messages[^1];
+            messages[^1] = new ChatMsg(userRole, prev.content + "\n" + userMessage);
         }
         else
         {
-            messages.Add(new { role = userRole, content = userMessage });
+            messages.Add(new ChatMsg(userRole, userMessage));
         }
 
         return messages;
     }
 
-    /// <summary>Extract content string from anonymous { role, content } object.</summary>
-    private static string GetContentFromAnonymous(object obj)
-    {
-        var prop = obj.GetType().GetProperty("content");
-        return prop?.GetValue(obj)?.ToString() ?? "";
-    }
+    // GetContentFromAnonymous removed — replaced by ChatMsg record (no reflection needed)
 
     public abstract Task InitializeAsync(CancellationToken ct = default);
 

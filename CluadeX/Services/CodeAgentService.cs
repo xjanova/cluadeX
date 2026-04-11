@@ -26,6 +26,45 @@ public class CodeAgentService
 
     private const int MaxAgentIterations = 15;
 
+    // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
+    private string? _cachedSystemPrompt;
+    private DateTime _promptCacheExpiry = DateTime.MinValue;
+    private readonly object _promptCacheLock = new();
+
+    /// <summary>
+    /// Pre-build the system prompt on a background thread.
+    /// Call this before ChatStreamAsync to avoid blocking the UI thread.
+    /// </summary>
+    public async Task<string> GetSystemPromptAsync()
+    {
+        // Return cached if still valid (cache for 30 seconds)
+        lock (_promptCacheLock)
+        {
+            if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry)
+                return _cachedSystemPrompt;
+        }
+
+        string prompt = await Task.Run(() => GetSystemPrompt());
+
+        lock (_promptCacheLock)
+        {
+            _cachedSystemPrompt = prompt;
+            _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
+        }
+
+        return prompt;
+    }
+
+    /// <summary>Invalidate the cached system prompt (e.g., when working directory changes).</summary>
+    public void InvalidateSystemPromptCache()
+    {
+        lock (_promptCacheLock)
+        {
+            _cachedSystemPrompt = null;
+            _promptCacheExpiry = DateTime.MinValue;
+        }
+    }
+
     // ─── Dynamic System Prompt Builder ───────────────────────────────
     // The prompt is generated dynamically based on:
     //   1. Active language (Thai/English) — so the AI responds in the user's language
@@ -558,15 +597,19 @@ public class CodeAgentService
             {
                 try
                 {
-                    string gitBranch = GetGitBranchSync();
+                    // Run both git commands in parallel (saves ~1-3s)
+                    var branchTask = Task.Run(GetGitBranchSync);
+                    var statusTask = Task.Run(GetGitStatusSync);
+                    Task.WaitAll(branchTask, statusTask);
+
+                    string gitBranch = branchTask.Result;
                     if (!string.IsNullOrEmpty(gitBranch))
                     {
                         sb.AppendLine($"- Git Branch: {gitBranch.Trim()}");
-                        string gitStatus = GetGitStatusSync();
+                        string gitStatus = statusTask.Result;
                         if (!string.IsNullOrWhiteSpace(gitStatus))
                         {
                             sb.AppendLine("- Git Status:");
-                            // Limit git status to first 20 lines
                             var lines = gitStatus.Split('\n');
                             foreach (var line in lines.Take(20))
                                 sb.AppendLine($"  {line}");
@@ -700,42 +743,30 @@ public class CodeAgentService
         catch { /* file doesn't exist — skip */ }
     }
 
-    /// <summary>Detect the project type based on key files.</summary>
+    /// <summary>Detect the project type based on key files. Uses File.Exists (fast, no exceptions).</summary>
     private string DetectProjectType()
     {
+        if (!_fileSystemService.HasWorkingDirectory) return "";
+        string wd = _fileSystemService.WorkingDirectory;
         var types = new List<string>();
 
-        bool hasFile(string name)
-        {
-            try { _fileSystemService.ReadFile(name); return true; }
-            catch { return false; }
-        }
+        bool hasFile(string name) => File.Exists(Path.Combine(wd, name));
 
         // .NET / C#
-        if (_fileSystemService.SearchFiles("*.csproj", ".").Count > 0 || _fileSystemService.SearchFiles("*.sln", ".").Count > 0)
+        if (Directory.EnumerateFiles(wd, "*.csproj", SearchOption.TopDirectoryOnly).Any()
+            || Directory.EnumerateFiles(wd, "*.sln", SearchOption.TopDirectoryOnly).Any())
             types.Add("C# / .NET");
 
-        // Node.js / TypeScript
         if (hasFile("package.json"))
         {
             types.Add("Node.js");
             if (hasFile("tsconfig.json")) types.Add("TypeScript");
         }
-
-        // Python
         if (hasFile("pyproject.toml") || hasFile("setup.py") || hasFile("requirements.txt"))
             types.Add("Python");
-
-        // Rust
         if (hasFile("Cargo.toml")) types.Add("Rust");
-
-        // Go
         if (hasFile("go.mod")) types.Add("Go");
-
-        // Java
         if (hasFile("pom.xml") || hasFile("build.gradle")) types.Add("Java");
-
-        // Flutter / Dart
         if (hasFile("pubspec.yaml")) types.Add("Flutter / Dart");
 
         return string.Join(", ", types);
@@ -749,7 +780,10 @@ public class CodeAgentService
         string userMessage,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var token in _providerManager.ActiveProvider.ChatAsync(history, userMessage, GetSystemPrompt(), ct))
+        // Build system prompt on background thread (avoids blocking UI with git/file I/O)
+        string systemPrompt = await GetSystemPromptAsync();
+
+        await foreach (var token in _providerManager.ActiveProvider.ChatAsync(history, userMessage, systemPrompt, ct))
         {
             yield return token;
         }
@@ -786,11 +820,11 @@ public class CodeAgentService
         CancellationToken ct)
     {
         var result = new AgentLoopResult();
-        string systemPrompt = GetSystemPrompt();
+        string systemPrompt = await GetSystemPromptAsync();
 
-        // ─── Smart context enrichment ───
+        // ─── Smart context enrichment (respects SmartEditing toggle) ───
         string enrichedMessage = userMessage;
-        if (_fileSystemService.HasWorkingDirectory)
+        if (_fileSystemService.HasWorkingDirectory && _settingsService.Settings.Features.SmartEditing)
         {
             var mentionedFiles = _smartEditingService.ExtractMentionedFiles(userMessage);
             if (mentionedFiles.Count > 0)
@@ -1187,14 +1221,14 @@ public class CodeAgentService
         CancellationToken ct)
     {
         var result = new AgentLoopResult();
-        string systemPrompt = GetSystemPrompt();
+        string systemPrompt = await GetSystemPromptAsync();
         bool isThai = _localizationService.CurrentLanguage == "th";
         int maxTokenRecoveryCount = 0;
         const int MaxOutputTokenRecoveries = 3;
         bool hasAttemptedReactiveCompact = false;
 
-        // ─── Smart context enrichment (same as legacy loop) ───
-        if (_fileSystemService.HasWorkingDirectory)
+        // ─── Smart context enrichment (respects SmartEditing toggle) ───
+        if (_fileSystemService.HasWorkingDirectory && _settingsService.Settings.Features.SmartEditing)
         {
             var mentionedFiles = _smartEditingService.ExtractMentionedFiles(userMessage);
             if (mentionedFiles.Count > 0)
@@ -1721,7 +1755,7 @@ public class CodeAgentService
             }
         }
 
-        string systemPrompt = GetSystemPrompt();
+        string systemPrompt = await GetSystemPromptAsync();
         return await GenerateWithRetryAsync(history, reviewPrompt, systemPrompt, ct);
     }
 
@@ -1737,7 +1771,7 @@ public class CodeAgentService
         var result = new AgentResult();
         int maxAttempts = _settingsService.Settings.MaxAutoFixAttempts;
         string currentMessage = userMessage;
-        string systemPrompt = GetSystemPrompt();
+        string systemPrompt = await GetSystemPromptAsync();
 
         for (int attempt = 0; attempt <= maxAttempts; attempt++)
         {

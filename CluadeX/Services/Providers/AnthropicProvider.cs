@@ -439,7 +439,7 @@ public class AnthropicProvider : ApiProviderBase
         }
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -447,7 +447,6 @@ public class AnthropicProvider : ApiProviderBase
             if (!string.IsNullOrEmpty(config.ApiKey))
                 error = error.Replace(config.ApiKey, "[REDACTED]");
 
-            // Re-throw as HttpRequestException with status code for reactive compaction
             throw new HttpRequestException(
                 $"Anthropic API error: {error}",
                 null,

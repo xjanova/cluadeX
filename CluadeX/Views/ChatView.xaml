@@ -18,6 +18,25 @@
         <conv:BoolToStringConverter x:Key="BoolStr"/>
         <conv:ContextUsageBrushConverter x:Key="CtxBrush"/>
         <conv:ContextLedGateConverter x:Key="CtxLedGate"/>
+
+        <!-- ═══ Reusable Pulse Animation Style ═══ -->
+        <Style x:Key="PulseDot" TargetType="Ellipse">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsStreaming}" Value="True">
+                    <DataTrigger.EnterActions>
+                        <BeginStoryboard x:Name="PulseAnim">
+                            <Storyboard RepeatBehavior="Forever">
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                    From="0.3" To="1.0" Duration="0:0:0.4" AutoReverse="True"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions>
+                        <StopStoryboard BeginStoryboardName="PulseAnim"/>
+                    </DataTrigger.ExitActions>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
 
     <Grid>
@@ -91,18 +110,176 @@
             </Grid>
         </Border>
 
-        <!-- CHAT MESSAGES AREA -->
+        <!-- ═══ IN-CHAT SEARCH BAR (Ctrl+F) ═══ -->
+        <Border Grid.Row="1" VerticalAlignment="Top" Panel.ZIndex="10"
+                Background="{StaticResource MantleBrush}"
+                Padding="12,6" BorderThickness="0,0,0,1"
+                BorderBrush="{StaticResource Surface0Brush}"
+                Visibility="{Binding IsChatSearchVisible, Converter={StaticResource BoolVis}}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                           Foreground="{StaticResource Overlay0Brush}"
+                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBox Grid.Column="1" x:Name="ChatSearchBox"
+                         Text="{Binding ChatSearchQuery, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource GlowTextBox}"
+                         FontSize="13" FontFamily="{StaticResource MonoFont}"
+                         Padding="8,4" Height="28"/>
+                <TextBlock Grid.Column="2"
+                           Foreground="{StaticResource Overlay0Brush}"
+                           FontSize="11" FontFamily="{StaticResource MonoFont}"
+                           VerticalAlignment="Center" Margin="8,0">
+                    <TextBlock.Text>
+                        <Binding Path="SearchMatchCount" StringFormat="{}{0} matches"/>
+                    </TextBlock.Text>
+                </TextBlock>
+                <Button Grid.Column="3" Content="&#xE711;" FontFamily="Segoe MDL2 Assets"
+                        Style="{StaticResource IconButton}" FontSize="10" Padding="4,4"
+                        Command="{Binding CloseChatSearchCommand}"
+                        ToolTip="Close search (Esc)"/>
+            </Grid>
+        </Border>
+
+        <!-- ═══ CHAT MESSAGES AREA (Virtualized) ═══ -->
         <Border Grid.Row="1" Background="{StaticResource BaseBrush}">
-            <ScrollViewer x:Name="ChatScroller"
-                          Style="{StaticResource SlimScrollViewer}"
-                          VerticalScrollBarVisibility="Auto"
-                          Padding="0,8">
-                <ItemsControl ItemsSource="{Binding Messages}" Margin="8,0">
-                    <ItemsControl.ItemTemplate>
+                <ListBox x:Name="ChatList" ItemsSource="{Binding Messages}" Margin="8,0"
+                         Background="Transparent" BorderThickness="0"
+                         Padding="0,8"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingStackPanel.IsVirtualizing="True"
+                         VirtualizingStackPanel.VirtualizationMode="Recycling"
+                         VirtualizingStackPanel.ScrollUnit="Pixel"
+                         SelectionMode="Single"
+                         HorizontalContentAlignment="Stretch">
+                    <!-- Use slim scrollbar style for the ListBox's internal ScrollViewer -->
+                    <ListBox.Template>
+                        <ControlTemplate TargetType="ListBox">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ScrollViewer Style="{StaticResource SlimScrollViewer}"
+                                              Focusable="False"
+                                              CanContentScroll="True">
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </Border>
+                        </ControlTemplate>
+                    </ListBox.Template>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <ContentPresenter/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <!-- Chat bubble wrapper (full width Grid so HorizontalAlignment works) -->
-                            <Grid>
-                                <!-- ═══ AgentStatus: Claude Code-style inline tool indicator ═══ -->
+                            <Grid Margin="0,1,0,1"
+                                  MouseEnter="MessageBubble_MouseEnter"
+                                  MouseLeave="MessageBubble_MouseLeave">
+
+                                <!-- ═══ Thinking Block (collapsible) ═══ -->
+                                <Border HorizontalAlignment="Left"
+                                        Margin="12,2,200,2"
+                                        Background="#18CBA6F7"
+                                        CornerRadius="8" Padding="10,4"
+                                        Visibility="{Binding HasThinking, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Cursor="Hand"
+                                                    MouseLeftButtonDown="ThinkingHeader_Click">
+                                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="10" Foreground="{StaticResource MauveBrush}"
+                                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Text="Thinking" FontSize="11" FontStyle="Italic"
+                                                       Foreground="{StaticResource MauveBrush}"
+                                                       VerticalAlignment="Center"/>
+                                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                                       Foreground="{StaticResource Overlay0Brush}"
+                                                       VerticalAlignment="Center" Margin="6,0,0,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="&#xE76C;"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsThinkingExpanded}" Value="True">
+                                                                <Setter Property="Text" Value="&#xE76B;"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                        <Border MaxHeight="200" Margin="0,4,0,0"
+                                                Visibility="{Binding IsThinkingExpanded, Converter={StaticResource BoolVis}}">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                                <TextBlock Text="{Binding ThinkingContent}"
+                                                           Foreground="{StaticResource Overlay0Brush}"
+                                                           FontSize="11" FontStyle="Italic"
+                                                           FontFamily="{StaticResource MonoFont}"
+                                                           TextWrapping="Wrap"/>
+                                            </ScrollViewer>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
+                                <Border HorizontalAlignment="Left"
+                                        Margin="12,4,100,4"
+                                        Background="#20F9E2AF"
+                                        BorderBrush="{StaticResource YellowBrush}"
+                                        BorderThickness="2,0,0,0"
+                                        CornerRadius="0,8,8,0"
+                                        Padding="12,8">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.PermissionRequest}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                            <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="14" Foreground="{StaticResource YellowBrush}"
+                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBlock Text="{Binding Content}"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       FontSize="13" FontFamily="{StaticResource MainFont}"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
+                                            <Button Content="Allow" Padding="16,4" Margin="0,0,8,0"
+                                                    Style="{StaticResource PrimaryButton}"
+                                                    FontSize="12"
+                                                    Click="PermissionAllow_Click"/>
+                                            <Button Content="Deny" Padding="16,4"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    FontSize="12"
+                                                    Click="PermissionDeny_Click"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ AgentStatus: inline tool indicator ═══ -->
                                 <Border HorizontalAlignment="Left"
                                         Margin="12,2,200,2"
                                         Background="{StaticResource Surface0Brush}"
@@ -119,7 +296,6 @@
                                         </Style>
                                     </Border.Style>
                                     <StackPanel Orientation="Horizontal">
-                                        <!-- Animated spinner dot (active) / static dot (finalized) -->
                                         <Ellipse Width="9" Height="9" Margin="0,0,10,0"
                                                  VerticalAlignment="Center">
                                             <Ellipse.Style>
@@ -147,23 +323,24 @@
                                                 </Style>
                                             </Ellipse.Style>
                                         </Ellipse>
-                                        <!-- Status text — verb + target + elapsed -->
+                                        <!-- Status text + elapsed time -->
                                         <TextBlock Text="{Binding Content}"
                                                    Foreground="{StaticResource TextBrush}"
                                                    FontSize="13"
                                                    FontFamily="{StaticResource MonoFont}"
                                                    VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding ToolElapsedTime}"
+                                                   Foreground="{StaticResource Overlay0Brush}"
+                                                   FontSize="10" FontFamily="{StaticResource MonoFont}"
+                                                   VerticalAlignment="Center" Margin="8,0,0,0"
+                                                   Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                     </StackPanel>
                                 </Border>
 
-                                <!-- ═══ Normal chat bubble (hidden for AgentStatus) ═══ -->
-                                <Border HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}"
-                                        Margin="{Binding Role, Converter={StaticResource RoleMargin}}"
-                                        Background="{Binding Role, Converter={StaticResource RoleBg}}"
-                                        CornerRadius="{Binding Role, Converter={StaticResource RoleCorner}}"
-                                        Padding="14,10">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
+                                <!-- ═══ Normal chat bubble ═══ -->
+                                <Grid>
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
                                             <Setter Property="Visibility" Value="Visible"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}">
@@ -171,7 +348,34 @@
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </Border.Style>
+                                    </Grid.Style>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- ⎿ Gutter line for ToolAction (Claude Code-style vertical connector) -->
+                                    <Border Grid.Column="0" Width="2" Margin="14,0,0,0"
+                                            Background="{StaticResource Overlay0Brush}"
+                                            CornerRadius="1">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                    </Border>
+
+                                <Border Grid.Column="1"
+                                        HorizontalAlignment="{Binding Role, Converter={StaticResource RoleAlign}}"
+                                        Margin="{Binding Role, Converter={StaticResource RoleMargin}}"
+                                        Background="{Binding Role, Converter={StaticResource RoleBg}}"
+                                        CornerRadius="{Binding Role, Converter={StaticResource RoleCorner}}"
+                                        Padding="14,10">
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
@@ -179,79 +383,136 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
 
-                                        <!-- Role label (hidden for User) -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                            <StackPanel.Style>
-                                                <Style TargetType="StackPanel">
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.User}">
+                                        <!-- Row 0: Role label + Tool Badge + Success/Fail + Hover Actions -->
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.User}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+
+                                                <TextBlock Text="{Binding Role, Converter={StaticResource RoleLabel}}"
+                                                           Foreground="{Binding Role, Converter={StaticResource RoleBrush}}"
+                                                           FontWeight="SemiBold" FontSize="11"
+                                                           FontFamily="{StaticResource MainFont}"/>
+
+                                                <!-- Tool Name Badge -->
+                                                <Border CornerRadius="4" Padding="6,1" Margin="8,0,0,0"
+                                                        Background="{StaticResource Surface1Brush}"
+                                                        Visibility="{Binding ToolName, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                    <TextBlock Text="{Binding ToolName}"
+                                                               Foreground="{StaticResource TealBrush}"
+                                                               FontSize="10" FontFamily="{StaticResource MonoFont}"/>
+                                                </Border>
+
+                                                <!-- Collapsed group count badge -->
+                                                <Border CornerRadius="8" Padding="5,1" Margin="4,0,0,0"
+                                                        Background="{StaticResource MauveBrush}"
+                                                        Visibility="{Binding IsCollapsedGroup, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                    <TextBlock Text="{Binding CollapsedCount}"
+                                                               Foreground="{StaticResource BaseBrush}"
+                                                               FontSize="9" FontWeight="Bold"
+                                                               FontFamily="{StaticResource MonoFont}"/>
+                                                </Border>
+
+                                                <!-- Success/Fail indicator -->
+                                                <TextBlock Text="&#x2713;" Foreground="{StaticResource GreenBrush}"
+                                                           FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
+                                                           VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
                                                             <Setter Property="Visibility" Value="Collapsed"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </StackPanel.Style>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                                                        <Condition Binding="{Binding ToolSuccess}" Value="True"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
 
-                                            <TextBlock Text="{Binding Role, Converter={StaticResource RoleLabel}}"
-                                                       Foreground="{Binding Role, Converter={StaticResource RoleBrush}}"
-                                                       FontWeight="SemiBold" FontSize="11"
-                                                       FontFamily="{StaticResource MainFont}"/>
+                                                <TextBlock Text="&#x2717;" Foreground="{StaticResource RedBrush}"
+                                                           FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
+                                                           VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                                                        <Condition Binding="{Binding ToolSuccess}" Value="False"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
 
-                                            <!-- Tool Name Badge -->
-                                            <Border CornerRadius="4" Padding="6,1" Margin="8,0,0,0"
-                                                    Background="{StaticResource Surface1Brush}"
-                                                    Visibility="{Binding ToolName, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                <TextBlock Text="{Binding ToolName}"
-                                                           Foreground="{StaticResource TealBrush}"
-                                                           FontSize="10" FontFamily="{StaticResource MonoFont}"/>
-                                            </Border>
+                                                <!-- Interrupted indicator -->
+                                                <Border CornerRadius="4" Padding="4,1" Margin="6,0,0,0"
+                                                        Background="#30F38BA8"
+                                                        Visibility="{Binding IsInterrupted, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                    <TextBlock Text="interrupted" FontSize="9"
+                                                               Foreground="{StaticResource RedBrush}"
+                                                               FontFamily="{StaticResource MonoFont}"/>
+                                                </Border>
 
-                                            <!-- Success/Fail indicator -->
-                                            <TextBlock Text="&#x2713;" Foreground="{StaticResource GreenBrush}"
-                                                       FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
-                                                       VerticalAlignment="Center">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                        <Style.Triggers>
-                                                            <MultiDataTrigger>
-                                                                <MultiDataTrigger.Conditions>
-                                                                    <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
-                                                                    <Condition Binding="{Binding ToolSuccess}" Value="True"/>
-                                                                </MultiDataTrigger.Conditions>
-                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                            </MultiDataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
+                                                <!-- Retry countdown -->
+                                                <Border CornerRadius="4" Padding="4,1" Margin="6,0,0,0"
+                                                        Background="#30F9E2AF"
+                                                        Visibility="{Binding IsRetrying, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                    <TextBlock Text="{Binding RetryCountdown}" FontSize="9"
+                                                               Foreground="{StaticResource YellowBrush}"
+                                                               FontFamily="{StaticResource MonoFont}"/>
+                                                </Border>
+                                            </StackPanel>
 
-                                            <TextBlock Text="&#x2717;" Foreground="{StaticResource RedBrush}"
-                                                       FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
-                                                       VerticalAlignment="Center">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                        <Style.Triggers>
-                                                            <MultiDataTrigger>
-                                                                <MultiDataTrigger.Conditions>
-                                                                    <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
-                                                                    <Condition Binding="{Binding ToolSuccess}" Value="False"/>
-                                                                </MultiDataTrigger.Conditions>
-                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                            </MultiDataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </StackPanel>
+                                            <!-- ═══ Hover Action Buttons (Copy + Retry) ═══ -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        Visibility="{Binding IsHovered, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                <!-- Copy message -->
+                                                <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
+                                                        Style="{StaticResource IconButton}"
+                                                        FontSize="10" Padding="4,2" Margin="2,0"
+                                                        ToolTip="Copy message"
+                                                        Click="CopyMessage_Click"
+                                                        Tag="{Binding Content}"/>
+                                                <!-- Retry (only for error messages) -->
+                                                <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
+                                                        Style="{StaticResource IconButton}"
+                                                        FontSize="10" Padding="4,2" Margin="2,0"
+                                                        ToolTip="Retry"
+                                                        Click="RetryMessage_Click"
+                                                        Visibility="{Binding HasError, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                            </StackPanel>
+                                        </Grid>
 
-                                        <!-- Tool Arguments (shown for ToolAction messages with arguments) -->
+                                        <!-- Row 1: Tool Arguments (truncated, structured) -->
                                         <Border Grid.Row="1" Margin="0,4,0,0"
                                                 Background="{StaticResource CrustBrush}"
-                                                CornerRadius="4" Padding="8,5">
+                                                CornerRadius="4" Padding="8,5"
+                                                MaxHeight="120">
                                             <Border.Style>
                                                 <Style TargetType="Border">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -266,18 +527,23 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <TextBlock Text="{Binding ToolArguments}"
-                                                       Foreground="{StaticResource Subtext0Brush}"
-                                                       FontFamily="{StaticResource MonoFont}"
-                                                       FontSize="11" TextWrapping="Wrap"/>
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <TextBlock Text="{Binding ToolArguments}"
+                                                           Foreground="{StaticResource Subtext0Brush}"
+                                                           FontFamily="{StaticResource MonoFont}"
+                                                           FontSize="11" TextWrapping="Wrap"
+                                                           MaxHeight="100"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </ScrollViewer>
                                         </Border>
 
-                                        <!-- Message Content with Markdown Rendering -->
-                                        <StackPanel Grid.Row="1" Margin="0,3,0,0"
+                                        <!-- Row 2: Message Content with Markdown -->
+                                        <StackPanel Grid.Row="2" Margin="0,3,0,0"
                                                     helpers:MarkdownHelper.Markdown="{Binding Content}"/>
 
-                                        <!-- Typing Indicator (shown ONLY when streaming AND content is still empty) -->
-                                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,4,0,0">
+                                        <!-- Row 3: Typing Indicator -->
+                                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,4,0,0">
                                             <StackPanel.Style>
                                                 <Style TargetType="StackPanel">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -292,72 +558,12 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </StackPanel.Style>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}" Margin="0,0,4,0">
-                                                <Ellipse.Style>
-                                                    <Style TargetType="Ellipse">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                                <DataTrigger.EnterActions>
-                                                                    <BeginStoryboard x:Name="ThinkDot1">
-                                                                        <Storyboard RepeatBehavior="Forever">
-                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                From="0.3" To="1.0" Duration="0:0:0.4"
-                                                                                AutoReverse="True" BeginTime="0:0:0"/>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </DataTrigger.EnterActions>
-                                                                <DataTrigger.ExitActions>
-                                                                    <StopStoryboard BeginStoryboardName="ThinkDot1"/>
-                                                                </DataTrigger.ExitActions>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Ellipse.Style>
-                                            </Ellipse>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}" Margin="0,0,4,0">
-                                                <Ellipse.Style>
-                                                    <Style TargetType="Ellipse">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                                <DataTrigger.EnterActions>
-                                                                    <BeginStoryboard x:Name="ThinkDot2">
-                                                                        <Storyboard RepeatBehavior="Forever">
-                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                From="0.3" To="1.0" Duration="0:0:0.4"
-                                                                                AutoReverse="True" BeginTime="0:0:0.15"/>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </DataTrigger.EnterActions>
-                                                                <DataTrigger.ExitActions>
-                                                                    <StopStoryboard BeginStoryboardName="ThinkDot2"/>
-                                                                </DataTrigger.ExitActions>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Ellipse.Style>
-                                            </Ellipse>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}">
-                                                <Ellipse.Style>
-                                                    <Style TargetType="Ellipse">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                                <DataTrigger.EnterActions>
-                                                                    <BeginStoryboard x:Name="ThinkDot3">
-                                                                        <Storyboard RepeatBehavior="Forever">
-                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                From="0.3" To="1.0" Duration="0:0:0.4"
-                                                                                AutoReverse="True" BeginTime="0:0:0.3"/>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </DataTrigger.EnterActions>
-                                                                <DataTrigger.ExitActions>
-                                                                    <StopStoryboard BeginStoryboardName="ThinkDot3"/>
-                                                                </DataTrigger.ExitActions>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Ellipse.Style>
-                                            </Ellipse>
+                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}" Margin="0,0,4,0"
+                                                     Style="{StaticResource PulseDot}"/>
+                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}" Margin="0,0,4,0"
+                                                     Style="{StaticResource PulseDot}"/>
+                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}"
+                                                     Style="{StaticResource PulseDot}"/>
                                             <TextBlock Text="  Thinking..."
                                                        Foreground="{StaticResource Subtext0Brush}"
                                                        FontSize="11" FontStyle="Italic"
@@ -365,8 +571,8 @@
                                                        VerticalAlignment="Center" Margin="4,0,0,0"/>
                                         </StackPanel>
 
-                                        <!-- Tool Output (collapsible) -->
-                                        <Expander Grid.Row="3" Margin="0,6,0,0"
+                                        <!-- Row 4: Tool Output (collapsible) -->
+                                        <Expander Grid.Row="4" Margin="0,6,0,0"
                                                   IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
                                                 <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
@@ -399,78 +605,29 @@
                                             </Expander.Style>
                                         </Expander>
 
-                                        <!-- Footer: timestamp + streaming dots -->
-                                        <StackPanel Grid.Row="4" Orientation="Horizontal"
+                                        <!-- Row 5: Error bar with retry hint -->
+                                        <Border Grid.Row="5" Margin="0,4,0,0" Padding="6,3"
+                                                Background="#20F38BA8" CornerRadius="4"
+                                                Visibility="{Binding HasError, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <TextBlock FontSize="10" Foreground="{StaticResource RedBrush}"
+                                                       FontFamily="{StaticResource MainFont}">
+                                                <Run Text="&#xE783;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
+                                                <Run Text=" An error occurred. Hover for retry button."/>
+                                            </TextBlock>
+                                        </Border>
+
+                                        <!-- Row 6: Footer — streaming dots + timestamp -->
+                                        <StackPanel Grid.Row="6" Orientation="Horizontal"
                                                     HorizontalAlignment="Right" Margin="0,6,0,0">
-                                            <!-- Streaming dots (inline) -->
+                                            <!-- Compact streaming indicator -->
                                             <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
                                                         Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}}">
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                                    <DataTrigger.EnterActions>
-                                                                        <BeginStoryboard x:Name="Dot1Pulse">
-                                                                            <Storyboard RepeatBehavior="Forever">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                    From="0.2" To="1.0" Duration="0:0:0.5"
-                                                                                    AutoReverse="True" BeginTime="0:0:0"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </DataTrigger.EnterActions>
-                                                                    <DataTrigger.ExitActions>
-                                                                        <StopStoryboard BeginStoryboardName="Dot1Pulse"/>
-                                                                    </DataTrigger.ExitActions>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                                    <DataTrigger.EnterActions>
-                                                                        <BeginStoryboard x:Name="Dot2Pulse">
-                                                                            <Storyboard RepeatBehavior="Forever">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                    From="0.2" To="1.0" Duration="0:0:0.5"
-                                                                                    AutoReverse="True" BeginTime="0:0:0.2"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </DataTrigger.EnterActions>
-                                                                    <DataTrigger.ExitActions>
-                                                                        <StopStoryboard BeginStoryboardName="Dot2Pulse"/>
-                                                                    </DataTrigger.ExitActions>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0">
-                                                    <Ellipse.Style>
-                                                        <Style TargetType="Ellipse">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                                    <DataTrigger.EnterActions>
-                                                                        <BeginStoryboard x:Name="Dot3Pulse">
-                                                                            <Storyboard RepeatBehavior="Forever">
-                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                                    From="0.2" To="1.0" Duration="0:0:0.5"
-                                                                                    AutoReverse="True" BeginTime="0:0:0.4"/>
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </DataTrigger.EnterActions>
-                                                                    <DataTrigger.ExitActions>
-                                                                        <StopStoryboard BeginStoryboardName="Dot3Pulse"/>
-                                                                    </DataTrigger.ExitActions>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Ellipse.Style>
-                                                </Ellipse>
+                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0"
+                                                         Style="{StaticResource PulseDot}"/>
+                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0"
+                                                         Style="{StaticResource PulseDot}"/>
+                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0"
+                                                         Style="{StaticResource PulseDot}"/>
                                             </StackPanel>
 
                                             <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
@@ -479,14 +636,14 @@
                                         </StackPanel>
                                     </Grid>
                                 </Border>
-                            </Grid>
+                                </Grid><!-- close gutter+bubble Grid -->
+                            </Grid><!-- close message wrapper Grid -->
                         </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+                    </ListBox.ItemTemplate>
+                </ListBox>
         </Border>
 
-        <!-- EMPTY STATE -->
+        <!-- ═══ EMPTY STATE with Suggested Prompts ═══ -->
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
             <TextBlock Text="&#x2728;" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
@@ -499,10 +656,46 @@
                        Foreground="{StaticResource Subtext0Brush}"
                        FontSize="14" HorizontalAlignment="Center"
                        Margin="0,8,0,0"/>
-            <TextBlock Text="Select a model below or download one from the Models tab."
-                       Foreground="{StaticResource Overlay0Brush}"
-                       FontSize="12" HorizontalAlignment="Center"
-                       Margin="0,4,0,0"/>
+
+            <!-- Suggested Prompts -->
+            <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0" MaxWidth="600">
+                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
+                        Click="SuggestedPrompt_Click"
+                        Tag="Explain this codebase's architecture and key patterns">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource MauveBrush}"/>
+                        <TextBlock Text="Explain codebase" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
+                        Click="SuggestedPrompt_Click"
+                        Tag="Find and fix bugs in this project">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource RedBrush}"/>
+                        <TextBlock Text="Find bugs" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
+                        Click="SuggestedPrompt_Click"
+                        Tag="Write unit tests for the most critical code paths">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8A0;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource GreenBrush}"/>
+                        <TextBlock Text="Write tests" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
+                        Click="SuggestedPrompt_Click"
+                        Tag="Review recent changes and suggest improvements">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource TealBrush}"/>
+                        <TextBlock Text="Code review" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                    </StackPanel>
+                </Button>
+            </WrapPanel>
 
             <Button Style="{StaticResource SecondaryButton}"
                     Command="{Binding OpenFolderCommand}"
@@ -532,7 +725,6 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Input box with placeholder overlay -->
                 <Grid>
                     <TextBox x:Name="InputBox"
                              Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
@@ -545,7 +737,6 @@
                              VerticalScrollBarVisibility="Auto"
                              IsEnabled="{Binding IsGenerating, Converter={StaticResource InvertBool}}"/>
 
-                    <!-- Placeholder text -->
                     <TextBlock Text="Type a message... (Enter to send, Shift+Enter for new line)"
                                FontFamily="{StaticResource MainFont}"
                                FontSize="13"
@@ -557,14 +748,12 @@
                 </Grid>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
-                    <!-- Open Folder Button -->
                     <Button Content="&#xE838;" Style="{StaticResource IconButton}"
                             Command="{Binding OpenFolderCommand}"
                             FontFamily="Segoe MDL2 Assets"
                             ToolTip="Open project folder"
                             Margin="0,0,4,0"/>
 
-                    <!-- Send Button -->
                     <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
                             Command="{Binding SendMessageCommand}"
                             FontFamily="Segoe MDL2 Assets" FontSize="16"
@@ -572,7 +761,6 @@
                             ToolTip="Send message (Enter)"
                             Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
 
-                    <!-- Stop Button -->
                     <Button Content="&#xE71A;" Style="{StaticResource DangerButton}"
                             Command="{Binding StopGenerationCommand}"
                             FontFamily="Segoe MDL2 Assets" FontSize="16"
@@ -580,7 +768,6 @@
                             ToolTip="Stop generation"
                             Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}"/>
 
-                    <!-- Clear Button -->
                     <Button Content="&#xE74D;" Style="{StaticResource IconButton}"
                             Command="{Binding ClearChatCommand}"
                             FontFamily="Segoe MDL2 Assets"
@@ -589,7 +776,7 @@
             </Grid>
         </Border>
 
-        <!-- CONTEXT WARNING BAR (slides in when context is getting full) -->
+        <!-- CONTEXT WARNING BAR with action buttons -->
         <Border Grid.Row="3" Padding="10,6"
                 BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}"
                 Visibility="{Binding ShowContextWarning, Converter={StaticResource BoolVis}}">
@@ -601,33 +788,13 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Context bar (prominent) -->
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets"
-                               FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="{StaticResource YellowBrush}"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding ShowContextWarning}" Value="True">
-                                        <DataTrigger.EnterActions>
-                                            <BeginStoryboard x:Name="WarnPulse">
-                                                <Storyboard RepeatBehavior="Forever">
-                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                        From="1.0" To="0.3" Duration="0:0:1" AutoReverse="True"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </DataTrigger.EnterActions>
-                                        <DataTrigger.ExitActions>
-                                            <StopStoryboard BeginStoryboardName="WarnPulse"/>
-                                        </DataTrigger.ExitActions>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
+                               FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"
+                               Foreground="{StaticResource YellowBrush}"/>
                     <ProgressBar Value="{Binding ContextUsagePercent}" Maximum="100"
                                  Width="120" Height="8"
                                  Style="{StaticResource ContextProgressBar}"
@@ -640,15 +807,27 @@
                                VerticalAlignment="Center" Margin="8,0,0,0"/>
                 </StackPanel>
 
-                <!-- Warning text -->
                 <TextBlock Grid.Column="1" Text="{Binding ContextWarningText}"
                            Foreground="{StaticResource YellowBrush}"
                            FontSize="11" FontFamily="{StaticResource MainFont}"
                            VerticalAlignment="Center" Margin="12,0,0,0"
                            TextTrimming="CharacterEllipsis"/>
 
+                <!-- Compact button -->
+                <Button Grid.Column="2" Padding="8,3" Margin="4,0"
+                        Style="{StaticResource SecondaryButton}"
+                        Command="{Binding CompactCommand}"
+                        ToolTip="Compress conversation to free up context">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock Text="Compact" FontFamily="{StaticResource MainFont}"
+                                   FontSize="10" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
                 <!-- New Chat button -->
-                <Button Grid.Column="2" Padding="10,4" Margin="8,0,0,0"
+                <Button Grid.Column="3" Padding="10,4" Margin="4,0,0,0"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding NewSessionCommand}"
                         ToolTip="Start a new chat to reset context">
@@ -702,13 +881,11 @@
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <!-- Refresh models button -->
                     <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
                             Style="{StaticResource IconButton}"
                             Command="{Binding RefreshModelsCommand}"
                             ToolTip="Refresh model list"
                             FontSize="10" Padding="4,4" Margin="2,0,0,0"/>
-                    <!-- Loading indicator -->
                     <TextBlock Text="Loading..."
                                Foreground="{StaticResource YellowBrush}"
                                FontSize="10" FontWeight="SemiBold"
@@ -725,7 +902,6 @@
                                FontFamily="{StaticResource MainFont}"
                                TextTrimming="CharacterEllipsis"
                                MaxWidth="300"/>
-                    <!-- Generating Spinner (animated) -->
                     <StackPanel Orientation="Horizontal" Margin="8,0,0,0"
                                 Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}">
                         <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets"
@@ -784,120 +960,27 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- LED-Style Context Bar -->
+                <!-- LED Context Bar -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0"
                             VerticalAlignment="Center">
-                    <!-- 5-segment LED bar -->
                     <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
                                 ToolTip="Context Memory — AI quality degrades as this fills up">
-                        <!-- Segment 1: 0-20% (Green) -->
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Background">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=0}" Value="True">
-                                            <Setter Property="Background">
-                                                <Setter.Value>
-                                                    <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.9"/>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
+                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=0}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
-                        <!-- Segment 2: 25-50% (Teal) -->
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Background">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=25}" Value="True">
-                                            <Setter Property="Background">
-                                                <Setter.Value>
-                                                    <SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.9"/>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
+                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=25}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
-                        <!-- Segment 3: 50-75% (Yellow) -->
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Background">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.15"/>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=50}" Value="True">
-                                            <Setter Property="Background">
-                                                <Setter.Value>
-                                                    <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.9"/>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
+                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=50}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
-                        <!-- Segment 4: 75-90% (Peach) -->
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Background">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.15"/>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=75}" Value="True">
-                                            <Setter Property="Background">
-                                                <Setter.Value>
-                                                    <SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.9"/>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
+                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=75}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
-                        <!-- Segment 5: 90-100% (Red) -->
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Background">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.15"/>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=90}" Value="True">
-                                            <Setter Property="Background">
-                                                <Setter.Value>
-                                                    <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.9"/>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
+                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=90}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
                     </StackPanel>
-
-                    <!-- Level Label -->
                     <Border CornerRadius="3" Padding="4,1" VerticalAlignment="Center"
                             Background="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}"
                             Opacity="0.8" Margin="0,0,4,0">
@@ -906,8 +989,6 @@
                                    Foreground="{StaticResource BaseBrush}"
                                    FontFamily="{StaticResource MonoFont}"/>
                     </Border>
-
-                    <!-- Percentage -->
                     <TextBlock Foreground="{StaticResource Overlay0Brush}"
                                FontSize="10" FontFamily="{StaticResource MonoFont}"
                                VerticalAlignment="Center">
@@ -947,7 +1028,7 @@
                     <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
                               Foreground="{StaticResource MauveBrush}"
                               FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="Extended Thinking — enables deeper reasoning with thinking blocks (Anthropic only)">
+                              ToolTip="Extended Thinking — enables deeper reasoning (Anthropic only)">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="10"
                                        VerticalAlignment="Center" Margin="0,0,3,0"/>
@@ -956,7 +1037,6 @@
                     </CheckBox>
                 </StackPanel>
 
-                <!-- New Chat quick button -->
                 <Button Grid.Column="5" Style="{StaticResource IconButton}"
                         Command="{Binding NewSessionCommand}"
                         ToolTip="New Chat"
