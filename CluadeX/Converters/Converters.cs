@@ -98,6 +98,8 @@ public class RoleToLabelConverter : IValueConverter
             MessageRole.ToolAction => "\U0001F527 Tool",
             MessageRole.AgentStatus => "\u2699 Agent",
             MessageRole.System => "\u2699 System",
+            MessageRole.PermissionRequest => "\U0001F512 Permission",
+            MessageRole.Thinking => "\U0001F9E0 Thinking",
             _ => "Unknown",
         };
     }

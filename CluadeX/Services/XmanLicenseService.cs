@@ -7,7 +7,7 @@ namespace CluadeX.Services;
 
 /// <summary>
 /// Connects CluadeX activation system to xman4289.com license API.
-/// API: https://xman4289.com/api/v1/product/cluadex
+/// API: https://xman4289.com/api/v1/product/cluadex-ai-coding-assistant
 /// Endpoints: /register-device, /activate, /validate, /deactivate, /pricing, /demo
 /// </summary>
 public class XmanLicenseService
@@ -59,9 +59,9 @@ public class XmanLicenseService
         }
     }
 
-    /// <summary>Activate a license key via xman API.</summary>
-    public async Task<(bool success, string tier, string message)> ActivateAsync(
-        string licenseKey, CancellationToken ct = default)
+    /// <summary>Activate a license key via xman API. Set forceRebind=true to transfer from another device.</summary>
+    public async Task<(bool success, string tier, string message, string? errorCode)> ActivateAsync(
+        string licenseKey, bool forceRebind = false, CancellationToken ct = default)
     {
         try
         {
@@ -77,11 +77,22 @@ public class XmanLicenseService
                 ["app_version"] = GetAppVersion(),
             };
 
+            if (forceRebind)
+                payload["force_rebind"] = "true";
+
             var response = await PostAsync($"{BaseUrl}/activate", payload, ct);
 
             if (response.success)
             {
-                string tier = response.data?.GetProperty("status").GetString() switch
+                // Server returns data.license_type (not data.status) on activate
+                string licenseType = "";
+                if (response.data.HasValue)
+                {
+                    if (response.data.Value.TryGetProperty("license_type", out var lt))
+                        licenseType = lt.GetString() ?? "";
+                }
+
+                string tier = licenseType switch
                 {
                     "lifetime" => "enterprise",
                     "yearly" or "monthly" => "pro",
@@ -90,16 +101,22 @@ public class XmanLicenseService
                 };
 
                 OnStatusChanged?.Invoke("License activated!");
-                return (true, tier, response.message);
+                return (true, tier, response.message, null);
             }
 
+            // Extract error_code for caller to handle (e.g. ALREADY_ACTIVATED_OTHER_DEVICE)
+            string? errorCode = null;
+            if (response.rawRoot.HasValue &&
+                response.rawRoot.Value.TryGetProperty("error_code", out var ec))
+                errorCode = ec.GetString();
+
             OnStatusChanged?.Invoke("Activation failed");
-            return (false, "free", response.message);
+            return (false, "free", response.message, errorCode);
         }
         catch (Exception ex)
         {
             OnStatusChanged?.Invoke("Connection error");
-            return (false, "free", $"Connection failed: {ex.Message}");
+            return (false, "free", $"Connection failed: {ex.Message}", null);
         }
     }
 
@@ -119,10 +136,18 @@ public class XmanLicenseService
 
             if (response.success && response.data.HasValue)
             {
-                string tier = response.data.Value.GetProperty("status").GetString() switch
+                // Validate returns data.license_type and data.status
+                string licenseType = "";
+                if (response.data.Value.TryGetProperty("license_type", out var lt))
+                    licenseType = lt.GetString() ?? "";
+                else if (response.data.Value.TryGetProperty("status", out var st))
+                    licenseType = st.GetString() ?? "";
+
+                string tier = licenseType switch
                 {
                     "lifetime" => "enterprise",
                     "yearly" or "monthly" => "pro",
+                    "demo" or "daily" or "weekly" => "dev",
                     _ => "pro",
                 };
 
@@ -175,13 +200,17 @@ public class XmanLicenseService
             var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("data", out var data))
+            if (root.TryGetProperty("data", out var data)
+                && data.TryGetProperty("plans", out var plans))
             {
                 return new PricingInfo
                 {
-                    MonthlyPrice = data.TryGetProperty("monthly", out var m) ? m.GetDecimal() : 199,
-                    YearlyPrice = data.TryGetProperty("yearly", out var y) ? y.GetDecimal() : 899,
-                    LifetimePrice = data.TryGetProperty("lifetime", out var l) ? l.GetDecimal() : 4999,
+                    MonthlyPrice = plans.TryGetProperty("monthly", out var m)
+                        && m.TryGetProperty("price", out var mp) ? mp.GetDecimal() : 399,
+                    YearlyPrice = plans.TryGetProperty("yearly", out var y)
+                        && y.TryGetProperty("price", out var yp) ? yp.GetDecimal() : 2500,
+                    LifetimePrice = plans.TryGetProperty("lifetime", out var l)
+                        && l.TryGetProperty("price", out var lp) ? lp.GetDecimal() : 5000,
                     Currency = "THB",
                 };
             }
@@ -191,13 +220,13 @@ public class XmanLicenseService
         // Default pricing
         return new PricingInfo
         {
-            MonthlyPrice = 199, YearlyPrice = 899, LifetimePrice = 4999, Currency = "THB"
+            MonthlyPrice = 399, YearlyPrice = 2500, LifetimePrice = 5000, Currency = "THB"
         };
     }
 
     // ─── Helpers ───
 
-    private async Task<(bool success, string message, JsonElement? data)> PostAsync(
+    private async Task<(bool success, string message, JsonElement? data, JsonElement? rawRoot)> PostAsync(
         string url, Dictionary<string, string> payload, CancellationToken ct)
     {
         var json = JsonSerializer.Serialize(payload);
@@ -212,7 +241,7 @@ public class XmanLicenseService
         string message = root.TryGetProperty("message", out var msg) ? msg.GetString() ?? "" : "";
         JsonElement? data = root.TryGetProperty("data", out var d) ? d : null;
 
-        return (success, message, data);
+        return (success, message, data, root);
     }
 
     private static string GetAppVersion()
@@ -224,8 +253,8 @@ public class XmanLicenseService
 
 public class PricingInfo
 {
-    public decimal MonthlyPrice { get; set; } = 199;
-    public decimal YearlyPrice { get; set; } = 899;
-    public decimal LifetimePrice { get; set; } = 4999;
+    public decimal MonthlyPrice { get; set; } = 399;
+    public decimal YearlyPrice { get; set; } = 2500;
+    public decimal LifetimePrice { get; set; } = 5000;
     public string Currency { get; set; } = "THB";
 }

@@ -25,6 +25,13 @@ public class ActivationService
 
     public event Action? ActivationChanged;
 
+    /// <summary>
+    /// Raised when the key is already activated on another device.
+    /// The UI should show a confirmation dialog; call ActivateForceAsync() to proceed.
+    /// Args: (licenseKey, serverMessage)
+    /// </summary>
+    public event Action<string, string>? DeviceConflictDetected;
+
     public ActivationService(SettingsService settingsService, XmanLicenseService licenseService)
     {
         _settingsService = settingsService;
@@ -85,8 +92,7 @@ public class ActivationService
 
         key = key.Trim();
 
-        // Always validate via online API
-        var (success, tier, message) = await _licenseService.ActivateAsync(key, ct);
+        var (success, tier, message, errorCode) = await _licenseService.ActivateAsync(key, forceRebind: false, ct);
 
         if (success)
         {
@@ -97,7 +103,40 @@ public class ActivationService
             return (true, $"Activated! Tier: {TierDisplayName}");
         }
 
+        // Key is already activated on another device — notify UI for confirmation
+        if (errorCode == "ALREADY_ACTIVATED_OTHER_DEVICE")
+        {
+            DeviceConflictDetected?.Invoke(key, message);
+            return (false, message + "\n\nต้องการย้ายมาเครื่องนี้หรือไม่? (เครื่องเก่าจะถูกยกเลิก)");
+        }
+
         return (false, !string.IsNullOrEmpty(message) ? message : "Invalid activation key. Please check and try again.");
+    }
+
+    /// <summary>Force activate: deactivate old device and activate on this device.</summary>
+    public async Task<(bool success, string message)> ActivateForceAsync(string key, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return (false, "Please enter an activation key.");
+
+        key = key.Trim();
+
+        // Step 1: Deactivate from old device
+        await _licenseService.DeactivateAsync(key, ct);
+
+        // Step 2: Activate on this device with force_rebind
+        var (success, tier, message, _) = await _licenseService.ActivateAsync(key, forceRebind: true, ct);
+
+        if (success)
+        {
+            _isActivated = true;
+            _activationTier = tier;
+            _settingsService.UpdateSettings(s => s.ActivationKey = key);
+            ActivationChanged?.Invoke();
+            return (true, $"ย้ายเครื่องสำเร็จ! Tier: {TierDisplayName}");
+        }
+
+        return (false, !string.IsNullOrEmpty(message) ? message : "Failed to transfer license.");
     }
 
     /// <summary>Synchronous activation (legacy compat — wraps async safely to avoid SynchronizationContext deadlock).</summary>
@@ -189,9 +228,7 @@ public class ActivationService
     {
         if (string.IsNullOrWhiteSpace(key)) return false;
         key = key.Trim();
-        // Accept CLUADEX-XXXX-XXXX-XXXX or CX-XXXX-XXXX-XXXX format
-        return (key.StartsWith("CLUADEX-", StringComparison.OrdinalIgnoreCase)
-             || key.StartsWith("CX-", StringComparison.OrdinalIgnoreCase))
-            && key.Split('-').Length >= 4;
+        // Accept any key format: XXXX-XXXX-XXXX-XXXX (server validates the actual key)
+        return key.Contains('-') && key.Split('-').Length >= 3 && key.Length >= 10;
     }
 }

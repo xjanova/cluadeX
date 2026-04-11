@@ -103,6 +103,17 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Flush all pending state to disk before exit
+        try
+        {
+            var settings = _serviceProvider?.GetService<SettingsService>();
+            settings?.Save();
+
+            var chatVm = _serviceProvider?.GetService<ChatViewModel>();
+            chatVm?.SaveNow();
+        }
+        catch { /* best-effort on exit */ }
+
         if (_serviceProvider is IDisposable disposable)
             disposable.Dispose();
 

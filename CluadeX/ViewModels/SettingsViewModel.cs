@@ -15,6 +15,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly LocalizationService _localizationService;
     private readonly MemoryService _memoryService;
     private readonly ActivationService _activationService;
+    private readonly System.Windows.Threading.DispatcherTimer _autoSaveDebounce;
 
     private string _modelDirectory = string.Empty;
     private string _cacheDirectory = string.Empty;
@@ -233,6 +234,18 @@ public class SettingsViewModel : ViewModelBase
         RefreshMemoriesCommand = new RelayCommand(RefreshMemories);
         DeleteMemoryCommand = new RelayCommand(DeleteSelectedMemory);
 
+        // Debounced auto-save: persist settings 2s after last property change
+        _autoSaveDebounce = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2)
+        };
+        _autoSaveDebounce.Tick += (_, _) =>
+        {
+            _autoSaveDebounce.Stop();
+            Save();
+        };
+        PropertyChanged += (_, _) => { _autoSaveDebounce.Stop(); _autoSaveDebounce.Start(); };
+
         LoadFromSettings();
         DetectGpuInfo();
         RefreshMemories();
@@ -335,21 +348,12 @@ public class SettingsViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Apply current UI values to the in-memory config so TestConnection works
-    /// without triggering a disk save.
+    /// Apply current UI values to config and persist to disk immediately.
+    /// Previously this was in-memory only, causing settings loss on restart.
     /// </summary>
     private void ApplyProviderConfigInMemory()
     {
-        var key = SelectedProvider.ToString();
-        var config = new ProviderConfig
-        {
-            ApiKey = string.IsNullOrWhiteSpace(ProviderApiKey) ? null : ProviderApiKey,
-            BaseUrl = string.IsNullOrWhiteSpace(ProviderBaseUrl) ? null : ProviderBaseUrl,
-            SelectedModel = ProviderModel,
-            CustomModelId = ProviderCustomModel,
-            UseCustomModel = UseCustomModel,
-        };
-        _settingsService.Settings.ProviderConfigs[key] = config;
+        SaveProviderConfig();
     }
 
     private async Task ApplyProvider()
@@ -557,7 +561,11 @@ public class SettingsViewModel : ViewModelBase
         });
 
         SaveStatus = "Settings saved!";
-        _ = Task.Delay(2000).ContinueWith(_ => App.Current?.Dispatcher.Invoke(() => SaveStatus = ""));
+        _ = Task.Delay(2000).ContinueWith(_ =>
+        {
+            try { App.Current?.Dispatcher.BeginInvoke(() => SaveStatus = ""); }
+            catch { /* app may be shutting down */ }
+        });
     }
 
     private void ResetDefaults()

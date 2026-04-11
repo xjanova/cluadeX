@@ -30,6 +30,11 @@ public class PluginService
     public List<PluginInfo> ScanPlugins()
     {
         var plugins = new List<PluginInfo>();
+
+        // Respect feature toggle — if PluginSystem is disabled, return empty
+        if (!_settingsService.Settings.Features.PluginSystem)
+            return plugins;
+
         var enabledNames = LoadEnabledPluginNames();
 
         if (!Directory.Exists(_pluginsDir))

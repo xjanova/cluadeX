@@ -130,6 +130,20 @@
                             Command="{Binding DeactivateCommand}"
                             Visibility="{Binding IsActivated, Converter={StaticResource BoolVis}}"/>
 
+                    <!-- Force transfer button (when device conflict) -->
+                    <Button Content="⚠ ย้ายมาเครื่องนี้ (เครื่องเก่าจะถูกยกเลิก)" Margin="0,6,0,0"
+                            HorizontalAlignment="Left" Padding="12,6" FontSize="12"
+                            FontFamily="{StaticResource MainFont}"
+                            Command="{Binding ForceActivateCommand}"
+                            Visibility="{Binding ShowForceActivate, Converter={StaticResource BoolVis}}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                <Setter Property="Background" Value="#44fab387"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+
                     <!-- Status message -->
                     <TextBlock Text="{Binding ActivationMessage}" FontSize="12" Margin="0,6,0,0"
                                FontFamily="{StaticResource MainFont}" TextWrapping="Wrap"
@@ -182,7 +196,7 @@
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <CheckBox Style="{StaticResource ToggleSwitch}"
                                               IsChecked="{Binding IsEnabled}"
-                                              IsEnabled="{Binding IsToggleable}"
+                                              IsEnabled="{Binding CanToggle}"
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
@@ -264,7 +278,7 @@
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <CheckBox Style="{StaticResource ToggleSwitch}"
                                               IsChecked="{Binding IsEnabled}"
-                                              IsEnabled="{Binding IsToggleable}"
+                                              IsEnabled="{Binding CanToggle}"
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
@@ -306,7 +320,7 @@
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <CheckBox Style="{StaticResource ToggleSwitch}"
                                               IsChecked="{Binding IsEnabled}"
-                                              IsEnabled="{Binding IsToggleable}"
+                                              IsEnabled="{Binding CanToggle}"
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
@@ -348,7 +362,7 @@
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <CheckBox Style="{StaticResource ToggleSwitch}"
                                               IsChecked="{Binding IsEnabled}"
-                                              IsEnabled="{Binding IsToggleable}"
+                                              IsEnabled="{Binding CanToggle}"
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"

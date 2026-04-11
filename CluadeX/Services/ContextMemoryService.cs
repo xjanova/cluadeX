@@ -160,6 +160,8 @@ public class ContextMemoryService
     /// </summary>
     public bool ShouldSummarize(IEnumerable<ChatMessage> messages)
     {
+        // Respect feature toggle — if ContextMemory is disabled, never auto-summarize
+        if (!_settingsService.Settings.Features.ContextMemory) return false;
         return GetContextUsagePercent(messages) > 75.0;
     }
 

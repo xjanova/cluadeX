@@ -25,8 +25,11 @@ public class FeatureItem : ViewModelBase
     public bool IsLocked
     {
         get => _isLocked;
-        set => SetProperty(ref _isLocked, value);
+        set { SetProperty(ref _isLocked, value); OnPropertyChanged(nameof(CanToggle)); }
     }
+
+    /// <summary>Can this feature be toggled? Must be toggleable AND not locked by activation.</summary>
+    public bool CanToggle => IsToggleable && !IsLocked;
 
     private bool _isUnlocked = true;
     public bool IsUnlocked
@@ -95,10 +98,14 @@ public class FeaturesViewModel : ViewModelBase
     public string ActivationMessage { get => _activationMessage; set => SetProperty(ref _activationMessage, value); }
     private bool _activationSuccess;
     public bool ActivationSuccess { get => _activationSuccess; set => SetProperty(ref _activationSuccess, value); }
+    private bool _showForceActivate;
+    public bool ShowForceActivate { get => _showForceActivate; set => SetProperty(ref _showForceActivate, value); }
+    private string _pendingKey = "";
 
     public ICommand ToggleFeatureCommand { get; }
     public ICommand ActivateCommand { get; }
     public ICommand DeactivateCommand { get; }
+    public ICommand ForceActivateCommand { get; }
 
     public FeaturesViewModel(SettingsService settingsService, LocalizationService loc, ActivationService activation)
     {
@@ -107,14 +114,21 @@ public class FeaturesViewModel : ViewModelBase
         _activation = activation;
 
         ToggleFeatureCommand = new RelayCommand<FeatureItem>(ToggleFeature);
-        ActivateCommand = new RelayCommand(DoActivate);
+        ActivateCommand = new AsyncRelayCommand(DoActivateAsync);
         DeactivateCommand = new RelayCommand(DoDeactivate);
+        ForceActivateCommand = new AsyncRelayCommand(DoForceActivateAsync);
 
         _loc.LanguageChanged += RefreshLabels;
         _activation.ActivationChanged += () =>
         {
             RefreshActivationState();
             RefreshLockStates();
+        };
+
+        _activation.DeviceConflictDetected += (key, msg) =>
+        {
+            _pendingKey = key;
+            ShowForceActivate = true;
         };
 
         BuildFeatureList();
@@ -128,12 +142,39 @@ public class FeaturesViewModel : ViewModelBase
         ActivationTier = _activation.TierDisplayName;
     }
 
-    private void DoActivate()
+    private async Task DoActivateAsync()
     {
-        var (success, message) = _activation.Activate(ActivationKeyInput);
+        ShowForceActivate = false;
+        ActivationMessage = "Activating...";
+        ActivationSuccess = false;
+
+        var (success, message) = await _activation.ActivateAsync(ActivationKeyInput);
         ActivationMessage = message;
         ActivationSuccess = success;
-        if (success) ActivationKeyInput = "";
+        if (success) { ActivationKeyInput = ""; ShowForceActivate = false; }
+    }
+
+    private async Task DoForceActivateAsync()
+    {
+        var key = !string.IsNullOrEmpty(_pendingKey) ? _pendingKey : ActivationKeyInput;
+        if (string.IsNullOrWhiteSpace(key)) return;
+
+        ActivationMessage = "Transferring license...";
+        ActivationSuccess = false;
+
+        try
+        {
+            var (success, message) = await _activation.ActivateForceAsync(key);
+            ActivationMessage = message;
+            ActivationSuccess = success;
+            ShowForceActivate = false;
+            if (success) { ActivationKeyInput = ""; _pendingKey = ""; }
+        }
+        catch (Exception ex)
+        {
+            ActivationMessage = $"Transfer failed: {ex.Message}";
+            ActivationSuccess = false;
+        }
     }
 
     private void DoDeactivate()
@@ -158,11 +199,24 @@ public class FeaturesViewModel : ViewModelBase
     {
         foreach (var item in items)
         {
-            bool unlocked = _activation.IsFeatureUnlocked(item.Key);
+            bool isFreeFeature = IsFreeFeature(item.Key);
+            bool unlocked = isFreeFeature || _activation.IsActivated;
+
             item.IsLocked = !unlocked;
             item.IsUnlocked = unlocked;
         }
     }
+
+    /// <summary>Free features are never locked regardless of activation status.</summary>
+    private static bool IsFreeFeature(string key) => key switch
+    {
+        "feature.localInference" or "feature.chatPersistence" or "feature.markdown"
+        or "feature.gpuDetection" or "feature.darkTheme" or "feature.i18n"
+        or "feature.buddy" or "feature.dpapi" or "feature.pathSafety"
+        or "feature.noTelemetry" or "feature.codeExecution" or "feature.fileSystem"
+        or "feature.ollama" => true,
+        _ => false,
+    };
 
     private void BuildFeatureList()
     {
@@ -364,9 +418,10 @@ public class FeaturesViewModel : ViewModelBase
 
     private void ToggleFeature(FeatureItem? item)
     {
-        if (item == null || !item.IsToggleable) return;
+        if (item == null || !item.CanToggle) return;
 
-        item.IsEnabled = !item.IsEnabled;
+        // Don't toggle here — the CheckBox.IsChecked two-way binding already toggled IsEnabled.
+        // We only need to update the status label and sync to settings.
         item.StatusLabel = item.IsEnabled ? _loc.T("features.enabled") : _loc.T("features.disabled");
 
         // Sync back to settings
