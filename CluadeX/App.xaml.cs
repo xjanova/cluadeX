@@ -1,4 +1,6 @@
+using System.IO;
 using System.Windows;
+using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using CluadeX.Services;
 using CluadeX.Services.Mcp;
@@ -10,9 +12,21 @@ public partial class App : Application
 {
     private ServiceProvider? _serviceProvider;
 
+    /// <summary>Directory crash logs are written to. Kept lightweight (no directory-exists check on each access).</summary>
+    private static string CrashLogDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".cluadex", "crash-logs");
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // ─── Global Exception Handlers (must be installed BEFORE any real work) ───
+        // Without these, an unhandled exception anywhere in the app silently kills the process
+        // with no diagnostic output — making it impossible for users to report bugs.
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        System.Threading.Tasks.TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
         var services = new ServiceCollection();
         ConfigureServices(services);
@@ -112,11 +126,67 @@ public partial class App : Application
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
             chatVm?.SaveNow();
         }
-        catch { /* best-effort on exit */ }
+        catch (Exception ex)
+        {
+            // Best-effort on exit — still write to debug output for troubleshooting.
+            System.Diagnostics.Debug.WriteLine($"OnExit flush failed: {ex.Message}");
+        }
 
         if (_serviceProvider is IDisposable disposable)
             disposable.Dispose();
 
         base.OnExit(e);
+    }
+
+    // ─── Global Exception Handlers ───
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        WriteCrashLog("dispatcher", e.Exception);
+        // Keep the app alive for non-fatal UI exceptions — losing unsaved chat state is worse than a blip.
+        // Fatal exceptions (StackOverflow, OutOfMemory, AccessViolation) can't be caught here anyway.
+        MessageBox.Show(
+            $"An error occurred:\n\n{e.Exception.Message}\n\nA crash log has been saved to:\n{CrashLogDir}",
+            "CluadeX — Unexpected Error",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        e.Handled = true;
+    }
+
+    private void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        // AppDomain exceptions are typically fatal and the process will terminate after this returns.
+        if (e.ExceptionObject is Exception ex)
+            WriteCrashLog("appdomain", ex);
+    }
+
+    private void OnUnobservedTaskException(object? sender, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
+    {
+        WriteCrashLog("task", e.Exception);
+        // Mark as observed so GC doesn't terminate the process.
+        e.SetObserved();
+    }
+
+    private static void WriteCrashLog(string source, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(CrashLogDir);
+            string path = Path.Combine(CrashLogDir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{source}.log");
+            var body = new System.Text.StringBuilder();
+            body.AppendLine($"Timestamp: {DateTime.Now:O}");
+            body.AppendLine($"Source: {source}");
+            body.AppendLine($"App Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
+            body.AppendLine($"OS: {Environment.OSVersion.VersionString}");
+            body.AppendLine($"CLR: {Environment.Version}");
+            body.AppendLine();
+            body.AppendLine(ex.ToString());
+            File.WriteAllText(path, body.ToString());
+        }
+        catch (Exception writeEx)
+        {
+            // Crash log writing itself failed — do not try to show UI (could recurse).
+            System.Diagnostics.Debug.WriteLine($"Failed to write crash log: {writeEx.Message}\nOriginal: {ex}");
+        }
     }
 }

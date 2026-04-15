@@ -136,7 +136,34 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    public string ProviderApiKey { get => _providerApiKey; set => SetProperty(ref _providerApiKey, value); }
+    public string ProviderApiKey
+    {
+        get => _providerApiKey;
+        set
+        {
+            if (SetProperty(ref _providerApiKey, value))
+                OnPropertyChanged(nameof(MaskedApiKey));
+        }
+    }
+
+    /// <summary>Masked display of the API key — shows dots + last 4 chars for verification.</summary>
+    public string MaskedApiKey
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_providerApiKey)) return "";
+            if (_providerApiKey.Length <= 4) return new string('\u2022', _providerApiKey.Length);
+            return new string('\u2022', Math.Max(8, _providerApiKey.Length - 4)) + _providerApiKey[^4..];
+        }
+    }
+
+    private bool _showApiKey;
+    /// <summary>When true, API key TextBox is shown; when false, only a masked label is visible.</summary>
+    public bool ShowApiKey
+    {
+        get => _showApiKey;
+        set => SetProperty(ref _showApiKey, value);
+    }
     public string ProviderBaseUrl { get => _providerBaseUrl; set => SetProperty(ref _providerBaseUrl, value); }
     public string ProviderModel { get => _providerModel; set => SetProperty(ref _providerModel, value); }
     public string ProviderCustomModel { get => _providerCustomModel; set => SetProperty(ref _providerCustomModel, value); }

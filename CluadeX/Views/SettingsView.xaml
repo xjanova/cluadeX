@@ -64,7 +64,7 @@
                     <StackPanel Visibility="{Binding NeedsApiKey, Converter={StaticResource BoolVis}}">
                         <TextBlock Text="API Key" Style="{StaticResource SettingLabel}"/>
                         <TextBlock Style="{StaticResource SettingDesc}">
-                            <Run Text="Your API key for this provider. Stored locally in settings.json."/>
+                            <Run Text="Your API key for this provider. Stored locally in settings.json. Click 'Show' to reveal while editing."/>
                         </TextBlock>
                         <TextBlock Margin="0,0,0,8" FontSize="11">
                             <Hyperlink NavigateUri="{Binding ApiKeyLink}" RequestNavigate="Hyperlink_RequestNavigate"
@@ -72,8 +72,43 @@
                                 <Run Text="{Binding ApiKeyLinkText, Mode=OneWay}"/>
                             </Hyperlink>
                         </TextBlock>
-                        <TextBox Text="{Binding ProviderApiKey, UpdateSourceTrigger=PropertyChanged}"
-                                 Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <!-- Masked display (read-only) shown when ShowApiKey = false -->
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding MaskedApiKey, Mode=OneWay}"
+                                     IsReadOnly="True"
+                                     Style="{StaticResource ModernTextBox}"
+                                     Visibility="{Binding ShowApiKey, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                            <!-- Editable real key shown when ShowApiKey = true -->
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding ProviderApiKey, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource ModernTextBox}"
+                                     Visibility="{Binding ShowApiKey, Converter={StaticResource BoolVis}}"/>
+                            <ToggleButton Grid.Column="1"
+                                          IsChecked="{Binding ShowApiKey}"
+                                          Margin="8,0,0,0"
+                                          Padding="12,0"
+                                          MinWidth="72"
+                                          VerticalAlignment="Stretch"
+                                          ToolTip="Show or hide the API key">
+                                <TextBlock>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Show"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ShowApiKey}" Value="True">
+                                                    <Setter Property="Text" Value="Hide"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </ToggleButton>
+                        </Grid>
                     </StackPanel>
 
                     <!-- Base URL (visible for all except Local) -->

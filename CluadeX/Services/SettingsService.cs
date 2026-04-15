@@ -69,6 +69,9 @@ public class SettingsService
     private AppSettings _settings = new();
     private readonly string _settingsPath;
     private readonly string _dataRoot;
+    // Serializes disk I/O and Update batches — without this, two Save() calls
+    // from different threads could race File.WriteAllText and corrupt settings.json.
+    private readonly object _ioLock = new();
 
     /// <summary>True when a "portable" marker file exists next to the exe.</summary>
     public bool IsPortable { get; }
@@ -106,47 +109,70 @@ public class SettingsService
 
     public void Load()
     {
-        try
+        lock (_ioLock)
         {
-            if (File.Exists(_settingsPath))
+            try
             {
-                string json = File.ReadAllText(_settingsPath);
-                _settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
-                DecryptSecrets(_settings);
+                if (File.Exists(_settingsPath))
+                {
+                    string json = File.ReadAllText(_settingsPath);
+                    _settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+                    DecryptSecrets(_settings);
+                }
             }
-        }
-        catch
-        {
-            _settings = new AppSettings();
+            catch
+            {
+                _settings = new AppSettings();
+            }
         }
     }
 
     public void Save()
     {
-        try
+        // Capture subscribers outside the lock so the Save() call itself doesn't hold
+        // the IO lock while handlers run (they may re-enter via settings reads).
+        Action? changedHandlers = null;
+        lock (_ioLock)
         {
-            string? dir = Path.GetDirectoryName(_settingsPath);
-            if (dir != null) Directory.CreateDirectory(dir);
+            try
+            {
+                string? dir = Path.GetDirectoryName(_settingsPath);
+                if (dir != null) Directory.CreateDirectory(dir);
 
-            // Clone settings and encrypt secrets before writing to disk
-            var clone = JsonSerializer.Deserialize<AppSettings>(
-                JsonSerializer.Serialize(_settings, JsonOptions), JsonOptions)!;
-            EncryptSecrets(clone);
+                // Clone settings and encrypt secrets before writing to disk
+                var clone = JsonSerializer.Deserialize<AppSettings>(
+                    JsonSerializer.Serialize(_settings, JsonOptions), JsonOptions)!;
+                EncryptSecrets(clone);
 
-            string json = JsonSerializer.Serialize(clone, JsonOptions);
-            File.WriteAllText(_settingsPath, json);
-            EnsureDirectoriesExist();
-            SettingsChanged?.Invoke();
+                string json = JsonSerializer.Serialize(clone, JsonOptions);
+
+                // Atomic write: write to temp file, then move over the target.
+                // A crash mid-write previously left a zero-byte or partial settings.json
+                // and users would lose every preference on next launch.
+                string tempPath = _settingsPath + ".tmp";
+                File.WriteAllText(tempPath, json);
+                if (File.Exists(_settingsPath))
+                    File.Replace(tempPath, _settingsPath, destinationBackupFileName: null);
+                else
+                    File.Move(tempPath, _settingsPath);
+
+                EnsureDirectoriesExist();
+                changedHandlers = SettingsChanged;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.GetType().Name}: {ex.Message}");
+            }
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.GetType().Name}");
-        }
+        changedHandlers?.Invoke();
     }
 
     public void UpdateSettings(Action<AppSettings> update)
     {
-        update(_settings);
+        lock (_ioLock)
+        {
+            update(_settings);
+        }
         Save();
     }
 

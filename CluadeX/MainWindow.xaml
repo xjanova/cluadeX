@@ -19,6 +19,20 @@
                       CornerRadius="0"/>
     </WindowChrome.WindowChrome>
 
+    <!-- Keyboard shortcuts (Claude Code parity) -->
+    <Window.InputBindings>
+        <KeyBinding Modifiers="Control" Key="L"
+                    Command="{Binding ChatVM.ClearChatCommand}"/>
+        <KeyBinding Modifiers="Control" Key="N"
+                    Command="{Binding ChatVM.NewSessionCommand}"/>
+        <KeyBinding Modifiers="Control" Key="OemComma"
+                    Command="{Binding NavigateToCommand}" CommandParameter="Settings"/>
+        <KeyBinding Modifiers="Control" Key="D1"
+                    Command="{Binding NavigateToCommand}" CommandParameter="Chat"/>
+        <KeyBinding Modifiers="Control" Key="D2"
+                    Command="{Binding NavigateToCommand}" CommandParameter="Models"/>
+    </Window.InputBindings>
+
     <Window.Resources>
         <!-- BoolVis is defined globally in App.xaml -->
 

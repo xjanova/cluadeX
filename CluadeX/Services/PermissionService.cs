@@ -147,12 +147,16 @@ public class PermissionService
     {
         if (pattern == "*") return true;
 
-        // Handle ** (match across path separators)
+        // Handle ** (match across path separators).
+        // Use a private-use unicode sentinel that is rejected by Regex.Escape and cannot
+        // occur in any real-world path pattern. This avoids the magic-string collision bug
+        // where a literal "@@DOUBLESTAR@@" in user input would corrupt the regex.
+        const string DoubleStarSentinel = "\uE000DS\uE001";
         string escaped = Regex.Escape(pattern);
         string regexPattern = "^" + escaped
-            .Replace("\\*\\*", "@@DOUBLESTAR@@")  // Preserve **
-            .Replace("\\*", "[^/\\\\]*")           // * = anything except path separators
-            .Replace("@@DOUBLESTAR@@", ".*")       // ** = anything including path separators
+            .Replace("\\*\\*", DoubleStarSentinel)   // Preserve **
+            .Replace("\\*", "[^/\\\\]*")             // * = anything except path separators
+            .Replace(DoubleStarSentinel, ".*")       // ** = anything including path separators
             + "$";
 
         return Regex.IsMatch(input, regexPattern, RegexOptions.IgnoreCase);

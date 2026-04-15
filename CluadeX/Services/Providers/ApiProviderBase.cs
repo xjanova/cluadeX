@@ -9,6 +9,21 @@ namespace CluadeX.Services.Providers;
 
 public abstract class ApiProviderBase : IAiProvider
 {
+    // Shared SocketsHttpHandler for connection pooling & DNS refresh across ALL providers.
+    // Sharing the handler is the recommended .NET pattern; each HttpClient is then cheap.
+    // A single shared handler avoids socket exhaustion and respects ApiProvider DI lifetimes.
+    private static readonly SocketsHttpHandler SharedHandler = new()
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
+        MaxConnectionsPerServer = 8,
+        EnableMultipleHttp2Connections = true,
+        KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
+        KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+        KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
+        ConnectTimeout = TimeSpan.FromSeconds(15),
+    };
+
     protected readonly SettingsService _settingsService;
     protected readonly HttpClient _httpClient;
 
@@ -25,18 +40,8 @@ public abstract class ApiProviderBase : IAiProvider
     protected ApiProviderBase(SettingsService settingsService)
     {
         _settingsService = settingsService;
-        var handler = new SocketsHttpHandler
-        {
-            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-            MaxConnectionsPerServer = 4,
-            EnableMultipleHttp2Connections = true,
-            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.WithActiveRequests,
-            KeepAlivePingDelay = TimeSpan.FromSeconds(30),
-            KeepAlivePingTimeout = TimeSpan.FromSeconds(10),
-            ConnectTimeout = TimeSpan.FromSeconds(15),
-        };
-        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+        // `disposeHandler: false` — the handler is shared and must outlive every client.
+        _httpClient = new HttpClient(SharedHandler, disposeHandler: false) { Timeout = TimeSpan.FromMinutes(5) };
     }
 
     protected ProviderConfig GetConfig()
@@ -176,6 +181,7 @@ public abstract class ApiProviderBase : IAiProvider
 
     public virtual void Dispose()
     {
+        // Disposes the HttpClient but NOT the shared handler (passed disposeHandler: false in ctor).
         _httpClient.Dispose();
     }
 }

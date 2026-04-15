@@ -597,16 +597,17 @@ public class CodeAgentService
             {
                 try
                 {
-                    // Run both git commands in parallel (saves ~1-3s)
+                    // Run both git commands in parallel (saves ~1-3s).
+                    // Hard timeout (6s) so we never stall system-prompt construction on a hung git.
                     var branchTask = Task.Run(GetGitBranchSync);
                     var statusTask = Task.Run(GetGitStatusSync);
-                    Task.WaitAll(branchTask, statusTask);
+                    Task.WaitAll(new[] { branchTask, statusTask }, 6000);
 
-                    string gitBranch = branchTask.Result;
+                    string gitBranch = branchTask.IsCompletedSuccessfully ? branchTask.Result : "";
                     if (!string.IsNullOrEmpty(gitBranch))
                     {
                         sb.AppendLine($"- Git Branch: {gitBranch.Trim()}");
-                        string gitStatus = statusTask.Result;
+                        string gitStatus = statusTask.IsCompletedSuccessfully ? statusTask.Result : "";
                         if (!string.IsNullOrWhiteSpace(gitStatus))
                         {
                             sb.AppendLine("- Git Status:");
@@ -683,33 +684,21 @@ public class CodeAgentService
     }
 
     /// <summary>Get current git branch synchronously (for prompt injection). Safe process pattern.</summary>
-    private string GetGitBranchSync()
-    {
-        try
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo("git", "branch --show-current")
-            {
-                WorkingDirectory = _fileSystemService.WorkingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = false, // Don't redirect stderr to avoid deadlock
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            using var proc = System.Diagnostics.Process.Start(psi);
-            if (proc == null) return "";
-            string output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(3000);
-            return output.Trim();
-        }
-        catch { return ""; }
-    }
+    private string GetGitBranchSync() => RunGitSync("branch --show-current");
 
     /// <summary>Get short git status synchronously (for prompt injection). Safe process pattern.</summary>
-    private string GetGitStatusSync()
+    private string GetGitStatusSync() => RunGitSync("status --short");
+
+    /// <summary>
+    /// Run a short git command safely (no deadlock, no orphan processes).
+    /// Uses ReadToEndAsync + WaitForExit with a hard timeout; kills the process tree on timeout.
+    /// </summary>
+    private string RunGitSync(string arguments, int timeoutMs = 3000)
     {
+        System.Diagnostics.Process? proc = null;
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("git", "status --short")
+            var psi = new System.Diagnostics.ProcessStartInfo("git", arguments)
             {
                 WorkingDirectory = _fileSystemService.WorkingDirectory,
                 RedirectStandardOutput = true,
@@ -717,13 +706,35 @@ public class CodeAgentService
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            using var proc = System.Diagnostics.Process.Start(psi);
+            proc = System.Diagnostics.Process.Start(psi);
             if (proc == null) return "";
-            string output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(3000);
-            return output.Trim();
+
+            // Read stdout on a worker thread so we never block the process's pipe buffer.
+            var outputTask = proc.StandardOutput.ReadToEndAsync();
+            if (!proc.WaitForExit(timeoutMs))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch (Exception killEx)
+                { System.Diagnostics.Debug.WriteLine($"[git {arguments}] kill failed: {killEx.Message}"); }
+                return "";
+            }
+
+            // Process exited; bound the read too in case the buffer never closed.
+            return outputTask.Wait(500) ? outputTask.Result.Trim() : "";
         }
-        catch { return ""; }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // git not installed — expected on machines without git
+            return "";
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[git {arguments}] failed: {ex.Message}");
+            return "";
+        }
+        finally
+        {
+            proc?.Dispose();
+        }
     }
 
     /// <summary>Read a key project file and append to system prompt if it exists.</summary>

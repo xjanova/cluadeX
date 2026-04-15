@@ -1289,7 +1289,7 @@ public class ChatViewModel : ViewModelBase
         // Finalize streaming message — update in-place to avoid flash
         App.Current?.Dispatcher.Invoke(() =>
         {
-            string finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
+            string? finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
                 ? _agentToolService.StripToolCalls(result.FinalResponse)
                 : null;
 
@@ -1993,6 +1993,17 @@ public class ChatViewModel : ViewModelBase
 
     private void ClearChat()
     {
+        // Destructive action — confirm unless already empty.
+        if (Messages.Count > 0)
+        {
+            var result = System.Windows.MessageBox.Show(
+                $"Clear all {Messages.Count} messages from this chat?\nThis cannot be undone.",
+                "Clear Chat",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning);
+            if (result != System.Windows.MessageBoxResult.Yes) return;
+        }
+
         Messages.Clear();
         CurrentSession?.Messages.Clear();
         _isDirty = true;
