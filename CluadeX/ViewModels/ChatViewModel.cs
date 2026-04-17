@@ -24,9 +24,11 @@ public class ChatViewModel : ViewModelBase
     private readonly ChatPersistenceService _persistenceService;
     private readonly HuggingFaceService _huggingFaceService;
     private readonly LlamaInferenceService _llamaService;
+    private readonly Services.Providers.LocalGgufProvider? _localGgufProvider;
     private readonly GpuDetectionService _gpuDetection;
     private readonly SkillService _skillService;
     private readonly CostTrackingService _costTracker;
+    private readonly SessionMemoryService? _sessionMemoryService;
     private CancellationTokenSource? _cts;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _autoSaveTimer;
@@ -65,6 +67,10 @@ public class ChatViewModel : ViewModelBase
 
     public ObservableCollection<ChatMessage> Messages { get; } = new();
     public ObservableCollection<ChatSession> Sessions { get; } = new();
+    /// <summary>Sessions filtered by the currently-open project folder. Bound by the sidebar.
+    /// When no folder is open, mirrors Sessions in full; otherwise only sessions whose
+    /// ProjectPath equals the current WorkingDirectory (or have empty ProjectPath for legacy rows).</summary>
+    public ObservableCollection<ChatSession> VisibleSessions { get; } = new();
     public ObservableCollection<SearchResult> SearchResults { get; } = new();
     public ObservableCollection<ModelInfo> LocalModels { get; } = new();
 
@@ -93,10 +99,60 @@ public class ChatViewModel : ViewModelBase
         set
         {
             if (SetProperty(ref _workingDirectory, value))
+            {
                 HasProject = !string.IsNullOrEmpty(value);
+                RebuildVisibleSessions();
+            }
         }
     }
     public bool HasProject { get => _hasProject; set => SetProperty(ref _hasProject, value); }
+
+    /// <summary>When true, the sidebar shows sessions from ALL projects. When false (default)
+    /// and a folder is open, it only shows sessions tagged with the current project's path.
+    /// Bound to a toggle in the sidebar header.</summary>
+    private bool _showAllProjectSessions;
+    public bool ShowAllProjectSessions
+    {
+        get => _showAllProjectSessions;
+        set { if (SetProperty(ref _showAllProjectSessions, value)) RebuildVisibleSessions(); }
+    }
+
+    /// <summary>Rebuild VisibleSessions from Sessions, applying the project filter.</summary>
+    private void RebuildVisibleSessions()
+    {
+        // Capture on UI thread — all callers should already be on the dispatcher, but be defensive.
+        VisibleSessions.Clear();
+
+        // No project open, or user opted to see everything → passthrough
+        bool filter = HasProject && !ShowAllProjectSessions;
+        string currentProject = WorkingDirectory ?? "";
+
+        foreach (var s in Sessions)
+        {
+            if (filter)
+            {
+                // Match sessions for this project. Legacy rows (empty ProjectPath) also pass so
+                // we don't hide the user's pre-migration history.
+                bool matches = string.IsNullOrEmpty(s.ProjectPath)
+                    || PathEquals(s.ProjectPath, currentProject);
+                if (!matches) continue;
+            }
+            VisibleSessions.Add(s);
+        }
+
+        OnPropertyChanged(nameof(VisibleSessionsCount));
+    }
+
+    public int VisibleSessionsCount => VisibleSessions.Count;
+
+    private static bool PathEquals(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return a == b;
+        return string.Equals(
+            a.TrimEnd('\\', '/'),
+            b.TrimEnd('\\', '/'),
+            StringComparison.OrdinalIgnoreCase);
+    }
     public string GitBranch { get => _gitBranch; set => SetProperty(ref _gitBranch, value); }
 
     // Context tracking
@@ -251,7 +307,9 @@ public class ChatViewModel : ViewModelBase
         LlamaInferenceService llamaService,
         GpuDetectionService gpuDetection,
         SkillService skillService,
-        CostTrackingService costTracker)
+        CostTrackingService costTracker,
+        SessionMemoryService? sessionMemoryService = null,
+        Services.Providers.LocalGgufProvider? localGgufProvider = null)
     {
         _providerManager = providerManager;
         _agentService = agentService;
@@ -265,9 +323,11 @@ public class ChatViewModel : ViewModelBase
         _persistenceService = persistenceService;
         _huggingFaceService = huggingFaceService;
         _llamaService = llamaService;
+        _localGgufProvider = localGgufProvider;
         _gpuDetection = gpuDetection;
         _skillService = skillService;
         _costTracker = costTracker;
+        _sessionMemoryService = sessionMemoryService;
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
@@ -298,6 +358,10 @@ public class ChatViewModel : ViewModelBase
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;
+
+        // Keep the sidebar-filtered VisibleSessions list in sync with Sessions automatically.
+        // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project.
+        Sessions.CollectionChanged += (_, _) => RebuildVisibleSessions();
 
         // Periodic RAM/context/GPU refresh every 5 seconds
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -433,12 +497,18 @@ public class ChatViewModel : ViewModelBase
                  && File.Exists(_settingsService.Settings.SelectedModelPath))
         {
             LoadedModelName = $"Loading: {_settingsService.Settings.SelectedModelName}...";
-            // Auto-load the previously selected model in background
             string autoLoadPath = _settingsService.Settings.SelectedModelPath!;
+
+            // Auto-load routes through LocalGgufProvider so architecture detection kicks in —
+            // without this, a Gemma 4 / Llama 4 / Qwen 3 model silently fails with
+            // UnsupportedModelArchitectureException and the UI stays at "Loading…" forever.
+            // If the DI graph somehow didn't inject LocalGgufProvider (tests, unusual boot),
+            // we fall back to the legacy direct LLamaSharp call.
             _ = Task.Run(async () =>
             {
                 // Guard: don't auto-load if another load is already in progress
                 if (_llamaService.IsLoading) return;
+                if (_localGgufProvider != null && _localGgufProvider.IsLoading) return;
 
                 try
                 {
@@ -449,14 +519,22 @@ public class ChatViewModel : ViewModelBase
                             LoadedModelName = s;
                         }));
 
-                    // Ensure provider is Local
+                    // Ensure provider is Local so status events flow to MainViewModel
                     if (_providerManager.ActiveProviderType != AiProviderType.Local)
                         await _providerManager.SwitchProviderAsync(AiProviderType.Local);
 
-                    await _llamaService.LoadModelAsync(autoLoadPath, progress);
+                    if (_localGgufProvider != null)
+                    {
+                        await _localGgufProvider.LoadModelAsync(autoLoadPath, progress);
+                    }
+                    else
+                    {
+                        await _llamaService.LoadModelAsync(autoLoadPath, progress);
+                    }
+
                     App.Current?.Dispatcher.Invoke(() =>
                     {
-                        StatusText = $"Ready: {_llamaService.LoadedModelName}";
+                        StatusText = $"Ready: {_settingsService.Settings.SelectedModelName}";
                         SyncModelSelectionFromSettings();
                     });
                 }
@@ -860,14 +938,23 @@ public class ChatViewModel : ViewModelBase
         {
             _isDirty = true;
             AutoSave();
+
+            // Extract durable memories from the finishing session (fire-and-forget).
+            // Disabled by default — user opts in via settings.
+            _sessionMemoryService?.ExtractInBackground(CurrentSession.Messages);
         }
 
-        // Create new session
-        var session = new ChatSession();
+        // Create new session — tag with the current project path so the sidebar can
+        // filter to "just this project" instead of mixing every project's sessions together.
+        var session = new ChatSession
+        {
+            ProjectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "",
+        };
         CurrentSession = session;
         Messages.Clear();
         Sessions.Insert(0, session);
         _isDirty = false;
+        RebuildVisibleSessions();
 
         // Persist immediately so LoadSession can find it later
         try { _persistenceService.SaveSession(session); }

@@ -4,6 +4,7 @@
         xmlns:views="clr-namespace:CluadeX.Views"
         xmlns:vm="clr-namespace:CluadeX.ViewModels"
         xmlns:conv="clr-namespace:CluadeX.Converters"
+        xmlns:services="clr-namespace:CluadeX.Services"
         Title="CluadeX — AI Coding Assistant"
         Icon="Assets/app.ico"
         Height="800" Width="1280"
@@ -117,6 +118,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- Row 0: Logo -->
@@ -196,54 +198,182 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Navigation -->
-                        <StackPanel Margin="8,0,8,4">
-                            <RadioButton Content="{Binding NavChat}" Style="{StaticResource NavButton}" Tag="&#xE8BD;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Chat"
-                                         GroupName="Nav" x:Name="NavChat"/>
-                            <RadioButton Content="{Binding NavModels}" Style="{StaticResource NavButton}" Tag="&#xE8F1;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Models"
-                                         GroupName="Nav"/>
-                            <RadioButton Content="{Binding NavSettings}" Style="{StaticResource NavButton}" Tag="&#xE713;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Settings, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Settings"
-                                         GroupName="Nav"/>
+                        <!-- Navigation — collapsible so chat history gets top priority -->
+                        <StackPanel Margin="8,4,8,4">
+                            <!-- Toggle header: gradient strip + glowing chevron -->
+                            <Button Command="{Binding ToggleNavCommand}"
+                                    Cursor="Hand" Margin="0,0,0,2"
+                                    HorizontalContentAlignment="Stretch">
+                                <Button.Style>
+                                    <Style TargetType="Button">
+                                        <Setter Property="Background" Value="{StaticResource MenuHeaderFill}"/>
+                                        <Setter Property="BorderBrush" Value="#18FFFFFF"/>
+                                        <Setter Property="BorderThickness" Value="1"/>
+                                        <Setter Property="Padding" Value="10,7"/>
+                                        <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="bd"
+                                                            Background="{TemplateBinding Background}"
+                                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                                            CornerRadius="8"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter HorizontalAlignment="Stretch"
+                                                                          VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="bd" Property="BorderBrush" Value="#4089B4FA"/>
+                                                            <Setter TargetName="bd" Property="Effect">
+                                                                <Setter.Value>
+                                                                    <DropShadowEffect Color="#89B4FA" BlurRadius="10" ShadowDepth="0" Opacity="0.35"/>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Colored bubble for the menu glyph so it reads as actionable -->
+                                    <Border Width="20" Height="20" CornerRadius="10"
+                                            Margin="0,0,8,0" VerticalAlignment="Center">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                                <GradientStop Color="#89B4FA" Offset="0"/>
+                                                <GradientStop Color="#CBA6F7" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                        <TextBlock Text="&#xE700;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="11" Foreground="#1E1E2E"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="MENU"
+                                               FontSize="10.5" FontWeight="Bold"
+                                               FontFamily="{StaticResource MainFont}"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Foreground>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                <GradientStop Color="#89B4FA" Offset="0"/>
+                                                <GradientStop Color="#CBA6F7" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </TextBlock.Foreground>
+                                    </TextBlock>
+                                    <!-- Chevron: right (collapsed) → down (expanded) -->
+                                    <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets"
+                                               FontSize="9" Foreground="{StaticResource MauveBrush}"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="&#xE76C;"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsNavExpanded}" Value="True">
+                                                        <Setter Property="Text" Value="&#xE70D;"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </Button>
 
-                            <!-- Separator -->
-                            <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
+                            <!-- Collapsible nav body -->
+                            <StackPanel Visibility="{Binding IsNavExpanded, Converter={StaticResource BoolVis}}">
+                                <RadioButton Content="{Binding NavChat}" Style="{StaticResource NavButton}" Tag="&#xE8BD;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Chat"
+                                             GroupName="Nav" x:Name="NavChat"/>
+                                <RadioButton Content="{Binding NavModels}" Style="{StaticResource NavButton}" Tag="&#xE8F1;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Models"
+                                             GroupName="Nav"/>
+                                <RadioButton Content="{Binding NavSettings}" Style="{StaticResource NavButton}" Tag="&#xE713;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Settings, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Settings"
+                                             GroupName="Nav"/>
 
-                            <RadioButton Content="{Binding NavPlugins}" Style="{StaticResource NavButton}" Tag="&#xE74C;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Plugins, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Plugins"
-                                         GroupName="Nav"/>
-                            <RadioButton Content="{Binding NavPermissions}" Style="{StaticResource NavButton}" Tag="&#xE72E;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Permissions, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Permissions"
-                                         GroupName="Nav"/>
-                            <RadioButton Content="{Binding NavTasks}" Style="{StaticResource NavButton}" Tag="&#xE9D5;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
-                                         GroupName="Nav"/>
-                            <RadioButton Content="{Binding NavMcpServers}" Style="{StaticResource NavButton}" Tag="&#xECAA;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=McpServers, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
-                                         GroupName="Nav"/>
+                                <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
 
-                            <!-- Separator -->
-                            <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
+                                <RadioButton Content="{Binding NavPlugins}" Style="{StaticResource NavButton}" Tag="&#xE74C;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Plugins, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Plugins"
+                                             GroupName="Nav"/>
+                                <RadioButton Content="{Binding NavPermissions}" Style="{StaticResource NavButton}" Tag="&#xE72E;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Permissions, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Permissions"
+                                             GroupName="Nav"/>
+                                <RadioButton Content="{Binding NavTasks}" Style="{StaticResource NavButton}" Tag="&#xE9D5;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
+                                             GroupName="Nav"/>
+                                <RadioButton Content="{Binding NavMcpServers}" Style="{StaticResource NavButton}" Tag="&#xECAA;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=McpServers, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
+                                             GroupName="Nav"/>
 
-                            <RadioButton Content="{Binding NavFeatures}" Style="{StaticResource NavButton}" Tag="&#xE734;"
-                                         IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Features, Mode=OneWay}"
-                                         Command="{Binding NavigateToCommand}" CommandParameter="Features"
-                                         GroupName="Nav"/>
+                                <Border Height="1" Background="{StaticResource Surface0Brush}" Margin="4,6"/>
+
+                                <RadioButton Content="{Binding NavFeatures}" Style="{StaticResource NavButton}" Tag="&#xE734;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Features, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Features"
+                                             GroupName="Nav"/>
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- Chat History Header + Search -->
                         <Border Padding="8,8,8,4"
                                 BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}">
                             <StackPanel>
+                                <!-- Current Project header (only when a folder is open) -->
+                                <Border CornerRadius="6" Padding="8,6" Margin="0,0,0,6"
+                                        Background="{StaticResource Surface0Brush}"
+                                        Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="11" Foreground="{StaticResource TealBrush}"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding ChatVM.ProjectName}"
+                                                   Foreground="{StaticResource TextBrush}"
+                                                   FontSize="11.5" FontWeight="SemiBold"
+                                                   FontFamily="{StaticResource MainFont}"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding ChatVM.WorkingDirectory}"/>
+                                        <!-- Toggle: show sessions from ALL projects (when off = only current) -->
+                                        <ToggleButton Grid.Column="2"
+                                                      IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
+                                                      Background="Transparent" BorderThickness="0"
+                                                      Padding="6,2" MinWidth="20"
+                                                      Content="&#xE1A6;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                      ToolTip="Show sessions from all projects">
+                                            <ToggleButton.Style>
+                                                <Style TargetType="ToggleButton">
+                                                    <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+                                                    <Style.Triggers>
+                                                        <Trigger Property="IsChecked" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource MauveBrush}"/>
+                                                        </Trigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ToggleButton.Style>
+                                        </ToggleButton>
+                                    </Grid>
+                                </Border>
+
                                 <Grid Margin="6,0,6,6">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -252,7 +382,7 @@
                                     <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets"
                                                FontSize="11" Foreground="{StaticResource Overlay0Brush}"
                                                VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBlock Grid.Column="1" Text="CHAT HISTORY"
+                                    <TextBlock Grid.Column="1" Text="{services:Loc sidebar.chatHistory}"
                                                FontSize="10" FontWeight="Bold"
                                                Foreground="{StaticResource Overlay0Brush}"
                                                FontFamily="{StaticResource MainFont}"
@@ -307,8 +437,8 @@
 
                         <!-- Session List / Search Results -->
                         <Grid Margin="0,2,0,0">
-                                <!-- Normal session list (hidden during search) -->
-                                <ItemsControl ItemsSource="{Binding ChatVM.Sessions}">
+                                <!-- Normal session list (hidden during search) — filtered by current project -->
+                                <ItemsControl ItemsSource="{Binding ChatVM.VisibleSessions}">
                                     <ItemsControl.Style>
                                         <Style TargetType="ItemsControl">
                                             <Setter Property="Visibility" Value="Visible"/>
@@ -371,7 +501,7 @@
                                         <Style TargetType="TextBlock">
                                             <Setter Property="Visibility" Value="Collapsed"/>
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding ChatVM.Sessions.Count}" Value="0">
+                                                <DataTrigger Binding="{Binding ChatVM.VisibleSessionsCount}" Value="0">
                                                     <Setter Property="Visibility" Value="Visible"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
@@ -459,8 +589,11 @@
                                 </TextBlock>
                             </Grid>
 
-                        <!-- Buddy Companion Widget -->
-                        <Border Padding="8,6" BorderThickness="0,1,0,0"
+                        </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- Row 2: Buddy Companion Widget (pinned — stays visible even when chat history scrolls) -->
+                        <Border Grid.Row="2" Padding="8,6" BorderThickness="0,1,0,0"
                                 BorderBrush="{StaticResource Surface0Brush}"
                                 Visibility="{Binding IsBuddyEnabled, Converter={StaticResource BoolVis}}">
                             <Border Background="{StaticResource Surface0Brush}" CornerRadius="10" Padding="10,8"
@@ -543,11 +676,8 @@
                             </Border>
                         </Border>
 
-                        </StackPanel>
-                        </ScrollViewer>
-
-                        <!-- Row 2: Bottom Status (pinned) -->
-                        <Border Grid.Row="2" Padding="14,10" BorderThickness="0,1,0,0"
+                        <!-- Row 3: Bottom Status (pinned) -->
+                        <Border Grid.Row="3" Padding="14,10" BorderThickness="0,1,0,0"
                                 BorderBrush="{StaticResource Surface0Brush}">
                             <StackPanel>
                                 <!-- Project Name -->
@@ -589,6 +719,76 @@
                                 <TextBlock Text="{Binding GpuStatus}"
                                            Foreground="{StaticResource Overlay0Brush}"
                                            FontSize="10" TextTrimming="CharacterEllipsis"/>
+
+                                <!-- GPU Live Graph + Temp (NVIDIA only; hidden if nvidia-smi missing) -->
+                                <Border CornerRadius="6" Padding="6,4" Margin="0,6,0,0"
+                                        Background="{StaticResource Surface0Brush}"
+                                        Visibility="{Binding HasLiveGpuStats, Converter={StaticResource BoolVis}}">
+                                    <StackPanel>
+                                        <!-- Top row: percent + temp chip -->
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="10" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource MauveBrush}"
+                                                       Margin="0,0,5,0"/>
+                                            <TextBlock Grid.Column="1"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       FontSize="10.5" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center">
+                                                <Run Text="GPU"/>
+                                                <Run Text="{Binding GpuUsageDisplay, Mode=OneWay}"/>
+                                            </TextBlock>
+                                            <Border Grid.Column="2" CornerRadius="3" Padding="4,1"
+                                                    Background="{Binding GpuTempBrush}">
+                                                <TextBlock Text="{Binding GpuTempDisplay}"
+                                                           Foreground="#1E1E2E" FontSize="10"
+                                                           FontWeight="Bold"/>
+                                            </Border>
+                                        </Grid>
+
+                                        <!-- Sparkline: GPU utilization over last ~48 seconds -->
+                                        <Canvas Width="100" Height="18" Margin="0,3,0,0"
+                                                ClipToBounds="True">
+                                            <Polyline Points="{Binding GpuSparklinePoints}"
+                                                      Stroke="{StaticResource MauveBrush}"
+                                                      StrokeThickness="1.5"
+                                                      StrokeLineJoin="Round"
+                                                      StrokeStartLineCap="Round"
+                                                      StrokeEndLineCap="Round"/>
+                                        </Canvas>
+
+                                        <!-- VRAM sub-line -->
+                                        <TextBlock Text="{Binding GpuVramDisplay}"
+                                                   Foreground="{StaticResource Overlay0Brush}"
+                                                   FontSize="9.5" Margin="0,2,0,0"/>
+                                    </StackPanel>
+
+                                    <Border.ToolTip>
+                                        <StackPanel Margin="4">
+                                            <TextBlock FontSize="11" FontWeight="Bold" Foreground="{StaticResource TextBrush}"
+                                                       Margin="0,0,0,4">
+                                                <Run Text="GPU monitor"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Utilization: "/><Run Text="{Binding LiveGpuStats.GpuUtilization, Mode=OneWay}"/><Run Text="%"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Temperature: "/><Run Text="{Binding LiveGpuStats.TemperatureC, Mode=OneWay}"/><Run Text="°C"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="VRAM: "/><Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Power: "/><Run Text="{Binding LiveGpuStats.PowerDrawW, Mode=OneWay, StringFormat={}{0:F0}}"/><Run Text=" W"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border.ToolTip>
+                                </Border>
 
                                 <!-- Version + Check Update -->
                                 <Grid Margin="0,6,0,0">

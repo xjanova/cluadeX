@@ -22,11 +22,15 @@ public class LlamaServerProvider : ApiProviderBase
     private string? _loadedModelPath;
     private int _port = 8087; // Avoid conflict with common ports
     private string ServerUrl => $"http://127.0.0.1:{_port}";
+    private readonly GpuDetectionService? _gpuDetection;
 
     public bool IsServerRunning => _serverProcess is { HasExited: false };
     public string? LoadedModelName => _loadedModelPath != null ? Path.GetFileNameWithoutExtension(_loadedModelPath) : null;
 
-    public LlamaServerProvider(SettingsService settingsService) : base(settingsService) { }
+    public LlamaServerProvider(SettingsService settingsService, GpuDetectionService? gpuDetection = null) : base(settingsService)
+    {
+        _gpuDetection = gpuDetection;
+    }
 
     public override async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -58,8 +62,37 @@ public class LlamaServerProvider : ApiProviderBase
                 "or run Scripts/update-llama-backend.ps1 to download it.");
 
         var settings = _settingsService.Settings;
-        int gpuLayers = settings.GpuLayerCount == -1 ? 99 : settings.GpuLayerCount;
+        int gpuLayers = settings.GpuLayerCount == -1 ? 999 : settings.GpuLayerCount;
         if (settings.GpuBackend == "CPU") gpuLayers = 0;
+
+        // ─── Multi-GPU tensor split ───
+        // If the user has more than one NVIDIA card, proportionally split the model
+        // across them by VRAM. nvidia-smi lists GPU 0, 1, 2 ... and llama-server takes
+        // --tensor-split as a comma-separated weight list (e.g. "8,8" or "24,8").
+        // Without this flag llama.cpp puts everything on the main GPU, wasting the rest.
+        string? tensorSplit = null;
+        int gpuCount = 1;
+        if (settings.GpuBackend != "CPU" && _gpuDetection != null)
+        {
+            try
+            {
+                var gpus = _gpuDetection.DetectAllNvidiaGpus();
+                if (gpus.Count > 1)
+                {
+                    gpuCount = gpus.Count;
+                    // Use each card's total VRAM as the weight. llama.cpp normalises internally.
+                    tensorSplit = string.Join(",", gpus.Select(g => g.VramTotalMB.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                }
+            }
+            catch { /* single-GPU fallback */ }
+        }
+
+        // ─── Threads ───
+        // 0 (our default) = use ALL physical cores. Without -t llama.cpp picks its own
+        // default which is often half the cores, leaving performance on the table.
+        int threads = settings.ThreadCount > 0
+            ? settings.ThreadCount
+            : Math.Max(1, Environment.ProcessorCount);
 
         // Inspect arch so we can apply model-specific defaults. For Gemma 4 the
         // Unsloth + ggml-org cards both prescribe temp=1.0 / top-p=0.95 / top-k=64
@@ -83,6 +116,13 @@ public class LlamaServerProvider : ApiProviderBase
         // llama-server to use the chat template embedded in the GGUF metadata instead of
         // a hard-coded one. Without it, Gemma 4 outputs garbage because the server falls
         // back to ChatML formatting, which Gemma's tokenizer doesn't recognize.
+        //
+        // --reasoning-format none keeps the model's thinking tokens inside message.content
+        // instead of splitting them into message.reasoning_content. Gemma 4 / DeepSeek R1
+        // / Qwen 3 all emit a reasoning phase; with the default "deepseek" format, the
+        // server returns content="" and puts everything in reasoning_content — our SSE
+        // parser below only reads delta.content, so the user sees a blank response.
+        // "none" is the safe cross-model default.
         var args = new List<string>
         {
             "-m", $"\"{modelPath}\"",
@@ -95,10 +135,15 @@ public class LlamaServerProvider : ApiProviderBase
             "--top-p", topP.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
             "--top-k", topK.ToString(System.Globalization.CultureInfo.InvariantCulture),
             "--jinja",
+            "--reasoning-format", "none",
+            "-t", threads.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
 
-        if (settings.ThreadCount > 0)
-            args.AddRange(new[] { "-t", settings.ThreadCount.ToString() });
+        // Multi-GPU: split model by VRAM weight across all NVIDIA cards.
+        if (tensorSplit != null)
+        {
+            args.AddRange(new[] { "--tensor-split", tensorSplit });
+        }
 
         string fileName = Path.GetFileName(modelPath);
         progress?.Report($"Starting llama-server with {fileName}...");
@@ -125,7 +170,10 @@ public class LlamaServerProvider : ApiProviderBase
             _serverProcess.Start();
             _loadedModelPath = modelPath;
 
-            // Read stderr in background for diagnostics
+            // Read stderr in background for diagnostics + load-progress forwarding.
+            // llama-server emits structured lines during weight loading; we mine them for
+            // a percent counter so the UI has something to show beyond a static spinner.
+            string fileName2 = Path.GetFileName(modelPath);
             _ = Task.Run(async () =>
             {
                 try
@@ -133,15 +181,16 @@ public class LlamaServerProvider : ApiProviderBase
                     while (_serverProcess is { HasExited: false })
                     {
                         string? line = await _serverProcess.StandardError.ReadLineAsync(ct);
-                        if (line != null)
-                            System.Diagnostics.Debug.WriteLine($"[llama-server] {line}");
+                        if (line == null) continue;
+                        System.Diagnostics.Debug.WriteLine($"[llama-server] {line}");
+                        ReportLoadProgress(line, progress, fileName2);
                     }
                 }
                 catch { }
             }, ct);
 
             // Wait for server to become ready (health check)
-            progress?.Report("Waiting for llama-server to load model...");
+            progress?.Report($"Loading {fileName2} into VRAM...");
             bool ready = await WaitForServerReady(ct);
 
             if (ready)
@@ -174,6 +223,62 @@ public class LlamaServerProvider : ApiProviderBase
         {
             SetLoading(false);
         }
+    }
+
+    // Precompiled once — regex hit on every stderr line, keep it cheap.
+    private static readonly System.Text.RegularExpressions.Regex LoadTensorsRegex =
+        new(@"load_tensors:.*?(\d+)\s*MiB", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex OffloadedRegex =
+        new(@"offloaded\s+(\d+)\s*/\s*(\d+)\s+layers", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Mine meaningful load progress out of llama-server's verbose stderr and surface it
+    /// via the progress callback. We recognise three phases:
+    ///   • "load_tensors: CUDA0 model buffer size = 4123 MiB" — weights uploaded per device
+    ///   • "load_tensors: offloaded 32/33 layers to GPU" — layer offload summary
+    ///   • "init_from_params: n_ctx_per_seq = ..." — context allocation (near the end)
+    /// Lines that don't match are ignored so the UI doesn't churn on every stderr write.
+    /// </summary>
+    private static void ReportLoadProgress(string line, IProgress<string>? progress, string fileName)
+    {
+        if (progress == null) return;
+        try
+        {
+            // GPU layer offload → most useful single number for "how much is on VRAM?"
+            var off = OffloadedRegex.Match(line);
+            if (off.Success)
+            {
+                int done = int.Parse(off.Groups[1].Value);
+                int total = int.Parse(off.Groups[2].Value);
+                int pct = total > 0 ? done * 100 / total : 0;
+                progress.Report($"Loading {fileName} — {done}/{total} layers on GPU ({pct}%)");
+                return;
+            }
+
+            // Per-device weight buffer size reports — pass through as status
+            var buf = LoadTensorsRegex.Match(line);
+            if (buf.Success)
+            {
+                string mib = buf.Groups[1].Value;
+                progress.Report($"Uploading weights to VRAM: {mib} MiB...");
+                return;
+            }
+
+            // Context allocation — final phase before serve loop
+            if (line.Contains("init_from_params", StringComparison.OrdinalIgnoreCase))
+            {
+                progress.Report($"Allocating context memory...");
+                return;
+            }
+
+            // Final "server is listening on" message — model is live
+            if (line.Contains("server is listening", StringComparison.OrdinalIgnoreCase)
+             || line.Contains("all slots are idle", StringComparison.OrdinalIgnoreCase))
+            {
+                progress.Report("Model ready — warming up...");
+            }
+        }
+        catch { /* best-effort */ }
     }
 
     private async Task<bool> WaitForServerReady(CancellationToken ct, int maxWaitMs = 120_000)
@@ -277,6 +382,10 @@ public class LlamaServerProvider : ApiProviderBase
             string data = line["data: ".Length..];
             if (data == "[DONE]") break;
 
+            // Read both delta.content AND delta.reasoning_content. We pass
+            // --reasoning-format none so content is normally everything, but if a server
+            // version ignores that flag (or the user overrode it) we still want the
+            // reasoning tokens to reach the UI instead of being silently dropped.
             string? content = null;
             try
             {
@@ -286,10 +395,16 @@ public class LlamaServerProvider : ApiProviderBase
                 {
                     foreach (var choice in choices.EnumerateArray())
                     {
-                        if (choice.TryGetProperty("delta", out var delta)
-                            && delta.TryGetProperty("content", out var c))
+                        if (!choice.TryGetProperty("delta", out var delta)) continue;
+                        if (delta.TryGetProperty("content", out var c))
                         {
-                            content = c.GetString();
+                            var s = c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+                            if (!string.IsNullOrEmpty(s)) content = (content ?? "") + s;
+                        }
+                        if (delta.TryGetProperty("reasoning_content", out var r))
+                        {
+                            var s = r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+                            if (!string.IsNullOrEmpty(s)) content = (content ?? "") + s;
                         }
                     }
                 }

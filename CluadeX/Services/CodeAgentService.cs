@@ -1296,12 +1296,20 @@ public class CodeAgentService
             progress?.Report(nativeStepStatus);
             OnAgentStatus?.Invoke(nativeStepStatus);
 
+            // Microcompact — shrink old tool results (keep recent turns verbatim).
+            // Runs only when the conversation has accumulated enough turns for it to matter.
+            var outboundMessages = _settingsService.Settings.MicrocompactEnabled && nativeMessages.Count > 6
+                ? MicrocompactNativeMessages(nativeMessages,
+                    _settingsService.Settings.MicrocompactKeepRecentTurns,
+                    _settingsService.Settings.MicrocompactMaxOldResultChars)
+                : nativeMessages;
+
             // Call API with native tools
             Services.Providers.NativeToolResponse response;
             try
             {
                 response = await _providerManager.ActiveProvider.ChatWithToolsAsync(
-                    nativeMessages, systemPrompt, toolSchemas, ct);
+                    outboundMessages, systemPrompt, toolSchemas, ct);
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
             {
@@ -1546,6 +1554,111 @@ public class CodeAgentService
         }
         catch { }
         return args;
+    }
+
+    /// <summary>
+    /// Microcompact: shrink the old portion of the conversation before re-sending it
+    /// to the API. Keeps the last <paramref name="keepRecentTurns"/> messages verbatim
+    /// (the agent needs them intact to continue reasoning). For older messages it:
+    ///   • drops image content (base64 blobs in text)
+    ///   • truncates large tool_result bodies to <paramref name="maxOldResultChars"/>
+    ///   • collapses ISO-8601 timestamps to date-only form
+    ///
+    /// Returns a shallow-copied list; the caller's list is not mutated so nativeMessages
+    /// (which we still append to for the real conversation state) stays faithful.
+    /// </summary>
+    internal static List<Services.Providers.NativeMessage> MicrocompactNativeMessages(
+        List<Services.Providers.NativeMessage> messages,
+        int keepRecentTurns,
+        int maxOldResultChars)
+    {
+        if (messages.Count == 0) return messages;
+        if (keepRecentTurns < 1) keepRecentTurns = 1;
+        if (maxOldResultChars < 100) maxOldResultChars = 100;
+
+        int oldBoundary = Math.Max(0, messages.Count - keepRecentTurns);
+        var result = new List<Services.Providers.NativeMessage>(messages.Count);
+
+        for (int i = 0; i < messages.Count; i++)
+        {
+            var msg = messages[i];
+            // Recent messages kept as-is (reference, not clone — we don't mutate them)
+            if (i >= oldBoundary)
+            {
+                result.Add(msg);
+                continue;
+            }
+
+            var compacted = new Services.Providers.NativeMessage { Role = msg.Role };
+            foreach (var block in msg.Content)
+            {
+                compacted.Content.Add(CompactBlock(block, maxOldResultChars));
+            }
+            result.Add(compacted);
+        }
+
+        return result;
+    }
+
+    private static Services.Providers.ContentBlock CompactBlock(
+        Services.Providers.ContentBlock block, int maxChars)
+    {
+        switch (block.Type)
+        {
+            case "tool_result":
+            {
+                string content = block.Content ?? "";
+                content = StripInlineImages(content);
+                content = CompressTimestamps(content);
+                if (content.Length > maxChars)
+                    content = content[..maxChars] + $"\n... (microcompact: trimmed {content.Length - maxChars} chars)";
+                return new Services.Providers.ContentBlock
+                {
+                    Type = "tool_result",
+                    ToolUseId = block.ToolUseId,
+                    Content = content,
+                    IsError = block.IsError,
+                };
+            }
+            case "text":
+            {
+                string text = block.Text ?? "";
+                text = StripInlineImages(text);
+                text = CompressTimestamps(text);
+                // Don't truncate text blocks — they're typically short and semantic.
+                // Only images/timestamps are stripped.
+                return new Services.Providers.ContentBlock { Type = "text", Text = text };
+            }
+            default:
+                // tool_use, thinking — keep unchanged (they drive semantics)
+                return block;
+        }
+    }
+
+    /// <summary>Remove base64 image blobs. The assistant can't see images from prior turns
+    /// anyway once we re-send the transcript; the placeholder preserves a breadcrumb.</summary>
+    private static string StripInlineImages(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        // Common patterns: data:image/...;base64,AAA...  or  <img src="data:image/...
+        return System.Text.RegularExpressions.Regex.Replace(
+            s,
+            @"data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=]{40,}",
+            "[image stripped]",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>Collapse full ISO-8601 timestamps to date-only form in old tool results.
+    /// Models rarely need the microsecond precision once several turns have passed.</summary>
+    private static string CompressTimestamps(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        // 2026-04-17T15:42:33.123Z   →   2026-04-17
+        // 2026-04-17T15:42:33+07:00 →   2026-04-17
+        return System.Text.RegularExpressions.Regex.Replace(
+            s,
+            @"(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:?\d{2})?",
+            "$1");
     }
 
     /// <summary>Ensure message list has strictly alternating user/assistant roles.</summary>

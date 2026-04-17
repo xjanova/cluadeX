@@ -1,4 +1,6 @@
 using System.Windows.Input;
+using System.Windows.Threading;
+using CluadeX.Models;
 using CluadeX.Services;
 
 namespace CluadeX.ViewModels;
@@ -19,8 +21,92 @@ public class MainViewModel : ViewModelBase
     private bool _isModelLoaded;
     private bool _isModelLoading;
 
+    // ─── Live GPU monitoring (nvidia-smi poll) ───
+    // Refreshed every ~2s by _gpuLiveTimer; drives the mini sparkline + temp display
+    // in the sidebar status bar. All state here is UI-thread-only.
+    private DispatcherTimer? _gpuLiveTimer;
+    private readonly System.Collections.Generic.Queue<int> _gpuUsageHistory = new();
+    private const int GpuHistoryMax = 24;   // samples retained for the sparkline
+    private const double SparklineWidth = 100;
+    private const double SparklineHeight = 18;
+
+    private GpuLiveStats? _liveGpuStats;
+    public GpuLiveStats? LiveGpuStats
+    {
+        get => _liveGpuStats;
+        set
+        {
+            if (SetProperty(ref _liveGpuStats, value))
+            {
+                OnPropertyChanged(nameof(HasLiveGpuStats));
+                OnPropertyChanged(nameof(GpuTempDisplay));
+                OnPropertyChanged(nameof(GpuUsageDisplay));
+                OnPropertyChanged(nameof(GpuVramDisplay));
+                OnPropertyChanged(nameof(GpuTempBrush));
+                OnPropertyChanged(nameof(GpuSparklinePoints));
+            }
+        }
+    }
+
+    public bool HasLiveGpuStats => _liveGpuStats != null;
+    public string GpuTempDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.TemperatureC}°C";
+    public string GpuUsageDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.GpuUtilization}%";
+    public string GpuVramDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.VramUsedGB:F1} / {_liveGpuStats.VramTotalGB:F1} GB";
+
+    /// <summary>Temperature → warning color so the status bar telegraphs thermal issues at a glance.</summary>
+    public System.Windows.Media.Brush GpuTempBrush
+    {
+        get
+        {
+            int t = _liveGpuStats?.TemperatureC ?? 0;
+            if (t >= 85) return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF3, 0x8B, 0xA8)); // red
+            if (t >= 75) return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFA, 0xB3, 0x87)); // orange
+            if (t >= 60) return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF9, 0xE2, 0xAF)); // yellow
+            return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xA6, 0xE3, 0xA1));               // green
+        }
+    }
+
+    /// <summary>Sparkline points for a Polyline. Mapped from the last N GPU utilization samples
+    /// into a 100×18 area. Empty string when we have no samples yet.</summary>
+    public System.Windows.Media.PointCollection GpuSparklinePoints
+    {
+        get
+        {
+            var points = new System.Windows.Media.PointCollection();
+            if (_gpuUsageHistory.Count < 2) return points;
+
+            var samples = _gpuUsageHistory.ToArray();
+            int n = samples.Length;
+            double stepX = n == 1 ? SparklineWidth : SparklineWidth / (n - 1);
+            for (int i = 0; i < n; i++)
+            {
+                double x = i * stepX;
+                // Invert Y so higher utilization is higher on screen.
+                double y = SparklineHeight - (samples[i] / 100.0 * SparklineHeight);
+                if (y < 0) y = 0;
+                if (y > SparklineHeight) y = SparklineHeight;
+                points.Add(new System.Windows.Point(x, y));
+            }
+            return points;
+        }
+    }
+
     public ViewModelBase? CurrentView { get => _currentView; set => SetProperty(ref _currentView, value); }
     public string SelectedNavItem { get => _selectedNavItem; set => SetProperty(ref _selectedNavItem, value); }
+
+    // System menu collapse state — default collapsed so chat history dominates the sidebar.
+    // Persisted via SettingsService so the user's choice survives restarts.
+    private bool _isNavExpanded;
+    public bool IsNavExpanded
+    {
+        get => _isNavExpanded;
+        set
+        {
+            if (SetProperty(ref _isNavExpanded, value))
+                _settingsService.UpdateSettings(s => s.SidebarNavExpanded = value);
+        }
+    }
+    public ICommand ToggleNavCommand => new RelayCommand(() => IsNavExpanded = !IsNavExpanded);
     public string ModelStatus { get => _modelStatus; set => SetProperty(ref _modelStatus, value); }
     public string GpuStatus { get => _gpuStatus; set => SetProperty(ref _gpuStatus, value); }
     public bool IsModelLoaded { get => _isModelLoaded; set => SetProperty(ref _isModelLoaded, value); }
@@ -113,6 +199,7 @@ public class MainViewModel : ViewModelBase
         _providerManager = providerManager;
         _buddyService = buddyService;
         _loc = loc;
+        _isNavExpanded = settingsService.Settings.SidebarNavExpanded;
 
         CurrentView = chatVM;
 
@@ -173,6 +260,34 @@ public class MainViewModel : ViewModelBase
 
         Task.Run(DetectGpu);
         InitializeBuddy();
+        StartGpuLivePolling();
+    }
+
+    /// <summary>Poll nvidia-smi every 2s on a background task, marshal back to the UI thread
+    /// to update the sidebar live stats + rolling sparkline history.</summary>
+    private void StartGpuLivePolling()
+    {
+        _gpuLiveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _gpuLiveTimer.Tick += (_, _) =>
+        {
+            // Keep the UI responsive: nvidia-smi can take ~200ms on first call.
+            Task.Run(() =>
+            {
+                var stats = _gpuDetectionService.GetLiveStats();
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    if (stats == null)
+                    {
+                        // Driver/nvidia-smi unavailable — keep previous state silently.
+                        return;
+                    }
+                    _gpuUsageHistory.Enqueue(stats.GpuUtilization);
+                    while (_gpuUsageHistory.Count > GpuHistoryMax) _gpuUsageHistory.Dequeue();
+                    LiveGpuStats = stats;
+                });
+            });
+        };
+        _gpuLiveTimer.Start();
     }
 
     private void InitializeBuddy()

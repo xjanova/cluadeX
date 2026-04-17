@@ -85,6 +85,25 @@ public class ModelManagerViewModel : ViewModelBase
         }
     }
 
+    // Catalog layout: List (vertical cards) or Grid (2-column tiles).
+    // Toggled from the page header; persisted via SettingsService so the user's choice survives restarts.
+    private bool _isGridView;
+    public bool IsGridView
+    {
+        get => _isGridView;
+        set
+        {
+            if (SetProperty(ref _isGridView, value))
+            {
+                OnPropertyChanged(nameof(IsListView));
+                _settingsService.UpdateSettings(s => s.ModelCatalogGridView = value);
+            }
+        }
+    }
+    public bool IsListView => !IsGridView;
+    public ICommand SwitchToListViewCommand => new RelayCommand(() => IsGridView = false);
+    public ICommand SwitchToGridViewCommand => new RelayCommand(() => IsGridView = true);
+
     public ICommand RefreshLocalModelsCommand { get; }
     public ICommand LoadModelCommand { get; }
     public ICommand UnloadModelCommand { get; }
@@ -114,6 +133,7 @@ public class ModelManagerViewModel : ViewModelBase
         _localProvider = localProvider;
         _settingsService = settingsService;
         _providerManager = providerManager;
+        _isGridView = settingsService.Settings.ModelCatalogGridView;
 
         RefreshLocalModelsCommand = new RelayCommand(RefreshLocalModels);
         LoadModelCommand = new AsyncRelayCommand<string>(LoadModel);
@@ -145,7 +165,11 @@ public class ModelManagerViewModel : ViewModelBase
             {
                 AvailableVramMB = gpu.VramTotalMB;
                 GpuRecommendation = $"{gpu.Name} - {gpu.VramTotalGB:F1} GB VRAM\n{rec.Description}";
-                _allRecommended = _huggingFaceService.GetRecommendedModels(gpu.VramTotalMB);
+                // Show the full catalog and use FitTier badges to signal which models run
+                // well on this GPU. Previously we silently filtered out anything larger than
+                // the user's VRAM — that hid useful options (bigger models still run via
+                // CPU offload) and made the catalog look incomplete.
+                _allRecommended = _huggingFaceService.GetRecommendedModels(null);
                 FilterRecommendedModels();
             });
         });
@@ -183,11 +207,85 @@ public class ModelManagerViewModel : ViewModelBase
         {
             model.IsInstalled = localFiles.Contains(model.FileName);
             model.InstalledPath = model.IsInstalled && localPaths.TryGetValue(model.FileName, out var p) ? p : null;
+            ComputeFit(model, AvailableVramMB);
             RecommendedModels.Add(model);
         }
 
         OnPropertyChanged(nameof(TotalPages));
         OnPropertyChanged(nameof(PageInfo));
+    }
+
+    /// <summary>
+    /// Decide how well a model fits the user's GPU, and suggest a reasonable <c>-ngl</c>
+    /// (gpu_layer_count) value so the UI can show a green/yellow/red fit badge.
+    ///
+    /// Heuristic: reserve ~15% of VRAM for KV cache + context, then compare the model's
+    /// quoted RequiredVramMB against what's left. If the model is bigger, we estimate how
+    /// much CPU offload would be needed. A model whose size is more than ~2× the available
+    /// VRAM runs so slowly via CPU offload that we label it TooLarge.
+    /// </summary>
+    private static void ComputeFit(RecommendedModel model, int availableVramMB)
+    {
+        if (availableVramMB <= 0)
+        {
+            // No GPU detected → everything is CPU-only. Small models are still usable.
+            model.FitTier = model.ParameterBillions <= 3 ? ModelFitTier.Partial : ModelFitTier.Poor;
+            model.FitLabel = "CPU only";
+            model.FitHint = "No dedicated GPU detected — runs on CPU only (slow).";
+            model.RecommendedGpuLayers = 0;
+            return;
+        }
+
+        // Reserve ~15% of VRAM for KV-cache and activations. Cap the reserve at 1.5 GB so
+        // huge cards don't over-reserve, and floor at 512 MB so tiny cards still have a buffer.
+        int reserved = Math.Clamp(availableVramMB / 7, 512, 1536);
+        int usable = Math.Max(availableVramMB - reserved, 512);
+        int needed = model.RequiredVramMB;
+
+        // Excellent: comfortable headroom (usable is 130%+ of needed)
+        if (needed > 0 && usable >= needed * 1.3)
+        {
+            model.FitTier = ModelFitTier.Excellent;
+            model.FitLabel = "Fast";
+            model.FitHint = $"Runs entirely on GPU with headroom ({usable} MB usable vs {needed} MB needed).";
+            model.RecommendedGpuLayers = -1;
+        }
+        // Good: fits but tight
+        else if (usable >= needed)
+        {
+            model.FitTier = ModelFitTier.Good;
+            model.FitLabel = "Good";
+            model.FitHint = $"Fits on GPU but tight — you may need to lower context size. ({usable} MB usable vs {needed} MB needed)";
+            model.RecommendedGpuLayers = -1;
+        }
+        // Partial: model bigger than VRAM but within ~1.5× — partial offload works OK
+        else if (needed <= availableVramMB * 1.5)
+        {
+            double fraction = (double)usable / needed;
+            int suggestedLayers = Math.Clamp((int)Math.Round(fraction * 40), 10, 40);
+            model.FitTier = ModelFitTier.Partial;
+            model.FitLabel = "Partial";
+            model.FitHint = $"Needs CPU offload — suggest -ngl {suggestedLayers} (about {(int)(fraction*100)}% on GPU). Slower but runs.";
+            model.RecommendedGpuLayers = suggestedLayers;
+        }
+        // Poor: heavy CPU offload
+        else if (needed <= availableVramMB * 2.5)
+        {
+            double fraction = (double)usable / needed;
+            int suggestedLayers = Math.Clamp((int)Math.Round(fraction * 40), 5, 20);
+            model.FitTier = ModelFitTier.Poor;
+            model.FitLabel = "Slow";
+            model.FitHint = $"Much larger than your VRAM — will be significantly slower. Try a smaller quant or a different model.";
+            model.RecommendedGpuLayers = suggestedLayers;
+        }
+        // Too large — not recommended
+        else
+        {
+            model.FitTier = ModelFitTier.TooLarge;
+            model.FitLabel = "Too large";
+            model.FitHint = $"Model needs ~{needed} MB VRAM but you only have {availableVramMB} MB. Not practical — pick a smaller quant/size.";
+            model.RecommendedGpuLayers = 5;
+        }
     }
 
     private void RefreshLocalModels()

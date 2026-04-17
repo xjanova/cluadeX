@@ -69,6 +69,11 @@ public class SettingsViewModel : ViewModelBase
     public int ThinkingBudgetTokens { get => _thinkingBudgetTokens; set => SetProperty(ref _thinkingBudgetTokens, value); }
     public bool PromptCachingEnabled { get => _promptCachingEnabled; set => SetProperty(ref _promptCachingEnabled, value); }
 
+    private bool _microcompactEnabled = true;
+    private bool _sessionMemoryEnabled;
+    public bool MicrocompactEnabled { get => _microcompactEnabled; set => SetProperty(ref _microcompactEnabled, value); }
+    public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
+
     public bool AutoExecuteCode { get => _autoExecuteCode; set => SetProperty(ref _autoExecuteCode, value); }
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public string PreferredLanguage { get => _preferredLanguage; set => SetProperty(ref _preferredLanguage, value); }
@@ -504,6 +509,8 @@ public class SettingsViewModel : ViewModelBase
         ExtendedThinkingEnabled = s.ExtendedThinkingEnabled;
         ThinkingBudgetTokens = s.ThinkingBudgetTokens;
         PromptCachingEnabled = s.PromptCachingEnabled;
+        MicrocompactEnabled = s.MicrocompactEnabled;
+        SessionMemoryEnabled = s.SessionMemoryEnabled;
 
         // Load provider settings
         SelectedProvider = s.ActiveProvider;
@@ -574,6 +581,8 @@ public class SettingsViewModel : ViewModelBase
             s.ExtendedThinkingEnabled = ExtendedThinkingEnabled;
             s.ThinkingBudgetTokens = ThinkingBudgetTokens;
             s.PromptCachingEnabled = PromptCachingEnabled;
+            s.MicrocompactEnabled = MicrocompactEnabled;
+            s.SessionMemoryEnabled = SessionMemoryEnabled;
 
             // Provider config in same save
             s.ActiveProvider = SelectedProvider;

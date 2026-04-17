@@ -34,6 +34,10 @@ public class ModelInfo
     /// <summary>Estimated parameter size from filename (e.g. "7B", "14B")</summary>
     public string ParameterDisplay => GuessParameterSize(FileName);
 
+    /// <summary>Direct link to the repo page on HuggingFace. Used by the "Read more" chip
+    /// on each search-result card so users can open model cards for license, readme, etc.</summary>
+    public string HuggingFaceUrl => string.IsNullOrEmpty(RepoId) ? "" : $"https://huggingface.co/{RepoId}";
+
     private static string FormatFileSize(long bytes)
     {
         if (bytes <= 0) return "Unknown";
@@ -114,6 +118,45 @@ public class RecommendedModel
 
     /// <summary>Local path if installed.</summary>
     public string? InstalledPath { get; set; }
+
+    // ─── Fit Indicator (set by ModelManagerViewModel when user GPU is detected) ───
+    // These drive a colored badge on each card so users immediately see whether a
+    // model will run entirely on GPU (fast), partially offload to CPU (medium), or
+    // require heavy CPU offload (slow). Not serialized — recomputed on every refresh.
+
+    /// <summary>Fit tier against the user's available VRAM. Set by the VM, not persisted.</summary>
+    public ModelFitTier FitTier { get; set; } = ModelFitTier.Unknown;
+
+    /// <summary>Short human label for the badge, e.g. "Fast" / "Partial" / "Slow".</summary>
+    public string FitLabel { get; set; } = "";
+
+    /// <summary>One-line description shown in the tooltip, e.g. "Fits in 8GB VRAM — full GPU".</summary>
+    public string FitHint { get; set; } = "";
+
+    /// <summary>Suggested -ngl value for llama.cpp given the user's VRAM. -1 means "all layers on GPU".</summary>
+    public int RecommendedGpuLayers { get; set; } = -1;
+
+    /// <summary>Color key used by the XAML DataTrigger for the badge/border accent.</summary>
+    public string FitColorKey => FitTier switch
+    {
+        ModelFitTier.Excellent => "Green",
+        ModelFitTier.Good      => "Teal",
+        ModelFitTier.Partial   => "Yellow",
+        ModelFitTier.Poor      => "Peach",
+        ModelFitTier.TooLarge  => "Red",
+        _                      => "Overlay0",
+    };
+}
+
+/// <summary>How well a model fits into the user's available VRAM.</summary>
+public enum ModelFitTier
+{
+    Unknown,
+    Excellent, // fits entirely with comfortable headroom — full GPU, fast
+    Good,      // fits but tight — full GPU, may need to reduce context size
+    Partial,   // most layers on GPU, some on CPU — medium speed
+    Poor,      // heavy CPU offload — usable but slow
+    TooLarge,  // won't fit even with full CPU offload at this quantization
 }
 
 /// <summary>

@@ -16,7 +16,7 @@ public sealed class DatabaseService : IDisposable
     private bool _disposed;
 
     /// <summary>Current schema version stored in PRAGMA user_version.</summary>
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     public DatabaseService(SettingsService settingsService)
     {
@@ -49,10 +49,11 @@ public sealed class DatabaseService : IDisposable
         {
             Execute(conn, @"
                 CREATE TABLE IF NOT EXISTS sessions (
-                    id          TEXT PRIMARY KEY,
-                    title       TEXT NOT NULL DEFAULT 'New Chat',
-                    created_at  TEXT NOT NULL,
-                    updated_at  TEXT NOT NULL
+                    id           TEXT PRIMARY KEY,
+                    title        TEXT NOT NULL DEFAULT 'New Chat',
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL,
+                    project_path TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -103,6 +104,24 @@ public sealed class DatabaseService : IDisposable
 
             Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
         }
+
+        // ─── Schema v2: project_path column on sessions ───
+        // Added so the sidebar can filter session list by the currently-open folder.
+        // SQLite ALTER TABLE ADD COLUMN is fine on live DBs — just ignore "duplicate column" if the user
+        // upgraded out of order.
+        if (currentVersion < 2)
+        {
+            try
+            {
+                Execute(conn, "ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT '';");
+            }
+            catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+            {
+                // Already added — proceed.
+            }
+            Execute(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path);");
+            Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
+        }
     }
 
     // ──────────────────────────── Sessions CRUD ────────────────────────────
@@ -120,15 +139,17 @@ public sealed class DatabaseService : IDisposable
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
-                    INSERT INTO sessions (id, title, created_at, updated_at)
-                    VALUES ($id, $title, $created, $updated)
+                    INSERT INTO sessions (id, title, created_at, updated_at, project_path)
+                    VALUES ($id, $title, $created, $updated, $project)
                     ON CONFLICT(id) DO UPDATE SET
                         title = excluded.title,
-                        updated_at = excluded.updated_at;";
+                        updated_at = excluded.updated_at,
+                        project_path = excluded.project_path;";
                 cmd.Parameters.AddWithValue("$id", session.Id);
                 cmd.Parameters.AddWithValue("$title", session.Title);
                 cmd.Parameters.AddWithValue("$created", session.CreatedAt.ToString("o"));
                 cmd.Parameters.AddWithValue("$updated", DateTime.Now.ToString("o"));
+                cmd.Parameters.AddWithValue("$project", session.ProjectPath ?? "");
                 cmd.ExecuteNonQuery();
             }
 
@@ -182,7 +203,7 @@ public sealed class DatabaseService : IDisposable
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT id, title, created_at, updated_at
+            SELECT id, title, created_at, updated_at, project_path
             FROM sessions ORDER BY updated_at DESC;";
 
         using var reader = cmd.ExecuteReader();
@@ -194,6 +215,7 @@ public sealed class DatabaseService : IDisposable
                 Title = reader.GetString(1),
                 CreatedAt = DateTime.Parse(reader.GetString(2)),
                 UpdatedAt = DateTime.Parse(reader.GetString(3)),
+                ProjectPath = reader.IsDBNull(4) ? "" : reader.GetString(4),
             });
         }
         return sessions;
@@ -208,7 +230,7 @@ public sealed class DatabaseService : IDisposable
         ChatSession? session = null;
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT id, title, created_at, updated_at FROM sessions WHERE id = $id;";
+            cmd.CommandText = "SELECT id, title, created_at, updated_at, project_path FROM sessions WHERE id = $id;";
             cmd.Parameters.AddWithValue("$id", sessionId);
             using var reader = cmd.ExecuteReader();
             if (reader.Read())
@@ -219,6 +241,7 @@ public sealed class DatabaseService : IDisposable
                     Title = reader.GetString(1),
                     CreatedAt = DateTime.Parse(reader.GetString(2)),
                     UpdatedAt = DateTime.Parse(reader.GetString(3)),
+                    ProjectPath = reader.IsDBNull(4) ? "" : reader.GetString(4),
                 };
             }
         }

@@ -32,6 +32,9 @@ public partial class App : Application
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
 
+        // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
+        LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
 
@@ -97,6 +100,7 @@ public partial class App : Application
         services.AddSingleton<SkillService>();
         services.AddSingleton<CostTrackingService>();
         services.AddSingleton<MemoryService>();
+        services.AddSingleton<SessionMemoryService>();
         services.AddSingleton<HookService>();
         services.AddSingleton<McpServerManager>();
 

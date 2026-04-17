@@ -103,9 +103,23 @@ public class LocalGgufProvider : IAiProvider
         try
         {
             await UnloadInternalAsync(keepBackend: Backend.LlamaSharp);
-            await _llamaService.LoadModelAsync(modelPath, progress, ct);
+
+            // Route events to the LlamaSharp backend BEFORE loading so progress/loading/
+            // status updates during LoadModelAsync actually propagate to the UI. If we set
+            // the flag only after load, IsReady and status messages fired during load get
+            // filtered out and the status bar stays stuck on "No model loaded".
             _activeBackend = Backend.LlamaSharp;
             _loadedModelPath = modelPath;
+            try
+            {
+                await _llamaService.LoadModelAsync(modelPath, progress, ct);
+            }
+            catch
+            {
+                _activeBackend = Backend.None;
+                _loadedModelPath = null;
+                throw;
+            }
         }
         catch (UnsupportedModelArchitectureException ex)
         {
@@ -117,9 +131,24 @@ public class LocalGgufProvider : IAiProvider
     private async Task SwitchToServerBackendAsync(string modelPath, IProgress<string>? progress, CancellationToken ct)
     {
         await UnloadInternalAsync(keepBackend: Backend.LlamaServer);
-        await _serverProvider.LoadModelAsync(modelPath, progress, ct);
+
+        // Flip to LlamaServer BEFORE launching. Events (status/loading) fired by
+        // LlamaServerProvider during startup are gated by _activeBackend — if we wait until
+        // after LoadModelAsync returns, "Starting llama-server...", "Waiting for model...",
+        // and the final "Ready:" status all get dropped and MainViewModel never learns the
+        // model is loaded.
         _activeBackend = Backend.LlamaServer;
         _loadedModelPath = modelPath;
+        try
+        {
+            await _serverProvider.LoadModelAsync(modelPath, progress, ct);
+        }
+        catch
+        {
+            _activeBackend = Backend.None;
+            _loadedModelPath = null;
+            throw;
+        }
     }
 
     /// <summary>Unload whichever backend is currently active. Pass <paramref name="keepBackend"/> to skip unloading one.</summary>
