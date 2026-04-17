@@ -8,6 +8,23 @@ using CluadeX.Models;
 
 namespace CluadeX.Services;
 
+/// <summary>
+/// Thrown when LlamaInferenceService is asked to load a GGUF whose architecture
+/// the bundled llama.cpp can't handle (e.g. Gemma 4). Callers (LocalGgufProvider)
+/// can catch this and route to llama-server.exe instead.
+/// </summary>
+public sealed class UnsupportedModelArchitectureException : Exception
+{
+    public string Architecture { get; }
+    public string ModelPath { get; }
+    public UnsupportedModelArchitectureException(string architecture, string modelPath, string message)
+        : base(message)
+    {
+        Architecture = architecture;
+        ModelPath = modelPath;
+    }
+}
+
 public class LlamaInferenceService : IDisposable
 {
     private readonly SettingsService _settingsService;
@@ -73,6 +90,23 @@ public class LlamaInferenceService : IDisposable
             var msg = $"Cannot read model file: {ex.Message}";
             OnError?.Invoke(msg);
             throw new InvalidOperationException(msg, ex);
+        }
+
+        // ── Architecture pre-check ──
+        // LLamaSharp ships an older llama.cpp build that doesn't recognize Gemma 3/4,
+        // Llama 4, Qwen 3, etc. Without this check, LoadFromFile fails deep in native
+        // code with a useless generic LoadWeightsFailedException. By detecting the
+        // architecture upfront we can throw a typed exception that LocalGgufProvider
+        // routes to llama-server.exe (which we ship in llama-backend/).
+        var (needsFallback, architecture) = GgufMetadataReader.InspectModel(modelPath);
+        if (needsFallback)
+        {
+            string fileName = Path.GetFileName(modelPath);
+            string detail = $"This model uses architecture '{architecture}', which the " +
+                            "bundled LLamaSharp build doesn't support. CluadeX will load it " +
+                            "with the bundled llama-server.exe instead.";
+            OnStatusChanged?.Invoke($"Routing {fileName} to llama-server (arch: {architecture})");
+            throw new UnsupportedModelArchitectureException(architecture!, modelPath, detail);
         }
 
         _isLoading = true;

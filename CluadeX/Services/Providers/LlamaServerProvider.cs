@@ -61,7 +61,28 @@ public class LlamaServerProvider : ApiProviderBase
         int gpuLayers = settings.GpuLayerCount == -1 ? 99 : settings.GpuLayerCount;
         if (settings.GpuBackend == "CPU") gpuLayers = 0;
 
-        // Build command line
+        // Inspect arch so we can apply model-specific defaults. For Gemma 4 the
+        // Unsloth + ggml-org cards both prescribe temp=1.0 / top-p=0.95 / top-k=64
+        // — using ChatML-style defaults produces garbled output.
+        string? arch = GgufMetadataReader.TryReadArchitecture(modelPath);
+        bool isGemma = !string.IsNullOrEmpty(arch) && arch.StartsWith("gemma", StringComparison.OrdinalIgnoreCase);
+
+        float temp = settings.Temperature;
+        float topP = settings.TopP;
+        int topK = 40;
+        if (isGemma)
+        {
+            // Don't override if the user has clearly customized things; only nudge defaults.
+            if (Math.Abs(settings.Temperature - 0.7f) < 0.001f) temp = 1.0f;
+            if (Math.Abs(settings.TopP - 0.9f) < 0.001f) topP = 0.95f;
+            topK = 64;
+        }
+
+        // Build command line.
+        // --jinja is critical for any modern model (Gemma 4, Llama 3+, Qwen 3): it tells
+        // llama-server to use the chat template embedded in the GGUF metadata instead of
+        // a hard-coded one. Without it, Gemma 4 outputs garbage because the server falls
+        // back to ChatML formatting, which Gemma's tokenizer doesn't recognize.
         var args = new List<string>
         {
             "-m", $"\"{modelPath}\"",
@@ -70,7 +91,10 @@ public class LlamaServerProvider : ApiProviderBase
             "-ngl", gpuLayers.ToString(),
             "-c", settings.ContextSize.ToString(),
             "-b", settings.BatchSize.ToString(),
-            "--temp", settings.Temperature.ToString("F2"),
+            "--temp", temp.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+            "--top-p", topP.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+            "--top-k", topK.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--jinja",
         };
 
         if (settings.ThreadCount > 0)

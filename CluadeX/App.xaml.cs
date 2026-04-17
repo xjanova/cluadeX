@@ -100,6 +100,12 @@ public partial class App : Application
         services.AddSingleton<HookService>();
         services.AddSingleton<McpServerManager>();
 
+        // Local GGUF backends — registered as singletons so AiProviderManager and
+        // LocalGgufProvider share the same LlamaServerProvider instance (otherwise
+        // the routing layer would launch a second llama-server process).
+        services.AddSingleton<Services.Providers.LlamaServerProvider>();
+        services.AddSingleton<Services.Providers.LocalGgufProvider>();
+
         // ViewModels
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<ChatViewModel>();

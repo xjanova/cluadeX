@@ -4,6 +4,7 @@ using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Helpers;
+using CluadeX.Services.Providers;
 using Microsoft.Win32;
 
 namespace CluadeX.ViewModels;
@@ -13,6 +14,7 @@ public class ModelManagerViewModel : ViewModelBase
     private readonly HuggingFaceService _huggingFaceService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly LlamaInferenceService _inferenceService;
+    private readonly LocalGgufProvider _localProvider;
     private readonly SettingsService _settingsService;
     private readonly AiProviderManager _providerManager;
     private CancellationTokenSource? _downloadCts;
@@ -102,12 +104,14 @@ public class ModelManagerViewModel : ViewModelBase
         HuggingFaceService huggingFaceService,
         GpuDetectionService gpuDetectionService,
         LlamaInferenceService inferenceService,
+        LocalGgufProvider localProvider,
         SettingsService settingsService,
         AiProviderManager providerManager)
     {
         _huggingFaceService = huggingFaceService;
         _gpuDetectionService = gpuDetectionService;
         _inferenceService = inferenceService;
+        _localProvider = localProvider;
         _settingsService = settingsService;
         _providerManager = providerManager;
 
@@ -199,7 +203,7 @@ public class ModelManagerViewModel : ViewModelBase
 
     private async Task LoadModel(string? path)
     {
-        if (string.IsNullOrEmpty(path) || _inferenceService.IsLoading) return;
+        if (string.IsNullOrEmpty(path) || _localProvider.IsLoading) return;
         IsLoadingModel = true;
         ModelLoadStatus = "Loading model...";
         try
@@ -210,7 +214,11 @@ public class ModelManagerViewModel : ViewModelBase
 
             var progress = new Progress<string>(s =>
                 App.Current?.Dispatcher.Invoke(() => ModelLoadStatus = s));
-            await _inferenceService.LoadModelAsync(path, progress);
+
+            // Route through LocalGgufProvider — it inspects the GGUF arch and
+            // transparently picks LLamaSharp or llama-server.exe (Gemma 4 etc.)
+            await _localProvider.LoadModelAsync(path, progress);
+
             SelectedModelPath = path;
             ModelLoadStatus = $"Loaded: {System.IO.Path.GetFileNameWithoutExtension(path)}";
             _settingsService.UpdateSettings(s =>
@@ -225,6 +233,8 @@ public class ModelManagerViewModel : ViewModelBase
 
     private void UnloadModel()
     {
+        // LocalGgufProvider doesn't expose an explicit unload — but unloading both
+        // backends is safe (each is a no-op if it wasn't loaded).
         _inferenceService.UnloadModel();
         SelectedModelPath = null;
         ModelLoadStatus = "Model unloaded.";

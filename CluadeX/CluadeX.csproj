@@ -9,7 +9,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>2.2.22</Version>
+    <Version>2.2.23</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -42,16 +42,26 @@
     <PackageReference Include="System.Management" Version="9.0.0" />
   </ItemGroup>
 
-  <!-- Post-build: copy llama-server.exe to output if llama-backend folder exists -->
+  <!--
+    Post-build: copy llama-server.exe + all native DLLs (llama.cpp, ggml backends,
+    CUDA runtime, multimodal projector) to the output directory. This is what
+    enables Gemma 4 / Llama 4 / Qwen 3 support — LLamaSharp's bundled llama.cpp
+    is too old, so LocalGgufProvider transparently routes those models to this
+    out-of-process server. CUDA runtime DLLs are required because most users
+    don't have the CUDA Toolkit installed (only the driver).
+
+    Uses globbing so newly added DLLs in llama-backend/ are picked up
+    automatically — no need to re-edit this list each time the backend updates.
+  -->
+  <ItemGroup>
+    <LlamaBackendFiles Include="$(ProjectDir)llama-backend\*.dll" />
+    <LlamaBackendFiles Include="$(ProjectDir)llama-backend\*.exe" />
+  </ItemGroup>
+
   <Target Name="CopyLlamaServer" AfterTargets="Build" Condition="Exists('$(ProjectDir)llama-backend\llama-server.exe')">
-    <Message Text="Copying llama-server.exe for Gemma 4 support..." Importance="high" />
+    <Message Text="Copying llama-backend (llama-server, ggml, CUDA runtime) — supports Gemma 4 / Llama 4 / Qwen 3..." Importance="high" />
     <MakeDir Directories="$(OutputPath)llama-backend" />
-    <Copy SourceFiles="$(ProjectDir)llama-backend\llama-server.exe" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(ProjectDir)llama-backend\llama.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml-base.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml-cuda.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(ProjectDir)llama-backend\ggml-cpu.dll" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(LlamaBackendFiles)" DestinationFolder="$(OutputPath)llama-backend\" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>
