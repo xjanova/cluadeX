@@ -120,52 +120,49 @@ public class XmanLicenseService
         }
     }
 
-    /// <summary>Validate existing license key is still active.</summary>
+    /// <summary>
+    /// Validate existing license key is still active.
+    /// Throws on network/timeout/parse errors so callers can distinguish
+    /// "offline" (keep cached activation) from "server says invalid" (clear key).
+    /// Only returns (false, ...) when the server explicitly responds that the key is invalid.
+    /// </summary>
     public async Task<(bool valid, string tier, DateTime? expiresAt)> ValidateAsync(
         string licenseKey, CancellationToken ct = default)
     {
-        try
+        var payload = new Dictionary<string, string>
         {
-            var payload = new Dictionary<string, string>
+            ["license_key"] = licenseKey.Trim(),
+            ["machine_id"] = GetMachineFingerprint(),
+        };
+
+        var response = await PostAsync($"{BaseUrl}/validate", payload, ct);
+
+        if (response.success && response.data.HasValue)
+        {
+            // Validate returns data.license_type and data.status
+            string licenseType = "";
+            if (response.data.Value.TryGetProperty("license_type", out var lt))
+                licenseType = lt.GetString() ?? "";
+            else if (response.data.Value.TryGetProperty("status", out var st))
+                licenseType = st.GetString() ?? "";
+
+            string tier = licenseType switch
             {
-                ["license_key"] = licenseKey.Trim(),
-                ["machine_id"] = GetMachineFingerprint(),
+                "lifetime" => "enterprise",
+                "yearly" or "monthly" => "pro",
+                "demo" or "daily" or "weekly" => "dev",
+                _ => "pro",
             };
 
-            var response = await PostAsync($"{BaseUrl}/validate", payload, ct);
+            DateTime? expires = null;
+            if (response.data.Value.TryGetProperty("expires_at", out var exp)
+                && exp.ValueKind == JsonValueKind.String)
+                expires = DateTime.TryParse(exp.GetString(), out var d) ? d : null;
 
-            if (response.success && response.data.HasValue)
-            {
-                // Validate returns data.license_type and data.status
-                string licenseType = "";
-                if (response.data.Value.TryGetProperty("license_type", out var lt))
-                    licenseType = lt.GetString() ?? "";
-                else if (response.data.Value.TryGetProperty("status", out var st))
-                    licenseType = st.GetString() ?? "";
-
-                string tier = licenseType switch
-                {
-                    "lifetime" => "enterprise",
-                    "yearly" or "monthly" => "pro",
-                    "demo" or "daily" or "weekly" => "dev",
-                    _ => "pro",
-                };
-
-                DateTime? expires = null;
-                if (response.data.Value.TryGetProperty("expires_at", out var exp)
-                    && exp.ValueKind == JsonValueKind.String)
-                    expires = DateTime.TryParse(exp.GetString(), out var d) ? d : null;
-
-                return (true, tier, expires);
-            }
-
-            return (false, "free", null);
+            return (true, tier, expires);
         }
-        catch
-        {
-            // Offline fallback — allow cached activation
-            return (false, "free", null);
-        }
+
+        return (false, "free", null);
     }
 
     /// <summary>Deactivate license from this machine.</summary>
@@ -232,6 +229,11 @@ public class XmanLicenseService
         var json = JsonSerializer.Serialize(payload);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var response = await _httpClient.PostAsync(url, content, ct);
+
+        // 5xx = transient server issue — throw so callers treat it as "offline",
+        // not as a definitive "key invalid" signal that would wipe cached activation.
+        if ((int)response.StatusCode >= 500)
+            throw new HttpRequestException($"License server returned {(int)response.StatusCode}");
 
         var body = await response.Content.ReadAsStringAsync(ct);
         var doc = JsonDocument.Parse(body);
