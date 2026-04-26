@@ -790,6 +790,65 @@
                                     </Border.ToolTip>
                                 </Border>
 
+                                <!-- ObsidianX bridge chip — visible only when McpHost is running.
+                                     Binds to MainViewModel.McpHost (the named-pipe MCP server). Green
+                                     dot = listening, count chip = active connections, request total
+                                     ticks up live. Tooltip exposes the pipe path + auth-token file
+                                     location so the user can paste either into ObsidianX. -->
+                                <Border CornerRadius="6" Padding="8,4" Margin="0,8,0,0"
+                                        Background="#1A4FFFE2" BorderBrush="#554FFFE2"
+                                        BorderThickness="1"
+                                        Visibility="{Binding McpHost, Converter={StaticResource NullToCollapsed}}">
+                                    <Border.ToolTip>
+                                        <StackPanel Margin="4">
+                                            <TextBlock FontSize="11" FontWeight="Bold"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       Margin="0,0,0,4">
+                                                ObsidianX bridge (MCP host)
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Pipe: "/><Run Text="\\.\pipe\"/><Run Text="{Binding McpHost.PipeName, Mode=OneWay}"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Auth token file: %USERPROFILE%\.cluadex\mcp-host-token"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Active connections: "/><Run Text="{Binding McpHost.ActiveConnections, Mode=OneWay}"/>
+                                            </TextBlock>
+                                            <TextBlock FontSize="10" Foreground="{StaticResource Subtext0Brush}">
+                                                <Run Text="Total requests: "/><Run Text="{Binding McpHost.TotalRequests, Mode=OneWay}"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border.ToolTip>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Width="7" Height="7" Margin="0,0,7,0"
+                                                 VerticalAlignment="Center">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Fill" Value="{StaticResource RedBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding McpHost.IsListening}" Value="True">
+                                                            <Setter Property="Fill" Value="#4FFFE2"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                        </Ellipse>
+                                        <TextBlock Text="🌉 ObsidianX bridge" FontSize="10"
+                                                   Foreground="{StaticResource TextBrush}"
+                                                   FontWeight="SemiBold" VerticalAlignment="Center"
+                                                   Margin="0,0,8,0"/>
+                                        <TextBlock FontSize="10"
+                                                   FontFamily="{StaticResource MonoFont}"
+                                                   Foreground="{StaticResource Subtext0Brush}"
+                                                   VerticalAlignment="Center">
+                                            <Run Text="{Binding McpHost.ActiveConnections, Mode=OneWay, FallbackValue=0}"/>
+                                            <Run Text="·"/>
+                                            <Run Text="{Binding McpHost.TotalRequests, Mode=OneWay, FallbackValue=0}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- Version + Check Update -->
                                 <Grid Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>

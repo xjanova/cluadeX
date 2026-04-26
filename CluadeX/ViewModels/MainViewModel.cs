@@ -2,6 +2,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using CluadeX.Models;
 using CluadeX.Services;
+using CluadeX.Services.Mcp;
 
 namespace CluadeX.ViewModels;
 
@@ -139,6 +140,18 @@ public class MainViewModel : ViewModelBase
     // Buddy companion
     public BuddyService BuddyService => _buddyService;
     public bool IsBuddyEnabled => _settingsService.Settings.Features.BuddyCompanion;
+
+    // ─── ObsidianX bridge (named-pipe MCP host) ───
+    // Surfaces the in-process MCP server's status to the sidebar so the user
+    // can see at a glance whether external orchestrators (ObsidianX Co-Pilot
+    // Arena) can reach this CluadeX instance. The chip in the status bar
+    // binds to this property.
+    private McpHostService? _mcpHost;
+    public McpHostService? McpHost
+    {
+        get => _mcpHost;
+        set => SetProperty(ref _mcpHost, value);
+    }
 
     // ─── Auto-Update ───
     private bool _showUpdateBar;

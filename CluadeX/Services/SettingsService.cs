@@ -169,9 +169,31 @@ public class SettingsService
 
     public void UpdateSettings(Action<AppSettings> update)
     {
+        AiProviderType before;
+        AiProviderType after;
         lock (_ioLock)
         {
+            before = _settings.ActiveProvider;
             update(_settings);
+            after = _settings.ActiveProvider;
+        }
+        // Diagnostic: trace every UpdateSettings that flips ActiveProvider so
+        // we can see the culprit reverting our set_model alignment. Cheap to
+        // ship; can be removed once the lifecycle is settled.
+        if (before != after)
+        {
+            try
+            {
+                var stack = new System.Diagnostics.StackTrace(skipFrames: 1, fNeedFileInfo: false);
+                var caller = stack.GetFrames()?.FirstOrDefault(f => f.GetMethod()?.Name != "UpdateSettings")?.GetMethod();
+                var callerName = caller != null ? $"{caller.DeclaringType?.Name}.{caller.Name}" : "?";
+                var logFile = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".cluadex", "mcp-host.log");
+                System.IO.File.AppendAllText(logFile,
+                    $"{DateTime.Now:O} ActiveProvider FLIP {before} -> {after}  caller={callerName}\n");
+            }
+            catch { /* best-effort */ }
         }
         Save();
     }

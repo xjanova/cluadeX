@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using CluadeX.Models;
@@ -931,7 +932,12 @@ public class ChatViewModel : ViewModelBase
         StatusText = "Ready";
     }
 
-    private void NewSession()
+    /// <summary>
+    /// Promoted from private to public so the McpHostService can spawn a
+    /// fresh visible session each time ObsidianX delegates a task. UI-thread
+    /// only — callers from background threads must Dispatcher.Invoke.
+    /// </summary>
+    public void NewSession()
     {
         // Save current session before creating new
         if (CurrentSession != null && CurrentSession.Messages.Count > 0)
@@ -961,6 +967,136 @@ public class ChatViewModel : ViewModelBase
         catch { /* ignore */ }
 
         StatusText = "Ready";
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  MCP-driven external runs (called by McpHostService → ToolDispatcher)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Run a coding task that arrived over the named-pipe MCP host. Spawns
+    /// a NEW visible chat session tagged with the caller's task id, posts
+    /// the spec as the user message, runs the agentic loop, and posts the
+    /// agent's reply. The transcript persists in codex.db like any normal
+    /// session — user can scroll back to it anytime.
+    ///
+    /// All UI-touching work happens on the dispatcher thread. Network/agent
+    /// work is awaited so the caller (the named-pipe handler) can serialise
+    /// the final response back to ObsidianX.
+    /// </summary>
+    public async Task<string> RunMcpTaskAsync(
+        string taskId,
+        string spec,
+        IReadOnlyList<string>? lessons,
+        IReadOnlyList<string>? contextFiles,
+        string? workingDirectory,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(spec))
+            return "(empty spec — nothing to do)";
+
+        // 1. Switch to a fresh visible session so the user's current chat
+        //    isn't disturbed. Tag with the caller's id so the sidebar
+        //    filter and history are easy to find later.
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            NewSession();
+            if (CurrentSession != null)
+            {
+                CurrentSession.Title = $"[ObsidianX] {taskId}";
+                CurrentSession.ProjectPath = $"obsidianx-task::{taskId}";
+            }
+            // If the caller pinned a working directory, switch to it so all
+            // file ops in this session are scoped correctly.
+            if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+                SetWorkingDirectory(workingDirectory!);
+        });
+
+        // 2. Compose the prompt. Inject "lessons learned" verbatim so the
+        //    agent sees them as system-level guidance from the orchestrator.
+        var sb = new StringBuilder();
+        sb.AppendLine(spec);
+        if (lessons is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Lessons learned from previous reviews");
+            sb.AppendLine("Pay attention to these — they describe mistakes the senior reviewer flagged before:");
+            foreach (var l in lessons)
+                sb.AppendLine($"- {l}");
+        }
+        if (contextFiles is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Files in scope");
+            foreach (var f in contextFiles)
+                sb.AppendLine($"- `{f}`");
+        }
+        string prompt = sb.ToString();
+
+        // 3. Post the spec as a user message so it's visible in the chat
+        //    transcript exactly like a human-typed prompt.
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var userMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
+            Messages.Add(userMsg);
+            CurrentSession?.Messages.Add(userMsg);
+            _isDirty = true;
+            ScrollToBottom?.Invoke();
+        });
+
+        // 4. Run the agentic loop. Use the same CodeAgentService instance
+        //    the interactive chat uses — same provider, same tool budget,
+        //    same hooks/permissions/skills.
+        //
+        //    IsGenerating is set up-front and ALWAYS reset in finally so the
+        //    Send button never gets stuck disabled if a downstream dispatcher
+        //    InvokeAsync fails (e.g. window closing mid-call).
+        IsGenerating = true;
+        var historySnapshot = Messages.ToList();
+        try
+        {
+            AgentLoopResult agentResult;
+            try
+            {
+                agentResult = await _agentService.ExecuteAgenticAsync(historySnapshot, prompt, ct: ct);
+            }
+            catch (Exception ex)
+            {
+                string err = $"❌ Agent loop failed: {ex.Message}";
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    var errMsg = new ChatMessage { Role = MessageRole.Assistant, Content = err, HasError = true };
+                    Messages.Add(errMsg);
+                    CurrentSession?.Messages.Add(errMsg);
+                });
+                return err;
+            }
+
+            // 5. Post the agent's final response to the chat so the user sees
+            //    what was returned to ObsidianX, then persist + return.
+            string finalText = agentResult.FinalResponse ?? "(agent loop returned no text)";
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var aMsg = new ChatMessage { Role = MessageRole.Assistant, Content = finalText };
+                Messages.Add(aMsg);
+                CurrentSession?.Messages.Add(aMsg);
+                _isDirty = true;
+                SaveNow();
+            });
+            return finalText;
+        }
+        finally
+        {
+            // Marshal the reset to the UI thread; SetProperty raises
+            // PropertyChanged which any binding consumers expect on the
+            // dispatcher.
+            try
+            {
+                if (Application.Current.Dispatcher.CheckAccess()) IsGenerating = false;
+                else await Application.Current.Dispatcher.InvokeAsync(() => IsGenerating = false);
+            }
+            catch { /* app closing — nothing to do */ }
+        }
     }
 
     private void CompactConversation()

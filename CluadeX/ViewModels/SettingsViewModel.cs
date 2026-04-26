@@ -350,10 +350,12 @@ public class SettingsViewModel : ViewModelBase
             UseCustomModel = UseCustomModel,
         };
 
+        // Don't write ActiveProvider here — see comment in Save() above.
+        // SwitchProviderAsync owns ActiveProvider; this VM only owns the
+        // per-provider knobs.
         _settingsService.UpdateSettings(s =>
         {
             s.ProviderConfigs[key] = config;
-            s.ActiveProvider = SelectedProvider;
         });
     }
 
@@ -584,8 +586,13 @@ public class SettingsViewModel : ViewModelBase
             s.MicrocompactEnabled = MicrocompactEnabled;
             s.SessionMemoryEnabled = SessionMemoryEnabled;
 
-            // Provider config in same save
-            s.ActiveProvider = SelectedProvider;
+            // Provider CONFIG (api key, base url, default model) for the
+            // currently-edited provider. Do NOT touch s.ActiveProvider here:
+            // AiProviderManager.SwitchProviderAsync is the single source of
+            // truth for "which provider is active right now". Writing it
+            // back from this VM stomped on programmatic switches done via
+            // the named-pipe MCP host (set_model alignment) and reverted
+            // them ~2s after they ran.
             s.ProviderConfigs[SelectedProvider.ToString()] = new ProviderConfig
             {
                 ApiKey = string.IsNullOrWhiteSpace(ProviderApiKey) ? null : ProviderApiKey,
