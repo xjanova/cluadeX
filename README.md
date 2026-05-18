@@ -27,6 +27,43 @@ CluadeX คือผู้ช่วยเขียนโค้ด AI เต็�
 
 ---
 
+## Vision — Where CluadeX Is Heading / วิสัยทัศน์
+
+**Mission:** Be THE Windows desktop AI coding workbench. Take every powerful idea from CLI-only competitors — specialized subagents, skill libraries, continuous learning, security scanners — and ship them inside a *visual*, *local-first*, *MCP-native* product that no terminal tool can match.
+
+**ภารกิจ:** เป็นเครื่องมือ AI สำหรับเขียนโค้ดบน Windows ที่ดีที่สุด ยกข้อดีทุกอย่างจากเครื่องมือ CLI คู่แข่ง (subagents เฉพาะทาง, library ของ skill, ระบบเรียนรู้, security scanner) มาใส่ในตัวที่มี UI สวยและทำงาน local ได้ก่อนใคร
+
+### What's Shipping in the Next 6 Weeks / สิ่งที่กำลังจะมา
+
+| Sprint | Feature | Why It Matters |
+|--------|---------|----------------|
+| **S1** | **Subagent System** (10 built-in: code-reviewer, security-reviewer, architect, silent-failure-hunter, …) | Scoped context per agent → better answers, lower cost |
+| **S1** | **Skill `.md` Library** (15 built-in: verification-loop, tdd-workflow, deep-research, eval-harness, multi-plan, …) | Unlimited workflow templates loadable from URL/git |
+| **S2** | **Instinct System** (continuous learning) | CluadeX learns your patterns and promotes them to reusable skills |
+| **S2** | **Strategic Compaction Toast** | Smart `/compact` suggestion at logical breakpoints |
+| **S3** | **SecurityShield Scanner** (50 OWASP rules + red-team/blue-team/auditor pipeline) | Production-grade security review on every change |
+| **S3** | **Hook Script Library** (15 pre-bundled hooks) | One-toggle automation — prettier, secret scan, push confirm, … |
+| **S4** | **Multi-Execute Worktree Arena** (3 parallel implementations side-by-side) | Pick the best of 3 approaches without losing the others |
+| **S4** | **Eval Harness** (pass@k, LLM judge / rule / unit-test graders) | Measure skill + subagent quality, catch regressions |
+| **S4** | **Marketplace 2.0** (manifest-driven install, signature verified) | One-click profile install: "fullstack-web" / "ml-engineer" / "blockchain" |
+| **S4** | **Session Handoff Exporter** | Portable `.cluadex/handoffs/*.md` survives reboots and machine changes |
+
+### CluadeX-Only Innovations / นวัตกรรมเฉพาะ CluadeX
+
+Things a CLI tool fundamentally cannot do:
+
+1. **Visual Subagent Tree** — live tree diagram of main agent → subagents → tool calls, colored by status, sized by token cost
+2. **GPU-Aware Local Subagents** — cheap-tier subagents auto-route to your local Qwen3/Gemma4 (cost = $0)
+3. **Mixed-Mode Cost Budget** — set "$1 cap per session" → agent auto-downgrades to local when 75% spent
+4. **MCP Host Integration** — subagents share the parent's MCP session via named-pipe host (no auth re-handshake)
+5. **Brain Integration** — instincts and handoffs sync to ObsidianX so knowledge survives across projects and machines
+6. **Buddy Reactions** — your companion pet animates on milestones (test pass = bounce, security finding = alert)
+7. **WPF Design Language** — gradient glass cards, drop shadows, native data-vis — things Tkinter dashboards cannot do
+
+→ **See the full plan:** [ROADMAP.md](ROADMAP.md) — 4 sprints, 10 features, success metrics, migration plan
+
+---
+
 ### Core Features / ฟีเจอร์หลัก
 
 | Feature | Description | คำอธิบาย |
@@ -196,8 +233,10 @@ CluadeX รองรับ slash-command skills — template prompt ที่ใ
 
 | Feature | Description | คำอธิบาย |
 |---------|-------------|----------|
-| **Built-in Skills** | `/commit` (git commit), `/review-pr` (PR review), `/simplify` (code quality) | Skill พื้นฐาน 3 ตัว |
+| **Built-in Skills (today)** | `/commit` (git commit), `/review-pr` (PR review), `/simplify` (code quality) | Skill พื้นฐาน 3 ตัว |
+| **Built-in Skills (Sprint 1 — coming)** | `/verification-loop`, `/tdd-workflow`, `/deep-research`, `/eval-harness`, `/cost-aware-llm-pipeline`, `/context-budget`, `/autonomous-loop`, `/e2e-testing`, `/security-scan`, `/agent-introspection-debug`, `/content-engine`, `/market-research`, `/harness-optimizer`, `/multi-plan`, `/multi-execute` (15 ใหม่) | Skill สำเร็จรูป 15 ตัวกำลังจะมา |
 | **Custom Skills** | Create `.md` files with YAML frontmatter in `~/.cluadex/skills/` or `{project}/.cluadex/skills/` | สร้าง skill เองด้วยไฟล์ markdown + YAML frontmatter |
+| **Install from URL/Git (S1)** | Install community skills with checksum + signature verification | ติดตั้ง skill จากชุมชนพร้อมตรวจสอบ checksum + signature |
 | **Tool Restrictions** | Skills can limit which tools the AI is allowed to use. | Skill กำหนดได้ว่า AI ใช้เครื่องมือไหนได้บ้าง |
 | **Project Override** | Project skills override user skills, user skills override built-in. | Skill ของโปรเจกต์มีสิทธิ์สูงกว่า Skill ของผู้ใช้ |
 
@@ -229,9 +268,11 @@ Run shell commands before/after tool execution — like Claude Code's hooks.
 |---------|-------------|----------|
 | **PreToolUse** | Run before a tool executes. Can block execution on failure. | รันก่อนใช้เครื่องมือ สามารถบล็อกได้ถ้าล้มเหลว |
 | **PostToolUse** | Run after a tool executes. Best-effort (doesn't block). | รันหลังใช้เครื่องมือ (ไม่บล็อก) |
+| **SessionStart / Stop / PreCompact (S3)** | Lifecycle hooks for load handoff, pattern extraction, state snapshot | hook ตามวงจรชีวิตเซสชัน |
 | **Wildcard Matchers** | Match by tool name pattern (e.g., `run_command`, `*` for all). | จับคู่ตามชื่อเครื่องมือ |
 | **Variable Substitution** | `{tool}`, `{path}`, `{command}` replaced with actual values. | `{tool}`, `{path}`, `{command}` แทนที่ด้วยค่าจริง |
 | **Config Files** | `.cluadex/hooks.json` (project) and `~/.cluadex/hooks.json` (global) | ไฟล์ config ระดับโปรเจกต์ และ global |
+| **Bundled Hook Library (S3 — coming)** | 15 ready-to-use hooks: `prettier-format`, `secret-scan`, `git-push-confirm`, `console-log-warn`, `block-dev-server-outside-tmux`, `pre-commit-quality`, `pattern-extract`, `cost-summary-toast`, `desktop-notify-completion`, `load-handoff`, `detect-package-manager`, `save-state-snapshot`, `dangerous-cmd-warn`, `pr-link-logger`, `quality-gate` | hook สำเร็จรูป 15 ตัวกำลังจะมา (กดสวิตช์ใช้ได้เลย) |
 
 ---
 
@@ -522,6 +563,23 @@ CluadeX/
 
 ---
 
+## Roadmap & Contributing / แผนพัฒนาและการมีส่วนร่วม
+
+The complete development plan is in [ROADMAP.md](ROADMAP.md) — covering 4 sprints, 10 major features, 7 CluadeX-only innovations, and success metrics.
+
+แผนพัฒนาเต็มอยู่ใน [ROADMAP.md](ROADMAP.md) — ครอบคลุม 4 sprint, 10 ฟีเจอร์หลัก, 7 นวัตกรรมเฉพาะ CluadeX, พร้อมตัวชี้วัดความสำเร็จ
+
+**Sprint priorities at a glance / ลำดับการพัฒนา:**
+
+1. **Sprint 1 — Foundation:** Subagent System + Skill `.md` Library (10 subagents + 15 skills built-in)
+2. **Sprint 2 — Intelligence:** Instinct System (continuous learning) + Strategic Compaction Toast
+3. **Sprint 3 — Safety:** SecurityShield Scanner (50 rules) + Hook Script Library (15 bundled hooks)
+4. **Sprint 4 — Power:** Multi-Execute Worktree Arena + Eval Harness + Marketplace 2.0 + Session Handoff Exporter
+
+Pull requests and issues welcome at [github.com/xjanova/CluadeX](https://github.com/xjanova/CluadeX).
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file.
@@ -529,5 +587,6 @@ MIT License - see [LICENSE](LICENSE) file.
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://xman4289.com">Xman Studio</a>
+  Made with ❤️ by <a href="https://xman4289.com">Xman Studio</a><br/>
+  <em>The Windows desktop AI coding workbench — visual, local-first, MCP-native.</em>
 </p>
