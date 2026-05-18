@@ -54,6 +54,25 @@ public class AppSettings
     public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
     public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 
+    // Microcompact — shrink old tool results before resending to the API.
+    // Keeps the most recent KeepRecentTurns tool_result blocks verbatim; older ones
+    // get summarized. Without this, long agentic loops balloon the prompt because
+    // the same large tool outputs keep being re-sent each turn.
+    public bool MicrocompactEnabled { get; set; } = true;
+    public int MicrocompactKeepRecentTurns { get; set; } = 3;       // recent assistant/user pairs to preserve verbatim
+    public int MicrocompactMaxOldResultChars { get; set; } = 800;   // cap on older tool_result content
+
+    // Session Memory — on session end, extract durable facts from the transcript and
+    // persist them as memory files. Runs in background; never blocks the UI. Off by
+    // default to avoid surprising the user with LLM calls they didn't ask for.
+    public bool SessionMemoryEnabled { get; set; } = false;
+
+    // Model Catalog view preference — list (default) vs grid (2-column tiles).
+    public bool ModelCatalogGridView { get; set; } = false;
+
+    // Sidebar system menu — collapsed by default to give chat history maximum real estate.
+    public bool SidebarNavExpanded { get; set; } = false;
+
     // UI settings
     public double FontSize { get; set; } = 14;
     public bool StreamOutput { get; set; } = true;

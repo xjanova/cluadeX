@@ -27,21 +27,88 @@ CluadeX คือผู้ช่วยเขียนโค้ด AI เต็�
 
 ---
 
+## Vision — Where CluadeX Is Heading / วิสัยทัศน์
+
+**Mission:** Be THE Windows desktop AI coding workbench. Take every powerful idea from CLI-only competitors — specialized subagents, skill libraries, continuous learning, security scanners — and ship them inside a *visual*, *local-first*, *MCP-native* product that no terminal tool can match.
+
+**ภารกิจ:** เป็นเครื่องมือ AI สำหรับเขียนโค้ดบน Windows ที่ดีที่สุด ยกข้อดีทุกอย่างจากเครื่องมือ CLI คู่แข่ง (subagents เฉพาะทาง, library ของ skill, ระบบเรียนรู้, security scanner) มาใส่ในตัวที่มี UI สวยและทำงาน local ได้ก่อนใคร
+
+### What's Shipping in the Next 6 Weeks / สิ่งที่กำลังจะมา
+
+| Sprint | Feature | Why It Matters |
+|--------|---------|----------------|
+| **S1** | **Subagent System** (10 built-in: code-reviewer, security-reviewer, architect, silent-failure-hunter, …) | Scoped context per agent → better answers, lower cost |
+| **S1** | **Skill `.md` Library** (15 built-in: verification-loop, tdd-workflow, deep-research, eval-harness, multi-plan, …) | Unlimited workflow templates loadable from URL/git |
+| **S2** | **Instinct System** (continuous learning) | CluadeX learns your patterns and promotes them to reusable skills |
+| **S2** | **Strategic Compaction Toast** | Smart `/compact` suggestion at logical breakpoints |
+| **S3** | **SecurityShield Scanner** (50 OWASP rules + red-team/blue-team/auditor pipeline) | Production-grade security review on every change |
+| **S3** | **Hook Script Library** (15 pre-bundled hooks) | One-toggle automation — prettier, secret scan, push confirm, … |
+| **S4** | **Multi-Execute Worktree Arena** (3 parallel implementations side-by-side) | Pick the best of 3 approaches without losing the others |
+| **S4** | **Eval Harness** (pass@k, LLM judge / rule / unit-test graders) | Measure skill + subagent quality, catch regressions |
+| **S4** | **Marketplace 2.0** (manifest-driven install, signature verified) | One-click profile install: "fullstack-web" / "ml-engineer" / "blockchain" |
+| **S4** | **Session Handoff Exporter** | Portable `.cluadex/handoffs/*.md` survives reboots and machine changes |
+
+### CluadeX-Only Innovations / นวัตกรรมเฉพาะ CluadeX
+
+Things a CLI tool fundamentally cannot do:
+
+1. **Visual Subagent Tree** — live tree diagram of main agent → subagents → tool calls, colored by status, sized by token cost
+2. **GPU-Aware Local Subagents** — cheap-tier subagents auto-route to your local Qwen3/Gemma4 (cost = $0)
+3. **Mixed-Mode Cost Budget** — set "$1 cap per session" → agent auto-downgrades to local when 75% spent
+4. **MCP Host Integration** — subagents share the parent's MCP session via named-pipe host (no auth re-handshake)
+5. **Brain Integration** — instincts and handoffs sync to ObsidianX so knowledge survives across projects and machines
+6. **Buddy Reactions** — your companion pet animates on milestones (test pass = bounce, security finding = alert)
+7. **WPF Design Language** — gradient glass cards, drop shadows, native data-vis — things Tkinter dashboards cannot do
+
+→ **See the full plan:** [ROADMAP.md](ROADMAP.md) — 4 sprints, 10 features, success metrics, migration plan
+
+---
+
 ### Core Features / ฟีเจอร์หลัก
 
 | Feature | Description | คำอธิบาย |
 |---------|-------------|----------|
-| **Local GGUF Inference** | Run AI models locally on your GPU/CPU with LLamaSharp (CUDA 12). No internet required, fully private. | รันโมเดล AI บนเครื่องด้วย GPU/CPU ไม่ต้องใช้อินเทอร์เน็ต ข้อมูลเป็นส่วนตัว 100% |
+| **Local GGUF Inference** | Run AI models locally on your GPU/CPU. Transparent dual backend — LLamaSharp (in-proc, CUDA 12) for classic models, bundled `llama-server.exe` auto-launched for newer architectures (Gemma 3/3N/4, Llama 4, Qwen 3, DeepSeek V3/R1, Phi 4). | รันโมเดล AI บนเครื่อง ใช้ backend คู่: LLamaSharp สำหรับโมเดลคลาสสิก, llama-server.exe สำหรับ Gemma 4 / Llama 4 / Qwen 3 ฯลฯ |
 | **Multi-Provider AI** | Switch between Local, OpenAI, Anthropic, Google Gemini, and Ollama providers instantly. | สลับระหว่าง Local, OpenAI, Anthropic, Google Gemini และ Ollama ได้ทันที |
-| **Chat Persistence (SQLite + FTS5)** | All conversations saved locally with full-text search. Never lose your chat history. | บันทึกการสนทนาทั้งหมดในเครื่องพร้อมค้นหาข้อความเต็ม ไม่สูญหาย |
+| **Chat Persistence (SQLite + FTS5)** | All conversations saved locally with full-text search. Sessions are tagged with project path and filtered per-folder in the sidebar. Never lose your chat history. | บันทึกการสนทนาทั้งหมด ค้นหาข้อความเต็ม และแยก session ตามโปรเจคอัตโนมัติ |
 | **Markdown & Syntax Highlighting** | Rich text rendering with code blocks, tables, and syntax-highlighted code snippets. | แสดงผลข้อความสวยงามพร้อมบล็อกโค้ด ตาราง และไฮไลท์โค้ดสีสัน |
-| **GPU Auto-Detection** | Automatically detects your NVIDIA GPU and VRAM for optimal model loading. | ตรวจจับ GPU NVIDIA และ VRAM อัตโนมัติเพื่อโหลดโมเดลได้เหมาะสม |
-| **Catppuccin Mocha Theme** | Beautiful dark theme with metallic gradients, drop shadows, and rounded corners. | ธีมมืดสวยงามพร้อมกราเดียนท์เมทัลลิก เงาตกกระทบ และขอบมน |
-| **HuggingFace Model Hub** | Browse, search, and download GGUF models directly from HuggingFace Hub. Curated catalog with Gemma 4, Qwen 2.5, Phi-3, Llama 3, DeepSeek, and more. | ค้นหาและดาวน์โหลดโมเดล GGUF จาก HuggingFace Hub โมเดลคัดสรรพร้อมใช้ |
-| **Thai/English Localization** | Full Thai and English language support (150+ translations). Switch anytime from Settings. AI responds in your chosen language. | รองรับภาษาไทยและอังกฤษเต็มรูปแบบ (150+ คำแปล) AI ตอบตามภาษาที่เลือก |
+| **Live GPU Monitoring** | Real-time sparkline of GPU utilization + color-coded temperature chip in the sidebar status bar (polls `nvidia-smi` every 2s). | กราฟ GPU utilization + chip อุณหภูมิแบบ real-time ในแถบสถานะ |
+| **GPU Auto-Detection** | Automatically detects your NVIDIA GPU and VRAM for optimal model loading. Multi-GPU supported via automatic `--tensor-split`. | ตรวจจับ GPU และ VRAM อัตโนมัติ รองรับหลายการ์ดจอผ่าน tensor-split |
+| **Catppuccin Mocha Theme** | Beautiful dark theme with metallic gradients, drop shadows, glowing menu, and rounded corners. | ธีมมืดสวยงามพร้อมเมนูเรืองแสง กราเดียนท์เมทัลลิก เงาตกกระทบ ขอบมน |
+| **HuggingFace Model Hub** | Browse, search, and download GGUF models directly from HuggingFace Hub. Search is filtered to GGUF text-generation LLMs only (no embeddings/image/audio). Every result card has a "Read more" link to the HF model page. | ค้นหาและดาวน์โหลด GGUF กรองเฉพาะ LLM text-generation ทุกผลมีลิงก์ Read more ไปดู model card |
+| **Rich Model Catalog** | Curated catalog with fit indicator on every card: 🟢 Fast (fits GPU) · 🟦 Good · 🟡 Partial (CPU offload) · 🟠 Slow · 🔴 Too large. 17 Gemma variants (4, 3N, 3, 3 QAT, 2, CodeGemma) plus Qwen 2.5, DeepSeek, Llama 3, Phi 3.5, StarCoder 2, CodeLlama. List/Grid view toggle. | แคตตาล็อกโมเดลพร้อมตัวบอกความเหมาะสมกับ VRAM ของคุณ มี 17 Gemma + รุ่นอื่นอีก toggle ระหว่าง list/grid |
+| **Thai/English Localization** | Hot-swappable Thai/English with `{services:Loc key}` XAML markup extension — all bound labels refresh live on language change. 200+ translations covering Settings, Features, navigation, buddy, common UI. | สลับภาษาแบบ hot-reload ผ่าน MarkupExtension 200+ คำแปล |
 | **Feature Toggles** | Enable or disable optional features from the Features page. | เปิด/ปิดฟีเจอร์เสริมได้จากหน้า Features |
 | **Activation Key System** | Advanced features gated behind activation key. Free tier includes local inference, chat, Ollama, buddy, and more. | ฟีเจอร์ขั้นสูงต้องใส่ activation key ฟรีเทียร์มีครบเรื่องพื้นฐาน |
 | **Portable Mode** | Place a `portable` or `portable.txt` file next to the exe to store all data locally. | วางไฟล์ `portable` ข้างไฟล์ exe เพื่อเก็บข้อมูลทั้งหมดในโฟลเดอร์เดียวกัน |
+
+---
+
+### Sidebar & UX / แถบข้าง
+
+| Feature | Description | คำอธิบาย |
+|---------|-------------|----------|
+| **Collapsible Menu** | System menu (Chat/Models/Settings/Plugins/…) collapses to a gradient "MENU" strip so chat history dominates. Default collapsed; state persisted. | เมนูระบบพับได้ — default พับเพื่อเน้นประวัติแชท |
+| **Per-Project Session Filter** | Sidebar shows sessions from the current project folder only. Toggle switch exposes "all projects" view. Legacy sessions (no project tag) always visible. | sidebar แสดง session เฉพาะโปรเจคที่เปิด มี toggle ให้ดูทุกโปรเจค |
+| **Project Header** | Current project name + icon shown prominently above chat history. Tooltip shows full path. | หัวโปรเจคแสดงชื่อโฟลเดอร์ปัจจุบัน |
+| **Sticky Buddy** | Buddy widget pinned above status bar — stays visible even when chat history scrolls. | buddy อยู่ติดด้านล่างไม่หล่นหายเมื่อเลื่อนประวัติ |
+| **Claude Code-style Chat UX** | Inline tool-step indicators with verbs + elapsed time, thinking indicator, live token counter, non-blocking streaming (BeginInvoke + token batching). | UX สไตล์ Claude Code: บอกเครื่องมือที่ใช้, เวลา, token, stream ไม่บล็อก |
+| **Rich 3D Menu Styling** | Selected nav items get gradient fill, drop shadow, colored icon bubble, and accent strip. Hover state preview. | เมนูมีมิติ: กรอบสี, เงา, bubble icon |
+
+---
+
+### Advanced Model Loading / การโหลดโมเดลขั้นสูง
+
+| Feature | Description | คำอธิบาย |
+|---------|-------------|----------|
+| **Multi-GPU Tensor Split** | If 2+ NVIDIA GPUs are detected, llama-server is launched with `--tensor-split <vram1,vram2,...>` so the model is split proportionally by VRAM. | หลายการ์ดจอ → แบ่งโหลดตามอัตราส่วน VRAM อัตโนมัติ |
+| **CPU Offload for VRAM Overflow** | Models larger than VRAM run with partial CPU offload (`-ngl N`). Fit indicator suggests optimal `-ngl` per model. | โมเดลใหญ่กว่า VRAM ใช้ CPU ช่วย พร้อมคำแนะนำค่า `-ngl` |
+| **All CPU Cores by Default** | When ThreadCount = 0, llama-server is launched with `-t Environment.ProcessorCount` (all logical cores) for maximum throughput. | ใช้ทุก CPU core อัตโนมัติ |
+| **Live Load Progress** | Parses `llama-server` stderr for structured loading steps — shows percent layers offloaded to GPU, VRAM upload size, context allocation phase in the UI. | บอก % โหลดเข้า VRAM ระหว่างโหลดโมเดลแบบ real-time |
+| **Architecture Detection** | GGUF header parsed before loading. Known-incompatible archs (Gemma 3/3N/4, Llama 4, Qwen 3, DeepSeek V3/R1, Phi 4) automatically routed to `llama-server.exe`. | ตรวจ GGUF arch ก่อนโหลด เพื่อเลือก backend ที่ถูกต้อง |
+| **Auto-Load Last Model** | On startup, the last loaded model is restored through the architecture-aware router — works for Gemma 4 etc., not just LLamaSharp-compatible models. | โหลดโมเดลล่าสุดอัตโนมัติ รองรับทุก architecture |
+| **Gemma Reasoning Fix** | llama-server launched with `--reasoning-format none` so models that emit thinking tokens (Gemma 4, DeepSeek R1, Qwen 3) don't return empty `content` fields. | fix Gemma 4 / R1 / Qwen 3 ที่เคยออกเป็นข้อความว่างเปล่า |
+| **Microcompact** | Before re-sending the conversation to the API, old tool results are shrunk (base64 images stripped, ISO-8601 timestamps collapsed, large bodies truncated). Keeps recent turns verbatim. | บีบอัดผลเครื่องมือเก่าก่อนส่งไป API ประหยัด context |
 
 ---
 
@@ -49,7 +116,7 @@ CluadeX คือผู้ช่วยเขียนโค้ด AI เต็�
 
 | Provider | Models | Requirements |
 |----------|--------|-------------|
-| **Local GGUF** | Any GGUF model (Gemma 4, Qwen 2.5, Llama 3, Phi-3, DeepSeek, etc.) | GPU with VRAM (CUDA 12) or CPU |
+| **Local GGUF** | Any GGUF model via transparent dual backend (LLamaSharp in-proc for classic archs, bundled `llama-server.exe` for Gemma 3/3N/4, Llama 4, Qwen 3, DeepSeek V3/R1, Phi 4). Multi-GPU tensor-split supported. | GPU with VRAM (CUDA 12) or CPU |
 | **OpenAI** | GPT-4o, GPT-4o-mini, o1, o1-pro, o3, o3-mini, o4-mini | OpenAI API Key |
 | **Anthropic** | Claude Opus 4, Claude Sonnet 4, Claude 3.5 Sonnet, Claude Haiku 3.5 | Anthropic API Key |
 | **Google Gemini** | Gemini 2.5 Pro/Flash, Gemini 2.0 Flash, Gemma 4 (31B, 26B MoE, E4B, E2B), Gemma 3 | Google AI API Key |
@@ -166,8 +233,10 @@ CluadeX รองรับ slash-command skills — template prompt ที่ใ
 
 | Feature | Description | คำอธิบาย |
 |---------|-------------|----------|
-| **Built-in Skills** | `/commit` (git commit), `/review-pr` (PR review), `/simplify` (code quality) | Skill พื้นฐาน 3 ตัว |
+| **Built-in Skills (today)** | `/commit` (git commit), `/review-pr` (PR review), `/simplify` (code quality) | Skill พื้นฐาน 3 ตัว |
+| **Built-in Skills (Sprint 1 — coming)** | `/verification-loop`, `/tdd-workflow`, `/deep-research`, `/eval-harness`, `/cost-aware-llm-pipeline`, `/context-budget`, `/autonomous-loop`, `/e2e-testing`, `/security-scan`, `/agent-introspection-debug`, `/content-engine`, `/market-research`, `/harness-optimizer`, `/multi-plan`, `/multi-execute` (15 ใหม่) | Skill สำเร็จรูป 15 ตัวกำลังจะมา |
 | **Custom Skills** | Create `.md` files with YAML frontmatter in `~/.cluadex/skills/` or `{project}/.cluadex/skills/` | สร้าง skill เองด้วยไฟล์ markdown + YAML frontmatter |
+| **Install from URL/Git (S1)** | Install community skills with checksum + signature verification | ติดตั้ง skill จากชุมชนพร้อมตรวจสอบ checksum + signature |
 | **Tool Restrictions** | Skills can limit which tools the AI is allowed to use. | Skill กำหนดได้ว่า AI ใช้เครื่องมือไหนได้บ้าง |
 | **Project Override** | Project skills override user skills, user skills override built-in. | Skill ของโปรเจกต์มีสิทธิ์สูงกว่า Skill ของผู้ใช้ |
 
@@ -185,6 +254,7 @@ Memory แบบไฟล์ที่ข้ามเซสชั่นได้ 
 | **Dual Scope** | Global (`~/.cluadex/memory/`) and project (`.cluadex/memory/`) | สองขอบเขต: ทั้งหมด และ เฉพาะโปรเจกต์ |
 | **MEMORY.md Index** | Auto-maintained index file (200-line cap). Injected into system prompt. | ไฟล์ index อัตโนมัติ ถูกใส่เข้า system prompt |
 | **Agent Tools** | `memory_save`, `memory_list`, `memory_delete` — AI manages memory itself. | AI จัดการ memory ได้เอง |
+| **Session Memory Extraction** | Optional background pass on session end: AI scans the transcript, extracts durable facts (preferences, references, project constraints) and saves them as memory files. Opt-in via Settings. | เมื่อจบเซสชัน สกัด fact สำคัญมาเก็บเป็น memory อัตโนมัติ (opt-in) |
 
 ---
 
@@ -198,9 +268,11 @@ Run shell commands before/after tool execution — like Claude Code's hooks.
 |---------|-------------|----------|
 | **PreToolUse** | Run before a tool executes. Can block execution on failure. | รันก่อนใช้เครื่องมือ สามารถบล็อกได้ถ้าล้มเหลว |
 | **PostToolUse** | Run after a tool executes. Best-effort (doesn't block). | รันหลังใช้เครื่องมือ (ไม่บล็อก) |
+| **SessionStart / Stop / PreCompact (S3)** | Lifecycle hooks for load handoff, pattern extraction, state snapshot | hook ตามวงจรชีวิตเซสชัน |
 | **Wildcard Matchers** | Match by tool name pattern (e.g., `run_command`, `*` for all). | จับคู่ตามชื่อเครื่องมือ |
 | **Variable Substitution** | `{tool}`, `{path}`, `{command}` replaced with actual values. | `{tool}`, `{path}`, `{command}` แทนที่ด้วยค่าจริง |
 | **Config Files** | `.cluadex/hooks.json` (project) and `~/.cluadex/hooks.json` (global) | ไฟล์ config ระดับโปรเจกต์ และ global |
+| **Bundled Hook Library (S3 — coming)** | 15 ready-to-use hooks: `prettier-format`, `secret-scan`, `git-push-confirm`, `console-log-warn`, `block-dev-server-outside-tmux`, `pre-commit-quality`, `pattern-extract`, `cost-summary-toast`, `desktop-notify-completion`, `load-handoff`, `detect-package-manager`, `save-state-snapshot`, `dangerous-cmd-warn`, `pr-link-logger`, `quality-gate` | hook สำเร็จรูป 15 ตัวกำลังจะมา (กดสวิตช์ใช้ได้เลย) |
 
 ---
 
@@ -491,6 +563,23 @@ CluadeX/
 
 ---
 
+## Roadmap & Contributing / แผนพัฒนาและการมีส่วนร่วม
+
+The complete development plan is in [ROADMAP.md](ROADMAP.md) — covering 4 sprints, 10 major features, 7 CluadeX-only innovations, and success metrics.
+
+แผนพัฒนาเต็มอยู่ใน [ROADMAP.md](ROADMAP.md) — ครอบคลุม 4 sprint, 10 ฟีเจอร์หลัก, 7 นวัตกรรมเฉพาะ CluadeX, พร้อมตัวชี้วัดความสำเร็จ
+
+**Sprint priorities at a glance / ลำดับการพัฒนา:**
+
+1. **Sprint 1 — Foundation:** Subagent System + Skill `.md` Library (10 subagents + 15 skills built-in)
+2. **Sprint 2 — Intelligence:** Instinct System (continuous learning) + Strategic Compaction Toast
+3. **Sprint 3 — Safety:** SecurityShield Scanner (50 rules) + Hook Script Library (15 bundled hooks)
+4. **Sprint 4 — Power:** Multi-Execute Worktree Arena + Eval Harness + Marketplace 2.0 + Session Handoff Exporter
+
+Pull requests and issues welcome at [github.com/xjanova/CluadeX](https://github.com/xjanova/CluadeX).
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file.
@@ -498,5 +587,6 @@ MIT License - see [LICENSE](LICENSE) file.
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://xman4289.com">Xman Studio</a>
+  Made with ❤️ by <a href="https://xman4289.com">Xman Studio</a><br/>
+  <em>The Windows desktop AI coding workbench — visual, local-first, MCP-native.</em>
 </p>

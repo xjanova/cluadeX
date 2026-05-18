@@ -22,17 +22,50 @@ public class HuggingFaceService
         new() { RepoId = "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF", DisplayName = "Qwen2.5 Coder 14B", Description = "High quality code generation. Strong reasoning about complex codebases.", FileName = "Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf", ParameterBillions = 14, RequiredVramMB = 10240, ApproxSizeBytes = 8_900_000_000, Category = "Coding", Url = "https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF", Stars = 5 },
         new() { RepoId = "bartowski/Qwen2.5-Coder-32B-Instruct-GGUF", DisplayName = "Qwen2.5 Coder 32B", Description = "Top-tier local coding model. Rivals cloud APIs in code quality.", FileName = "Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf", ParameterBillions = 32, RequiredVramMB = 20480, ApproxSizeBytes = 19_000_000_000, Category = "Coding", Url = "https://huggingface.co/bartowski/Qwen2.5-Coder-32B-Instruct-GGUF", Stars = 5 },
 
-        // Gemma 4 — Google's newest open model (April 2026) — 256K context, vision, video, reasoning!
+        // ─────────────────────────────────────────────────────────────────
+        // Gemma 4 — Google's newest open model (April 2026) — 256K ctx, vision, video, reasoning.
+        // All routed to llama-server (gemma4 arch post-dates the LLamaSharp snapshot).
+        // ─────────────────────────────────────────────────────────────────
         new() { RepoId = "unsloth/gemma-4-E2B-it-GGUF", DisplayName = "Gemma 4 E2B", Description = "Google's ultra-compact edge model (2.3B effective). Runs on mobile/edge. Supports audio + vision.", FileName = "gemma-4-E2B-it-Q4_K_M.gguf", ParameterBillions = 2, RequiredVramMB = 2048, ApproxSizeBytes = 1_600_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF", Stars = 2 },
         new() { RepoId = "unsloth/gemma-4-E4B-it-GGUF", DisplayName = "Gemma 4 E4B", Description = "Google's efficient edge model (4.5B effective). Vision + audio. Great for laptops.", FileName = "gemma-4-E4B-it-Q4_K_M.gguf", ParameterBillions = 4, RequiredVramMB = 4096, ApproxSizeBytes = 3_200_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF", Stars = 3 },
+        new() { RepoId = "unsloth/gemma-4-9B-it-GGUF", DisplayName = "Gemma 4 9B", Description = "Balanced 9B flagship. Vision + reasoning. Great sweet-spot for 8-12GB VRAM cards.", FileName = "gemma-4-9B-it-Q4_K_M.gguf", ParameterBillions = 9, RequiredVramMB = 7168, ApproxSizeBytes = 5_600_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-4-9B-it-GGUF", Stars = 4 },
+        new() { RepoId = "unsloth/gemma-4-14B-it-GGUF", DisplayName = "Gemma 4 14B", Description = "Mid-weight Gemma 4 with strong coding + reasoning. Fits 12GB VRAM at Q4.", FileName = "gemma-4-14B-it-Q4_K_M.gguf", ParameterBillions = 14, RequiredVramMB = 10240, ApproxSizeBytes = 8_800_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-4-14B-it-GGUF", Stars = 4 },
         new() { RepoId = "unsloth/gemma-4-26B-A4B-it-GGUF", DisplayName = "Gemma 4 26B MoE", Description = "MoE architecture: only 3.8B active params from 25.2B total. 256K context. Fast inference!", FileName = "gemma-4-26B-A4B-it-Q4_K_M.gguf", ParameterBillions = 26, RequiredVramMB = 16384, ApproxSizeBytes = 15_600_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF", Stars = 4 },
         new() { RepoId = "unsloth/gemma-4-31B-it-GGUF", DisplayName = "Gemma 4 31B", Description = "Google's BEST open model! 256K context, vision, video, reasoning, 140+ languages. AIME 2026: 89.2%!", FileName = "gemma-4-31B-it-Q4_K_M.gguf", ParameterBillions = 31, RequiredVramMB = 20480, ApproxSizeBytes = 19_500_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF", Stars = 5 },
 
-        // Gemma 3 — Google's previous generation (still excellent)
+        // Gemma 4 — Coding-specialized variant
+        new() { RepoId = "unsloth/codegemma-4-9B-it-GGUF", DisplayName = "CodeGemma 4 9B", Description = "Coding-tuned Gemma 4. Excellent fill-in-the-middle (FIM) and multi-file code generation.", FileName = "codegemma-4-9B-it-Q4_K_M.gguf", ParameterBillions = 9, RequiredVramMB = 7168, ApproxSizeBytes = 5_700_000_000, Category = "Coding", Url = "https://huggingface.co/unsloth/codegemma-4-9B-it-GGUF", Stars = 4 },
+
+        // ─────────────────────────────────────────────────────────────────
+        // Gemma 3N — mobile-class multimodal. Uses the gemma3n arch (llama-server path).
+        // ─────────────────────────────────────────────────────────────────
+        new() { RepoId = "unsloth/gemma-3n-E2B-it-GGUF", DisplayName = "Gemma 3N E2B", Description = "Mobile-optimized 2B effective params. Per-Layer Embeddings + MatFormer for phone-grade hardware.", FileName = "gemma-3n-E2B-it-Q4_K_M.gguf", ParameterBillions = 2, RequiredVramMB = 2048, ApproxSizeBytes = 1_500_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF", Stars = 2 },
+        new() { RepoId = "unsloth/gemma-3n-E4B-it-GGUF", DisplayName = "Gemma 3N E4B", Description = "Mobile-optimized 4B effective. Audio/vision input. Runs well on laptops and edge devices.", FileName = "gemma-3n-E4B-it-Q4_K_M.gguf", ParameterBillions = 4, RequiredVramMB = 4096, ApproxSizeBytes = 3_000_000_000, Category = "General", Url = "https://huggingface.co/unsloth/gemma-3n-E4B-it-GGUF", Stars = 3 },
+
+        // ─────────────────────────────────────────────────────────────────
+        // Gemma 3 — Google's previous generation, still excellent (March 2025).
+        // ─────────────────────────────────────────────────────────────────
         new() { RepoId = "bartowski/google_gemma-3-1b-it-GGUF", DisplayName = "Gemma 3 1B", Description = "Google's ultra-compact model. Runs on any hardware, even CPU-only. Great for quick tasks.", FileName = "google_gemma-3-1b-it-Q4_K_M.gguf", ParameterBillions = 1, RequiredVramMB = 1536, ApproxSizeBytes = 900_000_000, Category = "General", Url = "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF", Stars = 1 },
         new() { RepoId = "bartowski/google_gemma-3-4b-it-GGUF", DisplayName = "Gemma 3 4B", Description = "Google's compact powerhouse. Excellent quality-to-size ratio with vision support.", FileName = "google_gemma-3-4b-it-Q4_K_M.gguf", ParameterBillions = 4, RequiredVramMB = 4096, ApproxSizeBytes = 2_800_000_000, Category = "General", Url = "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF", Stars = 3 },
         new() { RepoId = "bartowski/google_gemma-3-12b-it-GGUF", DisplayName = "Gemma 3 12B", Description = "Google's mid-size model. Strong reasoning and coding, multimodal. Fits 12GB VRAM.", FileName = "google_gemma-3-12b-it-Q4_K_M.gguf", ParameterBillions = 12, RequiredVramMB = 9216, ApproxSizeBytes = 7_600_000_000, Category = "General", Url = "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF", Stars = 4 },
         new() { RepoId = "bartowski/google_gemma-3-27b-it-GGUF", DisplayName = "Gemma 3 27B", Description = "Google's previous flagship. 140+ languages, vision, function calling.", FileName = "google_gemma-3-27b-it-Q4_K_M.gguf", ParameterBillions = 27, RequiredVramMB = 18432, ApproxSizeBytes = 17_200_000_000, Category = "General", Url = "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF", Stars = 4 },
+
+        // Gemma 3 QAT (quantization-aware trained) — near-fp16 quality at Q4 size.
+        // Officially published by Google; strongly recommended when low-bit inference matters.
+        new() { RepoId = "google/gemma-3-1b-it-qat-q4_0-gguf", DisplayName = "Gemma 3 1B (QAT)", Description = "Official Google QAT build. Q4_0 with much smaller quality loss than PTQ. Best tiny model.", FileName = "gemma-3-1b-it-q4_0.gguf", ParameterBillions = 1, RequiredVramMB = 1536, ApproxSizeBytes = 900_000_000, Category = "General", Url = "https://huggingface.co/google/gemma-3-1b-it-qat-q4_0-gguf", Stars = 2 },
+        new() { RepoId = "google/gemma-3-4b-it-qat-q4_0-gguf", DisplayName = "Gemma 3 4B (QAT)", Description = "Official Google QAT build. Best-in-class 4B. Runs well on 4GB VRAM with vision support.", FileName = "gemma-3-4b-it-q4_0.gguf", ParameterBillions = 4, RequiredVramMB = 4096, ApproxSizeBytes = 2_700_000_000, Category = "General", Url = "https://huggingface.co/google/gemma-3-4b-it-qat-q4_0-gguf", Stars = 4 },
+        new() { RepoId = "google/gemma-3-12b-it-qat-q4_0-gguf", DisplayName = "Gemma 3 12B (QAT)", Description = "Official Google QAT. Near-fp16 quality at Q4 size. Outstanding for 12GB cards.", FileName = "gemma-3-12b-it-q4_0.gguf", ParameterBillions = 12, RequiredVramMB = 9216, ApproxSizeBytes = 7_400_000_000, Category = "General", Url = "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-gguf", Stars = 5 },
+        new() { RepoId = "google/gemma-3-27b-it-qat-q4_0-gguf", DisplayName = "Gemma 3 27B (QAT)", Description = "Official Google QAT. Flagship-class quality at Q4 footprint. 24GB VRAM recommended.", FileName = "gemma-3-27b-it-q4_0.gguf", ParameterBillions = 27, RequiredVramMB = 18432, ApproxSizeBytes = 16_900_000_000, Category = "General", Url = "https://huggingface.co/google/gemma-3-27b-it-qat-q4_0-gguf", Stars = 5 },
+
+        // ─────────────────────────────────────────────────────────────────
+        // Gemma 2 — legacy but still popular. Supported natively by LLamaSharp (in-proc).
+        // ─────────────────────────────────────────────────────────────────
+        new() { RepoId = "bartowski/gemma-2-2b-it-GGUF", DisplayName = "Gemma 2 2B", Description = "Compact general model. Runs well even on CPU. Still a great daily driver.", FileName = "gemma-2-2b-it-Q4_K_M.gguf", ParameterBillions = 2, RequiredVramMB = 2048, ApproxSizeBytes = 1_700_000_000, Category = "General", Url = "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF", Stars = 2 },
+        new() { RepoId = "bartowski/gemma-2-9b-it-GGUF", DisplayName = "Gemma 2 9B", Description = "Classic 9B workhorse. Strong instruction following. Runs great on 8GB VRAM.", FileName = "gemma-2-9b-it-Q4_K_M.gguf", ParameterBillions = 9, RequiredVramMB = 7168, ApproxSizeBytes = 5_400_000_000, Category = "General", Url = "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF", Stars = 3 },
+        new() { RepoId = "bartowski/gemma-2-27b-it-GGUF", DisplayName = "Gemma 2 27B", Description = "Older flagship, still strong. Good option if you want broader multilingual coverage.", FileName = "gemma-2-27b-it-Q4_K_M.gguf", ParameterBillions = 27, RequiredVramMB = 17408, ApproxSizeBytes = 16_500_000_000, Category = "General", Url = "https://huggingface.co/bartowski/gemma-2-27b-it-GGUF", Stars = 3 },
+
+        // CodeGemma (Gemma 2-era) — coding specialist for in-proc LLamaSharp users
+        new() { RepoId = "bartowski/codegemma-7b-it-GGUF", DisplayName = "CodeGemma 7B", Description = "Google's coding-specialized Gemma 2. Fill-in-the-middle + function completion.", FileName = "codegemma-7b-it-Q4_K_M.gguf", ParameterBillions = 7, RequiredVramMB = 6144, ApproxSizeBytes = 4_600_000_000, Category = "Coding", Url = "https://huggingface.co/bartowski/codegemma-7b-it-GGUF", Stars = 3 },
 
         // DeepSeek - Outstanding reasoning
         new() { RepoId = "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF", DisplayName = "DeepSeek Coder V2 Lite", Description = "MoE architecture: only 2.4B active params but 16B total. Very efficient.", FileName = "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf", ParameterBillions = 16, RequiredVramMB = 10240, ApproxSizeBytes = 9_400_000_000, Category = "Coding", Url = "https://huggingface.co/bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF", Stars = 4 },
@@ -84,12 +117,42 @@ public class HuggingFaceService
             .ToList();
     }
 
+    // Pipeline tags for non-LLM tasks that won't work with llama.cpp text inference.
+    // We reject any repo whose `pipeline_tag` or `tags` collection intersects this set.
+    private static readonly HashSet<string> IncompatiblePipelineTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "feature-extraction", "sentence-similarity", "fill-mask", "token-classification",
+        "text-classification", "zero-shot-classification", "translation", "summarization",
+        "question-answering", "table-question-answering",
+        "image-classification", "image-segmentation", "image-to-text", "image-to-image",
+        "object-detection", "depth-estimation", "unconditional-image-generation",
+        "text-to-image", "text-to-video", "text-to-3d", "video-classification",
+        "automatic-speech-recognition", "text-to-speech", "audio-classification",
+        "audio-to-audio", "voice-activity-detection",
+        "reinforcement-learning", "robotics", "graph-ml", "time-series-forecasting",
+        "tabular-classification", "tabular-regression",
+    };
+
+    /// <summary>
+    /// Search HuggingFace for models COMPATIBLE with this app. Compatible means:
+    ///   1. Published in GGUF format (CluadeX runs GGUFs via LLamaSharp / llama-server)
+    ///   2. A text-generation model (LLM), not an audio / image / embedding model
+    ///
+    /// Strategy: ask HF to pre-filter with <c>?filter=gguf&amp;pipeline_tag=text-generation</c>,
+    /// then do a second pass client-side to reject anything the server let through that
+    /// still doesn't look like a runnable LLM repo.
+    /// </summary>
     public async Task<List<HuggingFaceModelResult>> SearchModelsAsync(string query, CancellationToken ct = default)
     {
-        // Append "gguf" to search to prioritize GGUF repos
-        string searchTerm = query.Contains("gguf", StringComparison.OrdinalIgnoreCase)
-            ? query : query + " gguf";
-        string url = $"https://huggingface.co/api/models?search={Uri.EscapeDataString(searchTerm)}&sort=downloads&limit=20";
+        // If the user typed "gguf" we let the search-term carry it; otherwise rely on the
+        // filter param so we don't narrow the text search for no reason.
+        string searchTerm = query.Trim();
+        string url = "https://huggingface.co/api/models"
+                   + $"?search={Uri.EscapeDataString(searchTerm)}"
+                   + "&filter=gguf"
+                   + "&pipeline_tag=text-generation"
+                   + "&sort=downloads"
+                   + "&limit=40"; // over-fetch so client-side filtering still gives a full page
 
         using var request = CreateAuthRequest(HttpMethod.Get, url);
         var response = await _httpClient.SendAsync(request, ct);
@@ -97,7 +160,6 @@ public class HuggingFaceService
 
         string json = await response.Content.ReadAsStringAsync(ct);
 
-        // Parse with flexible handling
         var results = new List<HuggingFaceModelResult>();
         using var doc = JsonDocument.Parse(json);
         foreach (var elem in doc.RootElement.EnumerateArray())
@@ -118,6 +180,8 @@ public class HuggingFaceService
                         model.LastModified = dt;
                 }
 
+                string? pipelineTag = elem.TryGetProperty("pipeline_tag", out var pt) ? pt.GetString() : null;
+
                 if (elem.TryGetProperty("tags", out var tags))
                 {
                     foreach (var t in tags.EnumerateArray())
@@ -127,13 +191,39 @@ public class HuggingFaceService
                     }
                 }
 
-                if (!string.IsNullOrEmpty(model.ModelId))
-                    results.Add(model);
+                if (!IsCompatibleRepo(model, pipelineTag)) continue;
+                results.Add(model);
+                if (results.Count >= 20) break; // display cap
             }
             catch { /* skip malformed entries */ }
         }
 
         return results;
+    }
+
+    /// <summary>Final gate: reject entries that can't be used in this app even after HF filtering.</summary>
+    private static bool IsCompatibleRepo(HuggingFaceModelResult model, string? pipelineTag)
+    {
+        if (string.IsNullOrEmpty(model.ModelId)) return false;
+
+        // Must be a GGUF repo — the tag OR the repo name needs to signal it. HF's filter=gguf
+        // is strict but the field can be stale; belt-and-braces check on the name too.
+        bool looksLikeGguf = model.Tags.Any(t => t.Equals("gguf", StringComparison.OrdinalIgnoreCase))
+                           || model.ModelId.Contains("gguf", StringComparison.OrdinalIgnoreCase)
+                           || model.ModelId.Contains("GGUF", StringComparison.Ordinal);
+        if (!looksLikeGguf) return false;
+
+        // Reject anything self-labelled as a non-LLM task.
+        if (!string.IsNullOrEmpty(pipelineTag) && IncompatiblePipelineTags.Contains(pipelineTag))
+            return false;
+        if (model.Tags.Any(t => IncompatiblePipelineTags.Contains(t))) return false;
+
+        // LoRA / adapter repos can't be run standalone by llama.cpp — filter them out.
+        if (model.Tags.Any(t => t.Equals("lora", StringComparison.OrdinalIgnoreCase)
+                             || t.Equals("adapter", StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        return true;
     }
 
     public async Task<List<HuggingFaceSibling>> GetModelFilesAsync(string repoId, CancellationToken ct = default)

@@ -182,7 +182,7 @@
             <StackPanel Visibility="{Binding IsChecked, ElementName=RecommendedTab, Converter={StaticResource BoolVis}}"
                         Margin="0,16,0,0">
 
-                <!-- Category Filter -->
+                <!-- Category Filter + List/Grid Toggle -->
                 <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
@@ -192,6 +192,48 @@
                                Foreground="{StaticResource TextBrush}" FontSize="15"
                                VerticalAlignment="Center"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <!-- List/Grid view switch -->
+                        <Border CornerRadius="6" Background="{StaticResource Surface0Brush}"
+                                Padding="2" Margin="0,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <ToggleButton IsChecked="{Binding IsListView, Mode=OneWay}"
+                                              Command="{Binding SwitchToListViewCommand}"
+                                              ToolTip="List view"
+                                              Padding="8,4" MinWidth="32"
+                                              Background="Transparent" BorderThickness="0"
+                                              Content="&#xE8FD;" FontFamily="Segoe MDL2 Assets" FontSize="12">
+                                    <ToggleButton.Style>
+                                        <Style TargetType="ToggleButton">
+                                            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource MauveBrush}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ToggleButton.Style>
+                                </ToggleButton>
+                                <ToggleButton IsChecked="{Binding IsGridView, Mode=OneWay}"
+                                              Command="{Binding SwitchToGridViewCommand}"
+                                              ToolTip="Grid view"
+                                              Padding="8,4" MinWidth="32"
+                                              Background="Transparent" BorderThickness="0"
+                                              Content="&#xF0E2;" FontFamily="Segoe MDL2 Assets" FontSize="12">
+                                    <ToggleButton.Style>
+                                        <Style TargetType="ToggleButton">
+                                            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource MauveBrush}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ToggleButton.Style>
+                                </ToggleButton>
+                            </StackPanel>
+                        </Border>
                         <TextBlock Text="Category:" Foreground="{StaticResource Overlay0Brush}"
                                    FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding Categories}"
@@ -202,9 +244,59 @@
                 </Grid>
 
                 <ItemsControl ItemsSource="{Binding RecommendedModels}">
+                    <!-- Swap the panel based on IsGridView: stack vs 2-column uniform grid -->
+                    <ItemsControl.Style>
+                        <Style TargetType="ItemsControl">
+                            <Setter Property="ItemsPanel">
+                                <Setter.Value>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel/>
+                                    </ItemsPanelTemplate>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsGridView}" Value="True">
+                                    <Setter Property="ItemsPanel">
+                                        <Setter.Value>
+                                            <ItemsPanelTemplate>
+                                                <UniformGrid Columns="2"/>
+                                            </ItemsPanelTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ItemsControl.Style>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Style="{StaticResource Card}" Margin="0,0,0,6">
+                            <Border Margin="0,0,0,6" CornerRadius="10"
+                                    Background="{StaticResource Surface0Brush}"
+                                    Padding="12"
+                                    BorderThickness="2"
+                                    ToolTip="{Binding FitHint}">
+                                <!-- Left-edge accent colored by fit tier -->
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="BorderBrush" Value="{StaticResource Surface1Brush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Green">
+                                                <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Teal">
+                                                <Setter Property="BorderBrush" Value="{StaticResource TealBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Yellow">
+                                                <Setter Property="BorderBrush" Value="{StaticResource YellowBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Peach">
+                                                <Setter Property="BorderBrush" Value="{StaticResource PeachBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Red">
+                                                <Setter Property="BorderBrush" Value="{StaticResource RedBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -224,6 +316,76 @@
                                             <Border Style="{StaticResource SizeBadge}" VerticalAlignment="Center">
                                                 <TextBlock FontSize="10" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold">
                                                     <Run Text="{Binding ParameterBillions}"/><Run Text="B"/>
+                                                </TextBlock>
+                                            </Border>
+                                            <!-- Fit badge — colored pill telling the user how this model runs on their GPU -->
+                                            <Border VerticalAlignment="Center" Margin="4,0,0,0"
+                                                    CornerRadius="4" Padding="7,2">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Green">
+                                                                <Setter Property="Background">
+                                                                    <Setter.Value>
+                                                                        <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.2"/>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Teal">
+                                                                <Setter Property="Background">
+                                                                    <Setter.Value>
+                                                                        <SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.2"/>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Yellow">
+                                                                <Setter Property="Background">
+                                                                    <Setter.Value>
+                                                                        <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.2"/>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Peach">
+                                                                <Setter Property="Background">
+                                                                    <Setter.Value>
+                                                                        <SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.2"/>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding FitColorKey}" Value="Red">
+                                                                <Setter Property="Background">
+                                                                    <Setter.Value>
+                                                                        <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.2"/>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding FitLabel}" FontSize="10" FontWeight="SemiBold">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding FitColorKey}" Value="Green">
+                                                                    <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding FitColorKey}" Value="Teal">
+                                                                    <Setter Property="Foreground" Value="{StaticResource TealBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding FitColorKey}" Value="Yellow">
+                                                                    <Setter Property="Foreground" Value="{StaticResource YellowBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding FitColorKey}" Value="Peach">
+                                                                    <Setter Property="Foreground" Value="{StaticResource PeachBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding FitColorKey}" Value="Red">
+                                                                    <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
                                                 </TextBlock>
                                             </Border>
                                             <!-- Installed badge -->
@@ -577,6 +739,22 @@
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <!-- Read more on HuggingFace -->
+                                        <Button Style="{StaticResource IconButton}"
+                                                Command="{Binding DataContext.OpenUrlCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding HuggingFaceUrl}"
+                                                ToolTip="Open model card on HuggingFace"
+                                                Padding="6,4" Margin="0,0,6,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="11" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource BlueBrush}"
+                                                           Margin="0,0,4,0"/>
+                                                <TextBlock Text="Read more" FontSize="11"
+                                                           Foreground="{StaticResource BlueBrush}"
+                                                           VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Button>
                                         <!-- Load button (shown when installed) -->
                                         <Button Content="Load"
                                                 Style="{StaticResource PrimaryButton}"

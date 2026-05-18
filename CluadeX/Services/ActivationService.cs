@@ -78,9 +78,12 @@ public class ActivationService
 
             ActivationChanged?.Invoke();
         }
-        catch
+        catch (Exception ex)
         {
-            // Offline — keep cached activation (grace period)
+            // Network/timeout/parse error — keep cached activation (grace period).
+            // Only server-confirmed invalidity clears the key; transient failures
+            // must not silently wipe the user's license.
+            System.Diagnostics.Debug.WriteLine($"[ActivationService] Online validation skipped (offline): {ex.GetType().Name}");
         }
     }
 

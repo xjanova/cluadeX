@@ -295,7 +295,12 @@ public sealed class McpServerManager : IDisposable
             {
                 var tools = new List<McpTool>();
 
-                if (response.Result.Value.TryGetProperty("tools", out var toolsArray))
+                // Guard: only call TryGetProperty on Object-kind JsonElements, and ensure
+                // the 'tools' field is actually an array before enumerating. Malformed MCP
+                // servers can return unexpected shapes — prior code could throw here.
+                if (response.Result.Value.ValueKind == JsonValueKind.Object
+                    && response.Result.Value.TryGetProperty("tools", out var toolsArray)
+                    && toolsArray.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var toolElem in toolsArray.EnumerateArray())
                     {
@@ -336,11 +341,28 @@ public sealed class McpServerManager : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        foreach (var (_, transport) in _transports)
-        {
-            transport.StopAsync().Wait(5000);
-            transport.Dispose();
-        }
+        // Take a snapshot so concurrent mutation during shutdown is safe.
+        var snapshot = _transports.Values.ToList();
         _transports.Clear();
+
+        // Shut down all servers in parallel, bounded total timeout.
+        // Previously we waited up to 5s per server sequentially — with N servers this
+        // could block the UI shutdown for 5N seconds.
+        try
+        {
+            var stopTasks = snapshot.Select(t => t.StopAsync()).ToArray();
+            Task.WaitAll(stopTasks, 5000);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"MCP shutdown error: {ex.Message}");
+        }
+
+        // Dispose unconditionally — Dispose() kills the process if StopAsync didn't finish.
+        foreach (var t in snapshot)
+        {
+            try { t.Dispose(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"MCP dispose error: {ex.Message}"); }
+        }
     }
 }

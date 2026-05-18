@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using CluadeX.Models;
@@ -24,9 +25,11 @@ public class ChatViewModel : ViewModelBase
     private readonly ChatPersistenceService _persistenceService;
     private readonly HuggingFaceService _huggingFaceService;
     private readonly LlamaInferenceService _llamaService;
+    private readonly Services.Providers.LocalGgufProvider? _localGgufProvider;
     private readonly GpuDetectionService _gpuDetection;
     private readonly SkillService _skillService;
     private readonly CostTrackingService _costTracker;
+    private readonly SessionMemoryService? _sessionMemoryService;
     private CancellationTokenSource? _cts;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _autoSaveTimer;
@@ -65,6 +68,10 @@ public class ChatViewModel : ViewModelBase
 
     public ObservableCollection<ChatMessage> Messages { get; } = new();
     public ObservableCollection<ChatSession> Sessions { get; } = new();
+    /// <summary>Sessions filtered by the currently-open project folder. Bound by the sidebar.
+    /// When no folder is open, mirrors Sessions in full; otherwise only sessions whose
+    /// ProjectPath equals the current WorkingDirectory (or have empty ProjectPath for legacy rows).</summary>
+    public ObservableCollection<ChatSession> VisibleSessions { get; } = new();
     public ObservableCollection<SearchResult> SearchResults { get; } = new();
     public ObservableCollection<ModelInfo> LocalModels { get; } = new();
 
@@ -93,10 +100,60 @@ public class ChatViewModel : ViewModelBase
         set
         {
             if (SetProperty(ref _workingDirectory, value))
+            {
                 HasProject = !string.IsNullOrEmpty(value);
+                RebuildVisibleSessions();
+            }
         }
     }
     public bool HasProject { get => _hasProject; set => SetProperty(ref _hasProject, value); }
+
+    /// <summary>When true, the sidebar shows sessions from ALL projects. When false (default)
+    /// and a folder is open, it only shows sessions tagged with the current project's path.
+    /// Bound to a toggle in the sidebar header.</summary>
+    private bool _showAllProjectSessions;
+    public bool ShowAllProjectSessions
+    {
+        get => _showAllProjectSessions;
+        set { if (SetProperty(ref _showAllProjectSessions, value)) RebuildVisibleSessions(); }
+    }
+
+    /// <summary>Rebuild VisibleSessions from Sessions, applying the project filter.</summary>
+    private void RebuildVisibleSessions()
+    {
+        // Capture on UI thread — all callers should already be on the dispatcher, but be defensive.
+        VisibleSessions.Clear();
+
+        // No project open, or user opted to see everything → passthrough
+        bool filter = HasProject && !ShowAllProjectSessions;
+        string currentProject = WorkingDirectory ?? "";
+
+        foreach (var s in Sessions)
+        {
+            if (filter)
+            {
+                // Match sessions for this project. Legacy rows (empty ProjectPath) also pass so
+                // we don't hide the user's pre-migration history.
+                bool matches = string.IsNullOrEmpty(s.ProjectPath)
+                    || PathEquals(s.ProjectPath, currentProject);
+                if (!matches) continue;
+            }
+            VisibleSessions.Add(s);
+        }
+
+        OnPropertyChanged(nameof(VisibleSessionsCount));
+    }
+
+    public int VisibleSessionsCount => VisibleSessions.Count;
+
+    private static bool PathEquals(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return a == b;
+        return string.Equals(
+            a.TrimEnd('\\', '/'),
+            b.TrimEnd('\\', '/'),
+            StringComparison.OrdinalIgnoreCase);
+    }
     public string GitBranch { get => _gitBranch; set => SetProperty(ref _gitBranch, value); }
 
     // Context tracking
@@ -251,7 +308,9 @@ public class ChatViewModel : ViewModelBase
         LlamaInferenceService llamaService,
         GpuDetectionService gpuDetection,
         SkillService skillService,
-        CostTrackingService costTracker)
+        CostTrackingService costTracker,
+        SessionMemoryService? sessionMemoryService = null,
+        Services.Providers.LocalGgufProvider? localGgufProvider = null)
     {
         _providerManager = providerManager;
         _agentService = agentService;
@@ -265,9 +324,11 @@ public class ChatViewModel : ViewModelBase
         _persistenceService = persistenceService;
         _huggingFaceService = huggingFaceService;
         _llamaService = llamaService;
+        _localGgufProvider = localGgufProvider;
         _gpuDetection = gpuDetection;
         _skillService = skillService;
         _costTracker = costTracker;
+        _sessionMemoryService = sessionMemoryService;
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
@@ -298,6 +359,10 @@ public class ChatViewModel : ViewModelBase
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;
+
+        // Keep the sidebar-filtered VisibleSessions list in sync with Sessions automatically.
+        // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project.
+        Sessions.CollectionChanged += (_, _) => RebuildVisibleSessions();
 
         // Periodic RAM/context/GPU refresh every 5 seconds
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
@@ -433,12 +498,18 @@ public class ChatViewModel : ViewModelBase
                  && File.Exists(_settingsService.Settings.SelectedModelPath))
         {
             LoadedModelName = $"Loading: {_settingsService.Settings.SelectedModelName}...";
-            // Auto-load the previously selected model in background
             string autoLoadPath = _settingsService.Settings.SelectedModelPath!;
+
+            // Auto-load routes through LocalGgufProvider so architecture detection kicks in —
+            // without this, a Gemma 4 / Llama 4 / Qwen 3 model silently fails with
+            // UnsupportedModelArchitectureException and the UI stays at "Loading…" forever.
+            // If the DI graph somehow didn't inject LocalGgufProvider (tests, unusual boot),
+            // we fall back to the legacy direct LLamaSharp call.
             _ = Task.Run(async () =>
             {
                 // Guard: don't auto-load if another load is already in progress
                 if (_llamaService.IsLoading) return;
+                if (_localGgufProvider != null && _localGgufProvider.IsLoading) return;
 
                 try
                 {
@@ -449,14 +520,22 @@ public class ChatViewModel : ViewModelBase
                             LoadedModelName = s;
                         }));
 
-                    // Ensure provider is Local
+                    // Ensure provider is Local so status events flow to MainViewModel
                     if (_providerManager.ActiveProviderType != AiProviderType.Local)
                         await _providerManager.SwitchProviderAsync(AiProviderType.Local);
 
-                    await _llamaService.LoadModelAsync(autoLoadPath, progress);
+                    if (_localGgufProvider != null)
+                    {
+                        await _localGgufProvider.LoadModelAsync(autoLoadPath, progress);
+                    }
+                    else
+                    {
+                        await _llamaService.LoadModelAsync(autoLoadPath, progress);
+                    }
+
                     App.Current?.Dispatcher.Invoke(() =>
                     {
-                        StatusText = $"Ready: {_llamaService.LoadedModelName}";
+                        StatusText = $"Ready: {_settingsService.Settings.SelectedModelName}";
                         SyncModelSelectionFromSettings();
                     });
                 }
@@ -853,27 +932,171 @@ public class ChatViewModel : ViewModelBase
         StatusText = "Ready";
     }
 
-    private void NewSession()
+    /// <summary>
+    /// Promoted from private to public so the McpHostService can spawn a
+    /// fresh visible session each time ObsidianX delegates a task. UI-thread
+    /// only — callers from background threads must Dispatcher.Invoke.
+    /// </summary>
+    public void NewSession()
     {
         // Save current session before creating new
         if (CurrentSession != null && CurrentSession.Messages.Count > 0)
         {
             _isDirty = true;
             AutoSave();
+
+            // Extract durable memories from the finishing session (fire-and-forget).
+            // Disabled by default — user opts in via settings.
+            _sessionMemoryService?.ExtractInBackground(CurrentSession.Messages);
         }
 
-        // Create new session
-        var session = new ChatSession();
+        // Create new session — tag with the current project path so the sidebar can
+        // filter to "just this project" instead of mixing every project's sessions together.
+        var session = new ChatSession
+        {
+            ProjectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "",
+        };
         CurrentSession = session;
         Messages.Clear();
         Sessions.Insert(0, session);
         _isDirty = false;
+        RebuildVisibleSessions();
 
         // Persist immediately so LoadSession can find it later
         try { _persistenceService.SaveSession(session); }
         catch { /* ignore */ }
 
         StatusText = "Ready";
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  MCP-driven external runs (called by McpHostService → ToolDispatcher)
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Run a coding task that arrived over the named-pipe MCP host. Spawns
+    /// a NEW visible chat session tagged with the caller's task id, posts
+    /// the spec as the user message, runs the agentic loop, and posts the
+    /// agent's reply. The transcript persists in codex.db like any normal
+    /// session — user can scroll back to it anytime.
+    ///
+    /// All UI-touching work happens on the dispatcher thread. Network/agent
+    /// work is awaited so the caller (the named-pipe handler) can serialise
+    /// the final response back to ObsidianX.
+    /// </summary>
+    public async Task<string> RunMcpTaskAsync(
+        string taskId,
+        string spec,
+        IReadOnlyList<string>? lessons,
+        IReadOnlyList<string>? contextFiles,
+        string? workingDirectory,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(spec))
+            return "(empty spec — nothing to do)";
+
+        // 1. Switch to a fresh visible session so the user's current chat
+        //    isn't disturbed. Tag with the caller's id so the sidebar
+        //    filter and history are easy to find later.
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            NewSession();
+            if (CurrentSession != null)
+            {
+                CurrentSession.Title = $"[ObsidianX] {taskId}";
+                CurrentSession.ProjectPath = $"obsidianx-task::{taskId}";
+            }
+            // If the caller pinned a working directory, switch to it so all
+            // file ops in this session are scoped correctly.
+            if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
+                SetWorkingDirectory(workingDirectory!);
+        });
+
+        // 2. Compose the prompt. Inject "lessons learned" verbatim so the
+        //    agent sees them as system-level guidance from the orchestrator.
+        var sb = new StringBuilder();
+        sb.AppendLine(spec);
+        if (lessons is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Lessons learned from previous reviews");
+            sb.AppendLine("Pay attention to these — they describe mistakes the senior reviewer flagged before:");
+            foreach (var l in lessons)
+                sb.AppendLine($"- {l}");
+        }
+        if (contextFiles is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Files in scope");
+            foreach (var f in contextFiles)
+                sb.AppendLine($"- `{f}`");
+        }
+        string prompt = sb.ToString();
+
+        // 3. Post the spec as a user message so it's visible in the chat
+        //    transcript exactly like a human-typed prompt.
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var userMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
+            Messages.Add(userMsg);
+            CurrentSession?.Messages.Add(userMsg);
+            _isDirty = true;
+            ScrollToBottom?.Invoke();
+        });
+
+        // 4. Run the agentic loop. Use the same CodeAgentService instance
+        //    the interactive chat uses — same provider, same tool budget,
+        //    same hooks/permissions/skills.
+        //
+        //    IsGenerating is set up-front and ALWAYS reset in finally so the
+        //    Send button never gets stuck disabled if a downstream dispatcher
+        //    InvokeAsync fails (e.g. window closing mid-call).
+        IsGenerating = true;
+        var historySnapshot = Messages.ToList();
+        try
+        {
+            AgentLoopResult agentResult;
+            try
+            {
+                agentResult = await _agentService.ExecuteAgenticAsync(historySnapshot, prompt, ct: ct);
+            }
+            catch (Exception ex)
+            {
+                string err = $"❌ Agent loop failed: {ex.Message}";
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    var errMsg = new ChatMessage { Role = MessageRole.Assistant, Content = err, HasError = true };
+                    Messages.Add(errMsg);
+                    CurrentSession?.Messages.Add(errMsg);
+                });
+                return err;
+            }
+
+            // 5. Post the agent's final response to the chat so the user sees
+            //    what was returned to ObsidianX, then persist + return.
+            string finalText = agentResult.FinalResponse ?? "(agent loop returned no text)";
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var aMsg = new ChatMessage { Role = MessageRole.Assistant, Content = finalText };
+                Messages.Add(aMsg);
+                CurrentSession?.Messages.Add(aMsg);
+                _isDirty = true;
+                SaveNow();
+            });
+            return finalText;
+        }
+        finally
+        {
+            // Marshal the reset to the UI thread; SetProperty raises
+            // PropertyChanged which any binding consumers expect on the
+            // dispatcher.
+            try
+            {
+                if (Application.Current.Dispatcher.CheckAccess()) IsGenerating = false;
+                else await Application.Current.Dispatcher.InvokeAsync(() => IsGenerating = false);
+            }
+            catch { /* app closing — nothing to do */ }
+        }
     }
 
     private void CompactConversation()
@@ -1289,7 +1512,7 @@ public class ChatViewModel : ViewModelBase
         // Finalize streaming message — update in-place to avoid flash
         App.Current?.Dispatcher.Invoke(() =>
         {
-            string finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
+            string? finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
                 ? _agentToolService.StripToolCalls(result.FinalResponse)
                 : null;
 
@@ -1993,6 +2216,17 @@ public class ChatViewModel : ViewModelBase
 
     private void ClearChat()
     {
+        // Destructive action — confirm unless already empty.
+        if (Messages.Count > 0)
+        {
+            var result = System.Windows.MessageBox.Show(
+                $"Clear all {Messages.Count} messages from this chat?\nThis cannot be undone.",
+                "Clear Chat",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning);
+            if (result != System.Windows.MessageBoxResult.Yes) return;
+        }
+
         Messages.Clear();
         CurrentSession?.Messages.Clear();
         _isDirty = true;

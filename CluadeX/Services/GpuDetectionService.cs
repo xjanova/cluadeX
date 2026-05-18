@@ -263,6 +263,50 @@ public class GpuDetectionService
 
     public void ClearCache() => _cachedInfo = null;
 
+    /// <summary>
+    /// Detect ALL NVIDIA GPUs so llama.cpp can split a large model across multiple cards.
+    /// Returns an empty list if nvidia-smi isn't available or no NVIDIA GPUs present.
+    /// Each entry has raw VRAM so callers can compute a --tensor-split weighting.
+    /// </summary>
+    public List<GpuInfo> DetectAllNvidiaGpus()
+    {
+        var gpus = new List<GpuInfo>();
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "nvidia-smi",
+                Arguments = "--query-gpu=index,name,memory.total,memory.free,driver_version --format=csv,noheader,nounits",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(psi);
+            if (process == null) return gpus;
+            string output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(5000);
+            if (process.ExitCode != 0) return gpus;
+
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split(',');
+                if (parts.Length < 4) continue;
+                if (!int.TryParse(parts[0].Trim(), out var _idx)) continue;
+                gpus.Add(new GpuInfo
+                {
+                    Name = parts[1].Trim(),
+                    VramTotalBytes = long.Parse(parts[2].Trim()) * 1024 * 1024,
+                    VramFreeBytes = long.Parse(parts[3].Trim()) * 1024 * 1024,
+                    DriverVersion = parts.Length > 4 ? parts[4].Trim() : "",
+                    IsCudaAvailable = true,
+                    GpuBrand = "NVIDIA",
+                });
+            }
+        }
+        catch { /* nvidia-smi missing = no multi-GPU support */ }
+        return gpus;
+    }
+
     // ─── Real-Time GPU Monitoring ─────────────────────────────────────
     // Uses nvidia-smi for NVIDIA GPUs. Returns null for AMD/Intel (not supported).
 

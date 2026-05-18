@@ -69,6 +69,11 @@ public class SettingsViewModel : ViewModelBase
     public int ThinkingBudgetTokens { get => _thinkingBudgetTokens; set => SetProperty(ref _thinkingBudgetTokens, value); }
     public bool PromptCachingEnabled { get => _promptCachingEnabled; set => SetProperty(ref _promptCachingEnabled, value); }
 
+    private bool _microcompactEnabled = true;
+    private bool _sessionMemoryEnabled;
+    public bool MicrocompactEnabled { get => _microcompactEnabled; set => SetProperty(ref _microcompactEnabled, value); }
+    public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
+
     public bool AutoExecuteCode { get => _autoExecuteCode; set => SetProperty(ref _autoExecuteCode, value); }
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public string PreferredLanguage { get => _preferredLanguage; set => SetProperty(ref _preferredLanguage, value); }
@@ -136,7 +141,34 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    public string ProviderApiKey { get => _providerApiKey; set => SetProperty(ref _providerApiKey, value); }
+    public string ProviderApiKey
+    {
+        get => _providerApiKey;
+        set
+        {
+            if (SetProperty(ref _providerApiKey, value))
+                OnPropertyChanged(nameof(MaskedApiKey));
+        }
+    }
+
+    /// <summary>Masked display of the API key — shows dots + last 4 chars for verification.</summary>
+    public string MaskedApiKey
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(_providerApiKey)) return "";
+            if (_providerApiKey.Length <= 4) return new string('\u2022', _providerApiKey.Length);
+            return new string('\u2022', Math.Max(8, _providerApiKey.Length - 4)) + _providerApiKey[^4..];
+        }
+    }
+
+    private bool _showApiKey;
+    /// <summary>When true, API key TextBox is shown; when false, only a masked label is visible.</summary>
+    public bool ShowApiKey
+    {
+        get => _showApiKey;
+        set => SetProperty(ref _showApiKey, value);
+    }
     public string ProviderBaseUrl { get => _providerBaseUrl; set => SetProperty(ref _providerBaseUrl, value); }
     public string ProviderModel { get => _providerModel; set => SetProperty(ref _providerModel, value); }
     public string ProviderCustomModel { get => _providerCustomModel; set => SetProperty(ref _providerCustomModel, value); }
@@ -318,10 +350,12 @@ public class SettingsViewModel : ViewModelBase
             UseCustomModel = UseCustomModel,
         };
 
+        // Don't write ActiveProvider here — see comment in Save() above.
+        // SwitchProviderAsync owns ActiveProvider; this VM only owns the
+        // per-provider knobs.
         _settingsService.UpdateSettings(s =>
         {
             s.ProviderConfigs[key] = config;
-            s.ActiveProvider = SelectedProvider;
         });
     }
 
@@ -477,6 +511,8 @@ public class SettingsViewModel : ViewModelBase
         ExtendedThinkingEnabled = s.ExtendedThinkingEnabled;
         ThinkingBudgetTokens = s.ThinkingBudgetTokens;
         PromptCachingEnabled = s.PromptCachingEnabled;
+        MicrocompactEnabled = s.MicrocompactEnabled;
+        SessionMemoryEnabled = s.SessionMemoryEnabled;
 
         // Load provider settings
         SelectedProvider = s.ActiveProvider;
@@ -547,9 +583,16 @@ public class SettingsViewModel : ViewModelBase
             s.ExtendedThinkingEnabled = ExtendedThinkingEnabled;
             s.ThinkingBudgetTokens = ThinkingBudgetTokens;
             s.PromptCachingEnabled = PromptCachingEnabled;
+            s.MicrocompactEnabled = MicrocompactEnabled;
+            s.SessionMemoryEnabled = SessionMemoryEnabled;
 
-            // Provider config in same save
-            s.ActiveProvider = SelectedProvider;
+            // Provider CONFIG (api key, base url, default model) for the
+            // currently-edited provider. Do NOT touch s.ActiveProvider here:
+            // AiProviderManager.SwitchProviderAsync is the single source of
+            // truth for "which provider is active right now". Writing it
+            // back from this VM stomped on programmatic switches done via
+            // the named-pipe MCP host (set_model alignment) and reverted
+            // them ~2s after they ran.
             s.ProviderConfigs[SelectedProvider.ToString()] = new ProviderConfig
             {
                 ApiKey = string.IsNullOrWhiteSpace(ProviderApiKey) ? null : ProviderApiKey,

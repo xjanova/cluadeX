@@ -25,14 +25,18 @@ public class AiProviderManager : IDisposable
 
     public AiProviderManager(
         SettingsService settingsService,
-        LlamaInferenceService llamaService,
+        LocalGgufProvider localProvider,
+        LlamaServerProvider serverProvider,
         CostTrackingService costTracker)
     {
         _settingsService = settingsService;
 
-        // Register all providers
-        _providers[AiProviderType.Local] = new LocalGgufProvider(llamaService);
-        _providers[AiProviderType.LlamaServer] = new LlamaServerProvider(settingsService);
+        // Register all providers. LocalGgufProvider + LlamaServerProvider come from
+        // DI (singletons) so the LocalGguf router shares the same llama-server
+        // instance with the standalone LlamaServer provider — preventing duplicate
+        // server processes when the user toggles between them.
+        _providers[AiProviderType.Local] = localProvider;
+        _providers[AiProviderType.LlamaServer] = serverProvider;
         _providers[AiProviderType.OpenAI] = new OpenAiProvider(settingsService);
         _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService, costTracker);
         _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService);

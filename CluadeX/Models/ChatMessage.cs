@@ -161,4 +161,12 @@ public class ChatSession
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
     public List<ChatMessage> Messages { get; set; } = new();
+
+    /// <summary>Absolute path of the project folder this session was created in (empty = no project).</summary>
+    public string ProjectPath { get; set; } = "";
+
+    /// <summary>Display-only: last path segment of ProjectPath, or empty if no project.</summary>
+    public string ProjectName => string.IsNullOrEmpty(ProjectPath)
+        ? ""
+        : System.IO.Path.GetFileName(ProjectPath.TrimEnd('\\', '/'));
 }
