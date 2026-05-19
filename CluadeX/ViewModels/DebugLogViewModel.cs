@@ -139,8 +139,14 @@ public class DebugLogViewModel : ViewModelBase
             StatusMessage = "Emitted 5 test entries (one per level)";
         });
 
-        // Initial fill
-        foreach (var e in _log.Snapshot()) AddIfPasses(e);
+        // Initial fill — also seed _categoriesSeen so the Category ComboBox
+        // is populated immediately (fix audit MEDIUM #12: empty filter chip
+        // until the first new entry lands).
+        foreach (var e in _log.Snapshot())
+        {
+            _categoriesSeen.Add(e.Category);
+            AddIfPasses(e);
+        }
 
         // Live tail
         _log.OnEntry += entry =>

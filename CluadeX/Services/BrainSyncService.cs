@@ -94,13 +94,13 @@ public class BrainSyncService
             // Already synced once → append update note rather than create new
             if (!string.IsNullOrEmpty(instinct.BrainNoteId))
             {
-                var appendArgs = new Dictionary<string, string>
+                var appendArgs = new Dictionary<string, object>
                 {
                     ["id"] = instinct.BrainNoteId,
                     ["content"] = BuildAppendBlock(instinct),
                 };
                 _log.Debug("BrainSync", $"Appending update to existing note {instinct.BrainNoteId}");
-                var appendResult = await _mcp.CallToolAsync(server, "brain_append_note", appendArgs, ct);
+                var appendResult = await _mcp.CallToolWithObjectArgsAsync(server, "brain_append_note", appendArgs, ct);
                 if (appendResult.IsError)
                 {
                     var msg = ExtractText(appendResult);
@@ -119,16 +119,19 @@ public class BrainSyncService
                 }
             }
 
-            // Create a fresh note
-            var createArgs = new Dictionary<string, string>
+            // Create a fresh note.
+            // FIX (audit CRITICAL #4): tags must reach brain as a real JSON
+            // array, not a quoted string. Use the object-typed overload so
+            // `BuildTags(instinct)` (a List<string>) serialises natively.
+            var createArgs = new Dictionary<string, object>
             {
                 ["title"] = BuildTitle(instinct),
                 ["folder"] = "Notes/Coding-Lessons",
-                ["tags"] = JsonSerializer.Serialize(BuildTags(instinct)),
+                ["tags"] = BuildTags(instinct),
                 ["content"] = BuildNoteBody(instinct),
             };
             _log.Debug("BrainSync", $"Creating new brain note for '{instinct.Pattern}'");
-            var result = await _mcp.CallToolAsync(server, "brain_create_note", createArgs, ct);
+            var result = await _mcp.CallToolWithObjectArgsAsync(server, "brain_create_note", createArgs, ct);
 
             if (result.IsError)
             {
@@ -137,17 +140,34 @@ public class BrainSyncService
                 return new BrainSyncResult { Message = $"Brain rejected note: {msg}" };
             }
 
-            // Extract note id from result if present (brain MCP returns JSON with id/path)
+            // FIX (audit HIGH #9): only assign BrainNoteId when the brain
+            // actually returned one. A null id used to be replaced with a
+            // fake Guid, which then made every subsequent sync try to
+            // append against an id the brain never heard of.
             var (id, path) = ExtractIdAndPath(result);
-            instinct.BrainNoteId = id ?? Guid.NewGuid().ToString("N")[..12];
-            _log.Info("BrainSync", $"Synced '{instinct.Pattern}' → {path ?? "(no path)"}");
-            return new BrainSyncResult
+            if (!string.IsNullOrEmpty(id))
             {
-                Success = true,
-                Message = $"Synced to brain ({path ?? "ok"})",
-                NoteId = instinct.BrainNoteId,
-                NotePath = path,
-            };
+                instinct.BrainNoteId = id;
+                _log.Info("BrainSync", $"Synced '{instinct.Pattern}' → {path ?? "(no path)"}");
+                return new BrainSyncResult
+                {
+                    Success = true,
+                    Message = $"Synced to brain ({path ?? "ok"})",
+                    NoteId = id,
+                    NotePath = path,
+                };
+            }
+            else
+            {
+                _log.Warn("BrainSync",
+                    $"brain_create_note returned ok but no id field — skipping BrainNoteId assignment so retry creates fresh");
+                return new BrainSyncResult
+                {
+                    Success = true,
+                    Message = "Synced (no id returned — will recreate next time)",
+                    NotePath = path,
+                };
+            }
         }
         catch (Exception ex)
         {

@@ -232,14 +232,13 @@ public sealed class McpServerManager : IDisposable
     /// <summary>Call a tool on a specific server.</summary>
     public async Task<McpToolResult> CallToolAsync(string serverName, string toolName, Dictionary<string, string> arguments, CancellationToken ct = default)
     {
-        if (!_transports.TryGetValue(serverName, out var transport) || !transport.IsAlive)
-            throw new InvalidOperationException($"MCP server '{serverName}' is not running");
-
-        // Convert string args to JsonElement for proper typing
+        // Convert string args to typed args (int / double / bool / string).
+        // Callers that need to pass arrays or nested objects MUST use the
+        // object-overload below to avoid the brain receiving a quoted JSON
+        // string instead of a real array.
         var argsDict = new Dictionary<string, object>();
         foreach (var (key, value) in arguments)
         {
-            // Try to parse as number or bool, otherwise string
             if (int.TryParse(value, out int intVal))
                 argsDict[key] = intVal;
             else if (double.TryParse(value, out double dblVal))
@@ -249,8 +248,23 @@ public sealed class McpServerManager : IDisposable
             else
                 argsDict[key] = value;
         }
+        return await CallToolWithObjectArgsAsync(serverName, toolName, argsDict, ct);
+    }
 
-        var callParams = new { name = toolName, arguments = argsDict };
+    /// <summary>
+    /// Object-typed overload — use when an argument must reach the server
+    /// as a JSON array / object / strong type, not a string. Fixes the
+    /// audit CRITICAL #4 issue where `Dictionary&lt;string,string&gt;` forced
+    /// every value through string parsing.
+    /// </summary>
+    public async Task<McpToolResult> CallToolWithObjectArgsAsync(
+        string serverName, string toolName, Dictionary<string, object> arguments,
+        CancellationToken ct = default)
+    {
+        if (!_transports.TryGetValue(serverName, out var transport) || !transport.IsAlive)
+            throw new InvalidOperationException($"MCP server '{serverName}' is not running");
+
+        var callParams = new { name = toolName, arguments = arguments };
         var response = await transport.SendRequestAsync("tools/call", callParams, ct: ct);
 
         if (!response.IsSuccess)

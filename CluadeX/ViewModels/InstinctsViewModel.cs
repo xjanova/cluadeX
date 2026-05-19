@@ -189,14 +189,31 @@ public class InstinctsViewModel : ViewModelBase
         });
         SyncToBrainCommand = new AsyncRelayCommand(async () =>
         {
-            if (_selected == null) return;
-            StatusMessage = $"Syncing '{Trim(_selected.Pattern)}' to brain...";
-            var result = await _brainSync.SyncInstinctAsync(_selected);
+            // FIX (audit HIGH #6): capture id + pattern BEFORE the await so a
+            // background Refresh that swaps out the Selected reference doesn't
+            // cause us to persist the BrainNoteId onto a discarded instance.
+            var selected = _selected;
+            if (selected == null) return;
+            string id = selected.Id;
+            string label = Trim(selected.Pattern);
+            StatusMessage = $"Syncing '{label}' to brain...";
+
+            var result = await _brainSync.SyncInstinctAsync(selected);
+
+            // Re-fetch the canonical instinct from the store and copy the id
+            // back onto it before persisting (Refresh may have swapped the
+            // in-memory reference while the await was suspended).
             if (result.Success && !string.IsNullOrEmpty(result.NoteId))
             {
-                _service.Persist(_selected); // persist the BrainNoteId
+                var live = _service.GetById(id);
+                if (live != null)
+                {
+                    live.BrainNoteId = result.NoteId;
+                    live.LastSeen = DateTime.UtcNow;
+                    _service.Persist(live);
+                }
                 StatusMessage = $"✓ {result.Message}";
-                Refresh(preserveSelection: _selected.Id);
+                Refresh(preserveSelection: id);
             }
             else
             {
@@ -205,11 +222,24 @@ public class InstinctsViewModel : ViewModelBase
         });
         SyncAllStrongCommand = new AsyncRelayCommand(async () =>
         {
+            // FIX (audit CRITICAL #2): SyncAllStrongAsync only mutates
+            // BrainNoteId on instincts it actually pushed this run. We must
+            // not persist EVERY SyncedToBrain instinct (which would include
+            // previously-synced ones with stale in-memory state). Persist
+            // only the entries the sync call modified during this batch.
             StatusMessage = "Syncing all STRONG instincts to brain...";
+
+            // Snapshot before sync so we can diff afterward
+            var beforeIds = Instincts.Where(i => i.SyncedToBrain).Select(i => i.Id).ToHashSet();
+
             var (synced, skipped, failed) = await _brainSync.SyncAllStrongAsync(Instincts);
-            // Persist note ids that were written by SyncAllStrong
-            foreach (var i in Instincts.Where(x => x.SyncedToBrain))
-                _service.Persist(i);
+
+            // Only persist instincts that became synced during THIS call
+            foreach (var i in Instincts)
+            {
+                if (i.SyncedToBrain && !beforeIds.Contains(i.Id))
+                    _service.Persist(i);
+            }
             StatusMessage = $"Brain sync: {synced} synced · {skipped} skipped · {failed} failed";
             Refresh(preserveSelection: _selected?.Id);
         });

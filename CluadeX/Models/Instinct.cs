@@ -110,8 +110,11 @@ public class Instinct
         }
     }
 
-    /// <summary>Promotion eligibility — true if user can click Promote.</summary>
-    public bool CanPromote => !Promoted && Confidence >= 0.45;
+    /// <summary>Promotion eligibility — true if user can click Promote.
+    /// FIX (audit MEDIUM #10): require at least one explicit Accept so a
+    /// purely-observed pattern (no human feedback) can't auto-eligible
+    /// itself off the back of the 0.5 default success-rate floor.</summary>
+    public bool CanPromote => !Promoted && AcceptCount >= 1 && Confidence >= 0.45;
 
     /// <summary>Friendly stamp for the UI.</summary>
     public string RelativeLastSeen

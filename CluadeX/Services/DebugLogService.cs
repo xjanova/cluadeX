@@ -119,6 +119,10 @@ public class DebugLogService
             Exception = ex?.ToString(),
         };
 
+        // FIX (audit CRITICAL #3): rotation + file append + counters all
+        // happen INSIDE the same lock so two threads can't race past the
+        // midnight rollover and silently drop log lines (and worse, kill
+        // the EnumerateFiles prune mid-iteration).
         lock (_lock)
         {
             _ring.Enqueue(entry);
@@ -126,16 +130,20 @@ public class DebugLogService
             if (level == LogLevel.Warning)  WarningCount++;
             if (level == LogLevel.Error)    ErrorCount++;
             if (level == LogLevel.Critical) CriticalCount++;
+
+            // Best-effort file append (don't crash the app if the disk is full).
+            // Inside the lock so the daily rotation + AppendAllText is atomic.
+            try
+            {
+                RotateFileIfNeeded();
+                File.AppendAllText(_currentLogPath, entry.ToFlatString() + Environment.NewLine);
+            }
+            catch { /* in-memory ring is still the source of truth */ }
         }
 
-        // Best-effort file append (don't crash the app if the disk is full)
-        try
-        {
-            RotateFileIfNeeded();
-            File.AppendAllText(_currentLogPath, entry.ToFlatString() + Environment.NewLine);
-        }
-        catch { /* swallow — the in-memory ring is still the source of truth */ }
-
+        // Fire OnEntry OUTSIDE the lock so a slow subscriber can't stall
+        // other threads' Write calls. Subscribers MUST be thread-safe and
+        // are expected to marshal to the UI dispatcher themselves.
         try { OnEntry?.Invoke(entry); } catch { }
     }
 

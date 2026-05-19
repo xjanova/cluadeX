@@ -92,90 +92,118 @@ public class InstinctService
 
     public List<Instinct> GetAll()
     {
-        var store = Load();
-        // Returned in confidence-desc order so the UI puts the strongest first
-        return store.Instincts.OrderByDescending(i => i.Confidence).ToList();
+        // Snapshot under the same lock that protects mutations to avoid
+        // reading a half-mutated list. Returned list is detached from the
+        // store so callers can sort/enumerate without holding the lock.
+        lock (_lock)
+        {
+            var store = Load();
+            return store.Instincts.OrderByDescending(i => i.Confidence).ToList();
+        }
     }
 
     public Instinct? GetById(string id)
     {
-        var store = Load();
-        return store.Instincts.FirstOrDefault(i => i.Id == id);
+        lock (_lock)
+        {
+            var store = Load();
+            return store.Instincts.FirstOrDefault(i => i.Id == id);
+        }
     }
 
     // ─── Mutations ───────────────────────────────────────────────────
+    // FIX (audit CRITICAL #1): every public mutator now wraps the
+    // Load → mutate → Save round-trip in a single lock so a concurrent
+    // UI vote + background brain-sync persist can't silently drop one
+    // another's writes. Save() does NOT take the lock again — it relies
+    // on the caller already holding it.
 
     public Instinct Add(Instinct instinct)
     {
-        var store = Load();
-        if (string.IsNullOrEmpty(instinct.Id))
-            instinct.Id = Guid.NewGuid().ToString("N")[..8];
-        if (instinct.FirstSeen == default) instinct.FirstSeen = DateTime.UtcNow;
-        instinct.LastSeen = DateTime.UtcNow;
-        store.Instincts.Add(instinct);
-        Save(store);
-        return instinct;
+        lock (_lock)
+        {
+            var store = Load();
+            if (string.IsNullOrEmpty(instinct.Id))
+                instinct.Id = Guid.NewGuid().ToString("N")[..8];
+            if (instinct.FirstSeen == default) instinct.FirstSeen = DateTime.UtcNow;
+            instinct.LastSeen = DateTime.UtcNow;
+            store.Instincts.Add(instinct);
+            Save(store);
+            return instinct;
+        }
     }
 
     public bool Delete(string id)
     {
-        var store = Load();
-        var hit = store.Instincts.FirstOrDefault(i => i.Id == id);
-        if (hit == null) return false;
-        store.Instincts.Remove(hit);
-        Save(store);
-        return true;
+        lock (_lock)
+        {
+            var store = Load();
+            var hit = store.Instincts.FirstOrDefault(i => i.Id == id);
+            if (hit == null) return false;
+            store.Instincts.Remove(hit);
+            Save(store);
+            return true;
+        }
     }
 
     /// <summary>User confirmed this is a real pattern → boosts confidence.</summary>
     public void Accept(string id)
     {
-        var store = Load();
-        var hit = store.Instincts.FirstOrDefault(i => i.Id == id);
-        if (hit == null) return;
-        hit.AcceptCount++;
-        hit.LastSeen = DateTime.UtcNow;
-        Save(store);
+        lock (_lock)
+        {
+            var store = Load();
+            var hit = store.Instincts.FirstOrDefault(i => i.Id == id);
+            if (hit == null) return;
+            hit.AcceptCount++;
+            hit.LastSeen = DateTime.UtcNow;
+            Save(store);
+        }
     }
 
     /// <summary>User said no → drops confidence so it stops surfacing.</summary>
     public void Reject(string id)
     {
-        var store = Load();
-        var hit = store.Instincts.FirstOrDefault(i => i.Id == id);
-        if (hit == null) return;
-        hit.RejectCount++;
-        hit.LastSeen = DateTime.UtcNow;
-        Save(store);
+        lock (_lock)
+        {
+            var store = Load();
+            var hit = store.Instincts.FirstOrDefault(i => i.Id == id);
+            if (hit == null) return;
+            hit.RejectCount++;
+            hit.LastSeen = DateTime.UtcNow;
+            Save(store);
+        }
     }
 
     /// <summary>Called by the Stop hook (or by the AI) when the pattern fires again.</summary>
     public void RecordObservation(string pattern, string? trigger = null, string? action = null)
     {
         if (string.IsNullOrWhiteSpace(pattern)) return;
-        var store = Load();
-        // Dedupe by exact Pattern text (case-insensitive). v2 will use semantic dedupe.
-        var existing = store.Instincts.FirstOrDefault(i =>
-            string.Equals(i.Pattern, pattern, StringComparison.OrdinalIgnoreCase));
-        if (existing != null)
+        lock (_lock)
         {
-            existing.OccurrenceCount++;
-            existing.LastSeen = DateTime.UtcNow;
-            if (!string.IsNullOrEmpty(trigger) && string.IsNullOrEmpty(existing.Trigger))
-                existing.Trigger = trigger;
-            if (!string.IsNullOrEmpty(action) && string.IsNullOrEmpty(existing.Action))
-                existing.Action = action;
-        }
-        else
-        {
-            store.Instincts.Add(new Instinct
+            var store = Load();
+            // Dedupe by exact Pattern text (case-insensitive). v2 will use semantic dedupe.
+            var existing = store.Instincts.FirstOrDefault(i =>
+                string.Equals(i.Pattern, pattern, StringComparison.OrdinalIgnoreCase));
+            if (existing != null)
             {
-                Pattern = pattern.Trim(),
-                Trigger = trigger?.Trim() ?? "",
-                Action = action?.Trim() ?? "",
-            });
+                existing.OccurrenceCount++;
+                existing.LastSeen = DateTime.UtcNow;
+                if (!string.IsNullOrEmpty(trigger) && string.IsNullOrEmpty(existing.Trigger))
+                    existing.Trigger = trigger;
+                if (!string.IsNullOrEmpty(action) && string.IsNullOrEmpty(existing.Action))
+                    existing.Action = action;
+            }
+            else
+            {
+                store.Instincts.Add(new Instinct
+                {
+                    Pattern = pattern.Trim(),
+                    Trigger = trigger?.Trim() ?? "",
+                    Action = action?.Trim() ?? "",
+                });
+            }
+            Save(store);
         }
-        Save(store);
     }
 
     // ─── Promote → Skill ─────────────────────────────────────────────
@@ -197,7 +225,10 @@ public class InstinctService
 
         string safeName = SanitizeFileName(instinct.Pattern);
         if (string.IsNullOrEmpty(safeName)) safeName = $"instinct-{instinct.Id}";
-        string fileName = $"promoted-{safeName}.md";
+        // FIX (audit LOW #13): always append the instinct id so two patterns
+        // that sanitize to the same filename can coexist instead of one
+        // silently overwriting the other.
+        string fileName = $"promoted-{safeName}-{instinct.Id}.md";
         string filePath = Path.Combine(skillsDir, fileName);
 
         var md = new StringBuilder();
@@ -235,14 +266,17 @@ public class InstinctService
 
         File.WriteAllText(filePath, md.ToString());
 
-        // Mark as promoted
-        var store = Load();
-        var live = store.Instincts.FirstOrDefault(i => i.Id == id);
-        if (live != null)
+        // Mark as promoted (also under lock, audit CRITICAL #1)
+        lock (_lock)
         {
-            live.Promoted = true;
-            live.PromotedSkillPath = filePath;
-            Save(store);
+            var store = Load();
+            var live = store.Instincts.FirstOrDefault(i => i.Id == id);
+            if (live != null)
+            {
+                live.Promoted = true;
+                live.PromotedSkillPath = filePath;
+                Save(store);
+            }
         }
         return filePath;
     }
@@ -251,27 +285,38 @@ public class InstinctService
     /// Persist the BrainNoteId (and any other field) that another service
     /// updated on a live instinct reference. Used by BrainSyncService after
     /// pushing a note to the brain.
+    /// FIX (audit CRITICAL #2 / HIGH #9): only writes BrainNoteId when caller
+    /// provides a non-null value, so a failed sync doesn't wipe a previously-
+    /// good id from disk.
     /// </summary>
     public void Persist(Instinct mutated)
     {
-        var store = Load();
-        var hit = store.Instincts.FirstOrDefault(i => i.Id == mutated.Id);
-        if (hit == null) return;
-        hit.BrainNoteId = mutated.BrainNoteId;
-        hit.LastSeen = mutated.LastSeen;
-        Save(store);
+        if (mutated == null || string.IsNullOrEmpty(mutated.Id)) return;
+        lock (_lock)
+        {
+            var store = Load();
+            var hit = store.Instincts.FirstOrDefault(i => i.Id == mutated.Id);
+            if (hit == null) return;
+            if (!string.IsNullOrEmpty(mutated.BrainNoteId))
+                hit.BrainNoteId = mutated.BrainNoteId;
+            hit.LastSeen = mutated.LastSeen;
+            Save(store);
+        }
     }
 
     // ─── Export / Import ─────────────────────────────────────────────
 
     public void ExportTo(string path)
     {
-        var store = Load();
-        var json = JsonSerializer.Serialize(store, new JsonSerializerOptions
+        lock (_lock)
         {
-            WriteIndented = true,
-        });
-        File.WriteAllText(path, json);
+            var store = Load();
+            var json = JsonSerializer.Serialize(store, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+            });
+            File.WriteAllText(path, json);
+        }
     }
 
     /// <summary>Returns count of imported instincts. Skips duplicates by Pattern.</summary>
@@ -283,19 +328,22 @@ public class InstinctService
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         if (imported == null) return 0;
 
-        var store = Load();
-        int added = 0;
-        foreach (var inc in imported.Instincts)
+        lock (_lock)
         {
-            if (store.Instincts.Any(i =>
-                string.Equals(i.Pattern, inc.Pattern, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            if (string.IsNullOrEmpty(inc.Id)) inc.Id = Guid.NewGuid().ToString("N")[..8];
-            store.Instincts.Add(inc);
-            added++;
+            var store = Load();
+            int added = 0;
+            foreach (var inc in imported.Instincts)
+            {
+                if (store.Instincts.Any(i =>
+                    string.Equals(i.Pattern, inc.Pattern, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                if (string.IsNullOrEmpty(inc.Id)) inc.Id = Guid.NewGuid().ToString("N")[..8];
+                store.Instincts.Add(inc);
+                added++;
+            }
+            if (added > 0) Save(store);
+            return added;
         }
-        if (added > 0) Save(store);
-        return added;
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────

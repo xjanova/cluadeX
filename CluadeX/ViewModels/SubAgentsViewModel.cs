@@ -103,13 +103,27 @@ public class SubAgentsViewModel : ViewModelBase
 
     public void Refresh()
     {
+        // FIX (audit HIGH #8): preserve selection across Refresh so the
+        // user doesn't lose their place every time the registry reloads.
+        // Match by name (the only stable identifier — IsBuiltIn / FilePath
+        // can change between reloads).
+        var previouslySelectedName = _selected?.Name;
         _service.Reload();
         Agents.Clear();
         foreach (var a in _service.GetAll().OrderBy(x => x.Tier).ThenBy(x => x.Name))
             Agents.Add(a);
         OnPropertyChanged(nameof(BuiltInCount));
         OnPropertyChanged(nameof(CustomCount));
-        Selected ??= Agents.FirstOrDefault();
+        if (previouslySelectedName != null)
+        {
+            Selected = Agents.FirstOrDefault(a =>
+                string.Equals(a.Name, previouslySelectedName, StringComparison.OrdinalIgnoreCase))
+                ?? Agents.FirstOrDefault();
+        }
+        else
+        {
+            Selected ??= Agents.FirstOrDefault();
+        }
         StatusMessage = $"{Agents.Count} subagents · {BuiltInCount} built-in · {CustomCount} custom";
     }
 }

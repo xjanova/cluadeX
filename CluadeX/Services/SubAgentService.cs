@@ -21,8 +21,10 @@ public class SubAgentService
     private List<SubAgentDefinition>? _cache;
     private readonly object _lock = new();
 
+    // FIX (audit MEDIUM #11): accept CRLF as well as LF so files saved by
+    // Windows editors don't silently fall through to the no-frontmatter path.
     private static readonly Regex FrontmatterRegex = new(
-        @"^---\s*\n(.*?)\n---\s*\n(.*)$", RegexOptions.Singleline | RegexOptions.Compiled);
+        @"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n(.*)$", RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex YamlLineRegex = new(
         @"^(\w+):\s*(.*)$", RegexOptions.Compiled);
 
