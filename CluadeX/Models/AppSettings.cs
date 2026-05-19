@@ -67,6 +67,13 @@ public class AppSettings
     // default to avoid surprising the user with LLM calls they didn't ask for.
     public bool SessionMemoryEnabled { get; set; } = false;
 
+    // Strategic Compaction Toast (Sprint 2 #2) — non-blocking nudge that
+    // appears at logical breakpoints (50+ tool calls / context ≥ 60% / 75%),
+    // letting the user one-click compact BEFORE the alarm fires. On by default
+    // because it's a pure UX improvement; can be disabled if the user finds
+    // it too chatty.
+    public bool EnableStrategicCompactionToast { get; set; } = true;
+
     // Model Catalog view preference — list (default) vs grid (2-column tiles).
     public bool ModelCatalogGridView { get; set; } = false;
 

@@ -814,10 +814,190 @@
             </Grid>
         </Border>
 
+        <!-- ════ STRATEGIC COMPACTION TOAST (Sprint 2 #2) ════ -->
+        <!-- Non-blocking nudge that fires at logical breakpoints (50+ tool calls /
+             ctx ≥ 60% / ctx ≥ 75%) BEFORE the urgent warning bar below. Severity
+             drives the color: info=cyan, warn=amber, critical=red. -->
+        <Border Grid.Row="3" Padding="14,10" Margin="12,6,12,0" CornerRadius="10"
+                BorderThickness="1"
+                Visibility="{Binding ShowCompactionToast, Converter={StaticResource BoolVis}}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <!-- Default = info (cyan) -->
+                    <Setter Property="Background" Value="#1A4CDFFF"/>
+                    <Setter Property="BorderBrush" Value="#664CDFFF"/>
+                    <Setter Property="Effect">
+                        <Setter.Value>
+                            <DropShadowEffect Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
+                        </Setter.Value>
+                    </Setter>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="warn">
+                            <Setter Property="Background" Value="#1AFFD166"/>
+                            <Setter Property="BorderBrush" Value="#66FFD166"/>
+                            <Setter Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect Color="#FFD166" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
+                                </Setter.Value>
+                            </Setter>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="critical">
+                            <Setter Property="Background" Value="#1AFF6E6E"/>
+                            <Setter Property="BorderBrush" Value="#66FF6E6E"/>
+                            <Setter Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect Color="#FF6E6E" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+                                </Setter.Value>
+                            </Setter>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Severity glyph -->
+                <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" FontSize="20"
+                           VerticalAlignment="Center" Margin="0,0,12,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Text" Value="&#xE946;"/>
+                            <Setter Property="Foreground">
+                                <Setter.Value>
+                                    <SolidColorBrush Color="#4CDFFF"/>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="warn">
+                                    <Setter Property="Text" Value="&#xE7BA;"/>
+                                    <Setter Property="Foreground">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="#FFD166"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="critical">
+                                    <Setter Property="Text" Value="&#xE783;"/>
+                                    <Setter Property="Foreground">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="#FF6E6E"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding CompactionToastTitle}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}"/>
+                    <TextBlock Text="{Binding CompactionToastReason}" FontSize="11"
+                               Foreground="{StaticResource Subtext0Brush}"
+                               Margin="0,2,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <!-- Compact now (primary action) -->
+                <Button Grid.Column="2" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
+                        Command="{Binding AcceptCompactionToastCommand}"
+                        Background="#A672FF" BorderThickness="0" Foreground="White"
+                        ToolTip="Compact the conversation now">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#C78AFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Compact now" FontSize="11" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Snooze 10 turns -->
+                <Button Grid.Column="3" Padding="10,6" Margin="0,0,6,0" Cursor="Hand"
+                        Command="{Binding SnoozeCompactionToastCommand}"
+                        Background="Transparent"
+                        BorderBrush="{StaticResource Surface2Brush}" BorderThickness="1"
+                        Foreground="{StaticResource Subtext0Brush}"
+                        ToolTip="Don't ask for 10 more turns">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#11FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xEC92;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Snooze 10 turns" FontSize="11"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Dismiss (x) -->
+                <Button Grid.Column="4" Width="28" Height="28" Cursor="Hand"
+                        Command="{Binding DismissCompactionToastCommand}"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTip="Dismiss">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="14">
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{StaticResource Overlay0Brush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </Border>
+
         <!-- CONTEXT WARNING BAR with action buttons -->
+        <!-- Hidden when the strategic compaction toast is active to avoid visual stacking at Row 3 -->
         <Border Grid.Row="3" Padding="10,6"
-                BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}"
-                Visibility="{Binding ShowContextWarning, Converter={StaticResource BoolVis}}">
+                BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding ShowContextWarning}" Value="True"/>
+                                <Condition Binding="{Binding ShowCompactionToast}" Value="False"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <Border.Background>
                 <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.1"/>
             </Border.Background>

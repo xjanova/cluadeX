@@ -253,6 +253,31 @@ public class ChatViewModel : ViewModelBase
     public bool ShowContextWarning { get => _showContextWarning; set => SetProperty(ref _showContextWarning, value); }
     public string ContextWarningText { get => _contextWarningText; set => SetProperty(ref _contextWarningText, value); }
 
+    // ─── Strategic Compaction Toast (Sprint 2 #2) ─────────────────────
+    // Nudges the user to /compact at logical breakpoints — BEFORE the
+    // context-full alarm fires. Three triggers:
+    //   1. 50+ tool calls accumulated since last compaction
+    //   2. Context crosses 60% (proactive)
+    //   3. Context crosses 75% (urgent — overlaps with ContextWarning)
+    private bool _showCompactionToast;
+    private string _compactionToastTitle = "";
+    private string _compactionToastReason = "";
+    private string _compactionToastSeverity = "info"; // info | warn | critical
+    private int _toolActionsAtLastCompact;
+    private int _toastSnoozeUntilTurn = -1;
+    private string _lastFiredTrigger = ""; // dedupe so the same trigger doesn't re-fire each turn
+
+    public bool ShowCompactionToast { get => _showCompactionToast; set => SetProperty(ref _showCompactionToast, value); }
+    public string CompactionToastTitle { get => _compactionToastTitle; set => SetProperty(ref _compactionToastTitle, value); }
+    public string CompactionToastReason { get => _compactionToastReason; set => SetProperty(ref _compactionToastReason, value); }
+
+    /// <summary>"info" → cyan, "warn" → amber, "critical" → red. Used by XAML data triggers.</summary>
+    public string CompactionToastSeverity { get => _compactionToastSeverity; set => SetProperty(ref _compactionToastSeverity, value); }
+
+    public ICommand AcceptCompactionToastCommand { get; private set; } = null!;
+    public ICommand SnoozeCompactionToastCommand { get; private set; } = null!;
+    public ICommand DismissCompactionToastCommand { get; private set; } = null!;
+
     // ─── In-chat search (Ctrl+F) ───
     public string ChatSearchQuery
     {
@@ -340,6 +365,17 @@ public class ChatViewModel : ViewModelBase
         ClearChatCommand = new RelayCommand(ClearChat);
         NewSessionCommand = new RelayCommand(NewSession);
         CompactCommand = new RelayCommand(CompactConversation);
+        AcceptCompactionToastCommand = new RelayCommand(() =>
+        {
+            CompactConversation();
+            HideCompactionToast();
+        });
+        SnoozeCompactionToastCommand = new RelayCommand(() =>
+        {
+            _toastSnoozeUntilTurn = SessionTurnCount + 10;
+            HideCompactionToast();
+        });
+        DismissCompactionToastCommand = new RelayCommand(HideCompactionToast);
         ToggleChatSearchCommand = new RelayCommand(() => { IsChatSearchVisible = !IsChatSearchVisible; if (!IsChatSearchVisible) ChatSearchQuery = ""; });
         CloseChatSearchCommand = new RelayCommand(() => { IsChatSearchVisible = false; ChatSearchQuery = ""; });
         CopyCodeCommand = new RelayCommand<string>(CopyCode);
@@ -824,8 +860,86 @@ public class ChatViewModel : ViewModelBase
                 ShowContextWarning = true;
                 ContextWarningText = "🔴 Context almost full! Start a New Chat NOW for best results. The AI is losing earlier context.";
             }
+
+            // Sprint 2 #2 — Strategic Compaction Toast trigger check.
+            // Runs AFTER ContextUsagePercent + SessionTurnCount are fresh.
+            EvaluateCompactionTrigger(messages);
         }
         catch { /* ignore during initialization */ }
+    }
+
+    // ─── Strategic Compaction Toast logic ─────────────────────────────
+
+    /// <summary>
+    /// Decide whether to fire the strategic-compaction nudge. Three triggers,
+    /// each fires AT MOST ONCE per crossing — once dismissed/snoozed, the
+    /// same trigger won't re-spam every turn.
+    /// </summary>
+    private void EvaluateCompactionTrigger(List<ChatMessage> messages)
+    {
+        // Honor snooze
+        if (SessionTurnCount < _toastSnoozeUntilTurn) return;
+        // Honor user setting (default true)
+        if (!_settingsService.Settings.EnableStrategicCompactionToast) return;
+        // Don't fire while a toast is already showing
+        if (_showCompactionToast) return;
+
+        int toolActionsTotal = messages.Count(m => m.Role == MessageRole.ToolAction);
+        int toolActionsSince = Math.Max(0, toolActionsTotal - _toolActionsAtLastCompact);
+
+        // Trigger priority (highest fires first):
+        //   1. Context ≥ 75% (urgent)
+        //   2. Context ≥ 60% (proactive)
+        //   3. 50+ tool calls since last compact
+        string trigger = "";
+        if (ContextUsagePercent >= 75 && _lastFiredTrigger != "ctx75")
+        {
+            trigger = "ctx75";
+            ShowToast("critical",
+                "Context is getting hot",
+                $"{ContextUsagePercent:F0}% used. Compact now to keep the next response sharp.");
+        }
+        else if (ContextUsagePercent >= 60 && _lastFiredTrigger != "ctx60" && _lastFiredTrigger != "ctx75")
+        {
+            trigger = "ctx60";
+            ShowToast("warn",
+                "Good moment to compact",
+                $"You've crossed {ContextUsagePercent:F0}% — quick compact will reset the headroom.");
+        }
+        else if (toolActionsSince >= 50 && _lastFiredTrigger != "tools50")
+        {
+            trigger = "tools50";
+            ShowToast("info",
+                "Lots of tool calls this session",
+                $"{toolActionsSince} tool calls since last compact. A compact will trim the noise.");
+        }
+
+        if (!string.IsNullOrEmpty(trigger))
+        {
+            _lastFiredTrigger = trigger;
+        }
+        else if (ContextUsagePercent < 55)
+        {
+            // Reset the trigger memory once the user dropped well below 60%,
+            // so the next crossing fires the toast again.
+            _lastFiredTrigger = "";
+        }
+    }
+
+    private void ShowToast(string severity, string title, string reason)
+    {
+        CompactionToastSeverity = severity;
+        CompactionToastTitle = title;
+        CompactionToastReason = reason;
+        ShowCompactionToast = true;
+    }
+
+    private void HideCompactionToast()
+    {
+        ShowCompactionToast = false;
+        // Reset baseline so the next 50-tool-call cycle starts fresh
+        // (whether the user accepted, snoozed, or dismissed)
+        _toolActionsAtLastCompact = Messages.Count(m => m.Role == MessageRole.ToolAction);
     }
 
     // ─── GPU Live Stats ───
@@ -1124,6 +1238,13 @@ public class ChatViewModel : ViewModelBase
         }
 
         StatusText = "Conversation compacted";
+
+        // Reset Sprint 2 #2 trigger state so the strategic toast can fire
+        // again the next time the conversation grows past a threshold.
+        _toolActionsAtLastCompact = Messages.Count(m => m.Role == MessageRole.ToolAction);
+        _lastFiredTrigger = "";
+        ShowCompactionToast = false;
+
         UpdateContextInfo();
     }
 
