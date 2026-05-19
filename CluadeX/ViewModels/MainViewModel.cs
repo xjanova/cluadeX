@@ -177,6 +177,7 @@ public class MainViewModel : ViewModelBase
     public McpServersViewModel McpServersVM { get; }
     public TimeMachineViewModel TimeMachineVM { get; }
     public CodeEditorViewModel CodeEditorVM { get; }
+    public SubAgentsViewModel SubAgentsVM { get; }
     public HexEditorViewModel HexEditorVM { get; }
 
     public ICommand NavigateToCommand { get; }
@@ -197,6 +198,7 @@ public class MainViewModel : ViewModelBase
         TimeMachineViewModel timeMachineVM,
         HexEditorViewModel hexEditorVM,
         CodeEditorViewModel codeEditorVM,
+        SubAgentsViewModel subAgentsVM,
         AgentToolService agentToolService,
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
@@ -217,6 +219,7 @@ public class MainViewModel : ViewModelBase
         TimeMachineVM = timeMachineVM;
         HexEditorVM = hexEditorVM;
         CodeEditorVM = codeEditorVM;
+        SubAgentsVM = subAgentsVM;
 
         // When the AI agent invokes hex_open, switch the active page to the
         // Hex Editor so the user can see the file the agent is working on.
@@ -358,6 +361,7 @@ public class MainViewModel : ViewModelBase
             "TimeMachine" => TimeMachineVM,
             "HexEditor" => HexEditorVM,
             "Code" => CodeEditorVM,
+            "SubAgents" => SubAgentsVM,
             _ => ChatVM,
         };
 

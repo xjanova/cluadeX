@@ -517,6 +517,10 @@ public partial class App : Application
         // CodeWorkspaceService — backs the Code Editor page (file tree,
         // open/save tabs, git status enrichment for tree badges).
         services.AddSingleton<CodeWorkspaceService>();
+        // SubAgentService — Sprint 1 #1: registry of specialised subagents
+        // (code-reviewer, security-reviewer, architect, ...). Built-in 10
+        // plus discovery of ~/.cluadex/agents/*.md and project agents.
+        services.AddSingleton<SubAgentService>();
         // HexEditorService — binary file backend for both the Hex Editor view
         // and the AI agent's hex_* tools. Shared instance so AI patches show
         // up live in the UI and vice versa.
@@ -541,6 +545,7 @@ public partial class App : Application
         services.AddSingleton<TimeMachineViewModel>();
         services.AddSingleton<HexEditorViewModel>();
         services.AddSingleton<CodeEditorViewModel>();
+        services.AddSingleton<SubAgentsViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();

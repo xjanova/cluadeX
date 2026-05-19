@@ -85,6 +85,10 @@ public enum ToolType
     HexSearch,       // Find a hex/text pattern in a file (returns offsets)
     HexPatch,        // Patch bytes at offset (in-place, with undo, optionally save)
     HexInfo,         // Get file size, sha256, magic bytes without loading into editor
+
+    // Subagent system (Sprint 1 #1 — ECC parity)
+    SubAgentInvoke,  // Spawn a specialised subagent (code-reviewer, security-reviewer, etc.)
+    SubAgentList,    // List available subagents
 }
 
 /// <summary>

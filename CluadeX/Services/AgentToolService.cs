@@ -65,13 +65,15 @@ public class AgentToolService
     private readonly MemoryService _memoryService;
     private readonly SkillService _skillService;
     private readonly HexEditorService _hexEditor;
+    private readonly SubAgentService _subAgentService;
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
         WebFetchService webFetchService, TaskManagerService taskManager,
         McpServerManager mcpManager, HookService hookService, MemoryService memoryService,
-        SkillService skillService, HexEditorService hexEditor)
+        SkillService skillService, HexEditorService hexEditor,
+        SubAgentService subAgentService)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -87,6 +89,7 @@ public class AgentToolService
         _memoryService = memoryService;
         _skillService = skillService;
         _hexEditor = hexEditor;
+        _subAgentService = subAgentService;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -282,6 +285,10 @@ public class AgentToolService
                 ToolType.HexPatch => await ExecuteHexPatchAsync(call, ct),
                 ToolType.HexInfo => await ExecuteHexInfoAsync(call, ct),
 
+                // Subagent system (Sprint 1 #1 — ECC parity)
+                ToolType.SubAgentInvoke => ExecuteSubAgentInvoke(call),
+                ToolType.SubAgentList => ExecuteSubAgentList(call),
+
                 _ => new ToolResult
                 {
                     Type = call.Type,
@@ -465,6 +472,10 @@ public class AgentToolService
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
         schemas.Add(new() { Name = "agent_spawn", Description = "Spawn a sub-agent for a complex sub-task", InputSchema = MakeSchema(("task", "string", "Task description", true), ("context", "string", "Additional context", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
+
+        // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
+        schemas.Add(new() { Name = "subagent_invoke", Description = "Spawn a specialised subagent (code-reviewer, security-reviewer, architect, csharp-reviewer, python-reviewer, code-explorer, silent-failure-hunter, performance-optimizer, doc-updater, tdd-guide) with a scoped tool set and isolated focus. Returns a constructed prompt that you should execute next.", InputSchema = MakeSchema(("type", "string", "Subagent name (e.g. 'code-reviewer')", true), ("prompt", "string", "Task / question for the subagent", true), ("context_files", "string", "Optional comma-separated file paths the subagent should read first", false)) });
+        schemas.Add(new() { Name = "subagent_list", Description = "List all available subagents with descriptions and tiers (cheap/mid/deep).", InputSchema = MakeSchema() });
 
         // Memory tools
         schemas.Add(new() { Name = "memory_save", Description = "Save persistent memory that survives across sessions", InputSchema = MakeSchema(("name", "string", "Memory name", true), ("content", "string", "Memory content", true), ("type", "string", "user|feedback|project|reference", false), ("description", "string", "Short description", false), ("scope", "string", "global|project", false)) });
@@ -855,6 +866,29 @@ public class AgentToolService
                 args: fix login bug
                 [/ACTION]
                 Available skills: commit, review-pr, simplify (+ any user/project skills)
+
+            48. subagent_invoke - Spawn a specialised subagent with scoped tools and focused persona.
+                Useful when a sub-task is well-defined and deserves dedicated, single-purpose attention
+                (code review, security audit, architecture sketch, etc).
+                [ACTION: subagent_invoke]
+                type: code-reviewer
+                prompt: review the diff in src/Foo.cs for race conditions
+                context_files: src/Foo.cs
+                [/ACTION]
+                Built-in subagents (use 'subagent_list' to see full descriptions + tiers):
+                  - code-reviewer       (mid)    review diffs for bugs / security / style
+                  - security-reviewer   (deep)   OWASP-style scan: injection, secrets, access control
+                  - csharp-reviewer     (mid)    .NET-specific: async/await, IDisposable, WPF traps
+                  - python-reviewer     (mid)    Python-specific: type hints, mutable defaults, GIL
+                  - architect           (deep)   design BEFORE coding — contracts + risk register
+                  - code-explorer       (mid)    map unfamiliar code, find entry points + call traces
+                  - silent-failure-hunter (deep) bugs that don't throw — wrong-but-plausible behaviour
+                  - performance-optimizer (deep) profile-first hot-path proposals
+                  - doc-updater         (cheap)  keep README / CHANGELOG / docstrings in sync
+                  - tdd-guide           (mid)    strict red → green → refactor coach
+
+            49. subagent_list - List every available subagent with description and tier
+                [ACTION: subagent_list][/ACTION]
         """);
 
         // MCP server tools (dynamically discovered)
@@ -2025,6 +2059,10 @@ public class AgentToolService
             "hex_patch" or "patch_hex" or "hex_write" => ToolType.HexPatch,
             "hex_info" or "file_info" or "binary_info" => ToolType.HexInfo,
 
+            // Subagent system (Sprint 1 #1 — ECC parity)
+            "subagent_invoke" or "spawn_subagent" or "invoke_subagent" => ToolType.SubAgentInvoke,
+            "subagent_list" or "list_subagents" or "subagents" => ToolType.SubAgentList,
+
             _ => null,
         };
     }
@@ -2448,6 +2486,117 @@ public class AgentToolService
             Type = call.Type, ToolName = call.ToolName, Success = true,
             Output = prompt.ToString(),
             Summary = $"Skill '{skill.Name}' prompt loaded — execute it now",
+        };
+    }
+
+    // ════════════════════════════════════════════
+    // Sprint 1 #1: Subagent Invocation (ECC parity)
+    // ════════════════════════════════════════════
+
+    /// <summary>
+    /// Spawn a specialised subagent. v1 implementation: build the subagent's
+    /// system prompt + task prompt + restrict tool set, then return as a
+    /// structured tool result the main agent re-enters its loop with. Tool
+    /// restrictions are enforced via the existing ActiveSkillAllowedTools
+    /// channel until proper context isolation lands in v2.
+    /// </summary>
+    private ToolResult ExecuteSubAgentInvoke(ToolCall call)
+    {
+        string type = call.GetArg("type");
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            // No type → list all (same as subagent_list)
+            return ExecuteSubAgentList(call);
+        }
+
+        var agent = _subAgentService.GetByName(type);
+        if (agent == null)
+        {
+            var all = _subAgentService.GetAll();
+            var names = string.Join(", ", all.Select(a => a.Name));
+            return Fail(call, $"Subagent '{type}' not found. Available: {names}");
+        }
+
+        string userPrompt = call.GetArg("prompt", "").Trim();
+        string contextFiles = call.GetArg("context_files", "").Trim();
+
+        // Enforce the subagent's tool restriction for the duration of this
+        // invocation. The main agent will re-enter its loop with the new
+        // prompt and the restricted tool set.
+        if (agent.AllowedTools is { Count: > 0 })
+        {
+            ActiveSkillAllowedTools = agent.AllowedTools;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"# 🤖 Subagent activated: **{agent.Name}**");
+        sb.AppendLine($"_{agent.Description}_");
+        sb.AppendLine();
+        sb.AppendLine($"**Tier:** {agent.TierBadge}  |  **Color:** {agent.Color}");
+        if (agent.AllowedTools.Count > 0)
+            sb.AppendLine($"**Allowed tools (scoped):** {string.Join(", ", agent.AllowedTools)}");
+        if (!string.IsNullOrEmpty(agent.WhenToUse))
+            sb.AppendLine($"**When to use:** {agent.WhenToUse}");
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## System persona");
+        sb.AppendLine(agent.SystemPrompt);
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## Task");
+        if (!string.IsNullOrEmpty(userPrompt))
+            sb.AppendLine(userPrompt);
+        else
+            sb.AppendLine("(no task body provided — ask the user what they want this subagent to do)");
+
+        if (!string.IsNullOrEmpty(contextFiles))
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Context files to read first");
+            foreach (var f in contextFiles.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                sb.AppendLine($"- `{f.Trim()}`");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("**Now execute as this subagent.** Stay in persona until the task is done, " +
+                      "then report the result in the format described in the system persona.");
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = sb.ToString(),
+            Summary = $"Subagent '{agent.Name}' activated ({agent.TierBadge}) — execute now",
+        };
+    }
+
+    private ToolResult ExecuteSubAgentList(ToolCall call)
+    {
+        var all = _subAgentService.GetAll();
+        if (all.Count == 0)
+            return Fail(call, "No subagents available.");
+
+        var sb = new StringBuilder($"## Available subagents ({all.Count})\n\n");
+        foreach (var a in all.OrderBy(x => x.Tier).ThenBy(x => x.Name))
+        {
+            sb.AppendLine($"### `{a.Name}`  [{a.TierBadge}]");
+            sb.AppendLine($"{a.Description}");
+            if (!string.IsNullOrEmpty(a.WhenToUse))
+                sb.AppendLine($"_When:_ {a.WhenToUse}");
+            if (a.AllowedTools.Count > 0)
+                sb.AppendLine($"_Tools:_ {string.Join(", ", a.AllowedTools)}");
+            if (a.IsBuiltIn) sb.AppendLine("_(built-in)_");
+            sb.AppendLine();
+        }
+        sb.AppendLine("Invoke any of them via:\n");
+        sb.AppendLine("```\n[ACTION: subagent_invoke]\ntype: code-reviewer\nprompt: <your task>\n```\n");
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = sb.ToString(),
+            Summary = $"Listed {all.Count} subagents",
         };
     }
 

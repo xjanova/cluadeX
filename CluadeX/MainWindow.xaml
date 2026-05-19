@@ -38,6 +38,8 @@
                     Command="{Binding NavigateToCommand}" CommandParameter="HexEditor"/>
         <KeyBinding Modifiers="Control" Key="D5"
                     Command="{Binding NavigateToCommand}" CommandParameter="Code"/>
+        <KeyBinding Modifiers="Control" Key="D6"
+                    Command="{Binding NavigateToCommand}" CommandParameter="SubAgents"/>
         <KeyBinding Modifiers="Control" Key="S"
                     Command="{Binding CodeEditorVM.SaveActiveCommand}"/>
     </Window.InputBindings>
@@ -75,6 +77,9 @@
         </DataTemplate>
         <DataTemplate DataType="{x:Type vm:CodeEditorViewModel}">
             <views:CodeEditorView/>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SubAgentsViewModel}">
+            <views:SubAgentsView/>
         </DataTemplate>
     </Window.Resources>
 
@@ -434,6 +439,11 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Code"
                                              GroupName="Activity"
                                              ToolTip="Code Editor (Ctrl+5)" AutomationProperties.Name="Code Editor"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE99A;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=SubAgents, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="SubAgents"
+                                             GroupName="Activity"
+                                             ToolTip="Subagents (Ctrl+6)" AutomationProperties.Name="Subagents"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8F1;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Models"
