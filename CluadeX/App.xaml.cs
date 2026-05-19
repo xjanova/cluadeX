@@ -550,6 +550,9 @@ public partial class App : Application
         // brain via MCP. Pushes STRONG instincts as `coding-lesson` notes so
         // the knowledge survives across machines / Claude Code sessions.
         services.AddSingleton<BrainSyncService>();
+        // SecurityShieldService — Sprint 3 #1: static-analysis scanner with
+        // 25 ship-1 OWASP-style rules. Drives the SecurityShield page.
+        services.AddSingleton<SecurityShieldService>();
         // HexEditorService — binary file backend for both the Hex Editor view
         // and the AI agent's hex_* tools. Shared instance so AI patches show
         // up live in the UI and vice versa.
@@ -578,6 +581,7 @@ public partial class App : Application
         services.AddSingleton<SkillsViewModel>();
         services.AddSingleton<InstinctsViewModel>();
         services.AddSingleton<DebugLogViewModel>();
+        services.AddSingleton<SecurityShieldViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
