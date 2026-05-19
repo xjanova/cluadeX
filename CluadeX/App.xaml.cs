@@ -546,6 +546,7 @@ public partial class App : Application
         services.AddSingleton<HexEditorViewModel>();
         services.AddSingleton<CodeEditorViewModel>();
         services.AddSingleton<SubAgentsViewModel>();
+        services.AddSingleton<SkillsViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
