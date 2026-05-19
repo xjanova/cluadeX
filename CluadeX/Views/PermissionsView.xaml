@@ -4,6 +4,35 @@
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
+        <!-- ── Neon retheme — local override of Catppuccin keys ── -->
+        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
+        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
+        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
+        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
+        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
+        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
+        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
+        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
+        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
+        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
+        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
+        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
+        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>
+        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
+        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
+        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
+        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
+        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>
+        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
+        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
+        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
+        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
+        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
+
         <Style x:Key="SettingLabel" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
             <Setter Property="FontSize" Value="13"/>
