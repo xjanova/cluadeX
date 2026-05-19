@@ -48,6 +48,12 @@ public partial class App : Application
         }
         catch { }
 
+        // Resolve the debug log first so subsequent startup steps can log
+        // their progress / failures. If DI itself failed, this is null and
+        // each helper TryLogToDebugService call no-ops silently.
+        var dbg = _serviceProvider.GetService<DebugLogService>();
+        dbg?.Info("App", "MainWindow shown, starting background services");
+
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
@@ -56,16 +62,24 @@ public partial class App : Application
                 // Validate license key against online API
                 var activation = _serviceProvider.GetRequiredService<ActivationService>();
                 await activation.ValidateOnlineAsync();
+                dbg?.Debug("Activation", "License validation finished");
             }
-            catch { /* License validation is best-effort */ }
+            catch (Exception ex)
+            {
+                dbg?.Warn("Activation", "License validate threw (offline?)", ex);
+            }
 
             try
             {
                 // Initialize MCP servers
                 var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
                 await mcpManager.InitializeAsync();
+                dbg?.Info("MCP", "McpServerManager initialised");
             }
-            catch { /* MCP init is best-effort */ }
+            catch (Exception ex)
+            {
+                dbg?.Warn("MCP", "McpServerManager init failed", ex);
+            }
 
             try
             {
@@ -77,6 +91,7 @@ public partial class App : Application
                 // routes to ChatViewModel which spawns a visible session.
                 host.ToolDispatcher = (invocation, ct) => HandleMcpToolAsync(invocation, ct);
                 await host.StartAsync();
+                dbg?.Info("MCP", $"McpHostService listening on pipe '{host.PipeName}'");
 
                 // Surface the host on MainViewModel so the sidebar status chip
                 // can data-bind to its observable properties. Do this on the UI
@@ -91,6 +106,7 @@ public partial class App : Application
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"McpHostService start failed: {ex.Message}");
+                dbg?.Error("MCP", "McpHostService start failed", ex);
             }
         });
     }
@@ -525,6 +541,11 @@ public partial class App : Application
         // store of observed patterns, accept/reject voting, confidence
         // scoring (success_rate × frequency × recency_decay), promote-to-skill.
         services.AddSingleton<InstinctService>();
+        // DebugLogService — central in-app log with ring buffer + daily
+        // rotated file at %USERPROFILE%/.cluadex/logs/. Drives the Debug
+        // Log page (Ctrl+9) AND captures global exceptions routed from
+        // the dispatcher / appdomain / task handlers above.
+        services.AddSingleton<DebugLogService>();
         // HexEditorService — binary file backend for both the Hex Editor view
         // and the AI agent's hex_* tools. Shared instance so AI patches show
         // up live in the UI and vice versa.
@@ -552,6 +573,7 @@ public partial class App : Application
         services.AddSingleton<SubAgentsViewModel>();
         services.AddSingleton<SkillsViewModel>();
         services.AddSingleton<InstinctsViewModel>();
+        services.AddSingleton<DebugLogViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
@@ -585,10 +607,12 @@ public partial class App : Application
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         WriteCrashLog("dispatcher", e.Exception);
+        TryLogToDebugService(CluadeX.Models.LogLevel.Critical, "Dispatcher",
+            $"Unhandled dispatcher exception: {e.Exception.Message}", e.Exception);
         // Keep the app alive for non-fatal UI exceptions — losing unsaved chat state is worse than a blip.
         // Fatal exceptions (StackOverflow, OutOfMemory, AccessViolation) can't be caught here anyway.
         MessageBox.Show(
-            $"An error occurred:\n\n{e.Exception.Message}\n\nA crash log has been saved to:\n{CrashLogDir}",
+            $"An error occurred:\n\n{e.Exception.Message}\n\nA crash log has been saved to:\n{CrashLogDir}\n\nOpen Debug Log (Ctrl+9) to see context.",
             "CluadeX — Unexpected Error",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
@@ -599,14 +623,42 @@ public partial class App : Application
     {
         // AppDomain exceptions are typically fatal and the process will terminate after this returns.
         if (e.ExceptionObject is Exception ex)
+        {
             WriteCrashLog("appdomain", ex);
+            TryLogToDebugService(CluadeX.Models.LogLevel.Critical, "AppDomain",
+                $"Unhandled AppDomain exception (process likely terminating): {ex.Message}", ex);
+        }
     }
 
     private void OnUnobservedTaskException(object? sender, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
     {
         WriteCrashLog("task", e.Exception);
+        TryLogToDebugService(CluadeX.Models.LogLevel.Error, "Task",
+            $"Unobserved task exception: {e.Exception.Message}", e.Exception);
         // Mark as observed so GC doesn't terminate the process.
         e.SetObserved();
+    }
+
+    /// <summary>
+    /// Route global exceptions through DebugLogService so they show up in
+    /// the in-app Debug Log page (Ctrl+9) AND get persisted to the daily
+    /// rotated log file. Best-effort — never throws.
+    /// </summary>
+    private void TryLogToDebugService(CluadeX.Models.LogLevel level, string category, string message, Exception ex)
+    {
+        try
+        {
+            var log = _serviceProvider?.GetService<DebugLogService>();
+            if (log == null) return;
+            switch (level)
+            {
+                case CluadeX.Models.LogLevel.Warning:  log.Warn(category, message, ex); break;
+                case CluadeX.Models.LogLevel.Error:    log.Error(category, message, ex); break;
+                case CluadeX.Models.LogLevel.Critical: log.Critical(category, message, ex); break;
+                default:                               log.Info(category, message); break;
+            }
+        }
+        catch { /* logging must never crash crash handling */ }
     }
 
     private static void WriteCrashLog(string source, Exception ex)
