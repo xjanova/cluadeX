@@ -396,15 +396,26 @@
                         <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="Black" Opacity="0.5"/>
                     </Border.Effect>
                     <Grid>
-                        <!-- Empty state -->
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Margin="40">
+                        <!-- Empty state — shown when current tab has nothing selected -->
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="40">
                             <StackPanel.Style>
                                 <Style TargetType="StackPanel">
-                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SelectedPlugin, Converter={StaticResource NullToCollapsed}, ConverterParameter=Invert}" Value="Visible"/>
-                                        <DataTrigger Binding="{Binding SelectedCatalogPlugin, Converter={StaticResource NullToCollapsed}, ConverterParameter=Invert}" Value="Visible"/>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsChecked, ElementName=TabInstalled}" Value="True"/>
+                                                <Condition Binding="{Binding SelectedPlugin}" Value="{x:Null}"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsChecked, ElementName=TabCatalog}" Value="True"/>
+                                                <Condition Binding="{Binding SelectedCatalogPlugin}" Value="{x:Null}"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </StackPanel.Style>
@@ -416,9 +427,22 @@
                                        Foreground="{StaticResource NeonInk2Brush}"/>
                         </StackPanel>
 
-                        <!-- INSTALLED detail -->
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22"
-                                      Visibility="{Binding SelectedPlugin, Converter={StaticResource NullToCollapsed}}">
+                        <!-- INSTALLED detail — only when Installed tab AND a plugin is selected -->
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22">
+                            <ScrollViewer.Style>
+                                <Style TargetType="ScrollViewer">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsChecked, ElementName=TabInstalled}" Value="True"/>
+                                                <Condition Binding="{Binding SelectedPlugin, Converter={StaticResource NullToCollapsed}}" Value="Visible"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ScrollViewer.Style>
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
                                     <Border Width="56" Height="56" CornerRadius="14">
@@ -472,9 +496,22 @@
                             </StackPanel>
                         </ScrollViewer>
 
-                        <!-- CATALOG detail -->
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22"
-                                      Visibility="{Binding SelectedCatalogPlugin, Converter={StaticResource NullToCollapsed}}">
+                        <!-- CATALOG detail — only when Catalog tab AND a catalog plugin is selected -->
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="22">
+                            <ScrollViewer.Style>
+                                <Style TargetType="ScrollViewer">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsChecked, ElementName=TabCatalog}" Value="True"/>
+                                                <Condition Binding="{Binding SelectedCatalogPlugin, Converter={StaticResource NullToCollapsed}}" Value="Visible"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ScrollViewer.Style>
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
                                     <Border Width="56" Height="56" CornerRadius="14">
