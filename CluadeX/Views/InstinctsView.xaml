@@ -68,6 +68,18 @@
                         </Border>
                     </Grid>
 
+                    <!-- Brain sync chip -->
+                    <Border Padding="5,1" CornerRadius="3" HorizontalAlignment="Left" Margin="0,0,0,6"
+                            Background="#22A672FF"
+                            BorderBrush="{StaticResource NeonVioletBrush}" BorderThickness="1"
+                            Visibility="{Binding SyncedToBrain, Converter={StaticResource BoolVis}}">
+                        <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
+                                   Foreground="{StaticResource NeonVioletBrush}">
+                            <Run Text="🧠 SYNCED · "/>
+                            <Run Text="{Binding BrainNoteId, Mode=OneWay}"/>
+                        </TextBlock>
+                    </Border>
+
                     <!-- Confidence bar -->
                     <Grid Margin="0,0,0,4">
                         <Border Height="4" CornerRadius="2" Background="#15FFFFFF"/>
@@ -269,6 +281,49 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Brain status chip -->
+                        <Border Padding="8,5" CornerRadius="6" Margin="0,0,6,0"
+                                BorderThickness="1" VerticalAlignment="Center"
+                                ToolTip="{Binding BrainStatusText}">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background" Value="#1A8388BD"/>
+                                    <Setter Property="BorderBrush" Value="#558388BD"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding BrainAvailable}" Value="True">
+                                            <Setter Property="Background" Value="#22A672FF"/>
+                                            <Setter Property="BorderBrush" Value="{StaticResource NeonVioletBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🧠" FontSize="11" Margin="0,0,5,0"/>
+                                <TextBlock FontSize="10" FontFamily="{StaticResource NeonMonoFont}" FontWeight="Bold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="OFFLINE"/>
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BrainAvailable}" Value="True">
+                                                    <Setter Property="Text" Value="BRAIN"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonVioletBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Command="{Binding SyncAllStrongCommand}" Style="{StaticResource NeonAction}"
+                                IsEnabled="{Binding BrainAvailable}"
+                                ToolTip="Push every STRONG instinct as a coding-lesson note in your ObsidianX vault">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🧠" FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="Sync all STRONG"/>
+                            </StackPanel>
+                        </Button>
                         <Button Command="{Binding ExportCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE792;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
@@ -471,6 +526,14 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
                                                 <TextBlock Text="Promote → Skill"/>
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Command="{Binding SyncToBrainCommand}" Style="{StaticResource NeonAction}"
+                                                IsEnabled="{Binding BrainAvailable}"
+                                                ToolTip="Push this instinct to ObsidianX as a coding-lesson note (syncs across machines)">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="🧠" FontSize="11" Margin="0,0,6,0"/>
+                                                <TextBlock Text="Sync to brain"/>
                                             </StackPanel>
                                         </Button>
                                         <Button Command="{Binding DeleteCommand}" Style="{StaticResource NeonDanger}">

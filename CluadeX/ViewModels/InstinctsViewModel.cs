@@ -15,6 +15,7 @@ namespace CluadeX.ViewModels;
 public class InstinctsViewModel : ViewModelBase
 {
     private readonly InstinctService _service;
+    private readonly BrainSyncService _brainSync;
 
     public ObservableCollection<Instinct> Instincts { get; } = new();
 
@@ -67,10 +68,17 @@ public class InstinctsViewModel : ViewModelBase
     public ICommand ExportCommand { get; }
     public ICommand ImportCommand { get; }
     public ICommand OpenStoreFolderCommand { get; }
+    public ICommand SyncToBrainCommand { get; }
+    public ICommand SyncAllStrongCommand { get; }
 
-    public InstinctsViewModel(InstinctService service)
+    // ─── Brain bridge state (UI bindings) ────────────────────────────
+    public bool BrainAvailable => _brainSync.IsBrainAvailable;
+    public string BrainStatusText => _brainSync.StatusText;
+
+    public InstinctsViewModel(InstinctService service, BrainSyncService brainSync)
     {
         _service = service;
+        _brainSync = brainSync;
         RefreshCommand = new RelayCommand(() => Refresh());
         SelectCommand = new RelayCommand<Instinct>(i => { if (i != null) Selected = i; });
         AcceptCommand = new RelayCommand(() =>
@@ -178,6 +186,32 @@ public class InstinctsViewModel : ViewModelBase
                 }
             }
             catch (Exception ex) { StatusMessage = $"Open folder failed: {ex.Message}"; }
+        });
+        SyncToBrainCommand = new AsyncRelayCommand(async () =>
+        {
+            if (_selected == null) return;
+            StatusMessage = $"Syncing '{Trim(_selected.Pattern)}' to brain...";
+            var result = await _brainSync.SyncInstinctAsync(_selected);
+            if (result.Success && !string.IsNullOrEmpty(result.NoteId))
+            {
+                _service.Persist(_selected); // persist the BrainNoteId
+                StatusMessage = $"✓ {result.Message}";
+                Refresh(preserveSelection: _selected.Id);
+            }
+            else
+            {
+                StatusMessage = $"⚠ {result.Message}";
+            }
+        });
+        SyncAllStrongCommand = new AsyncRelayCommand(async () =>
+        {
+            StatusMessage = "Syncing all STRONG instincts to brain...";
+            var (synced, skipped, failed) = await _brainSync.SyncAllStrongAsync(Instincts);
+            // Persist note ids that were written by SyncAllStrong
+            foreach (var i in Instincts.Where(x => x.SyncedToBrain))
+                _service.Persist(i);
+            StatusMessage = $"Brain sync: {synced} synced · {skipped} skipped · {failed} failed";
+            Refresh(preserveSelection: _selected?.Id);
         });
 
         Refresh();

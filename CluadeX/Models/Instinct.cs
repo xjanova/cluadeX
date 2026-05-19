@@ -49,6 +49,17 @@ public class Instinct
     public string? PromotedSkillPath { get; set; }
 
     /// <summary>
+    /// If pushed to the ObsidianX brain via MCP, this is the note id returned
+    /// by brain_create_note. Used both as "did we already sync this?" check
+    /// and to enable future updates via brain_append_note instead of creating
+    /// a duplicate.
+    /// </summary>
+    public string? BrainNoteId { get; set; }
+
+    /// <summary>Convenience for UI: true if instinct has been synced to brain.</summary>
+    public bool SyncedToBrain => !string.IsNullOrEmpty(BrainNoteId);
+
+    /// <summary>
     /// Confidence score 0..1.
     ///
     ///   confidence = success_rate × frequency_curve × recency_decay

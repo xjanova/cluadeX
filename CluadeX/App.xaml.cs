@@ -546,6 +546,10 @@ public partial class App : Application
         // Log page (Ctrl+9) AND captures global exceptions routed from
         // the dispatcher / appdomain / task handlers above.
         services.AddSingleton<DebugLogService>();
+        // BrainSyncService — bridge between local Instincts and the ObsidianX
+        // brain via MCP. Pushes STRONG instincts as `coding-lesson` notes so
+        // the knowledge survives across machines / Claude Code sessions.
+        services.AddSingleton<BrainSyncService>();
         // HexEditorService — binary file backend for both the Hex Editor view
         // and the AI agent's hex_* tools. Shared instance so AI patches show
         // up live in the UI and vice versa.

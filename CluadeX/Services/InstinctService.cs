@@ -247,6 +247,21 @@ public class InstinctService
         return filePath;
     }
 
+    /// <summary>
+    /// Persist the BrainNoteId (and any other field) that another service
+    /// updated on a live instinct reference. Used by BrainSyncService after
+    /// pushing a note to the brain.
+    /// </summary>
+    public void Persist(Instinct mutated)
+    {
+        var store = Load();
+        var hit = store.Instincts.FirstOrDefault(i => i.Id == mutated.Id);
+        if (hit == null) return;
+        hit.BrainNoteId = mutated.BrainNoteId;
+        hit.LastSeen = mutated.LastSeen;
+        Save(store);
+    }
+
     // ─── Export / Import ─────────────────────────────────────────────
 
     public void ExportTo(string path)
