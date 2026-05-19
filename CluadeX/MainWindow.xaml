@@ -863,13 +863,47 @@
                             </TextBlock>
                         </StackPanel>
 
-                        <!-- GPU info -->
+                        <!-- GPU info — VRAM + sparkline + temp chip -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
                                     Visibility="{Binding HasLiveGpuStats, Converter={StaticResource BoolVis}}">
+                            <StackPanel.ToolTip>
+                                <StackPanel Margin="4">
+                                    <TextBlock Text="GPU live monitor" FontWeight="Bold"
+                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                        <Run Text="Utilization: "/><Run Text="{Binding LiveGpuStats.GpuUtilization, Mode=OneWay}"/><Run Text="%"/>
+                                    </TextBlock>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                        <Run Text="Temperature: "/><Run Text="{Binding LiveGpuStats.TemperatureC, Mode=OneWay}"/><Run Text="°C"/>
+                                    </TextBlock>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                        <Run Text="VRAM: "/><Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </StackPanel.ToolTip>
                             <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                        Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
                                        Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center">
+                                <Run Text="{Binding GpuUsageDisplay, Mode=OneWay}"/>
+                            </TextBlock>
+                            <!-- Rolling sparkline of last ~48s of GPU utilization -->
+                            <Canvas Width="100" Height="18" Margin="8,0,0,0" ClipToBounds="True"
+                                    Background="#221E2056">
+                                <Polyline Points="{Binding GpuSparklinePoints}"
+                                          Stroke="{StaticResource NeonVioletBrush}"
+                                          StrokeThickness="1.4"
+                                          StrokeLineJoin="Round"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round">
+                                    <Polyline.Effect>
+                                        <DropShadowEffect Color="#A672FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
+                                    </Polyline.Effect>
+                                </Polyline>
+                            </Canvas>
+                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"
+                                       Margin="8,0,0,0">
                                 <Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
                             </TextBlock>
                             <Border Margin="6,0,0,0" Padding="5,1" CornerRadius="3"
