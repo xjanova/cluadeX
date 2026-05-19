@@ -64,13 +64,14 @@ public class AgentToolService
     private readonly HookService _hookService;
     private readonly MemoryService _memoryService;
     private readonly SkillService _skillService;
+    private readonly HexEditorService _hexEditor;
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
         WebFetchService webFetchService, TaskManagerService taskManager,
         McpServerManager mcpManager, HookService hookService, MemoryService memoryService,
-        SkillService skillService)
+        SkillService skillService, HexEditorService hexEditor)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -85,6 +86,7 @@ public class AgentToolService
         _hookService = hookService;
         _memoryService = memoryService;
         _skillService = skillService;
+        _hexEditor = hexEditor;
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -272,6 +274,13 @@ public class AgentToolService
                 ToolType.MemorySave => ExecuteMemorySave(call),
                 ToolType.MemoryList => ExecuteMemoryList(call),
                 ToolType.MemoryDelete => ExecuteMemoryDelete(call),
+
+                // Hex editor tools (binary file inspection + AI-driven patching)
+                ToolType.HexOpen => await ExecuteHexOpenAsync(call, ct),
+                ToolType.HexRead => await ExecuteHexReadAsync(call, ct),
+                ToolType.HexSearch => await ExecuteHexSearchAsync(call, ct),
+                ToolType.HexPatch => await ExecuteHexPatchAsync(call, ct),
+                ToolType.HexInfo => await ExecuteHexInfoAsync(call, ct),
 
                 _ => new ToolResult
                 {
@@ -461,6 +470,13 @@ public class AgentToolService
         schemas.Add(new() { Name = "memory_save", Description = "Save persistent memory that survives across sessions", InputSchema = MakeSchema(("name", "string", "Memory name", true), ("content", "string", "Memory content", true), ("type", "string", "user|feedback|project|reference", false), ("description", "string", "Short description", false), ("scope", "string", "global|project", false)) });
         schemas.Add(new() { Name = "memory_list", Description = "List all saved memories", InputSchema = MakeSchema() });
         schemas.Add(new() { Name = "memory_delete", Description = "Delete a saved memory", InputSchema = MakeSchema(("name", "string", "Memory name to delete", true), ("scope", "string", "global|project", false)) });
+
+        // Hex editor tools — binary file inspection + AI-driven patching
+        schemas.Add(new() { Name = "hex_info", Description = "Get binary file info: size, sha256, magic bytes, detected type. Does not load the file into the editor.", InputSchema = MakeSchema(("path", "string", "Absolute path to the file", true)) });
+        schemas.Add(new() { Name = "hex_open", Description = "Open a binary file in the Hex Editor UI (also returns file info). Use this when you want the user to see the file visually.", InputSchema = MakeSchema(("path", "string", "Absolute path to the file", true)) });
+        schemas.Add(new() { Name = "hex_read", Description = "Read raw bytes from a file at a specific offset. Returns hex and ascii representations. Reads in-memory if the file is already open in the editor, else opens it transparently.", InputSchema = MakeSchema(("path", "string", "Absolute file path (optional if a file is already open)", false), ("offset", "string", "Byte offset (decimal or 0x-prefixed hex)", true), ("length", "string", "Number of bytes to read (default 256)", false)) });
+        schemas.Add(new() { Name = "hex_search", Description = "Search for a hex or text pattern in a file. Returns up to 100 match offsets. Mode: 'hex' (e.g. 'DE AD BE EF') or 'text' (UTF-8 substring).", InputSchema = MakeSchema(("path", "string", "Absolute file path (optional if a file is already open)", false), ("pattern", "string", "Pattern to find", true), ("mode", "string", "hex | text | text_ci (case-insensitive)", false), ("max_results", "string", "Cap on results (default 100)", false)) });
+        schemas.Add(new() { Name = "hex_patch", Description = "Patch bytes at a specific offset (in-place, same length only). Creates an undo entry. Set save=true to write changes to disk (with .bak backup).", InputSchema = MakeSchema(("path", "string", "Absolute file path (optional if a file is already open)", false), ("offset", "string", "Byte offset (decimal or 0x-prefixed hex)", true), ("bytes", "string", "Replacement bytes as hex (e.g. 'DEADBEEF')", true), ("save", "string", "true to save to disk after patching", false), ("description", "string", "Short description of the patch (logged in undo)", false)) });
 
         // MCP server tools (dynamically discovered)
         if (features.McpServers)
@@ -942,6 +958,10 @@ public class AgentToolService
 
             // Memory tools — always available
             ToolType.MemorySave or ToolType.MemoryList or ToolType.MemoryDelete => true,
+
+            // Hex editor — always available; read tools are concurrent-safe, patches need permission
+            ToolType.HexOpen or ToolType.HexRead or ToolType.HexSearch
+            or ToolType.HexPatch or ToolType.HexInfo => true,
 
             // File/code tools — always available (core features)
             _ => true,
@@ -1999,6 +2019,12 @@ public class AgentToolService
             "memory_list" or "list_memories" or "memories" => ToolType.MemoryList,
             "memory_delete" or "delete_memory" or "forget" => ToolType.MemoryDelete,
 
+            "hex_open" or "open_hex" => ToolType.HexOpen,
+            "hex_read" or "read_hex" or "hex_dump" => ToolType.HexRead,
+            "hex_search" or "search_hex" or "hex_find" => ToolType.HexSearch,
+            "hex_patch" or "patch_hex" or "hex_write" => ToolType.HexPatch,
+            "hex_info" or "file_info" or "binary_info" => ToolType.HexInfo,
+
             _ => null,
         };
     }
@@ -2259,6 +2285,18 @@ public class AgentToolService
             Success = false,
             Error = error,
             Summary = $"Error: {error}",
+        };
+    }
+
+    private static ToolResult Ok(ToolCall call, string output, string? summary = null)
+    {
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = output,
+            Summary = summary ?? (output.Length > 100 ? output[..100] + "…" : output),
         };
     }
 
@@ -2893,5 +2931,193 @@ public class AgentToolService
         {
             proc?.Dispose();
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Hex Editor tools
+    // ─────────────────────────────────────────────────────────────────────
+    // These let the agent inspect and patch binary files surgically.
+    // hex_read and hex_search operate on a file path even if it's not open
+    // in the editor — they transparently load the file. hex_open is the
+    // explicit "show this in the UI" command. hex_patch and hex_open are
+    // gated by the standard permission system (write scope).
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>Event raised when the agent wants the user to see a file in the Hex Editor.</summary>
+    public event Action<string>? OnHexEditorRequested;
+
+    private static long ParseOffsetArg(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return 0;
+        s = s.Trim();
+        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return long.TryParse(s[2..], System.Globalization.NumberStyles.HexNumber, null, out var hex) ? hex : 0;
+        return long.TryParse(s, out var dec) ? dec : 0;
+    }
+
+    private async Task<bool> EnsureFileOpenAsync(string? path, CancellationToken ct)
+    {
+        // If editor already has THIS path open, no-op. Otherwise open it.
+        if (string.IsNullOrWhiteSpace(path))
+            return _hexEditor.HasFile;
+        if (_hexEditor.HasFile && string.Equals(_hexEditor.CurrentPath, path, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!File.Exists(path)) return false;
+        await _hexEditor.OpenAsync(path, ct: ct);
+        return true;
+    }
+
+    private async Task<ToolResult> ExecuteHexInfoAsync(ToolCall call, CancellationToken ct)
+    {
+        string path = call.GetArg("path");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return Fail(call, $"hex_info: file not found: {path}");
+        try
+        {
+            // Read first 64 bytes for magic + compute SHA-256 over the file
+            var fi = new FileInfo(path);
+            byte[] sample = new byte[Math.Min(64, fi.Length)];
+            await using (var fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                int read = 0;
+                while (read < sample.Length)
+                {
+                    int n = await fs.ReadAsync(sample.AsMemory(read, sample.Length - read), ct);
+                    if (n == 0) break;
+                    read += n;
+                }
+            }
+            var info = HexFileInfo.From(path, sample, fi.Length);
+            await using (var fs2 = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                info.ComputeSha256(fs2);
+            }
+            var sb = new StringBuilder();
+            sb.AppendLine($"path:         {info.Path}");
+            sb.AppendLine($"size:         {info.Size} bytes ({info.SizeDisplay})");
+            sb.AppendLine($"detected:     {info.DetectedType}");
+            sb.AppendLine($"magic (hex):  {info.MagicHex}");
+            sb.AppendLine($"sha256:       {info.Sha256}");
+            return Ok(call, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"hex_info failed: {ex.Message}");
+        }
+    }
+
+    private async Task<ToolResult> ExecuteHexOpenAsync(ToolCall call, CancellationToken ct)
+    {
+        string path = call.GetArg("path");
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return Fail(call, $"hex_open: file not found: {path}");
+        try
+        {
+            var info = await _hexEditor.OpenAsync(path, ct: ct);
+            // Tell the UI to navigate to the Hex Editor tab
+            try { OnHexEditorRequested?.Invoke(path); } catch { /* nav is best-effort */ }
+            var sb = new StringBuilder();
+            sb.AppendLine($"Opened {info.SizeDisplay} in the Hex Editor.");
+            sb.AppendLine($"  type:   {info.DetectedType}");
+            sb.AppendLine($"  magic:  {info.MagicHex}");
+            sb.AppendLine($"  sha256: {info.Sha256[..Math.Min(16, info.Sha256.Length)]}…");
+            sb.AppendLine("  (switch to the Hex Editor tab to see the file)");
+            return Ok(call, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"hex_open failed: {ex.Message}");
+        }
+    }
+
+    private async Task<ToolResult> ExecuteHexReadAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = call.GetArg("path");
+        long offset = ParseOffsetArg(call.GetArg("offset"));
+        int length = 256;
+        if (int.TryParse(call.GetArg("length", "256"), out var l)) length = Math.Clamp(l, 1, 4096);
+
+        if (!await EnsureFileOpenAsync(string.IsNullOrWhiteSpace(path) ? null : path, ct))
+            return Fail(call, "hex_read: no file open and no path given (or path not found)");
+
+        var (hex, ascii) = _hexEditor.ReadHexAndAscii(offset, length);
+        var sb = new StringBuilder();
+        sb.AppendLine($"file:   {_hexEditor.CurrentPath}");
+        sb.AppendLine($"offset: 0x{offset:X8} ({offset})");
+        sb.AppendLine($"length: {length}");
+        sb.AppendLine();
+        sb.AppendLine("HEX:");
+        sb.AppendLine(hex);
+        sb.AppendLine();
+        sb.AppendLine("ASCII:");
+        sb.AppendLine(ascii);
+        return Ok(call, sb.ToString());
+    }
+
+    private async Task<ToolResult> ExecuteHexSearchAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = call.GetArg("path");
+        string pattern = call.GetArg("pattern");
+        string modeStr = call.GetArg("mode", "hex").ToLowerInvariant();
+        int max = 100;
+        if (int.TryParse(call.GetArg("max_results", "100"), out var m)) max = Math.Clamp(m, 1, 5000);
+        if (string.IsNullOrWhiteSpace(pattern))
+            return Fail(call, "hex_search: 'pattern' is required");
+
+        if (!await EnsureFileOpenAsync(string.IsNullOrWhiteSpace(path) ? null : path, ct))
+            return Fail(call, "hex_search: no file open and no path given (or path not found)");
+
+        var mode = modeStr switch
+        {
+            "text" => HexEditorService.SearchMode.Text,
+            "text_ci" or "text_ignorecase" or "ci" => HexEditorService.SearchMode.TextCaseInsensitive,
+            _ => HexEditorService.SearchMode.Hex,
+        };
+        var hits = _hexEditor.Search(pattern, mode, maxResults: max);
+        if (hits.Count == 0) return Ok(call, $"No matches for pattern '{pattern}' in {_hexEditor.CurrentPath}");
+        var sb = new StringBuilder();
+        sb.AppendLine($"Found {hits.Count} match(es) in {_hexEditor.CurrentPath} (mode={modeStr}):");
+        foreach (var h in hits.Take(max))
+        {
+            sb.AppendLine($"  {h.OffsetHex}  ({h.Length} bytes)  preview: {h.Preview}");
+        }
+        return Ok(call, sb.ToString());
+    }
+
+    private async Task<ToolResult> ExecuteHexPatchAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = call.GetArg("path");
+        long offset = ParseOffsetArg(call.GetArg("offset"));
+        string bytesHex = call.GetArg("bytes");
+        bool save = string.Equals(call.GetArg("save", "false"), "true", StringComparison.OrdinalIgnoreCase);
+        string desc = call.GetArg("description", "agent patch");
+
+        if (string.IsNullOrWhiteSpace(bytesHex))
+            return Fail(call, "hex_patch: 'bytes' (hex string) is required");
+        if (!HexEditorService.TryParseHex(bytesHex, out var newBytes))
+            return Fail(call, $"hex_patch: invalid hex string '{bytesHex}'");
+
+        if (!await EnsureFileOpenAsync(string.IsNullOrWhiteSpace(path) ? null : path, ct))
+            return Fail(call, "hex_patch: no file open and no path given (or path not found)");
+
+        bool ok = _hexEditor.Patch(offset, newBytes, desc);
+        if (!ok) return Fail(call, $"hex_patch: out-of-range or no change at 0x{offset:X8} ({newBytes.Length} bytes)");
+
+        string saveNote;
+        if (save)
+        {
+            try
+            {
+                await _hexEditor.SaveAsync(createBackup: true, ct: ct);
+                saveNote = " · saved to disk (.bak backup written)";
+            }
+            catch (Exception ex)
+            {
+                saveNote = $" · save FAILED: {ex.Message}";
+            }
+        }
+        else saveNote = " · NOT saved — call hex_patch again with save=true, or use Save in the UI";
+
+        return Ok(call, $"Patched {newBytes.Length} byte(s) at 0x{offset:X8} of {_hexEditor.CurrentPath}{saveNote}");
     }
 }

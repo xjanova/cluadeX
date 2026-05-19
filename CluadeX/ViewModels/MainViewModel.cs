@@ -175,6 +175,9 @@ public class MainViewModel : ViewModelBase
     public TaskManagerViewModel TaskManagerVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
     public McpServersViewModel McpServersVM { get; }
+    public TimeMachineViewModel TimeMachineVM { get; }
+    public CodeEditorViewModel CodeEditorVM { get; }
+    public HexEditorViewModel HexEditorVM { get; }
 
     public ICommand NavigateToCommand { get; }
     public ICommand PetBuddyCommand { get; }
@@ -191,6 +194,10 @@ public class MainViewModel : ViewModelBase
         TaskManagerViewModel taskManagerVM,
         FeaturesViewModel featuresVM,
         McpServersViewModel mcpServersVM,
+        TimeMachineViewModel timeMachineVM,
+        HexEditorViewModel hexEditorVM,
+        CodeEditorViewModel codeEditorVM,
+        AgentToolService agentToolService,
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
@@ -207,6 +214,14 @@ public class MainViewModel : ViewModelBase
         TaskManagerVM = taskManagerVM;
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
+        TimeMachineVM = timeMachineVM;
+        HexEditorVM = hexEditorVM;
+        CodeEditorVM = codeEditorVM;
+
+        // When the AI agent invokes hex_open, switch the active page to the
+        // Hex Editor so the user can see the file the agent is working on.
+        agentToolService.OnHexEditorRequested += _ =>
+            App.Current?.Dispatcher.Invoke(() => NavigateTo("HexEditor"));
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
@@ -340,6 +355,9 @@ public class MainViewModel : ViewModelBase
             "Tasks" => TaskManagerVM,
             "Features" => FeaturesVM,
             "McpServers" => McpServersVM,
+            "TimeMachine" => TimeMachineVM,
+            "HexEditor" => HexEditorVM,
+            "Code" => CodeEditorVM,
             _ => ChatVM,
         };
 

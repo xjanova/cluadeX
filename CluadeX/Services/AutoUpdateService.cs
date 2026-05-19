@@ -26,7 +26,7 @@ public class AutoUpdateService
     {
         _settingsService = settingsService;
         _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CluadeX/2.0");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CluadeX/3.0");
         _httpClient.Timeout = TimeSpan.FromSeconds(30);
     }
 

@@ -466,6 +466,11 @@ public class CodeAgentService
         ["plan_mode"] = "Planning",
         ["agent_spawn"] = "Spawning agent",
         ["config"] = "Reading config",
+        ["hex_info"] = "Inspecting binary",
+        ["hex_open"] = "Opening in Hex Editor",
+        ["hex_read"] = "Reading bytes",
+        ["hex_search"] = "Searching binary",
+        ["hex_patch"] = "Patching bytes",
     };
 
     // Random spinner verbs for the thinking phase (inspired by Claude Code spinnerVerbs.ts)

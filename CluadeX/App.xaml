@@ -13,6 +13,14 @@
             <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
             <conv:NavItemConverter x:Key="NavConverter"/>
             <conv:NullToCollapsedConverter x:Key="NullToCollapsed"/>
+            <conv:DiffKindToBrushConverter x:Key="DiffKindBrush"/>
+            <conv:DiffKindToBackgroundConverter x:Key="DiffKindBg"/>
+            <conv:AiBoolToBrushConverter x:Key="AiBoolBrush"/>
+            <conv:AiBoolToAvatarConverter x:Key="AiBoolAvatar"/>
+            <conv:FileStatusToTextConverter x:Key="FileStatusText"/>
+            <conv:ContextUsageBrushConverter x:Key="CtxBrush"/>
+            <conv:ContextLedGateConverter x:Key="ContextLedGate"/>
+            <conv:HexToColorConverter x:Key="HexToColor"/>
         </ResourceDictionary>
     </Application.Resources>
 

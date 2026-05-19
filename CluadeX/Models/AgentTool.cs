@@ -78,6 +78,13 @@ public enum ToolType
     MemorySave,      // Save a memory entry
     MemoryList,      // List all memories
     MemoryDelete,    // Delete a memory
+
+    // Hex editor tools (binary file inspection + patching)
+    HexOpen,         // Open a binary file in the Hex Editor view + return file info
+    HexRead,         // Read bytes from a file at offset (returns hex + ascii)
+    HexSearch,       // Find a hex/text pattern in a file (returns offsets)
+    HexPatch,        // Patch bytes at offset (in-place, with undo, optionally save)
+    HexInfo,         // Get file size, sha256, magic bytes without loading into editor
 }
 
 /// <summary>

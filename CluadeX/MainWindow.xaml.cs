@@ -13,7 +13,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         _viewModel = viewModel;
         DataContext = viewModel;
-        NavChat.IsChecked = true;
+        // Activity bar uses RadioButtons bound via SelectedNavItem converter —
+        // initial selection comes from MainViewModel.SelectedNavItem ("Chat" default).
         StateChanged += OnStateChanged;
         Closing += OnClosing;
 

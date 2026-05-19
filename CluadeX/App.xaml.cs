@@ -511,6 +511,16 @@ public partial class App : Application
         // Co-Pilot Arena to delegate write/run/review tasks while keeping the
         // chat visible inside CluadeX.
         services.AddSingleton<McpHostService>();
+        // TimeMachineService — git-backed commit timeline + safe rewind with
+        // auto-stash and snapshot branches. Drives the Time Machine view.
+        services.AddSingleton<TimeMachineService>();
+        // CodeWorkspaceService — backs the Code Editor page (file tree,
+        // open/save tabs, git status enrichment for tree badges).
+        services.AddSingleton<CodeWorkspaceService>();
+        // HexEditorService — binary file backend for both the Hex Editor view
+        // and the AI agent's hex_* tools. Shared instance so AI patches show
+        // up live in the UI and vice versa.
+        services.AddSingleton<HexEditorService>();
 
         // Local GGUF backends — registered as singletons so AiProviderManager and
         // LocalGgufProvider share the same LlamaServerProvider instance (otherwise
@@ -528,6 +538,9 @@ public partial class App : Application
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
+        services.AddSingleton<TimeMachineViewModel>();
+        services.AddSingleton<HexEditorViewModel>();
+        services.AddSingleton<CodeEditorViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
