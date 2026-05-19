@@ -521,6 +521,10 @@ public partial class App : Application
         // (code-reviewer, security-reviewer, architect, ...). Built-in 10
         // plus discovery of ~/.cluadex/agents/*.md and project agents.
         services.AddSingleton<SubAgentService>();
+        // InstinctService — Sprint 2 #1: continuous learning. JSON-backed
+        // store of observed patterns, accept/reject voting, confidence
+        // scoring (success_rate × frequency × recency_decay), promote-to-skill.
+        services.AddSingleton<InstinctService>();
         // HexEditorService — binary file backend for both the Hex Editor view
         // and the AI agent's hex_* tools. Shared instance so AI patches show
         // up live in the UI and vice versa.
@@ -547,6 +551,7 @@ public partial class App : Application
         services.AddSingleton<CodeEditorViewModel>();
         services.AddSingleton<SubAgentsViewModel>();
         services.AddSingleton<SkillsViewModel>();
+        services.AddSingleton<InstinctsViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
