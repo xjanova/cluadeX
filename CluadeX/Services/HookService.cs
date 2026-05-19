@@ -263,6 +263,14 @@ public class HookService
         if (File.Exists(globalHooksFile))
             hooks.AddRange(ParseHooksFile(globalHooksFile));
 
+        // Bundled hooks projected by HookBundleService (~/.cluadex/hooks-bundled.json)
+        // Sprint 3 #2: enabled entries from the Hook Library catalog.
+        string bundledHooksFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".cluadex", "hooks-bundled.json");
+        if (File.Exists(bundledHooksFile))
+            hooks.AddRange(ParseHooksFile(bundledHooksFile));
+
         // Enabled plugin hooks (from {plugins_dir}/{plugin_id}/hooks.json)
         try
         {
