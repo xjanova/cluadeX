@@ -23,6 +23,8 @@ public class CodeAgentService
     private readonly LocalizationService _localizationService;
     private readonly ActivationService _activationService;
     private readonly MemoryService _memoryService;
+    private readonly HookService? _hookService;
+    private readonly CostTrackingService? _costTrackingService;
 
     private const int MaxAgentIterations = 15;
 
@@ -560,7 +562,9 @@ public class CodeAgentService
         ContextMemoryService contextMemoryService,
         LocalizationService localizationService,
         ActivationService activationService,
-        MemoryService memoryService)
+        MemoryService memoryService,
+        HookService? hookService = null,
+        CostTrackingService? costTrackingService = null)
     {
         _providerManager = providerManager;
         _codeExecutionService = codeExecutionService;
@@ -572,6 +576,8 @@ public class CodeAgentService
         _localizationService = localizationService;
         _activationService = activationService;
         _memoryService = memoryService;
+        _hookService = hookService;
+        _costTrackingService = costTrackingService;
     }
 
     /// <summary>Gets system prompt with or without tool definitions based on whether a project is open.</summary>
@@ -1303,7 +1309,27 @@ public class CodeAgentService
 
             // Microcompact — shrink old tool results (keep recent turns verbatim).
             // Runs only when the conversation has accumulated enough turns for it to matter.
-            var outboundMessages = _settingsService.Settings.MicrocompactEnabled && nativeMessages.Count > 6
+            bool willCompact = _settingsService.Settings.MicrocompactEnabled && nativeMessages.Count > 6;
+
+            // PreCompact hook fires once per loop iteration where compaction would run,
+            // BEFORE the trimming so a snapshot hook can capture the full history.
+            if (willCompact && _hookService != null)
+            {
+                int approxTokens = nativeMessages.Sum(m =>
+                    m.Content.Sum(c => (c.Text?.Length ?? 0) / 4));
+                try
+                {
+                    await _hookService.ExecutePreCompactHooksAsync(
+                        new HookSessionContext
+                        {
+                            MessageCount = nativeMessages.Count,
+                            TokenEstimate = approxTokens,
+                        }, ct);
+                }
+                catch { /* best-effort */ }
+            }
+
+            var outboundMessages = willCompact
                 ? MicrocompactNativeMessages(nativeMessages,
                     _settingsService.Settings.MicrocompactKeepRecentTurns,
                     _settingsService.Settings.MicrocompactMaxOldResultChars)
@@ -1534,6 +1560,26 @@ public class CodeAgentService
         {
             result.StopReason = "max_iterations";
             result.FinalResponse = result.Steps.LastOrDefault()?.ResponseText ?? "Agent reached maximum iterations.";
+        }
+
+        // Stop hook — runs after the agentic loop returns, with session telemetry.
+        if (_hookService != null)
+        {
+            try
+            {
+                decimal totalCost = _costTrackingService?.TotalCostUsd ?? 0;
+                int totalTokens = (_costTrackingService?.TotalInputTokens ?? 0)
+                                + (_costTrackingService?.TotalOutputTokens ?? 0);
+                await _hookService.ExecuteStopHooksAsync(
+                    new HookSessionContext
+                    {
+                        Model = _providerManager.ActiveProvider?.GetType().Name ?? "unknown",
+                        SessionCostUsd = (double)totalCost,
+                        SessionTokens = totalTokens,
+                        TurnCount = result.TurnCount,
+                    }, ct);
+            }
+            catch { /* best-effort */ }
         }
 
         progress?.Report("Done");

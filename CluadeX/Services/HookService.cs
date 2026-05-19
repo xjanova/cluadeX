@@ -7,26 +7,35 @@ namespace CluadeX.Services;
 
 /// <summary>
 /// Hook execution service modeled after Claude Code's hooks system.
-/// Supports PreToolUse and PostToolUse hooks that run shell commands
-/// before/after tool execution.
+/// Supports five phases:
+///   - PreToolUse — before a tool runs (can block by returning non-zero)
+///   - PostToolUse — after a tool runs (informational, never blocks)
+///   - Stop — after the agentic loop returns its final response
+///   - SessionStart — once at app startup after services initialize
+///   - PreCompact — right before microcompaction strips/truncates history
 ///
 /// Hook sources:
 ///   - .cluadex/hooks.json (project-specific)
 ///   - ~/.cluadex/hooks.json (user-global)
+///   - ~/.cluadex/hooks-bundled.json (managed by HookBundleService — toggleable library)
 ///   - Enabled plugin hooks.json files
 ///
 /// Hook config format:
 /// {
 ///   "hooks": {
-///     "PreToolUse": [
-///       { "matcher": "run_command", "command": "echo 'running command'" },
-///       { "matcher": "write_file", "command": "eslint --fix {path}" }
-///     ],
-///     "PostToolUse": [
-///       { "matcher": "edit_file", "command": "prettier --write {path}" }
-///     ]
+///     "PreToolUse":  [ { "matcher": "run_command", "command": "powershell -File ..." } ],
+///     "PostToolUse": [ { "matcher": "edit_file",   "command": "prettier --write {path}" } ],
+///     "Stop":        [ { "matcher": "*", "command": "powershell -File stop-pattern-extract.ps1 -Cost {cost}" } ],
+///     "SessionStart":[ { "matcher": "*", "command": "powershell -File sessionstart-load-handoff.ps1" } ],
+///     "PreCompact":  [ { "matcher": "*", "command": "powershell -File precompact-save-snapshot.ps1" } ]
 ///   }
 /// }
+///
+/// Available substitution tokens (sanitized to prevent shell injection):
+///   - {tool} {path} {command} {arguments}          — PreToolUse / PostToolUse
+///   - {model} {cost} {tokens} {turn_count}         — Stop
+///   - {cwd}                                        — SessionStart / any
+///   - {message_count} {token_estimate}             — PreCompact
 /// </summary>
 public class HookService
 {
@@ -52,7 +61,7 @@ public class HookService
         var hooks = GetHooksForPhase("PreToolUse", call.ToolName);
         foreach (var hook in hooks)
         {
-            var result = await RunHookAsync(hook, call, ct);
+            var result = await RunHookAsync(hook, BuildToolContext(call), ct);
             if (!result.Success)
                 return result; // Block tool execution
         }
@@ -67,10 +76,52 @@ public class HookService
         {
             try
             {
-                await RunHookAsync(hook, call, ct);
+                await RunHookAsync(hook, BuildToolContext(call), ct);
             }
             catch { /* post-tool hooks are best-effort */ }
         }
+    }
+
+    /// <summary>
+    /// Execute Stop hooks after the agentic loop returns. Best-effort — never throws.
+    /// Pattern-extract hooks feed InstinctService.RecordObservation via stdout JSON.
+    /// </summary>
+    public async Task ExecuteStopHooksAsync(HookSessionContext context, CancellationToken ct = default)
+    {
+        var hooks = GetHooksForPhase("Stop", "*");
+        foreach (var hook in hooks)
+        {
+            try { await RunHookAsync(hook, context, ct); }
+            catch { /* best-effort */ }
+        }
+    }
+
+    /// <summary>Execute SessionStart hooks. Fired once on app startup after services build.</summary>
+    public async Task ExecuteSessionStartHooksAsync(HookSessionContext context, CancellationToken ct = default)
+    {
+        var hooks = GetHooksForPhase("SessionStart", "*");
+        foreach (var hook in hooks)
+        {
+            try { await RunHookAsync(hook, context, ct); }
+            catch { /* best-effort */ }
+        }
+    }
+
+    /// <summary>Execute PreCompact hooks. Fired right before microcompaction trims history.</summary>
+    public async Task ExecutePreCompactHooksAsync(HookSessionContext context, CancellationToken ct = default)
+    {
+        var hooks = GetHooksForPhase("PreCompact", "*");
+        foreach (var hook in hooks)
+        {
+            try { await RunHookAsync(hook, context, ct); }
+            catch { /* best-effort */ }
+        }
+    }
+
+    private HookSessionContext BuildToolContext(ToolCall call)
+    {
+        var ctx = new HookSessionContext { ToolCall = call };
+        return ctx;
     }
 
     /// <summary>Get hooks matching a phase and tool name.</summary>
@@ -102,24 +153,44 @@ public class HookService
     }
 
     /// <summary>Run a hook command and return result.</summary>
-    private async Task<HookResult> RunHookAsync(HookDefinition hook, ToolCall call, CancellationToken ct)
+    private async Task<HookResult> RunHookAsync(HookDefinition hook, HookSessionContext context, CancellationToken ct)
     {
         string command = hook.Command;
+        var call = context.ToolCall;
 
-        // Variable substitution — sanitize values to prevent command injection
-        // Supports {tool}, {path}, {command}, {arguments} (full JSON of all args)
-        command = command.Replace("{tool}", SanitizeShellArg(call.ToolName));
-        command = command.Replace("{path}", SanitizeShellArg(call.GetArg("path", "")));
-        command = command.Replace("{command}", SanitizeShellArg(call.GetArg("command", "")));
-        if (command.Contains("{arguments}"))
+        // ── Tool-context substitutions (PreToolUse / PostToolUse) ───────
+        if (call != null)
         {
-            try
+            command = command.Replace("{tool}", SanitizeShellArg(call.ToolName));
+            command = command.Replace("{path}", SanitizeShellArg(call.GetArg("path", "")));
+            command = command.Replace("{command}", SanitizeShellArg(call.GetArg("command", "")));
+            if (command.Contains("{arguments}"))
             {
-                string argsJson = System.Text.Json.JsonSerializer.Serialize(call.Arguments);
-                command = command.Replace("{arguments}", SanitizeShellArg(argsJson));
+                try
+                {
+                    string argsJson = System.Text.Json.JsonSerializer.Serialize(call.Arguments);
+                    command = command.Replace("{arguments}", SanitizeShellArg(argsJson));
+                }
+                catch { command = command.Replace("{arguments}", "{}"); }
             }
-            catch { command = command.Replace("{arguments}", "{}"); }
         }
+        else
+        {
+            // Clear unsubstituted tool tokens so a hook config that references them
+            // in the wrong phase doesn't leak the literal placeholder into the shell.
+            command = command.Replace("{tool}", "").Replace("{path}", "")
+                             .Replace("{command}", "").Replace("{arguments}", "{}");
+        }
+
+        // ── Session-context substitutions (Stop / SessionStart / PreCompact) ─
+        command = command.Replace("{model}", SanitizeShellArg(context.Model ?? ""));
+        command = command.Replace("{cost}", SanitizeShellArg(context.SessionCostUsd?.ToString("F4") ?? "0"));
+        command = command.Replace("{tokens}", SanitizeShellArg(context.SessionTokens?.ToString() ?? "0"));
+        command = command.Replace("{turn_count}", SanitizeShellArg(context.TurnCount?.ToString() ?? "0"));
+        command = command.Replace("{message_count}", SanitizeShellArg(context.MessageCount?.ToString() ?? "0"));
+        command = command.Replace("{token_estimate}", SanitizeShellArg(context.TokenEstimate?.ToString() ?? "0"));
+        command = command.Replace("{cwd}", SanitizeShellArg(
+            _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : Environment.CurrentDirectory));
 
         Process? proc = null;
         try
@@ -301,4 +372,24 @@ public class HookResult
     public bool Success { get; set; }
     public string Message { get; set; } = "";
     public int ExitCode { get; set; }
+}
+
+/// <summary>
+/// Context passed to a hook when it runs. Different phases populate different
+/// fields. The {token} substitutions in HookDefinition.Command pull from here.
+/// </summary>
+public class HookSessionContext
+{
+    // Tool-phase fields (PreToolUse / PostToolUse)
+    public ToolCall? ToolCall { get; set; }
+
+    // Stop-phase fields
+    public string? Model { get; set; }
+    public double? SessionCostUsd { get; set; }
+    public int? SessionTokens { get; set; }
+    public int? TurnCount { get; set; }
+
+    // PreCompact-phase fields
+    public int? MessageCount { get; set; }
+    public int? TokenEstimate { get; set; }
 }

@@ -108,6 +108,32 @@ public partial class App : Application
                 System.Diagnostics.Debug.WriteLine($"McpHostService start failed: {ex.Message}");
                 dbg?.Error("MCP", "McpHostService start failed", ex);
             }
+
+            // ─── HookBundleService: deploy bundled .ps1 scripts + project enabled set ───
+            // Resolving the service triggers its ctor which copies/refreshes the
+            // ~/.cluadex/hooks-bundled/ directory and writes hooks-bundled.json.
+            try
+            {
+                _ = _serviceProvider.GetRequiredService<HookBundleService>();
+                dbg?.Info("Hooks", "HookBundleService initialised");
+            }
+            catch (Exception ex)
+            {
+                dbg?.Warn("Hooks", "HookBundleService init failed", ex);
+            }
+
+            // ─── SessionStart hook ───
+            // Fire once at startup. Best-effort: hook failures must not block app.
+            try
+            {
+                var hooks = _serviceProvider.GetRequiredService<HookService>();
+                await hooks.ExecuteSessionStartHooksAsync(new HookSessionContext());
+                dbg?.Debug("Hooks", "SessionStart hooks fired");
+            }
+            catch (Exception ex)
+            {
+                dbg?.Warn("Hooks", "SessionStart hooks threw", ex);
+            }
         });
     }
 
@@ -553,6 +579,11 @@ public partial class App : Application
         // SecurityShieldService — Sprint 3 #1: static-analysis scanner with
         // 25 ship-1 OWASP-style rules. Drives the SecurityShield page.
         services.AddSingleton<SecurityShieldService>();
+        // HookBundleService — Sprint 3 #2: 15 bundled .ps1 hook scripts.
+        // On first resolve, deploys scripts to ~/.cluadex/hooks-bundled/ and
+        // projects the enabled set into ~/.cluadex/hooks-bundled.json which
+        // HookService reads alongside the user's own hooks.json.
+        services.AddSingleton<HookBundleService>();
         // HexEditorService — binary file backend for both the Hex Editor view
         // and the AI agent's hex_* tools. Shared instance so AI patches show
         // up live in the UI and vice versa.
@@ -582,6 +613,7 @@ public partial class App : Application
         services.AddSingleton<InstinctsViewModel>();
         services.AddSingleton<DebugLogViewModel>();
         services.AddSingleton<SecurityShieldViewModel>();
+        services.AddSingleton<HookLibraryViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();

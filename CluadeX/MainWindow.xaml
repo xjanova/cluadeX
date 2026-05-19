@@ -99,6 +99,9 @@
         <DataTemplate DataType="{x:Type vm:SecurityShieldViewModel}">
             <views:SecurityShieldView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:HookLibraryViewModel}">
+            <views:HookLibraryView/>
+        </DataTemplate>
     </Window.Resources>
 
     <Border x:Name="RootBorder">
@@ -485,6 +488,12 @@
                                              GroupName="Activity"
                                              ToolTip="SecurityShield — OWASP-style scanner (25 rules)"
                                              AutomationProperties.Name="SecurityShield"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE9F5;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=HookLibrary, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="HookLibrary"
+                                             GroupName="Activity"
+                                             ToolTip="Hook Library — 15 bundled .ps1 hooks (PreToolUse/PostToolUse/Stop/SessionStart/PreCompact)"
+                                             AutomationProperties.Name="Hook Library"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8F1;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Models"

@@ -9,7 +9,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.11</Version>
+    <Version>3.0.12</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -26,6 +26,18 @@
   <ItemGroup>
     <Resource Include="Assets\logo.png" />
     <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+
+  <!--
+    Sprint 3 #2 — Hook Script Library. Ship 15 bundled .ps1 hook scripts
+    next to the .exe under Resources/HooksBundled/. HookBundleService copies
+    them to %USERPROFILE%/.cluadex/hooks-bundled/ on first run.
+  -->
+  <ItemGroup>
+    <Content Include="Resources\HooksBundled\*.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>Resources\HooksBundled\%(Filename)%(Extension)</Link>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

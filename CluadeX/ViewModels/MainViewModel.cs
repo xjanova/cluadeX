@@ -182,6 +182,7 @@ public class MainViewModel : ViewModelBase
     public InstinctsViewModel InstinctsVM { get; }
     public DebugLogViewModel DebugLogVM { get; }
     public SecurityShieldViewModel SecurityShieldVM { get; }
+    public HookLibraryViewModel HookLibraryVM { get; }
     public HexEditorViewModel HexEditorVM { get; }
 
     public ICommand NavigateToCommand { get; }
@@ -207,6 +208,7 @@ public class MainViewModel : ViewModelBase
         InstinctsViewModel instinctsVM,
         DebugLogViewModel debugLogVM,
         SecurityShieldViewModel securityShieldVM,
+        HookLibraryViewModel hookLibraryVM,
         AgentToolService agentToolService,
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
@@ -232,6 +234,7 @@ public class MainViewModel : ViewModelBase
         InstinctsVM = instinctsVM;
         DebugLogVM = debugLogVM;
         SecurityShieldVM = securityShieldVM;
+        HookLibraryVM = hookLibraryVM;
 
         // When the AI agent invokes hex_open, switch the active page to the
         // Hex Editor so the user can see the file the agent is working on.
@@ -378,6 +381,7 @@ public class MainViewModel : ViewModelBase
             "Instincts" => InstinctsVM,
             "DebugLog" => DebugLogVM,
             "SecurityShield" => SecurityShieldVM,
+            "HookLibrary" => HookLibraryVM,
             _ => ChatVM,
         };
 
