@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text.Json;
 using CluadeX.Models;
@@ -12,8 +13,10 @@ public sealed class McpServerManager : IDisposable
 {
     private readonly SettingsService _settingsService;
     private readonly McpToolRegistry _toolRegistry;
-    private readonly Dictionary<string, McpStdioTransport> _transports = new();
-    private readonly Dictionary<string, McpServerConfig> _configs = new();
+    // Concurrent: touched by the UI thread (start/stop), the agent thread (CallTool reads), and the
+    // server read-loop/notification callback thread — plain Dictionary structural writes raced reads.
+    private readonly ConcurrentDictionary<string, McpStdioTransport> _transports = new();
+    private readonly ConcurrentDictionary<string, McpServerConfig> _configs = new();
     private bool _disposed;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -104,7 +107,7 @@ public sealed class McpServerManager : IDisposable
     }
 
     /// <summary>Remove a server configuration by name.</summary>
-    public bool RemoveConfig(string name) => _configs.Remove(name);
+    public bool RemoveConfig(string name) => _configs.TryRemove(name, out _);
 
     /// <summary>Start all enabled MCP servers.</summary>
     public async Task StartAllEnabledAsync(CancellationToken ct = default)
@@ -130,7 +133,7 @@ public sealed class McpServerManager : IDisposable
         {
             await existing.StopAsync();
             existing.Dispose();
-            _transports.Remove(name);
+            _transports.TryRemove(name, out _);
         }
 
         try
@@ -168,7 +171,7 @@ public sealed class McpServerManager : IDisposable
                 OnServerLog?.Invoke(name, $"Initialize failed: {errorMsg}");
                 await transport.StopAsync();
                 transport.Dispose();
-                _transports.Remove(name);
+                _transports.TryRemove(name, out _);
                 return false;
             }
 
@@ -192,7 +195,7 @@ public sealed class McpServerManager : IDisposable
                 stderrHint = timedOut.LastStartupError.Trim();
                 await timedOut.StopAsync();
                 timedOut.Dispose();
-                _transports.Remove(name);
+                _transports.TryRemove(name, out _);
             }
             string detail = !string.IsNullOrEmpty(stderrHint)
                 ? $"Handshake timed out. Server stderr:\n{stderrHint}"
@@ -208,7 +211,7 @@ public sealed class McpServerManager : IDisposable
             {
                 await failed.StopAsync();
                 failed.Dispose();
-                _transports.Remove(name);
+                _transports.TryRemove(name, out _);
             }
 
             return false;
@@ -222,7 +225,7 @@ public sealed class McpServerManager : IDisposable
         {
             await transport.StopAsync();
             transport.Dispose();
-            _transports.Remove(name);
+            _transports.TryRemove(name, out _);
             _toolRegistry.RemoveServer(name);
             OnToolsChanged?.Invoke();
             OnServerLog?.Invoke(name, "Stopped");

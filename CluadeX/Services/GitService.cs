@@ -189,11 +189,13 @@ public class GitService
 
     private static bool IsValidBranchName(string name)
         => !string.IsNullOrWhiteSpace(name) && name.Length < 256
-           && BranchNameRegex.IsMatch(name) && !name.Contains("..");
+           && BranchNameRegex.IsMatch(name) && !name.Contains("..")
+           && !name.StartsWith('-'); // a leading '-' makes git parse the ref as an option
 
     private static bool IsValidGitArg(string arg)
         => !string.IsNullOrWhiteSpace(arg) && !arg.Contains(';') && !arg.Contains('|')
-           && !arg.Contains('&') && !arg.Contains('`') && !arg.Contains('$');
+           && !arg.Contains('&') && !arg.Contains('`') && !arg.Contains('$')
+           && !arg.StartsWith('-'); // reject option-injection (e.g. "-D", "--upload-pack=...")
 
     // ═══════════════════════════════════════════
     // Diff & Log

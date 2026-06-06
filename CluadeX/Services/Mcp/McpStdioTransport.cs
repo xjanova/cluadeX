@@ -19,6 +19,10 @@ public sealed class McpStdioTransport : IDisposable
     private bool _disposed;
     private readonly Dictionary<int, TaskCompletionSource<JsonRpcResponse>> _pending = new();
     private readonly object _lock = new();
+    // Serializes writes to the server's stdin. StreamWriter is NOT safe for concurrent WriteLineAsync,
+    // and a notification-triggered tools/list can overlap an in-flight tools/call → corrupt JSON-RPC
+    // framing → mystery request timeouts.
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private CancellationTokenSource? _readCts;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -135,7 +139,9 @@ public sealed class McpStdioTransport : IDisposable
             var request = new JsonRpcRequest { Id = id, Method = method, Params = parameters };
             string json = JsonSerializer.Serialize(request, JsonOpts);
 
-            await _writer!.WriteLineAsync(json.AsMemory(), ct);
+            await _writeLock.WaitAsync(ct);
+            try { await _writer!.WriteLineAsync(json.AsMemory(), ct); }
+            finally { _writeLock.Release(); }
 
             // Wait with timeout
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -161,7 +167,9 @@ public sealed class McpStdioTransport : IDisposable
 
         var notification = new JsonRpcNotification { Method = method, Params = parameters };
         string json = JsonSerializer.Serialize(notification, JsonOpts);
-        await _writer!.WriteLineAsync(json.AsMemory(), ct);
+        await _writeLock.WaitAsync(ct);
+        try { await _writer!.WriteLineAsync(json.AsMemory(), ct); }
+        finally { _writeLock.Release(); }
     }
 
     /// <summary>Gracefully stop the server.</summary>

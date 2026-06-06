@@ -88,6 +88,12 @@ public class AsyncRelayCommand : ICommand
         _isExecuting = true;
         CommandManager.InvalidateRequerySuggested();
         try { await _execute(); }
+        catch (Exception ex)
+        {
+            // Safety net: never let an async-void command exception escape unhandled (it would hit the
+            // global crash dialog). Individual commands handle their own user-facing errors.
+            System.Diagnostics.Debug.WriteLine($"[AsyncRelayCommand] unhandled: {ex}");
+        }
         finally
         {
             _isExecuting = false;
@@ -122,6 +128,10 @@ public class AsyncRelayCommand<T> : ICommand
         _isExecuting = true;
         CommandManager.InvalidateRequerySuggested();
         try { await _execute((T?)parameter); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[AsyncRelayCommand<{typeof(T).Name}>] unhandled: {ex}");
+        }
         finally
         {
             _isExecuting = false;

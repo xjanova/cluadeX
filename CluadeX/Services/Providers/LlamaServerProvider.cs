@@ -55,6 +55,10 @@ public class LlamaServerProvider : ApiProviderBase
         // Stop existing server
         await StopServerAsync();
 
+        // Pick a free port (8087 may be held by another app or a stale llama-server). Binding a
+        // taken port makes llama-server die on startup and surface only a vague timeout, so probe first.
+        _port = FindFreePort(8087);
+
         string? serverExe = FindServerExe();
         if (serverExe == null)
             throw new FileNotFoundException(
@@ -174,19 +178,29 @@ public class LlamaServerProvider : ApiProviderBase
             // llama-server emits structured lines during weight loading; we mine them for
             // a percent counter so the UI has something to show beyond a static spinner.
             string fileName2 = Path.GetFileName(modelPath);
+            var stderrProc = _serverProcess; // capture so a concurrent StopServerAsync nulling the field can't NRE us mid-read
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    while (_serverProcess is { HasExited: false })
+                    var stderr = stderrProc.StandardError;
+                    string? line;
+                    // ReadLineAsync returns null at EOF (the server closed stderr) — that IS the exit signal.
+                    // The old code did `continue` on null, which busy-spun the CPU until HasExited flipped.
+                    while ((line = await stderr.ReadLineAsync(ct)) != null)
                     {
-                        string? line = await _serverProcess.StandardError.ReadLineAsync(ct);
-                        if (line == null) continue;
                         System.Diagnostics.Debug.WriteLine($"[llama-server] {line}");
                         ReportLoadProgress(line, progress, fileName2);
                     }
                 }
-                catch { }
+                catch (OperationCanceledException) { /* load cancelled — expected */ }
+                catch (ObjectDisposedException) { /* process disposed during shutdown — expected */ }
+                catch (Exception ex)
+                {
+                    // Never swallow silently: a broken stderr pipe used to vanish here, leaving the UI
+                    // with no clue the progress reader had died.
+                    System.Diagnostics.Debug.WriteLine($"[llama-server stderr reader stopped] {ex.GetType().Name}: {ex.Message}");
+                }
             }, ct);
 
             // Wait for server to become ready (health check)
@@ -292,12 +306,11 @@ public class LlamaServerProvider : ApiProviderBase
             try
             {
                 using var response = await _httpClient.GetAsync($"{ServerUrl}/health", ct);
+                // llama-server returns 503 ("loading model") until the weights are resident, then 200.
+                // The HTTP status IS the readiness signal — string-matching the body was brittle across
+                // server versions that changed the {"status":"ok"} shape.
                 if (response.IsSuccessStatusCode)
-                {
-                    var json = await response.Content.ReadAsStringAsync(ct);
-                    if (json.Contains("ok", StringComparison.OrdinalIgnoreCase))
-                        return true;
-                }
+                    return true;
             }
             catch (HttpRequestException) { /* Server not ready yet */ }
 
@@ -409,10 +422,22 @@ public class LlamaServerProvider : ApiProviderBase
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // A malformed/truncated SSE chunk used to vanish here, making the stream look like it
+                // just stopped mid-sentence. Log and keep reading — the next chunk is usually intact.
+                System.Diagnostics.Debug.WriteLine($"[llama-server SSE chunk skipped] {ex.Message}");
+            }
 
             if (!string.IsNullOrEmpty(content))
-                yield return content;
+            {
+                // Local chat models (DeepSeek R1 Distill, Qwen, …) sometimes leak their ChatML control
+                // tokens into content and even begin a fake next turn ("…GPT-4<|im_end|><|im_start|>").
+                // Cut at the first turn-end marker and strip any stray control tokens before display.
+                var (clean, stop) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(content);
+                if (!string.IsNullOrEmpty(clean)) yield return clean;
+                if (stop) yield break;
+            }
         }
     }
 
@@ -426,6 +451,57 @@ public class LlamaServerProvider : ApiProviderBase
         await foreach (var token in ChatAsync(history, userMessage, systemPrompt, ct))
             sb.Append(token);
         return sb.ToString();
+    }
+
+    // ─── Native tool use (OpenAI-style function calling) ───
+    // Gated on a setting so users with non-tool GGUFs can fall back to the [ACTION:] text loop.
+    public override bool SupportsNativeToolUse => _settingsService.Settings.LocalNativeToolUseEnabled;
+
+    /// <summary>
+    /// Native tool-calling via llama-server's OpenAI-compatible endpoint. Requires the loaded model's
+    /// chat template to support tools (Qwen2.5-Coder, Llama 3.x, Hermes, Mistral…) — we already start
+    /// the server with --jinja so the template is honoured. Non-streaming: the agent loop consumes one
+    /// response per turn, exactly like the Anthropic path.
+    /// </summary>
+    public override async Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools, CancellationToken ct = default)
+    {
+        if (!IsServerRunning || !IsReady)
+            return new NativeToolResponse { TextContent = "llama-server is not running. Load a model first.", StopReason = "end_turn" };
+
+        var settings = _settingsService.Settings;
+        var requestObj = new Dictionary<string, object>
+        {
+            ["model"] = "local",
+            ["messages"] = BuildOpenAiToolMessages(messages, systemPrompt),
+            ["max_tokens"] = settings.MaxTokens,
+            ["temperature"] = (double)settings.Temperature,
+            ["top_p"] = (double)settings.TopP,
+            ["stream"] = false,
+        };
+        if (tools.Count > 0)
+        {
+            requestObj["tools"] = BuildOpenAiToolDefs(tools);
+            requestObj["tool_choice"] = "auto";
+        }
+
+        var body = JsonSerializer.Serialize(requestObj);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            return new NativeToolResponse
+            {
+                TextContent = $"llama-server tool call failed ({(int)response.StatusCode}): {(error.Length > 300 ? error[..300] : error)}",
+                StopReason = "end_turn",
+            };
+        }
+
+        var responseText = await response.Content.ReadAsStringAsync(ct);
+        return ParseOpenAiToolResponse(responseText);
     }
 
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)
@@ -473,14 +549,40 @@ public class LlamaServerProvider : ApiProviderBase
             using var proc = Process.Start(psi);
             if (proc != null)
             {
-                string? result = proc.StandardOutput.ReadLine();
-                proc.WaitForExit(3000);
+                string? result = proc.StandardOutput.ReadLine()?.Trim();
+                if (!proc.WaitForExit(3000))
+                {
+                    // `where` hung (rare, but a stuck handle blocks the using-dispose) — don't orphan it.
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                }
                 if (!string.IsNullOrEmpty(result) && File.Exists(result)) return result;
             }
         }
         catch { }
 
         return null;
+    }
+
+    /// <summary>
+    /// Pick an available loopback TCP port starting from <paramref name="preferred"/>. llama-server
+    /// binds exactly one port; if 8087 is already held (another app, or a stale llama-server that
+    /// didn't die cleanly), the bind fails and the model "load" just times out with a vague error.
+    /// Probing first turns that silent hang into a clean port hop.
+    /// </summary>
+    private static int FindFreePort(int preferred)
+    {
+        for (int port = preferred; port < preferred + 64; port++)
+        {
+            try
+            {
+                var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+                listener.Start();
+                listener.Stop();
+                return port;
+            }
+            catch (System.Net.Sockets.SocketException) { /* in use — try the next port */ }
+        }
+        return preferred; // give up probing; let llama-server surface the real bind error
     }
 
     public override void Dispose()

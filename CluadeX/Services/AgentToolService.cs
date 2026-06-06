@@ -11,7 +11,7 @@ namespace CluadeX.Services;
 /// Parses tool calls from model output and executes them via FileSystemService / CodeExecutionService.
 /// Tool format: [ACTION: tool_name]\nkey: value\n[/ACTION]
 /// </summary>
-public class AgentToolService
+public class AgentToolService : IDisposable
 {
     private readonly FileSystemService _fileSystem;
     private readonly CodeExecutionService _codeExecution;
@@ -59,13 +59,18 @@ public class AgentToolService
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     /// <summary>Raised when a tool requires user confirmation (PermAction.Ask).</summary>
-    public event Func<string, string, Task<bool>>? OnPermissionRequired;
+    public event Func<PermissionRequestInfo, Task<bool>>? OnPermissionRequired;
 
     private readonly HookService _hookService;
     private readonly MemoryService _memoryService;
     private readonly SkillService _skillService;
     private readonly HexEditorService _hexEditor;
     private readonly SubAgentService _subAgentService;
+    private readonly BrainSyncService? _brainSync;
+    private readonly LspClientService? _lspClient;
+    private readonly RepoMapService? _repoMap;
+    private readonly EmbeddingService? _embeddingService;
+    private readonly InstinctService? _instinctService;
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
@@ -73,7 +78,12 @@ public class AgentToolService
         WebFetchService webFetchService, TaskManagerService taskManager,
         McpServerManager mcpManager, HookService hookService, MemoryService memoryService,
         SkillService skillService, HexEditorService hexEditor,
-        SubAgentService subAgentService)
+        SubAgentService subAgentService,
+        BrainSyncService? brainSync = null,
+        LspClientService? lspClient = null,
+        RepoMapService? repoMap = null,
+        EmbeddingService? embeddingService = null,
+        InstinctService? instinctService = null)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -90,6 +100,26 @@ public class AgentToolService
         _skillService = skillService;
         _hexEditor = hexEditor;
         _subAgentService = subAgentService;
+        _brainSync = brainSync;
+        _lspClient = lspClient;
+        _repoMap = repoMap;
+        _embeddingService = embeddingService;
+        _instinctService = instinctService;
+    }
+
+    /// <summary>Tear down long-lived child processes (python/node REPL sessions) on app shutdown.
+    /// AgentToolService is a DI singleton, so the container calls this on exit — without it the REPL
+    /// child processes are orphaned.</summary>
+    public void Dispose()
+    {
+        lock (_replSessions)
+        {
+            foreach (var session in _replSessions.Values)
+            {
+                try { session.Dispose(); } catch { /* best-effort cleanup */ }
+            }
+            _replSessions.Clear();
+        }
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -177,23 +207,46 @@ public class AgentToolService
             // ── Permission check (respects PermissionSystem toggle) ──
             if (_settingsService.Settings.Features.PermissionSystem)
             {
-                string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
-                string scope = call.Type switch
-                {
-                    ToolType.WriteFile or ToolType.EditFile or ToolType.CreateDirectory => "write",
-                    ToolType.RunCommand => "execute",
-                    ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
-                    _ => "execute",
-                };
-                var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
-                if (perm == PermAction.Deny)
-                    return Fail(call, $"Permission denied for {scope}: {resource}");
-                if (perm == PermAction.Ask)
+                // Hex tools touching an ABSOLUTE path outside the project get a dedicated, always-on
+                // prompt (user policy 2026-06-04) — hex_patch writes raw bytes to disk. Relative hex
+                // paths are sandboxed under the project by ResolveHexPath and fall through to the normal
+                // rule check. Asking here (and skipping the generic check) avoids a double prompt.
+                if (IsHexTool(call.Type) && TryGetAbsoluteOutsidePath(call, out var hexPath))
                 {
                     bool allowed = OnPermissionRequired != null
-                        && await OnPermissionRequired.Invoke(call.ToolName, $"{scope}: {resource}");
+                        && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+                        {
+                            ToolName = call.ToolName,
+                            Detail = $"access a file OUTSIDE the project: {hexPath}",
+                        });
                     if (!allowed)
-                        return Fail(call, $"User denied permission for {scope}: {resource}");
+                        return Fail(call, $"User denied hex access to a path outside the project: {hexPath}");
+                }
+                else
+                {
+                    string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
+                    string scope = call.Type switch
+                    {
+                        ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory => "write",
+                        ToolType.RunCommand => "execute",
+                        ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
+                        _ => "execute",
+                    };
+                    var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
+                    if (perm == PermAction.Deny)
+                        return Fail(call, $"Permission denied for {scope}: {resource}");
+                    if (perm == PermAction.Ask)
+                    {
+                        bool allowed = OnPermissionRequired != null
+                            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+                            {
+                                ToolName = call.ToolName,
+                                Detail = $"{scope}: {resource}",
+                                Diff = TryComputePreviewDiff(call),
+                            });
+                        if (!allowed)
+                            return Fail(call, $"User denied permission for {scope}: {resource}");
+                    }
                 }
             }
 
@@ -208,6 +261,9 @@ public class AgentToolService
                 ToolType.ReadFile => ExecuteReadFile(call),
                 ToolType.WriteFile => ExecuteWriteFile(call),
                 ToolType.EditFile => ExecuteEditFile(call),
+                ToolType.MultiEdit => ExecuteMultiEdit(call),
+                ToolType.ListSymbols => ExecuteListSymbols(call),
+                ToolType.FindSymbol => ExecuteFindSymbol(call),
                 ToolType.ListFiles => ExecuteListFiles(call),
                 ToolType.SearchFiles => ExecuteSearchFiles(call),
                 ToolType.SearchContent => ExecuteSearchContent(call),
@@ -276,6 +332,10 @@ public class AgentToolService
                 // Memory tools
                 ToolType.MemorySave => ExecuteMemorySave(call),
                 ToolType.MemoryList => ExecuteMemoryList(call),
+                ToolType.BrainRecall => await ExecuteBrainRecallAsync(call, ct),
+                ToolType.LspDiagnostics => await ExecuteLspDiagnosticsAsync(call, ct),
+                ToolType.CodebaseSearch => await ExecuteCodebaseSearchAsync(call, ct),
+                ToolType.InstinctEvolve => await ExecuteInstinctEvolveAsync(call, ct),
                 ToolType.MemoryDelete => ExecuteMemoryDelete(call),
 
                 // Hex editor tools (binary file inspection + AI-driven patching)
@@ -391,12 +451,14 @@ public class AgentToolService
         }
 
         // File tools
-        schemas.Add(new() { Name = "read_file", Description = "Read the contents of a file",
-            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true)) });
+        schemas.Add(new() { Name = "read_file", Description = "Read a file. Omit offset/limit to read the whole file; pass them to read a line range (returns lines as 'N<tab>text', 1-based — handy for large files or referencing a specific error line).",
+            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true), ("offset", "string", "1-based first line to read (optional)", false), ("limit", "string", "Max lines to read (optional, default 2000)", false)) });
         schemas.Add(new() { Name = "write_file", Description = "Create or overwrite a file",
             InputSchema = MakeSchema(("path", "string", "File path", true), ("content", "string", "File content", true)) });
-        schemas.Add(new() { Name = "edit_file", Description = "Find and replace text in an existing file",
-            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Text to find", true), ("replace", "string", "Replacement text", true)) });
+        schemas.Add(new() { Name = "edit_file", Description = "Find and replace text in an existing file. 'find' is matched newline- and whitespace-tolerantly and must be UNIQUE unless replace_all=true.",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Text to find", true), ("replace", "string", "Replacement text", true), ("replace_all", "string", "Set true to replace every occurrence; otherwise 'find' must match exactly once", false)) });
+        schemas.Add(new() { Name = "multi_edit", Description = "Apply MULTIPLE find/replace edits to ONE file in a single atomic step (all-or-nothing: if any edit fails to match, NOTHING is written). Prefer this over several edit_file calls. Each edit uses the same newline/whitespace-tolerant matching as edit_file.",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("edits", "string", "A JSON array of edits, e.g. [{\"find\":\"old\",\"replace\":\"new\"},{\"find\":\"a\",\"replace\":\"b\",\"replace_all\":true}]", true)) });
         schemas.Add(new() { Name = "list_files", Description = "List files and directories",
             InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
         schemas.Add(new() { Name = "search_files", Description = "Find files matching a pattern",
@@ -481,6 +543,16 @@ public class AgentToolService
         schemas.Add(new() { Name = "memory_save", Description = "Save persistent memory that survives across sessions", InputSchema = MakeSchema(("name", "string", "Memory name", true), ("content", "string", "Memory content", true), ("type", "string", "user|feedback|project|reference", false), ("description", "string", "Short description", false), ("scope", "string", "global|project", false)) });
         schemas.Add(new() { Name = "memory_list", Description = "List all saved memories", InputSchema = MakeSchema() });
         schemas.Add(new() { Name = "memory_delete", Description = "Delete a saved memory", InputSchema = MakeSchema(("name", "string", "Memory name to delete", true), ("scope", "string", "global|project", false)) });
+
+        // BrainX knowledge base — recall past decisions / coding-lessons / bug fixes across machines
+        schemas.Add(new() { Name = "brain_recall", Description = "Search your BrainX knowledge base (coding-lessons, past decisions, bug fixes, project context) for relevant prior knowledge BEFORE solving a problem. Returns matching note titles + previews. Set semantic=true for meaning-based search.", InputSchema = MakeSchema(("query", "string", "Keywords or a natural-language question", true), ("semantic", "string", "true for meaning-based (embedding) search", false), ("limit", "string", "Max results (default 5)", false)) });
+
+        // Code intelligence — language-server diagnostics (errors/warnings) for a file
+        schemas.Add(new() { Name = "lsp_diagnostics", Description = "Check a source file for errors/warnings via its language server (OmniSharp/pylsp/tsserver/rust-analyzer/gopls, if installed). Use after editing to verify your change compiles. Returns a hint if no server is installed.", InputSchema = MakeSchema(("path", "string", "Path to the source file to check", true)) });
+        schemas.Add(new() { Name = "list_symbols", Description = "Outline a source file — its classes/methods/functions with line numbers — WITHOUT reading the whole file. Use it to navigate a file cheaply before read_file/edit_file.", InputSchema = MakeSchema(("path", "string", "Path to the source file", true)) });
+        schemas.Add(new() { Name = "find_symbol", Description = "Find where a symbol (class/method/function/type) is DEFINED across the project, by NAME — a lightweight 'go to definition' that needs no language server. Returns file:line for each likely definition. Use this instead of blind-grepping to locate where to edit.", InputSchema = MakeSchema(("name", "string", "The symbol name to locate (e.g. a class or method name)", true)) });
+        schemas.Add(new() { Name = "codebase_search", Description = "Find the most relevant files/lines for a natural-language query across the whole repo, ranked by filename + symbol + content relevance (smarter than raw grep for 'where is X handled?'). Then read_file the top hits.", InputSchema = MakeSchema(("query", "string", "What you're looking for (keywords or a question)", true), ("limit", "string", "Max results (default 12)", false)) });
+        schemas.Add(new() { Name = "instinct_evolve", Description = "Housekeeping: merge near-duplicate learned instincts via embedding similarity (preserves occurrence/accept counts, deletes redundant copies). Needs an Ollama embedding model; no-ops gracefully without one.", InputSchema = MakeSchema() });
 
         // Hex editor tools — binary file inspection + AI-driven patching
         schemas.Add(new() { Name = "hex_info", Description = "Get binary file info: size, sha256, magic bytes, detected type. Does not load the file into the editor.", InputSchema = MakeSchema(("path", "string", "Absolute path to the file", true)) });
@@ -993,6 +1065,18 @@ public class AgentToolService
             // Memory tools — always available
             ToolType.MemorySave or ToolType.MemoryList or ToolType.MemoryDelete => true,
 
+            // BrainX recall — always available (graceful no-op when the brain MCP is offline)
+            ToolType.BrainRecall => true,
+
+            // LSP diagnostics — always available (graceful when no language server is installed)
+            ToolType.LspDiagnostics => true,
+
+            // Codebase search — always available (pure local, no external deps)
+            ToolType.CodebaseSearch => true,
+
+            // Instinct evolve — always available (graceful when no embedding model)
+            ToolType.InstinctEvolve => true,
+
             // Hex editor — always available; read tools are concurrent-safe, patches need permission
             ToolType.HexOpen or ToolType.HexRead or ToolType.HexSearch
             or ToolType.HexPatch or ToolType.HexInfo => true,
@@ -1012,6 +1096,25 @@ public class AgentToolService
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
+        // Ranged read (offset/limit) → numbered lines, so the agent can page big files / cite line numbers.
+        string offStr = call.GetArg("offset");
+        string limStr = call.GetArg("limit");
+        if (!string.IsNullOrEmpty(offStr) || !string.IsNullOrEmpty(limStr))
+        {
+            int off = int.TryParse(offStr, out var o) && o > 0 ? o : 1;
+            int lim = int.TryParse(limStr, out var l) && l > 0 ? l : 2000;
+            var (text, total) = _fileSystem.ReadLines(path, off, lim);
+            int end = Math.Min(off + lim - 1, total);
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = text,
+                Summary = $"Read {path} lines {off}-{end} of {total}",
+            };
+        }
+
         string content = _fileSystem.ReadFile(path);
         int lineCount = content.Split('\n').Length;
 
@@ -1025,6 +1128,47 @@ public class AgentToolService
         };
     }
 
+    /// <summary>
+    /// Best-effort preview of the file change a write/edit will make, so the permission prompt can show
+    /// the user a diff BEFORE they approve. Never throws and never mutates — returns null when there's
+    /// nothing meaningful to preview (the tool then prompts with just its description).
+    /// </summary>
+    private EditDiffResult? TryComputePreviewDiff(ToolCall call)
+    {
+        try
+        {
+            if (call.Type == ToolType.WriteFile)
+            {
+                string p = call.GetArg("path");
+                if (string.IsNullOrEmpty(p)) return null;
+                string before = _fileSystem.TryReadRaw(p) ?? "";
+                return CluadeX.Helpers.DiffUtil.Compute(before, call.GetArg("content"));
+            }
+            if (call.Type == ToolType.EditFile)
+            {
+                string p = call.GetArg("path");
+                string find = call.GetArg("find");
+                if (string.IsNullOrEmpty(p) || string.IsNullOrEmpty(find)) return null;
+                bool ra = bool.TryParse(call.GetArg("replace_all"), out var b) && b;
+                var prev = _fileSystem.PreviewEdit(p, find, call.GetArg("replace"), ra);
+                if (prev == null) return null;
+                return CluadeX.Helpers.DiffUtil.Compute(prev.Value.before, prev.Value.after);
+            }
+            if (call.Type == ToolType.MultiEdit)
+            {
+                string p = call.GetArg("path");
+                if (string.IsNullOrEmpty(p)) return null;
+                var edits = ParseEdits(call.GetArg("edits"), out string? err);
+                if (err != null || edits.Count == 0) return null;
+                var prev = _fileSystem.PreviewMultiEdit(p, edits);
+                if (prev == null || !prev.Value.ok) return null;
+                return CluadeX.Helpers.DiffUtil.Compute(prev.Value.before, prev.Value.after);
+            }
+        }
+        catch { /* preview is best-effort */ }
+        return null;
+    }
+
     private ToolResult ExecuteWriteFile(ToolCall call)
     {
         string path = call.GetArg("path");
@@ -1032,7 +1176,9 @@ public class AgentToolService
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
+        string? beforeWrite = _fileSystem.TryReadRaw(path);
         _fileSystem.WriteFile(path, content);
+        var writeDiff = CluadeX.Helpers.DiffUtil.Compute(beforeWrite ?? "", content);
 
         return new ToolResult
         {
@@ -1041,6 +1187,7 @@ public class AgentToolService
             Success = true,
             Output = $"File written: {path} ({content.Length} bytes)",
             Summary = $"Wrote {path}",
+            Diff = writeDiff,
         };
     }
 
@@ -1049,13 +1196,27 @@ public class AgentToolService
         string path = call.GetArg("path");
         string find = call.GetArg("find");
         string replace = call.GetArg("replace");
+        bool replaceAll = bool.TryParse(call.GetArg("replace_all"), out var ra) && ra;
 
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
         if (string.IsNullOrEmpty(find))
             return Fail(call, "Missing 'find' argument");
 
-        var (found, replacements) = _fileSystem.EditFile(path, find, replace);
+        // Capture the file BEFORE editing so we can show the user an exact before/after diff.
+        string? beforeEdit = _fileSystem.TryReadRaw(path);
+
+        bool found;
+        int replacements;
+        try
+        {
+            (found, replacements) = _fileSystem.EditFile(path, find, replace, replaceAll);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException)
+        {
+            // Ambiguous match / empty find / missing file — surface the actionable message to the model.
+            return Fail(call, ex.Message);
+        }
 
         if (!found)
         {
@@ -1064,10 +1225,15 @@ public class AgentToolService
                 Type = call.Type,
                 ToolName = call.ToolName,
                 Success = false,
-                Error = $"Text not found in {path}. Make sure 'find' matches exactly.",
+                Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist — re-read the file and copy the exact block you want to change.",
                 Summary = $"Edit failed: text not found in {path}",
             };
         }
+
+        string? afterEdit = _fileSystem.TryReadRaw(path);
+        var editDiff = (beforeEdit != null && afterEdit != null)
+            ? CluadeX.Helpers.DiffUtil.Compute(beforeEdit, afterEdit)
+            : null;
 
         return new ToolResult
         {
@@ -1076,6 +1242,122 @@ public class AgentToolService
             Success = true,
             Output = $"Edited {path}: {replacements} replacement(s) made",
             Summary = $"Edited {path} ({replacements} changes)",
+            Diff = editDiff,
+        };
+    }
+
+    private ToolResult ExecuteMultiEdit(ToolCall call)
+    {
+        string path = call.GetArg("path");
+        string editsJson = call.GetArg("edits");
+        if (string.IsNullOrEmpty(path)) return Fail(call, "Missing 'path' argument");
+        if (string.IsNullOrEmpty(editsJson)) return Fail(call, "Missing 'edits' (a JSON array of {find, replace, replace_all?}).");
+
+        var edits = ParseEdits(editsJson, out string? parseError);
+        if (parseError != null) return Fail(call, $"multi_edit: {parseError}");
+        if (edits.Count == 0) return Fail(call, "multi_edit: no edits provided.");
+
+        string? before = _fileSystem.TryReadRaw(path);
+        bool ok; int applied; string message;
+        try { (ok, applied, message) = _fileSystem.MultiEdit(path, edits); }
+        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException) { return Fail(call, ex.Message); }
+
+        if (!ok)
+            return Fail(call, $"multi_edit aborted ({applied}/{edits.Count} applied) — NO changes written (atomic). {message}");
+
+        string? after = _fileSystem.TryReadRaw(path);
+        var diff = (before != null && after != null) ? CluadeX.Helpers.DiffUtil.Compute(before, after) : null;
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = $"multi_edit: {applied} edit(s) applied to {path}",
+            Summary = $"Edited {path} ({applied} edits)",
+            Diff = diff,
+        };
+    }
+
+    /// <summary>Parse the multi_edit 'edits' JSON array into find/replace tuples.</summary>
+    private static List<(string find, string replace, bool replaceAll)> ParseEdits(string editsJson, out string? error)
+    {
+        error = null;
+        var list = new List<(string find, string replace, bool replaceAll)>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(editsJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                error = "'edits' must be a JSON array of {find, replace, replace_all?}.";
+                return list;
+            }
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                string find = e.TryGetProperty("find", out var f) && f.ValueKind == System.Text.Json.JsonValueKind.String ? (f.GetString() ?? "") : "";
+                string replace = e.TryGetProperty("replace", out var r) && r.ValueKind == System.Text.Json.JsonValueKind.String ? (r.GetString() ?? "") : "";
+                bool all = false;
+                if (e.TryGetProperty("replace_all", out var a))
+                    all = a.ValueKind == System.Text.Json.JsonValueKind.True
+                          || (a.ValueKind == System.Text.Json.JsonValueKind.String && bool.TryParse(a.GetString(), out var b) && b);
+                list.Add((find, replace, all));
+            }
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            error = $"'edits' is not valid JSON: {ex.Message}";
+        }
+        return list;
+    }
+
+    private ToolResult ExecuteListSymbols(ToolCall call)
+    {
+        if (_repoMap == null) return Fail(call, "list_symbols: code map is not wired into this build.");
+        string path = call.GetArg("path");
+        if (string.IsNullOrEmpty(path)) return Fail(call, "Missing 'path' argument");
+
+        string? content = _fileSystem.TryReadRaw(path, 2 * 1024 * 1024);
+        if (content == null) return Fail(call, $"list_symbols: cannot read {path} (missing or larger than 2MB).");
+
+        var symbols = _repoMap.OutlineContent(content);
+        if (symbols.Count == 0)
+            return Ok(call, $"No top-level symbols detected in {path}. Use read_file to view it directly.");
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"{symbols.Count} symbol(s) in {path}:");
+        foreach (var (line, sym) in symbols)
+            sb.Append("  ").Append(line).Append('\t').Append(sym).Append('\n');
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = sb.ToString().TrimEnd(),
+            Summary = $"{symbols.Count} symbols in {path}",
+        };
+    }
+
+    private ToolResult ExecuteFindSymbol(ToolCall call)
+    {
+        if (_repoMap == null) return Fail(call, "find_symbol: code map is not wired into this build.");
+        string name = call.GetArg("name", call.GetArg("symbol", call.GetArg("query")));
+        if (string.IsNullOrWhiteSpace(name)) return Fail(call, "Missing 'name' (the symbol to locate).");
+
+        var hits = _repoMap.FindSymbolDefinitions(name, 25);
+        if (hits.Count == 0)
+            return Ok(call, $"No definition found for '{name}'. It may be external/third-party — try codebase_search to find usages, or read_file if you know the file.");
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"{hits.Count} likely definition(s) of '{name}':");
+        foreach (var h in hits)
+            sb.Append("  ").Append(h.File).Append(':').Append(h.Line + 1).Append("  ").Append(h.Snippet).Append('\n');
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = sb.ToString().TrimEnd(),
+            Summary = $"{hits.Count} definition(s) of {name}",
         };
     }
 
@@ -1159,42 +1441,11 @@ public class AgentToolService
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
 
-        // Security: block dangerous commands (respects DangerousCommandBlocking toggle)
-        if (_settingsService.Settings.Features.DangerousCommandBlocking)
-        {
-            string cmdLower = command.ToLowerInvariant().Trim();
-            string[] blockedPatterns = [
-                "rm -rf /", "rm -rf ~", "rm -rf .",
-                "format ", "format\t",
-                "del /s", "del /f", "del /q",
-                "rmdir /s", "rd /s",
-                "remove-item -recurse",
-                "shutdown", "restart-computer",
-                "reg delete", "reg add",
-                "net user", "net localgroup",
-                "takeown", "icacls",
-                "mkfs.", "dd if=",
-                "> /dev/", ">/dev/",
-            ];
-            string[] blockedContains = [
-                "| rm ", "| del ", "&& rm ", "&& del ",
-                "; rm ", "; del ", "` rm ", "` del ",
-                "invoke-webrequest", "invoke-restmethod",
-                "start-bitstransfer",
-                "certutil -urlcache",
-                "bitsadmin /transfer",
-            ];
-            foreach (var blocked in blockedPatterns)
-            {
-                if (cmdLower.StartsWith(blocked))
-                    return Fail(call, $"Command blocked for safety: {command}");
-            }
-            foreach (var blocked in blockedContains)
-            {
-                if (cmdLower.Contains(blocked))
-                    return Fail(call, $"Command blocked for safety: {command}");
-            }
-        }
+        // Security: block dangerous commands (defense-in-depth, NOT a boundary — the permission prompt
+        // is). Shared helper so powershell/repl can't bypass the run_command blocklist by switching tools.
+        var dangerReason = CheckDangerousCommand(command);
+        if (dangerReason != null)
+            return Fail(call, dangerReason);
 
         try
         {
@@ -1986,6 +2237,7 @@ public class AgentToolService
             "read_file" or "readfile" => ToolType.ReadFile,
             "write_file" or "writefile" => ToolType.WriteFile,
             "edit_file" or "editfile" => ToolType.EditFile,
+            "multi_edit" or "multiedit" or "apply_edits" => ToolType.MultiEdit,
             "list_files" or "listfiles" or "list_directory" or "ls" => ToolType.ListFiles,
             "search_files" or "searchfiles" or "find_files" => ToolType.SearchFiles,
             "search_content" or "searchcontent" => ToolType.SearchContent,
@@ -2052,6 +2304,16 @@ public class AgentToolService
             "memory_save" or "save_memory" or "remember" => ToolType.MemorySave,
             "memory_list" or "list_memories" or "memories" => ToolType.MemoryList,
             "memory_delete" or "delete_memory" or "forget" => ToolType.MemoryDelete,
+
+            // BrainX knowledge base
+            "brain_recall" or "brain_search" or "recall" or "brain" => ToolType.BrainRecall,
+
+            // Code intelligence
+            "lsp_diagnostics" or "diagnostics" or "check_errors" or "check_diagnostics" => ToolType.LspDiagnostics,
+            "list_symbols" or "listsymbols" or "outline" or "file_outline" => ToolType.ListSymbols,
+            "find_symbol" or "findsymbol" or "go_to_definition" or "goto_definition" or "find_definition" or "where_defined" => ToolType.FindSymbol,
+            "codebase_search" or "search_codebase" or "find_code" or "code_search" => ToolType.CodebaseSearch,
+            "instinct_evolve" or "evolve_instincts" or "evolve" => ToolType.InstinctEvolve,
 
             "hex_open" or "open_hex" => ToolType.HexOpen,
             "hex_read" or "read_hex" or "hex_dump" => ToolType.HexRead,
@@ -2421,6 +2683,132 @@ public class AgentToolService
         {
             return Fail(call, $"Failed to delete memory: {ex.Message}");
         }
+    }
+
+    // ════════════════════════════════════════════
+    // Wave 4: BrainX recall (read from the knowledge base)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteBrainRecallAsync(ToolCall call, CancellationToken ct)
+    {
+        string query = call.GetArg("query");
+        if (string.IsNullOrWhiteSpace(query))
+            return Fail(call, "brain_recall: 'query' is required (keywords or a natural-language question).");
+        if (_brainSync == null)
+            return Fail(call, "brain_recall: BrainX is not wired into this build.");
+
+        bool semantic = bool.TryParse(call.GetArg("semantic"), out var s) && s;
+        int limit = int.TryParse(call.GetArg("limit"), out var l) ? Math.Clamp(l, 1, 20) : 5;
+
+        string result = await _brainSync.SearchAsync(query, limit, semantic, ct);
+        return Ok(call, result);
+    }
+
+    // ════════════════════════════════════════════
+    // Code intelligence — LSP diagnostics (errors/warnings after an edit)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteLspDiagnosticsAsync(ToolCall call, CancellationToken ct)
+    {
+        if (_lspClient == null) return Fail(call, "lsp_diagnostics: LSP is not wired into this build.");
+
+        string path = call.GetArg("path");
+        if (string.IsNullOrWhiteSpace(path))
+            return Fail(call, "lsp_diagnostics: 'path' is required.");
+
+        string resolved;
+        try { resolved = Path.IsPathRooted(path) ? path : _fileSystem.ResolveSafePath(path); }
+        catch (Exception ex) { return Fail(call, ex.Message); }
+        if (!File.Exists(resolved))
+            return Fail(call, $"lsp_diagnostics: file not found: {path}");
+
+        string lang = Path.GetExtension(resolved).TrimStart('.').ToLowerInvariant();
+        bool started = await _lspClient.StartServerAsync(lang, ct);
+        if (!started)
+            return Ok(call, $"No language server available for '.{lang}' files. Install one (OmniSharp for C#, " +
+                            "pylsp for Python, typescript-language-server for TS/JS, rust-analyzer, gopls) for live " +
+                            "diagnostics. Fallback: run the project's build/lint via run_command.");
+
+        var diags = await _lspClient.GetDiagnosticsAsync(resolved, ct);
+        if (diags.Count == 0)
+            return Ok(call, $"No diagnostics reported for {path} ✓");
+
+        var sb = new StringBuilder($"Diagnostics for {path} ({diags.Count}):");
+        sb.AppendLine();
+        foreach (var d in diags.OrderByDescending(x => x.Severity == "error").ThenBy(x => x.Line).Take(50))
+            sb.AppendLine($"  [{d.Severity}] {d.Line + 1}:{d.Character + 1} — {d.Message}{(string.IsNullOrEmpty(d.Source) ? "" : $" ({d.Source})")}");
+        return Ok(call, sb.ToString());
+    }
+
+    // ════════════════════════════════════════════
+    // Code intelligence — ranked codebase search
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteCodebaseSearchAsync(ToolCall call, CancellationToken ct)
+    {
+        if (_repoMap == null) return Fail(call, "codebase_search: repo map is not wired into this build.");
+
+        string query = call.GetArg("query");
+        if (string.IsNullOrWhiteSpace(query))
+            return Fail(call, "codebase_search: 'query' is required (keywords or what you're looking for).");
+
+        int limit = int.TryParse(call.GetArg("limit"), out var l) ? Math.Clamp(l, 1, 50) : 12;
+
+        // Keyword recall first (always works, zero deps). Over-fetch so the semantic pass has room to re-rank.
+        var candidates = _repoMap.SearchCode(query, limit * 4);
+        if (candidates.Count == 0)
+            return Ok(call, $"No code found matching '{query}'. Try different keywords, or use grep for an exact pattern.");
+
+        string mode = "keyword";
+        List<CodeHit> ranked = candidates;
+
+        // Optional semantic re-rank. Embed the QUERY first — if that fails (Ollama/embedding model
+        // absent) bail to keyword instantly, so a missing embedder costs one fast call, not one per candidate.
+        if (_embeddingService is { Enabled: true })
+        {
+            float[]? qv = await _embeddingService.EmbedAsync(query, ct);
+            if (qv != null)
+            {
+                const int reRankCap = 24;
+                var scored = new List<(CodeHit hit, double sim)>();
+                foreach (var c in candidates.Take(reRankCap))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    float[]? cv = await _embeddingService.EmbedAsync($"{c.File}\n{c.Snippet}", ct);
+                    scored.Add((c, cv != null ? EmbeddingService.Cosine(qv, cv) : -1));
+                }
+                ranked = scored.OrderByDescending(x => x.sim).Select(x => x.hit).ToList();
+                ranked.AddRange(candidates.Skip(reRankCap)); // keep keyword order for the tail
+                mode = "semantic+keyword";
+            }
+        }
+
+        var top = ranked.Take(limit).ToList();
+        var sb = new StringBuilder($"Top {top.Count} matches for '{query}' ({mode}):");
+        sb.AppendLine();
+        foreach (var h in top)
+        {
+            string loc = h.Line >= 0 ? $"{h.File}:{h.Line + 1}" : h.File;
+            sb.Append("  ").Append(loc);
+            if (!string.IsNullOrEmpty(h.Snippet))
+                sb.Append("  — ").Append(h.Snippet.Length > 120 ? h.Snippet[..120] + "…" : h.Snippet);
+            sb.AppendLine();
+        }
+        sb.AppendLine();
+        sb.AppendLine("Use read_file on the most relevant paths for full context.");
+        return Ok(call, sb.ToString());
+    }
+
+    // ════════════════════════════════════════════
+    // Instinct maintenance — semantic evolve (merge near-duplicates)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteInstinctEvolveAsync(ToolCall call, CancellationToken ct)
+    {
+        if (_instinctService == null || _embeddingService == null)
+            return Fail(call, "instinct_evolve: instinct / embedding services are not wired into this build.");
+        string result = await _instinctService.EvolveAsync(_embeddingService, ct: ct);
+        return Ok(call, result);
     }
 
     // ════════════════════════════════════════════
@@ -3011,11 +3399,53 @@ public class AgentToolService
     // Phase 3: PowerShell Tool
     // ════════════════════════════════════════════
 
+    /// <summary>Returns a block reason if <paramref name="command"/> matches a known-dangerous pattern
+    /// (when DangerousCommandBlocking is on), else null. Defense-in-depth, NOT a security boundary — the
+    /// permission prompt is. Shared by run_command + powershell so the blocklist can't be bypassed by
+    /// switching tools.</summary>
+    private string? CheckDangerousCommand(string command)
+    {
+        if (!_settingsService.Settings.Features.DangerousCommandBlocking) return null;
+        string cmdLower = command.ToLowerInvariant().Trim();
+        string[] blockedPrefixes = [
+            "rm -rf /", "rm -rf ~", "rm -rf .",
+            "format ", "format\t",
+            "del /s", "del /f", "del /q",
+            "rmdir /s", "rd /s",
+            "shutdown", "restart-computer", "stop-computer",
+            "reg delete", "reg add",
+            "net user", "net localgroup",
+            "takeown", "icacls",
+            "mkfs.", "dd if=",
+            "> /dev/", ">/dev/",
+        ];
+        string[] blockedContains = [
+            "| rm ", "| del ", "&& rm ", "&& del ",
+            "; rm ", "; del ", "` rm ", "` del ",
+            "invoke-webrequest", "invoke-restmethod",
+            "start-bitstransfer",
+            "certutil -urlcache",
+            "bitsadmin /transfer",
+            // PowerShell destructive forms (piped/chained — prefix matching misses these)
+            "remove-item -recurse", "remove-item -force", "-recurse -force",
+            "format-volume", "clear-disk", "format-disk",
+        ];
+        foreach (var b in blockedPrefixes)
+            if (cmdLower.StartsWith(b)) return $"Command blocked for safety: {command}";
+        foreach (var b in blockedContains)
+            if (cmdLower.Contains(b)) return $"Command blocked for safety: {command}";
+        return null;
+    }
+
     private async Task<ToolResult> ExecutePowerShellAsync(ToolCall call, CancellationToken ct)
     {
         string command = call.GetArg("command", call.GetArg("script"));
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
+
+        var psDanger = CheckDangerousCommand(command);
+        if (psDanger != null)
+            return Fail(call, psDanger);
 
         int timeoutMs = int.TryParse(call.GetArg("timeout", "30000"), out int t) ? t : 30000;
         timeoutMs = Math.Min(timeoutMs, 120000); // Cap at 2 minutes
@@ -3028,7 +3458,11 @@ public class AgentToolService
                 ? @"C:\Program Files\PowerShell\7\pwsh.exe"
                 : "powershell.exe";
 
-            var psi = new System.Diagnostics.ProcessStartInfo(psExe, $"-NoProfile -NonInteractive -Command \"{command.Replace("\"", "\\\"")}\"")
+            // Pass the script via -EncodedCommand (Base64 UTF-16LE). Inlining into -Command "..." with
+            // cmd-style \" escaping is WRONG for PowerShell (it uses backtick / doubled quotes), which
+            // broke legit quoted scripts AND allowed argument breakout. EncodedCommand is injection-proof.
+            string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+            var psi = new System.Diagnostics.ProcessStartInfo(psExe, $"-NoProfile -NonInteractive -EncodedCommand {encodedCommand}")
             {
                 WorkingDirectory = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory,
                 RedirectStandardOutput = true,
@@ -3109,6 +3543,7 @@ public class AgentToolService
         // If editor already has THIS path open, no-op. Otherwise open it.
         if (string.IsNullOrWhiteSpace(path))
             return _hexEditor.HasFile;
+        path = ResolveHexPath(path);
         if (_hexEditor.HasFile && string.Equals(_hexEditor.CurrentPath, path, StringComparison.OrdinalIgnoreCase))
             return true;
         if (!File.Exists(path)) return false;
@@ -3116,9 +3551,43 @@ public class AgentToolService
         return true;
     }
 
+    /// <summary>
+    /// Resolve a hex-tool path. Relative paths are sandboxed + resolved under the working directory
+    /// (a bare File.Exists would otherwise resolve against the process CWD — almost never what the
+    /// agent meant). Absolute paths pass through so the binary-inspection / RE workflows the hex
+    /// editor exists for keep working.
+    /// </summary>
+    private string? ResolveHexPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path)) return path;
+        try { return _fileSystem.ResolveSafePath(path); }
+        catch { return path; }
+    }
+
+    private static bool IsHexTool(ToolType type) =>
+        type is ToolType.HexInfo or ToolType.HexOpen or ToolType.HexRead or ToolType.HexSearch or ToolType.HexPatch;
+
+    /// <summary>True if the call's `path` arg is an absolute path resolving OUTSIDE the working directory.</summary>
+    private bool TryGetAbsoluteOutsidePath(ToolCall call, out string path)
+    {
+        path = call.GetArg("path");
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path)) return false;
+        try
+        {
+            if (!_fileSystem.HasWorkingDirectory) return true; // no project open → everything is "outside"
+            string full = Path.GetFullPath(path);
+            string root = Path.GetFullPath(_fileSystem.WorkingDirectory);
+            // Compare with a trailing separator so "C:\App" doesn't count sibling "C:\App-secrets" as inside.
+            string rootSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+            string fullSep = full.EndsWith(Path.DirectorySeparatorChar) ? full : full + Path.DirectorySeparatorChar;
+            return !fullSep.StartsWith(rootSep, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return true; }
+    }
+
     private async Task<ToolResult> ExecuteHexInfoAsync(ToolCall call, CancellationToken ct)
     {
-        string path = call.GetArg("path");
+        string? path = ResolveHexPath(call.GetArg("path"));
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             return Fail(call, $"hex_info: file not found: {path}");
         try
@@ -3157,7 +3626,7 @@ public class AgentToolService
 
     private async Task<ToolResult> ExecuteHexOpenAsync(ToolCall call, CancellationToken ct)
     {
-        string path = call.GetArg("path");
+        string? path = ResolveHexPath(call.GetArg("path"));
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             return Fail(call, $"hex_open: file not found: {path}");
         try

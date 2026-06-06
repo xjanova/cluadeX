@@ -132,6 +132,11 @@
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
                               ToolTip="Enable agentic mode (file access, commands, Git)"/>
+                    <CheckBox Content="Auto" Margin="4,0"
+                              IsChecked="{Binding AutonomousMode}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="10" VerticalAlignment="Center"
+                              ToolTip="Autonomous mode: implement → run the project's tests → fix → loop until green, then review for hidden bugs. Set iteration counts in Settings."/>
                     <CheckBox Content="Thinking" Margin="4,0"
                               IsChecked="{Binding ShowThinking}"
                               Foreground="{StaticResource Subtext0Brush}"
@@ -304,6 +309,48 @@
                                                        FontSize="13" FontFamily="{StaticResource MainFont}"
                                                        TextWrapping="Wrap"/>
                                         </StackPanel>
+                                        <!-- Preview diff of the change being requested (file edits/writes) -->
+                                        <Border Background="{StaticResource Surface0Brush}"
+                                                CornerRadius="6" Padding="0,4,0,4" Margin="22,0,0,8"
+                                                Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                                           Foreground="{StaticResource Subtext0Brush}" Margin="10,2,10,4"/>
+                                                <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <ItemsControl ItemsSource="{Binding DiffLines}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}"
+                                                                           FontSize="11" Padding="10,0" TextWrapping="NoWrap">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                                            <Setter Property="Background" Value="Transparent"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Add}">
+                                                                                    <Setter Property="Foreground" Value="#A6E3A1"/>
+                                                                                    <Setter Property="Background" Value="#1A40A02B"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Remove}">
+                                                                                    <Setter Property="Foreground" Value="#F38BA8"/>
+                                                                                    <Setter Property="Background" Value="#1AF38BA8"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Hunk}">
+                                                                                    <Setter Property="Foreground" Value="#89B4FA"/>
+                                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </StackPanel>
+                                        </Border>
+
                                         <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
                                             <Button Content="Allow" Padding="16,4" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
@@ -609,9 +656,59 @@
                                                        VerticalAlignment="Center" Margin="4,0,0,0"/>
                                         </StackPanel>
 
-                                        <!-- Row 4: Tool Output (collapsible) -->
-                                        <Expander Grid.Row="4" Margin="0,6,0,0"
-                                                  IsExpanded="{Binding IsExpanded}">
+                                        <!-- Row 4: inline diff (file edits) + collapsible tool output -->
+                                        <StackPanel Grid.Row="4" Margin="0,6,0,0">
+
+                                        <!-- Colorized before/after diff — shown for every file edit/write -->
+                                        <Border Background="{StaticResource Surface0Brush}"
+                                                CornerRadius="6" Padding="0,4,0,4" Margin="0,0,0,4"
+                                                Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal" Margin="10,2,10,4">
+                                                    <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                               Foreground="{StaticResource Overlay0Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Text="Changes" FontSize="10" Foreground="{StaticResource Overlay0Brush}"
+                                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                                               Foreground="{StaticResource Subtext0Brush}" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <ItemsControl ItemsSource="{Binding DiffLines}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}"
+                                                                           FontSize="11" Padding="10,0" TextWrapping="NoWrap">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                                            <Setter Property="Background" Value="Transparent"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Add}">
+                                                                                    <Setter Property="Foreground" Value="#A6E3A1"/>
+                                                                                    <Setter Property="Background" Value="#1A40A02B"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Remove}">
+                                                                                    <Setter Property="Foreground" Value="#F38BA8"/>
+                                                                                    <Setter Property="Background" Value="#1AF38BA8"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Hunk}">
+                                                                                    <Setter Property="Foreground" Value="#89B4FA"/>
+                                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Raw tool output (collapsible) -->
+                                        <Expander IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
                                                 <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
                                                     <Run Text="Show output"/>
@@ -642,6 +739,7 @@
                                                 </Style>
                                             </Expander.Style>
                                         </Expander>
+                                        </StackPanel>
 
                                         <!-- Row 5: Error bar with retry hint -->
                                         <Border Grid.Row="5" Margin="0,4,0,0" Padding="6,3"

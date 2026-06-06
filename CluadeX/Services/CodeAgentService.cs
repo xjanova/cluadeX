@@ -26,7 +26,8 @@ public class CodeAgentService
     private readonly HookService? _hookService;
     private readonly CostTrackingService? _costTrackingService;
 
-    private const int MaxAgentIterations = 15;
+    // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
+    private int MaxAgentIterations => Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
 
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
     private string? _cachedSystemPrompt;
@@ -177,6 +178,27 @@ public class CodeAgentService
               """);
 
         // ═══════════════════════════════════════════
+        // Section 3b: Code intelligence & memory (use what makes CluadeX unique)
+        // ═══════════════════════════════════════════
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "# ปัญญาโค้ด & ความจำ" : "# Code Intelligence & Memory");
+        sb.AppendLine(isThai
+            ? """
+              - มี CODEBASE MAP (ด้านล่าง) สรุป type/function ของทั้งโปรเจค — ใช้นำทางก่อน แล้วค่อย read_file ไฟล์ที่เกี่ยวข้อง แทนการเดาหรือ grep มั่ว
+              - จะหาว่า "X อยู่ตรงไหน / ทำงานยังไง" ใช้ codebase_search (จัดอันดับความเกี่ยวข้อง ฉลาดกว่า grep ดิบ) แล้ว read_file ผลลัพธ์อันดับต้น
+              - หานิยามของชื่อ (class/method/function) ใช้ find_symbol "ชื่อ" (go-to-definition ไม่ต้องใช้ coord); ดูโครงไฟล์ (class/method พร้อมเลขบรรทัด) ใช้ list_symbols — แม่นกว่าและถูกกว่าการ read ทั้งไฟล์
+              - งานที่ไม่ trivial: เรียก brain_recall ก่อนลงมือ เพื่อดูบทเรียน/การตัดสินใจ/บั๊กที่เคยเจอจาก BrainX (อย่าแก้บั๊กเดิมซ้ำรอย)
+              - หลังแก้โค้ด: เรียก lsp_diagnostics กับไฟล์ที่แก้ (หรือ build) เพื่อยืนยันว่าไม่มี error ก่อนบอกว่าเสร็จ
+              """
+            : """
+              - A CODEBASE MAP (below) lists the project's types/functions. Use it to navigate, then read_file the relevant files — don't guess or blind-grep.
+              - To locate "where is X handled?", use codebase_search (ranked relevance, smarter than raw grep), then read_file the top hits.
+              - To find where a NAME (class/method/function) is DEFINED, use find_symbol "name" (go-to-definition, no coords needed). To outline a file (symbols + line numbers) use list_symbols — both beat reading the whole file.
+              - For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX (don't re-solve a bug you already solved).
+              - After editing code, call lsp_diagnostics on the changed file (or build it) to verify there are no errors before claiming the task is done.
+              """);
+
+        // ═══════════════════════════════════════════
         // Section 4: Executing Actions with Care
         // ═══════════════════════════════════════════
         sb.AppendLine();
@@ -251,7 +273,7 @@ public class CodeAgentService
               4. ปฏิบัติตาม best practices และรูปแบบ idiomatic ของภาษานั้นๆ
               5. เมื่อแก้ error ให้วิเคราะห์ error message อย่างละเอียดและให้โค้ดที่แก้ไขแล้วทั้งหมด
               6. ใส่คอมเมนต์เฉพาะ logic ที่ซับซ้อนเท่านั้น — อย่าเพิ่มคอมเมนต์ในโค้ดที่ไม่ได้แก้
-              7. เมื่อแก้ไฟล์ ใช้ edit_file กับ find/replace ที่แม่นยำ แทนการเขียนไฟล์ใหม่ทั้งหมด
+              7. เมื่อแก้ไฟล์ ใช้ edit_file กับ find/replace ที่แม่นยำ แทนการเขียนไฟล์ใหม่ทั้งหมด — ถ้าต้องแก้หลายจุดในไฟล์เดียว ใช้ multi_edit (atomic: พลาดจุดใดจุดหนึ่งจะไม่เขียนทั้งไฟล์); อ่านไฟล์ใหญ่ใช้ read_file พร้อม offset/limit
               8. ตรวจสอบโค้ดในใจก่อนเขียน — ให้แน่ใจว่าวงเล็บ/ปีกกาสมดุล
               9. ห้ามแนะนำ security vulnerabilities (command injection, XSS, SQL injection)
               """
@@ -262,7 +284,7 @@ public class CodeAgentService
               4. Follow best practices and idiomatic patterns for the language
               5. When fixing errors, analyze the error message carefully and provide the complete corrected code
               6. Add comments for complex logic only — don't add comments to code you didn't change
-              7. When editing files, prefer minimal changes — use edit_file with precise find/replace over rewriting entire files
+              7. When editing files, prefer minimal changes — use edit_file with precise find/replace over rewriting entire files. For SEVERAL edits to one file, use multi_edit (atomic — if any hunk fails to match, nothing is written). For large files, read_file with offset+limit.
               8. Validate your code mentally before writing — ensure brackets/braces balance
               9. Do not introduce security vulnerabilities (command injection, XSS, SQL injection, OWASP top 10)
               """);
@@ -459,6 +481,10 @@ public class CodeAgentService
         ["notebook_edit"] = "Editing notebook",
         ["memory_save"] = "Saving memory",
         ["memory_list"] = "Listing memories",
+        ["brain_recall"] = "Recalling from BrainX",
+        ["lsp_diagnostics"] = "Checking diagnostics",
+        ["codebase_search"] = "Searching codebase",
+        ["instinct_evolve"] = "Evolving instincts",
         ["memory_delete"] = "Deleting memory",
         ["skill_invoke"] = "Invoking skill",
         ["ask_user"] = "Asking user",
@@ -552,6 +578,9 @@ public class CodeAgentService
     /// <summary>Fires per-token during agentic generation for real-time streaming display.</summary>
     public event Action<string, int>? OnAgenticStreamingToken; // token, stepNumber
 
+    private readonly BrainSyncService? _brainSync;
+    private readonly RepoMapService? _repoMap;
+
     public CodeAgentService(
         AiProviderManager providerManager,
         CodeExecutionService codeExecutionService,
@@ -564,8 +593,12 @@ public class CodeAgentService
         ActivationService activationService,
         MemoryService memoryService,
         HookService? hookService = null,
-        CostTrackingService? costTrackingService = null)
+        CostTrackingService? costTrackingService = null,
+        BrainSyncService? brainSync = null,
+        RepoMapService? repoMap = null)
     {
+        _brainSync = brainSync;
+        _repoMap = repoMap;
         _providerManager = providerManager;
         _codeExecutionService = codeExecutionService;
         _agentToolService = agentToolService;
@@ -652,6 +685,21 @@ public class CodeAgentService
                     tree = tree[..4000] + "\n... (truncated)";
                 sb.AppendLine("PROJECT STRUCTURE:");
                 sb.AppendLine(tree);
+            }
+            catch { /* ignore */ }
+
+            // Codebase map — a symbol-level outline so the agent knows the whole project's types and
+            // APIs without being pointed at files (IDE-grade awareness). Bounded + cached; on Anthropic
+            // it rides inside the prompt-cached system prompt, so it's effectively free after request #1.
+            try
+            {
+                string repoMap = _repoMap?.GetRepoMap(6000) ?? "";
+                if (!string.IsNullOrWhiteSpace(repoMap))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("CODEBASE MAP (key declarations per file — read a file for full content):");
+                    sb.AppendLine(repoMap);
+                }
             }
             catch { /* ignore */ }
 
@@ -825,6 +873,9 @@ public class CodeAgentService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
+        userMessage = await MaybePrependBrainContextAsync(userMessage, progress, ct);
+
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
         {
@@ -832,6 +883,44 @@ public class CodeAgentService
         }
 
         return await ExecuteLegacyToolLoopAsync(history, userMessage, progress, ct);
+    }
+
+    /// <summary>
+    /// Auto-recall: before an agentic task, search the connected BrainX for relevant coding-lessons /
+    /// past decisions and prepend the top hits to the user message (model input only — the persisted
+    /// user message is untouched). Best-effort: gated by setting, 3s timeout, silent on any failure so
+    /// the task never stalls on the brain.
+    /// </summary>
+    private async Task<string> MaybePrependBrainContextAsync(string userMessage, IProgress<string>? progress, CancellationToken ct)
+    {
+        if (_brainSync == null || !_settingsService.Settings.BrainAutoRecallEnabled) return userMessage;
+        if (string.IsNullOrWhiteSpace(userMessage) || !_brainSync.IsBrainAvailable) return userMessage;
+
+        try
+        {
+            progress?.Report("Recalling from BrainX...");
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
+
+            string query = userMessage.Length > 200 ? userMessage[..200] : userMessage;
+            string lessons = await _brainSync.SearchAsync(query, limit: 3, semantic: false, timeoutCts.Token);
+
+            // SearchAsync returns "(...)" sentinels for not-connected / error / empty — skip those.
+            if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith("(", StringComparison.Ordinal))
+                return userMessage;
+
+            return
+                "<brainx_recall>\n" +
+                "Relevant prior knowledge from your BrainX knowledge base (past decisions, bug fixes, lessons). " +
+                "Consult it if helpful; ignore if not relevant to this task:\n\n" +
+                lessons +
+                "\n</brainx_recall>\n\n" +
+                userMessage;
+        }
+        catch
+        {
+            return userMessage; // never block a task on the brain
+        }
     }
 
     /// <summary>Legacy agentic loop using [ACTION:] text parsing (for non-Anthropic providers).</summary>
@@ -1469,7 +1558,11 @@ public class CodeAgentService
             int aggregateChars = 0;
             async Task ExecuteNativeToolCall(Services.Providers.NativeToolCall toolCall)
             {
-                // Add tool_use block to assistant message
+                // Add tool_use block to assistant message FIRST. From here on, this tool_use MUST get a
+                // matching tool_result or the next API request is malformed — Anthropic rejects an
+                // assistant tool_use with no corresponding user tool_result. So everything below runs
+                // under a try that ALWAYS emits a result (even when a tool throws), and a single failing
+                // tool can no longer abort the entire turn through Task.WhenAll.
                 lock (assistantMsg.Content)
                 {
                     assistantMsg.Content.Add(new Services.Providers.ContentBlock
@@ -1481,47 +1574,75 @@ public class CodeAgentService
                     });
                 }
 
-                ct.ThrowIfCancellationRequested();
-                var call = new ToolCall
+                string resultContent;
+                bool isError;
+                try
                 {
-                    ToolName = toolCall.Name,
-                    Type = _agentToolService.ResolveToolTypePublic(toolCall.Name) ?? ToolType.RunCommand,
-                    Arguments = ParseJsonInputToArgs(toolCall.Input),
-                };
-                string nativeCallStatus = GetToolStatusMessage(toolCall.Name, call.Arguments);
-                OnAgentStatus?.Invoke(nativeCallStatus);
-                progress?.Report(nativeCallStatus);
-                OnToolStarting?.Invoke(toolCall.Name, nativeCallStatus);
+                    ct.ThrowIfCancellationRequested();
 
-                var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
+                    // Unknown tool name → surface a clear error to the model (handled by the catch below).
+                    // NEVER silently fall back to RunCommand: a misspelled tool name must not become a shell exec.
+                    var resolvedType = _agentToolService.ResolveToolTypePublic(toolCall.Name);
+                    if (resolvedType == null)
+                        throw new InvalidOperationException(
+                            $"Unknown tool '{toolCall.Name}' — not a registered tool. Only call tools that were provided to you.");
 
-                // ─── Write validation for write/edit operations ───
-                if (call.Type is ToolType.WriteFile or ToolType.EditFile && toolResult.Success)
-                {
-                    var writeValidation = ValidateToolWrite(call);
-                    if (writeValidation != null)
+                    var call = new ToolCall
                     {
-                        toolResult = new ToolResult
+                        ToolName = toolCall.Name,
+                        Type = resolvedType.Value,
+                        Arguments = ParseJsonInputToArgs(toolCall.Input),
+                    };
+                    string nativeCallStatus = GetToolStatusMessage(toolCall.Name, call.Arguments);
+                    OnAgentStatus?.Invoke(nativeCallStatus);
+                    progress?.Report(nativeCallStatus);
+                    OnToolStarting?.Invoke(toolCall.Name, nativeCallStatus);
+
+                    var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
+
+                    // ─── Write validation for write/edit operations ───
+                    if (call.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit && toolResult.Success)
+                    {
+                        var writeValidation = ValidateToolWrite(call);
+                        if (writeValidation != null)
                         {
-                            ToolName = toolResult.ToolName,
-                            Type = toolResult.Type,
-                            Success = true,
-                            Output = toolResult.Output + $"\n⚠ Validation: {writeValidation}",
-                            Summary = toolResult.Summary + " (with warnings)",
-                        };
+                            toolResult = new ToolResult
+                            {
+                                ToolName = toolResult.ToolName,
+                                Type = toolResult.Type,
+                                Success = true,
+                                Output = toolResult.Output + $"\n⚠ Validation: {writeValidation}",
+                                Summary = toolResult.Summary + " (with warnings)",
+                            };
+                        }
                     }
+
+                    lock (toolResults) { toolResults.Add(toolResult); }
+                    OnToolExecuted?.Invoke(toolResult);
+
+                    // Per-tool and aggregate budget enforcement
+                    resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
+                    isError = !toolResult.Success;
+                    if (resultContent.Length > MaxPerToolOutputChars)
+                        resultContent = resultContent[..MaxPerToolOutputChars] + "\n... (truncated)";
+                    int currentAggregate = Interlocked.Add(ref aggregateChars, resultContent.Length);
+                    if (currentAggregate > MaxAggregateOutputChars)
+                        resultContent = resultContent[..Math.Min(resultContent.Length, 500)] + "\n... (aggregate budget exceeded, truncated)";
                 }
-
-                lock (toolResults) { toolResults.Add(toolResult); }
-                OnToolExecuted?.Invoke(toolResult);
-
-                // Per-tool and aggregate budget enforcement
-                string resultContent = toolResult.Success ? toolResult.Output : toolResult.Error;
-                if (resultContent.Length > MaxPerToolOutputChars)
-                    resultContent = resultContent[..MaxPerToolOutputChars] + "\n... (truncated)";
-                int currentAggregate = Interlocked.Add(ref aggregateChars, resultContent.Length);
-                if (currentAggregate > MaxAggregateOutputChars)
-                    resultContent = resultContent[..Math.Min(resultContent.Length, 500)] + "\n... (aggregate budget exceeded, truncated)";
+                catch (OperationCanceledException)
+                {
+                    throw; // user cancelled — let the whole turn unwind; these local messages are discarded, never sent
+                }
+                catch (Exception ex)
+                {
+                    // Degrade a thrown tool into an error result instead of nuking the turn (and breaking
+                    // the tool_use/tool_result balance for every OTHER tool in this same batch).
+                    resultContent = $"Tool '{toolCall.Name}' failed: {ex.GetType().Name}: {ex.Message}";
+                    isError = true;
+                    var errResult = new ToolResult { ToolName = toolCall.Name, Success = false, Error = resultContent };
+                    lock (toolResults) { toolResults.Add(errResult); }
+                    OnToolExecuted?.Invoke(errResult);
+                }
 
                 lock (userResultMsg.Content)
                 {
@@ -1530,7 +1651,7 @@ public class CodeAgentService
                         Type = "tool_result",
                         ToolUseId = toolCall.Id,
                         Content = resultContent,
-                        IsError = !toolResult.Success,
+                        IsError = isError,
                     });
                 }
             }

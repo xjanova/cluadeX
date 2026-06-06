@@ -32,22 +32,9 @@ public class GpuDetectionService
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "nvidia-smi",
-                Arguments = "--query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader,nounits",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null) return null;
-
-            string output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-
-            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+            string? output = RunNvidiaSmi(
+                "--query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader,nounits", 5000);
+            if (string.IsNullOrWhiteSpace(output))
                 return null;
 
             string[] parts = output.Trim().Split(',');
@@ -273,19 +260,9 @@ public class GpuDetectionService
         var gpus = new List<GpuInfo>();
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "nvidia-smi",
-                Arguments = "--query-gpu=index,name,memory.total,memory.free,driver_version --format=csv,noheader,nounits",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            using var process = Process.Start(psi);
-            if (process == null) return gpus;
-            string output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-            if (process.ExitCode != 0) return gpus;
+            string? output = RunNvidiaSmi(
+                "--query-gpu=index,name,memory.total,memory.free,driver_version --format=csv,noheader,nounits", 5000);
+            if (string.IsNullOrWhiteSpace(output)) return gpus;
 
             foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -315,22 +292,9 @@ public class GpuDetectionService
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "nvidia-smi",
-                Arguments = "--query-gpu=temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.free,memory.total,power.draw,power.limit,fan.speed --format=csv,noheader,nounits",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null) return null;
-
-            string output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(3000);
-
-            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output))
+            string? output = RunNvidiaSmi(
+                "--query-gpu=temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.free,memory.total,power.draw,power.limit,fan.speed --format=csv,noheader,nounits", 3000);
+            if (string.IsNullOrWhiteSpace(output))
                 return null;
 
             string[] parts = output.Trim().Split(',');
@@ -353,5 +317,38 @@ public class GpuDetectionService
         catch { }
 
         return null;
+    }
+
+    /// <summary>
+    /// Run nvidia-smi with a hard timeout and return stdout, or null on any failure. Reads stdout
+    /// asynchronously and kills the child if it overruns, so a hung nvidia-smi (bad driver state)
+    /// can never block the caller — the old ReadToEnd()+WaitForExit pattern would hang forever if
+    /// the process never closed its stdout, and GetLiveStats runs every 2s on a timer.
+    /// </summary>
+    private static string? RunNvidiaSmi(string arguments, int timeoutMs)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "nvidia-smi",
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(psi);
+            if (process == null) return null;
+
+            var readTask = process.StandardOutput.ReadToEndAsync();
+            if (!process.WaitForExit(timeoutMs))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return null;
+            }
+            string output = readTask.GetAwaiter().GetResult();
+            return process.ExitCode == 0 ? output : null;
+        }
+        catch { return null; }
     }
 }

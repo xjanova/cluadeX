@@ -304,6 +304,96 @@ public class InstinctService
         }
     }
 
+    // ─── Evolve — semantic clustering / dedup (Wave 5 #2) ────────────
+
+    /// <summary>
+    /// Merge near-duplicate instincts using embedding similarity. Embeds each instinct's
+    /// pattern+trigger+action via the supplied EmbeddingService (OUTSIDE the lock — it's async),
+    /// greedily clusters by cosine ≥ threshold, then UNDER the lock merges each cluster into its
+    /// highest-confidence member (summing occurrence/accept/reject counts and unioning tags, so no
+    /// learning is lost) and deletes the rest. Fully graceful: if embeddings are unavailable nothing
+    /// changes. Returns a human-readable summary.
+    /// </summary>
+    public async Task<string> EvolveAsync(EmbeddingService embed, double threshold = 0.86, CancellationToken ct = default)
+    {
+        if (embed == null || !embed.Enabled)
+            return "Semantic evolve needs an embedding model (enable SemanticSearchEnabled and `ollama pull nomic-embed-text`).";
+
+        var all = GetAll();
+        if (all.Count < 2) return "Nothing to evolve (need at least 2 instincts).";
+
+        // Embed every instinct OUTSIDE the lock (async HTTP — can't await under a lock).
+        var vecs = new Dictionary<string, float[]>();
+        foreach (var i in all)
+        {
+            ct.ThrowIfCancellationRequested();
+            var v = await embed.EmbedAsync($"{i.Pattern}\n{i.Trigger}\n{i.Action}".Trim(), ct);
+            if (v != null) vecs[i.Id] = v;
+        }
+        if (vecs.Count < 2)
+            return "Could not compute embeddings — is Ollama running with the embedding model pulled?";
+
+        // Greedy clustering by cosine similarity.
+        var ids = vecs.Keys.ToList();
+        var used = new HashSet<string>();
+        var clusters = new List<List<string>>();
+        for (int a = 0; a < ids.Count; a++)
+        {
+            if (!used.Add(ids[a])) continue;
+            var cluster = new List<string> { ids[a] };
+            for (int b = a + 1; b < ids.Count; b++)
+            {
+                if (used.Contains(ids[b])) continue;
+                if (EmbeddingService.Cosine(vecs[ids[a]], vecs[ids[b]]) >= threshold)
+                {
+                    cluster.Add(ids[b]);
+                    used.Add(ids[b]);
+                }
+            }
+            if (cluster.Count > 1) clusters.Add(cluster);
+        }
+        if (clusters.Count == 0)
+            return $"No near-duplicate instincts found (≥{threshold:P0} similar). Nothing merged.";
+
+        // Merge under the lock against a freshly-loaded store (an instinct may have changed since the snapshot).
+        int mergedClusters = 0, removed = 0;
+        lock (_lock)
+        {
+            var store = Load();
+            foreach (var cluster in clusters)
+            {
+                var members = cluster
+                    .Select(id => store.Instincts.FirstOrDefault(x => x.Id == id))
+                    .Where(x => x != null)
+                    .Cast<Instinct>()
+                    .ToList();
+                if (members.Count < 2) continue;
+
+                var winner = members
+                    .OrderByDescending(m => m.Confidence)
+                    .ThenByDescending(m => m.OccurrenceCount)
+                    .First();
+
+                foreach (var loser in members.Where(m => m.Id != winner.Id))
+                {
+                    winner.OccurrenceCount += loser.OccurrenceCount;
+                    winner.AcceptCount += loser.AcceptCount;
+                    winner.RejectCount += loser.RejectCount;
+                    if (loser.LastSeen > winner.LastSeen) winner.LastSeen = loser.LastSeen;
+                    if (loser.FirstSeen < winner.FirstSeen) winner.FirstSeen = loser.FirstSeen;
+                    foreach (var t in loser.Tags)
+                        if (!winner.Tags.Contains(t)) winner.Tags.Add(t);
+                    store.Instincts.Remove(loser);
+                    removed++;
+                }
+                mergedClusters++;
+            }
+            if (removed > 0) Save(store);
+        }
+
+        return $"Evolved: merged {removed} near-duplicate instinct(s) into {mergedClusters} cluster(s).";
+    }
+
     // ─── Export / Import ─────────────────────────────────────────────
 
     public void ExportTo(string path)

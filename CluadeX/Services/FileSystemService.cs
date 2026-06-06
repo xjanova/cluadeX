@@ -12,10 +12,19 @@ public class FileSystemService
 {
     private string _workingDirectory = string.Empty;
 
+    /// <summary>Raised when the working directory changes — lets HookService re-evaluate workspace
+    /// trust for the new folder and drop stale project hooks.</summary>
+    public event Action? OnWorkingDirectoryChanged;
+
     public string WorkingDirectory
     {
         get => _workingDirectory;
-        set => _workingDirectory = value;
+        set
+        {
+            if (string.Equals(_workingDirectory, value, StringComparison.OrdinalIgnoreCase)) return;
+            _workingDirectory = value;
+            OnWorkingDirectoryChanged?.Invoke();
+        }
     }
 
     public bool HasWorkingDirectory => !string.IsNullOrEmpty(_workingDirectory) && Directory.Exists(_workingDirectory);
@@ -35,6 +44,131 @@ public class FileSystemService
         return File.ReadAllText(fullPath, Encoding.UTF8);
     }
 
+    // ─── Read a line range (1-based), prefixed with line numbers ───
+    /// <summary>
+    /// Read a slice of a file as "N\ttext" lines (1-based). Lets the agent page through big files and
+    /// reference code by line number (e.g. to cross-check an lsp_diagnostics error). Returns the slice
+    /// text plus the file's total line count. Capped at 16 MB.
+    /// </summary>
+    public (string text, int total) ReadLines(string relativePath, int startLine, int maxLines)
+    {
+        string fullPath = ResolveSafePath(relativePath);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"File not found: {relativePath}");
+        if (new FileInfo(fullPath).Length > 16 * 1024 * 1024)
+            throw new InvalidOperationException($"File too large for a ranged read (>16MB): {relativePath}");
+
+        var all = File.ReadAllLines(fullPath, Encoding.UTF8);
+        int total = all.Length;
+        if (startLine < 1) startLine = 1;
+        if (maxLines < 1) maxLines = 2000;
+
+        var sb = new StringBuilder();
+        int end = Math.Min(startLine + maxLines - 1, total);
+        for (int i = startLine; i <= end; i++)
+            sb.Append(i).Append('\t').Append(all[i - 1]).Append('\n');
+        if (startLine > total)
+            sb.Append($"(file has only {total} line(s))\n");
+        return (sb.ToString(), total);
+    }
+
+    // ─── Multi-edit (atomic batch find/replace on one file) ───
+    /// <summary>
+    /// Apply several find/replace edits to ONE file in a single atomic write: every edit is applied
+    /// in order to an in-memory copy, and the file is written ONLY if all of them match. If any edit
+    /// can't be applied, nothing is written (the file is left untouched) and the failing edit is named.
+    /// Reuses the same newline-tolerant + whitespace-flexible matching as EditFile.
+    /// </summary>
+    public (bool ok, int applied, string message) MultiEdit(
+        string relativePath, IReadOnlyList<(string find, string replace, bool replaceAll)> edits)
+    {
+        string fullPath = ResolveSafePath(relativePath);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"File not found: {relativePath}");
+        if (edits == null || edits.Count == 0)
+            throw new ArgumentException("No edits provided.");
+
+        string raw = File.ReadAllText(fullPath, Encoding.UTF8);
+        int crlfCount = CountOccurrences(raw, "\r\n");
+        int loneLfCount = CountOccurrences(raw, "\n") - crlfCount;
+        bool fileUsesCrLf = crlfCount > loneLfCount;
+
+        var (ok, content, applied, message) = ApplyMultiEdit(raw.Replace("\r\n", "\n"), edits);
+        if (!ok) return (false, applied, message);   // atomic: nothing written
+
+        string outContent = fileUsesCrLf ? content.Replace("\n", "\r\n") : content;
+        File.WriteAllText(fullPath, outContent, Encoding.UTF8);
+        return (true, applied, message);
+    }
+
+    /// <summary>Compute the result of a MultiEdit WITHOUT writing — for the pre-apply diff preview.</summary>
+    public (bool ok, string before, string after, string message)? PreviewMultiEdit(
+        string relativePath, IReadOnlyList<(string find, string replace, bool replaceAll)> edits)
+    {
+        try
+        {
+            string fullPath = ResolveSafePath(relativePath);
+            if (!File.Exists(fullPath) || edits == null || edits.Count == 0) return null;
+            if (new FileInfo(fullPath).Length > 1_048_576) return null;
+            string content = File.ReadAllText(fullPath, Encoding.UTF8).Replace("\r\n", "\n");
+            var (ok, after, _, message) = ApplyMultiEdit(content, edits);
+            return (ok, content, after, message);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Pure core of MultiEdit — applies edits to normalized (\n) content; no IO.</summary>
+    private static (bool ok, string content, int applied, string message) ApplyMultiEdit(
+        string content, IReadOnlyList<(string find, string replace, bool replaceAll)> edits)
+    {
+        int applied = 0;
+        for (int i = 0; i < edits.Count; i++)
+        {
+            var (find, replace, replaceAll) = edits[i];
+            if (string.IsNullOrEmpty(find))
+                return (false, content, applied, $"edit #{i + 1}: 'find' is empty.");
+
+            string findN = find.Replace("\r\n", "\n");
+            string replaceN = replace.Replace("\r\n", "\n");
+            int count = CountOccurrences(content, findN);
+
+            if (count == 0)
+            {
+                string? flexed = TryFlexibleReplace(content, findN, replaceN);
+                if (flexed == null)
+                    return (false, content, applied, $"edit #{i + 1}: text not found — re-read the file and copy the exact block.");
+                content = flexed;
+            }
+            else if (count > 1 && !replaceAll)
+            {
+                return (false, content, applied, $"edit #{i + 1}: 'find' matches {count} times — add surrounding context to make it unique, or set replace_all.");
+            }
+            else
+            {
+                content = content.Replace(findN, replaceN);
+            }
+            applied++;
+        }
+        return (true, content, applied, $"{applied} edit(s) applied");
+    }
+
+    // ─── Safe raw read (for diff capture) ───
+    /// <summary>
+    /// Read a file's raw text for before/after diffing. Returns null instead of throwing when the file
+    /// is missing, too large, or unreadable — diffing is best-effort and must never break the edit itself.
+    /// </summary>
+    public string? TryReadRaw(string relativePath, int maxBytes = 1_048_576)
+    {
+        try
+        {
+            string fullPath = ResolveSafePath(relativePath);
+            if (!File.Exists(fullPath)) return null;
+            if (new FileInfo(fullPath).Length > maxBytes) return null;
+            return File.ReadAllText(fullPath, Encoding.UTF8);
+        }
+        catch { return null; }
+    }
+
     // ─── Write File ───
     public void WriteFile(string relativePath, string content)
     {
@@ -45,28 +179,137 @@ public class FileSystemService
     }
 
     // ─── Edit File (Find & Replace) ───
-    public (bool found, int replacements) EditFile(string relativePath, string find, string replace)
+    // Line-ending tolerant + whitespace-flexible fallback. This is the most-used code-editing
+    // primitive, so it must "just work" even when the model's find-block has \n while a Windows repo
+    // file has \r\n, or the indentation is slightly off.
+    public (bool found, int replacements) EditFile(string relativePath, string find, string replace, bool replaceAll = false)
     {
         string fullPath = ResolveSafePath(relativePath);
         if (!File.Exists(fullPath))
             throw new FileNotFoundException($"File not found: {relativePath}");
+        if (string.IsNullOrEmpty(find))
+            throw new ArgumentException("The 'find' text must not be empty.");
 
-        string content = File.ReadAllText(fullPath, Encoding.UTF8);
-        int count = 0;
+        string raw = File.ReadAllText(fullPath, Encoding.UTF8);
 
-        // Count occurrences
-        int idx = 0;
-        while ((idx = content.IndexOf(find, idx, StringComparison.Ordinal)) >= 0)
+        // Remember the file's DOMINANT newline so we write it back unchanged — injecting \n into a \r\n
+        // file (or vice-versa) made edits "succeed" then show phantom whole-file diffs in git. Use the
+        // dominant style (not "any CRLF") so a mostly-LF file with one stray CRLF isn't fully converted.
+        int crlfCount = CountOccurrences(raw, "\r\n");
+        int loneLfCount = CountOccurrences(raw, "\n") - crlfCount;
+        bool fileUsesCrLf = crlfCount > loneLfCount;
+
+        // Match on \n-normalized text. The model emits \n; the file is often \r\n; an Ordinal compare
+        // then never matches — the #1 reason edit_file "can't find" text that's visibly right there.
+        string content = raw.Replace("\r\n", "\n");
+        string findN = find.Replace("\r\n", "\n");
+        string replaceN = replace.Replace("\r\n", "\n");
+
+        int count = CountOccurrences(content, findN);
+
+        if (count == 0)
         {
-            count++;
-            idx += find.Length;
+            // Exact match failed even after newline-normalizing. Try one whitespace-tolerant pass
+            // (ignore each line's leading/trailing horizontal whitespace) — but ONLY when it resolves
+            // to a single unambiguous location, so we never silently edit the wrong spot.
+            string? flexed = TryFlexibleReplace(content, findN, replaceN);
+            if (flexed == null) return (false, 0);
+            content = flexed;
+            count = 1;
+        }
+        else if (count > 1 && !replaceAll)
+        {
+            throw new InvalidOperationException(
+                $"The text to replace appears {count} times in {relativePath}. Add more surrounding " +
+                "context so the match is unique, or pass replace_all=true to change every occurrence.");
+        }
+        else
+        {
+            content = content.Replace(findN, replaceN);
         }
 
-        if (count == 0) return (false, 0);
-
-        string newContent = content.Replace(find, replace);
-        File.WriteAllText(fullPath, newContent, Encoding.UTF8);
+        string outContent = fileUsesCrLf ? content.Replace("\n", "\r\n") : content;
+        File.WriteAllText(fullPath, outContent, Encoding.UTF8);
         return (true, count);
+    }
+
+    /// <summary>
+    /// Compute what an EditFile WOULD produce, without writing anything — used to preview a diff before
+    /// the user approves. Read-only and best-effort: returns null on missing file, oversized file, empty
+    /// find, no match, or ambiguous match (the real edit, run after approval, surfaces the actionable
+    /// error). before/after are newline-normalized so the previewed diff is clean.
+    /// </summary>
+    public (bool found, string before, string after)? PreviewEdit(string relativePath, string find, string replace, bool replaceAll = false)
+    {
+        try
+        {
+            string fullPath = ResolveSafePath(relativePath);
+            if (!File.Exists(fullPath) || string.IsNullOrEmpty(find)) return null;
+            if (new FileInfo(fullPath).Length > 1_048_576) return null;
+
+            string content = File.ReadAllText(fullPath, Encoding.UTF8).Replace("\r\n", "\n");
+            string findN = find.Replace("\r\n", "\n");
+            string replaceN = replace.Replace("\r\n", "\n");
+
+            int count = CountOccurrences(content, findN);
+            string after;
+            if (count == 0)
+            {
+                string? flexed = TryFlexibleReplace(content, findN, replaceN);
+                if (flexed == null) return null;
+                after = flexed;
+            }
+            else if (count > 1 && !replaceAll)
+            {
+                return null; // ambiguous — don't guess in a preview
+            }
+            else
+            {
+                after = content.Replace(findN, replaceN);
+            }
+
+            return (true, content, after);
+        }
+        catch { return null; }
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0, idx = 0;
+        while ((idx = haystack.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            idx += needle.Length;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Last-resort match that tolerates per-line leading/trailing whitespace differences (the model
+    /// dropped or shifted indentation). Returns edited content only when EXACTLY one location matches —
+    /// ambiguity returns null so the caller asks the model for more context instead of guessing and
+    /// corrupting the wrong block.
+    /// </summary>
+    private static string? TryFlexibleReplace(string content, string find, string replace)
+    {
+        var findLines = find.Split('\n');
+        var pattern = new StringBuilder();
+        for (int i = 0; i < findLines.Length; i++)
+        {
+            if (i > 0) pattern.Append('\n');
+            pattern.Append("[ \\t]*")
+                   .Append(Regex.Escape(findLines[i].Trim()))
+                   .Append("[ \\t]*");
+        }
+        try
+        {
+            var rx = new Regex(pattern.ToString(), RegexOptions.None, TimeSpan.FromSeconds(2));
+            var matches = rx.Matches(content);
+            if (matches.Count != 1) return null;
+            var m = matches[0];
+            return content[..m.Index] + replace + content[(m.Index + m.Length)..];
+        }
+        catch { return null; } // RegexParseException / RegexMatchTimeoutException — fall back to "not found"
     }
 
     // ─── List Directory ───
@@ -277,9 +520,12 @@ public class FileSystemService
 
         string fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, normalized));
 
-        // Security: ensure path stays within working directory (handles .. traversal)
+        // Security: ensure path stays within working directory (handles .. traversal).
+        // Compare with a trailing separator so "C:\App" doesn't accept sibling "C:\App-evil\secret".
         string workDirFull = Path.GetFullPath(_workingDirectory);
-        if (!fullPath.StartsWith(workDirFull, StringComparison.OrdinalIgnoreCase))
+        string workDirSep = workDirFull.EndsWith(Path.DirectorySeparatorChar) ? workDirFull : workDirFull + Path.DirectorySeparatorChar;
+        string compare = fullPath.EndsWith(Path.DirectorySeparatorChar) ? fullPath : fullPath + Path.DirectorySeparatorChar;
+        if (!compare.StartsWith(workDirSep, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException("Access denied. Path must be within the working directory.");
 
         return fullPath;

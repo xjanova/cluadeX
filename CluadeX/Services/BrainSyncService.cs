@@ -192,6 +192,46 @@ public class BrainSyncService
         return (synced, skipped, failed);
     }
 
+    // ─── Brain → CluadeX recall (read path) ─────────────────────────
+
+    /// <summary>
+    /// Query the connected BrainX for relevant notes (coding-lessons, past decisions, bug fixes).
+    /// Backs the `brain_recall` agent tool and the auto-recall context injector. Graceful when the
+    /// brain MCP server isn't running — returns an explanatory string, never throws. The returned
+    /// text is the brain's raw JSON result (title + preview + tags per hit), suitable as model context.
+    /// </summary>
+    public async Task<string> SearchAsync(string query, int limit = 5, bool semantic = false, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return "(empty query)";
+
+        var server = FindBrainServer();
+        if (server == null)
+            return "(BrainX not connected — configure a brain MCP server in MCP Servers, Ctrl+5)";
+
+        try
+        {
+            var args = new Dictionary<string, object>
+            {
+                ["query"] = query,
+                ["limit"] = limit,
+            };
+            string tool = semantic ? "brain_semantic_search" : "brain_search";
+            var result = await _mcp.CallToolWithObjectArgsAsync(server, tool, args, ct);
+            if (result.IsError)
+            {
+                var msg = ExtractText(result);
+                _log.Warn("BrainSync", $"{tool} failed: {msg}");
+                return $"(brain search failed: {msg})";
+            }
+            return ExtractText(result);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("BrainSync", $"SearchAsync threw: {ex.Message}");
+            return $"(brain search error: {ex.Message})";
+        }
+    }
+
     // ─── Note formatting ────────────────────────────────────────────
 
     private static string BuildTitle(Instinct i)

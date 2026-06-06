@@ -44,7 +44,53 @@ public class AppSettings
     // Agent settings
     public bool AutoExecuteCode { get; set; } = false;
     public int MaxAutoFixAttempts { get; set; } = 3;
+    /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks.</summary>
+    public int MaxAgentIterations { get; set; } = 25;
     public string PreferredLanguage { get; set; } = "C#";
+
+    /// <summary>
+    /// Local native tool-calling. When ON, llama-server / Ollama use OpenAI-style function-calling
+    /// (tools + tool_calls) and run the SAME structured native agent loop as Anthropic, instead of the
+    /// fragile [ACTION:] text parser. Turn OFF for local models whose chat template lacks tool support
+    /// (older GGUFs) — they fall back to the text-protocol loop. Default ON: modern coding models
+    /// (Qwen2.5-Coder, Llama 3.x, Hermes, Mistral-Nemo) all ship tool templates.
+    /// </summary>
+    public bool LocalNativeToolUseEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Auto-recall from BrainX. When ON, before each agentic task CluadeX searches the connected
+    /// BrainX MCP brain for relevant coding-lessons / past decisions and injects the top hits into
+    /// the model's context. Best-effort + short-timeout: if the brain is offline the task proceeds
+    /// normally. The agent can also pull on demand via the `brain_recall` tool regardless of this flag.
+    /// </summary>
+    public bool BrainAutoRecallEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Semantic codebase search. When ON, codebase_search re-ranks its keyword candidates by embedding
+    /// similarity (via Ollama EmbeddingModel) for "find code that does X" queries. Fully graceful: if
+    /// Ollama / the embedding model isn't available it silently falls back to keyword ranking. No
+    /// persistent index is built — embeddings are computed on demand for the query + top candidates.
+    /// </summary>
+    public bool SemanticSearchEnabled { get; set; } = true;
+
+    /// <summary>Ollama model used for embeddings (semantic codebase search). Pull it with `ollama pull nomic-embed-text`.</summary>
+    public string EmbeddingModel { get; set; } = "nomic-embed-text";
+
+    // ─── Autonomous coding loop (selling-point) ───
+    // Edit → run the project's build/tests ON THIS MACHINE → read failures → fix → repeat until green,
+    // then review the changes for hidden bugs, iterating. All loops are capped to avoid runaway cost.
+    /// <summary>Master switch for the autonomous build-test-fix-review loop (opt-in: it runs commands + spends tokens).</summary>
+    public bool AutonomousLoopEnabled { get; set; } = false;
+    /// <summary>Max build/test → fix attempts before giving up (1-25).</summary>
+    public int AutoFixMaxIterations { get; set; } = 5;
+    /// <summary>Verify command to run after each fix. Empty = auto-detect from the project (dotnet/npm/cargo/go/pytest).</summary>
+    public string AutoVerifyCommand { get; set; } = "";
+    /// <summary>After the build is green, run the hidden-bug review loop.</summary>
+    public bool AutoReviewEnabled { get; set; } = true;
+    /// <summary>"until_clean" = review+fix until a pass finds nothing (capped); "fixed_rounds" = always run N rounds.</summary>
+    public string AutoReviewMode { get; set; } = "until_clean";
+    /// <summary>Review rounds: the hard cap for until_clean, and the exact count for fixed_rounds (1-25).</summary>
+    public int AutoReviewMaxRounds { get; set; } = 3;
 
     // Extended Thinking (Anthropic Claude)
     // Note: budget_tokens must be < max_tokens when thinking is enabled.
@@ -66,6 +112,14 @@ public class AppSettings
     // persist them as memory files. Runs in background; never blocks the UI. Off by
     // default to avoid surprising the user with LLM calls they didn't ask for.
     public bool SessionMemoryEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Instinct learning loop. When ON, after a session ends CluadeX runs a background LLM pass over the
+    /// transcript to extract reusable behavioral instincts (corrections the user made, approaches that
+    /// worked) into the Instinct system; STRONG instincts then sync to BrainX. Opt-in (off by default)
+    /// because it spends tokens the user didn't explicitly request — essentially free on a local model.
+    /// </summary>
+    public bool InstinctLearningEnabled { get; set; } = false;
 
     // Strategic Compaction Toast (Sprint 2 #2) — non-blocking nudge that
     // appears at logical breakpoints (50+ tool calls / context ≥ 60% / 75%),

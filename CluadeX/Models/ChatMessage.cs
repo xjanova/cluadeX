@@ -112,6 +112,14 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>Whether the tool output contains diff content.</summary>
     public bool IsDiffContent { get; set; }
 
+    // ─── Inline Diff (file edit/write) ───
+    /// <summary>Colorized diff lines for a file-mutating tool action. Null/empty = no diff to show.</summary>
+    public List<EditDiffLine>? DiffLines { get; set; }
+    /// <summary>Short stat for the diff header (e.g. "+12  -3").</summary>
+    public string? DiffStat { get; set; }
+    /// <summary>True when there is a diff to render inline.</summary>
+    public bool HasDiff => DiffLines is { Count: > 0 };
+
     /// <summary>Whether the tool details are expanded in UI.</summary>
     public bool IsExpanded
     {

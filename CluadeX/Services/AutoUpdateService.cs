@@ -77,6 +77,7 @@ public class AutoUpdateService
                     Changelog = root.TryGetProperty("changelog", out var cl) ? cl.GetString() ?? "" : "",
                     FileSize = root.TryGetProperty("file_size", out var fs) ? fs.GetInt64() : 0,
                     FileName = root.TryGetProperty("download_filename", out var fn) ? fn.GetString() ?? "" : "",
+                    Sha256 = root.TryGetProperty("sha256", out var sh) ? sh.GetString() ?? "" : "",
                 };
                 OnUpdateAvailable?.Invoke(info);
                 return info;
@@ -104,6 +105,7 @@ public class AutoUpdateService
                 string downloadUrl = "";
                 string fileName = "";
                 long fileSize = 0;
+                string sha256 = "";
 
                 if (root.TryGetProperty("assets", out var assets))
                 {
@@ -115,6 +117,10 @@ public class AutoUpdateService
                             downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
                             fileName = name;
                             fileSize = asset.GetProperty("size").GetInt64();
+                            // GitHub asset digest is "sha256:HEX" (newer API) — use it for integrity.
+                            string digest = asset.TryGetProperty("digest", out var dg) ? dg.GetString() ?? "" : "";
+                            if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                                sha256 = digest["sha256:".Length..];
                             break;
                         }
                     }
@@ -137,6 +143,7 @@ public class AutoUpdateService
                     Changelog = changelog,
                     FileSize = fileSize,
                     FileName = fileName,
+                    Sha256 = sha256,
                 };
                 OnUpdateAvailable?.Invoke(info);
                 return info;
@@ -198,7 +205,25 @@ public class AutoUpdateService
             }
 
             OnDownloadProgress?.Invoke(100, "Download complete!");
-            OnUpdateStatus?.Invoke("Download complete. Ready to install.");
+
+            // Integrity gate: verify the downloaded file's SHA-256 against the manifest hash when the
+            // server provided one — closes the "tampered/MITM download → arbitrary exe overwrite → RCE"
+            // vector. (A fully-compromised manifest server still needs code-signing; tracked separately.)
+            if (!string.IsNullOrWhiteSpace(info.Sha256))
+            {
+                string actual = await ComputeSha256Async(zipPath, ct);
+                if (!string.Equals(actual, info.Sha256.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(zipPath); } catch { }
+                    OnUpdateStatus?.Invoke("Update REJECTED: integrity check failed (SHA-256 mismatch). The download may be corrupt or tampered.");
+                    return null;
+                }
+                OnUpdateStatus?.Invoke("Integrity verified ✓ — ready to install.");
+            }
+            else
+            {
+                OnUpdateStatus?.Invoke("Download complete (no checksum provided — integrity NOT verified). Ready to install.");
+            }
             return zipPath;
         }
         catch (Exception ex)
@@ -206,6 +231,14 @@ public class AutoUpdateService
             OnUpdateStatus?.Invoke($"Download failed: {ex.Message}");
             return null;
         }
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)
+    {
+        await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, useAsync: true);
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var hash = await sha.ComputeHashAsync(fs, ct);
+        return Convert.ToHexString(hash);
     }
 
     /// <summary>Extract update and create a batch script to replace files and restart.</summary>
@@ -302,6 +335,8 @@ public class UpdateInfo
     public string Changelog { get; set; } = "";
     public long FileSize { get; set; }
     public string FileName { get; set; } = "";
+    /// <summary>Expected SHA-256 (hex) of the download from the manifest. Verified before install.</summary>
+    public string Sha256 { get; set; } = "";
 
     public bool IsNewer => !string.IsNullOrEmpty(NewVersion) && NewVersion != CurrentVersion;
     public string FileSizeDisplay => FileSize switch

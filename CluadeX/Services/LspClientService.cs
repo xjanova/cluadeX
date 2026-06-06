@@ -23,6 +23,8 @@ public sealed class LspClientService : IDisposable
     private bool _disposed;
     private readonly object _lock = new();
     private readonly Dictionary<int, TaskCompletionSource<JsonElement>> _pendingRequests = new();
+    // Latest pushed diagnostics per normalized file URI (textDocument/publishDiagnostics notifications).
+    private readonly Dictionary<string, List<LspDiagnostic>> _diagnostics = new();
 
     // Supported language → server command mapping
     private static readonly Dictionary<string, (string exe, string args)> KnownServers = new(StringComparer.OrdinalIgnoreCase)
@@ -118,20 +120,28 @@ public sealed class LspClientService : IDisposable
         if (!IsConnected) return new();
 
         string uri = PathToUri(filePath);
+        string key = NormalizeUri(uri);
         string content = File.Exists(filePath) ? await File.ReadAllTextAsync(filePath, ct) : "";
 
-        // Open the document
+        // Drop any stale entry, then (re)open the document so the server re-publishes diagnostics.
+        lock (_lock) _diagnostics.Remove(key);
         await SendNotificationAsync("textDocument/didOpen", new
         {
             textDocument = new { uri, languageId = DetectLanguage(filePath), version = 1, text = content }
         }, ct);
 
-        // Wait briefly for server to process
-        await Task.Delay(500, ct);
-
-        // Request diagnostics via pull diagnostics or wait for push
-        // Most servers push diagnostics after didOpen — we'll collect them from the response reader
-        return new List<LspDiagnostic>(); // Diagnostics come via notifications
+        // Diagnostics arrive asynchronously as textDocument/publishDiagnostics notifications, which the
+        // reader now captures. Poll briefly until they show up (server processing time varies).
+        for (int i = 0; i < 6 && !ct.IsCancellationRequested; i++)
+        {
+            await Task.Delay(400, ct);
+            lock (_lock)
+            {
+                if (_diagnostics.TryGetValue(key, out var stored))
+                    return new List<LspDiagnostic>(stored);
+            }
+        }
+        return new List<LspDiagnostic>();
     }
 
     /// <summary>Get hover info for a position in a file.</summary>
@@ -340,8 +350,16 @@ public sealed class LspClientService : IDisposable
                     using var doc = JsonDocument.Parse(body);
                     var root = doc.RootElement;
 
-                    // Check if it's a response to a request
-                    if (root.TryGetProperty("id", out var idProp))
+                    // Server → client notification: capture diagnostics pushes (the whole point of LSP
+                    // for an agent — "did my edit introduce errors?"). This used to be dropped on the floor.
+                    if (root.TryGetProperty("method", out var methodEl)
+                        && methodEl.GetString() == "textDocument/publishDiagnostics"
+                        && root.TryGetProperty("params", out var diagParams))
+                    {
+                        StoreDiagnostics(diagParams);
+                    }
+                    // Response to one of our requests.
+                    else if (root.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.Number)
                     {
                         int id = idProp.GetInt32();
                         TaskCompletionSource<JsonElement>? tcs;
@@ -358,13 +376,56 @@ public sealed class LspClientService : IDisposable
                                 tcs.SetResult(default);
                         }
                     }
-                    // Notifications (diagnostics, etc.) are ignored for now
                 }
                 catch { /* ignore malformed messages */ }
             }
         }
         catch (OperationCanceledException) { }
         catch { /* reader closed */ }
+    }
+
+    private void StoreDiagnostics(JsonElement p)
+    {
+        try
+        {
+            string uri = p.TryGetProperty("uri", out var u) ? (u.GetString() ?? "") : "";
+            if (string.IsNullOrEmpty(uri)) return;
+
+            var list = new List<LspDiagnostic>();
+            if (p.TryGetProperty("diagnostics", out var diags) && diags.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var d in diags.EnumerateArray())
+                {
+                    int line = 0, ch = 0;
+                    if (d.TryGetProperty("range", out var range) && range.TryGetProperty("start", out var start))
+                    {
+                        line = start.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
+                        ch = start.TryGetProperty("character", out var c) ? c.GetInt32() : 0;
+                    }
+                    int sev = d.TryGetProperty("severity", out var s) && s.ValueKind == JsonValueKind.Number ? s.GetInt32() : 0;
+                    list.Add(new LspDiagnostic
+                    {
+                        Line = line,
+                        Character = ch,
+                        Severity = sev switch { 1 => "error", 2 => "warning", 3 => "info", 4 => "hint", _ => "" },
+                        Message = d.TryGetProperty("message", out var m) ? (m.GetString() ?? "") : "",
+                        Source = d.TryGetProperty("source", out var src) ? (src.GetString() ?? "") : "",
+                    });
+                }
+            }
+            lock (_lock) _diagnostics[NormalizeUri(uri)] = list;
+        }
+        catch { /* ignore malformed diagnostics */ }
+    }
+
+    /// <summary>Normalize an LSP file URI to a comparable key (servers differ on scheme/slash/case).</summary>
+    private static string NormalizeUri(string uri)
+    {
+        // Decode %3A etc. first — OmniSharp / rust-analyzer / tsserver percent-encode the drive colon in
+        // the URIs they publish, so without this the store key (server URI) never matches the lookup key
+        // (our PathToUri), and diagnostics silently come back empty (a false "no errors ✓").
+        try { uri = Uri.UnescapeDataString(uri); } catch { }
+        return uri.Replace("file:///", "").Replace("file://", "").Replace('\\', '/').TrimStart('/').ToLowerInvariant();
     }
 
     private static string PathToUri(string path)

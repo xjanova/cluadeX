@@ -11,9 +11,12 @@ public class AiProviderManager : IDisposable
     private readonly object _switchLock = new();
     private bool _isSwitching;
 
-    private Action<string>? _statusHandler;
-    private Action<bool>? _loadingHandler;
-    private Action<string>? _errorHandler;
+    // Stable handler delegates — created ONCE so Subscribe/Unsubscribe always reference the SAME
+    // instances. Reallocating them per provider-switch (the old bug) could orphan a provider's
+    // subscription (never detachable) → leak + duplicate status/loading/error events to the UI.
+    private readonly Action<string> _statusHandler;
+    private readonly Action<bool> _loadingHandler;
+    private readonly Action<string> _errorHandler;
 
     public IAiProvider ActiveProvider => _activeProvider;
     public AiProviderType ActiveProviderType => _settingsService.Settings.ActiveProvider;
@@ -30,6 +33,9 @@ public class AiProviderManager : IDisposable
         CostTrackingService costTracker)
     {
         _settingsService = settingsService;
+        _statusHandler = s => OnStatusChanged?.Invoke(s);
+        _loadingHandler = b => OnLoadingChanged?.Invoke(b);
+        _errorHandler = e => OnError?.Invoke(e);
 
         // Register all providers. LocalGgufProvider + LlamaServerProvider come from
         // DI (singletons) so the LocalGguf router shares the same llama-server
@@ -101,9 +107,6 @@ public class AiProviderManager : IDisposable
 
     private void SubscribeToProvider(IAiProvider provider)
     {
-        _statusHandler = s => OnStatusChanged?.Invoke(s);
-        _loadingHandler = b => OnLoadingChanged?.Invoke(b);
-        _errorHandler = e => OnError?.Invoke(e);
         provider.OnStatusChanged += _statusHandler;
         provider.OnLoadingChanged += _loadingHandler;
         provider.OnError += _errorHandler;
@@ -111,12 +114,9 @@ public class AiProviderManager : IDisposable
 
     private void UnsubscribeFromProvider(IAiProvider provider)
     {
-        if (_statusHandler != null) provider.OnStatusChanged -= _statusHandler;
-        if (_loadingHandler != null) provider.OnLoadingChanged -= _loadingHandler;
-        if (_errorHandler != null) provider.OnError -= _errorHandler;
-        _statusHandler = null;
-        _loadingHandler = null;
-        _errorHandler = null;
+        provider.OnStatusChanged -= _statusHandler;
+        provider.OnLoadingChanged -= _loadingHandler;
+        provider.OnError -= _errorHandler;
     }
 
     public void Dispose()

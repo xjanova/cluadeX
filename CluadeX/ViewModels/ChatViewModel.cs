@@ -17,6 +17,7 @@ public class ChatViewModel : ViewModelBase
     private readonly CodeAgentService _agentService;
     private readonly CodeExecutionService _codeExecutionService;
     private readonly AgentToolService _agentToolService;
+    private readonly AutonomousCodingService? _autonomousService;
     private readonly FileSystemService _fileSystemService;
     private readonly GitService _gitService;
     private readonly GitHubService _gitHubService;
@@ -38,6 +39,7 @@ public class ChatViewModel : ViewModelBase
     private bool _isGenerating;
     private bool _autoExecute;
     private bool _agenticMode;
+    private bool _autonomousMode;
     private string _statusText = "Ready";
     private ChatSession? _currentSession;
     private bool _canSend = true;
@@ -90,6 +92,12 @@ public class ChatViewModel : ViewModelBase
     {
         get => _agenticMode;
         set => SetProperty(ref _agenticMode, value);
+    }
+    /// <summary>Autonomous "drive to green": implement → run tests → fix → loop, then review-iterate for hidden bugs.</summary>
+    public bool AutonomousMode
+    {
+        get => _autonomousMode;
+        set => SetProperty(ref _autonomousMode, value);
     }
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
     public ChatSession? CurrentSession { get => _currentSession; set => SetProperty(ref _currentSession, value); }
@@ -335,7 +343,8 @@ public class ChatViewModel : ViewModelBase
         SkillService skillService,
         CostTrackingService costTracker,
         SessionMemoryService? sessionMemoryService = null,
-        Services.Providers.LocalGgufProvider? localGgufProvider = null)
+        Services.Providers.LocalGgufProvider? localGgufProvider = null,
+        AutonomousCodingService? autonomousService = null)
     {
         _providerManager = providerManager;
         _agentService = agentService;
@@ -354,6 +363,14 @@ public class ChatViewModel : ViewModelBase
         _skillService = skillService;
         _costTracker = costTracker;
         _sessionMemoryService = sessionMemoryService;
+        _autonomousService = autonomousService;
+        _autonomousMode = settingsService.Settings.AutonomousLoopEnabled;
+        if (_autonomousService != null)
+            _autonomousService.OnPhase += msg => App.Current?.Dispatcher.Invoke(() =>
+            {
+                Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = msg });
+                ScrollToBottom?.Invoke();
+            });
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
@@ -392,6 +409,74 @@ public class ChatViewModel : ViewModelBase
         // Listen for tool execution events
         _agentService.OnToolExecuted += OnToolExecuted;
         _agentService.OnToolStarting += OnToolStarting;
+
+        // Surface provider errors that are raised mid-stream (Ollama down, llama-server not running,
+        // API auth/rate errors). These used to be raised into the void — NOTHING subscribed — so the
+        // user just saw "no response" with no clue why. Show a clean, sanitized message and clear any
+        // dangling thinking indicator.
+        _providerManager.OnError += msg =>
+        {
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                string safe = SanitizeErrorMessage(msg ?? "Unknown error");
+                if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+                // De-dupe: don't stack the identical error twice in a row.
+                if (Messages.LastOrDefault() is { HasError: true } last && last.Content?.Contains(safe) == true)
+                {
+                    StatusText = safe;
+                    return;
+                }
+                Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = $"**⚠ {safe}**", HasError = true });
+                StatusText = safe;
+                ScrollToBottom?.Invoke();
+            });
+        };
+
+        // Wire the human-in-the-loop permission prompt. Without this, PermAction.Ask resolved against a
+        // null handler → silently DENIED → users were funneled into blanket-allowing "*" (which then
+        // never prompts for rm -rf / force-push / overwrite). Now an Ask shows a real confirmation.
+        _agentToolService.OnPermissionRequired += info =>
+        {
+            var dispatcher = App.Current?.Dispatcher;
+            if (dispatcher == null) return Task.FromResult(false); // headless / no UI → fail safe (deny)
+
+            // Inline, non-blocking prompt: render the request (with a preview diff for file edits) right in
+            // the conversation, and resolve when the user clicks Allow/Deny. Replaces the old modal MessageBox
+            // so the user can SEE exactly what's about to change before approving.
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var token = _cts?.Token ?? CancellationToken.None;
+            CancellationTokenRegistration reg = default;
+
+            var prompt = new ChatMessage
+            {
+                Role = MessageRole.PermissionRequest,
+                Content = $"Allow {info.ToolName} to {info.Detail}?",
+                DiffLines = info.Diff?.Lines,
+                DiffStat = info.Diff?.Stat,
+                PermissionCallback = allow => { tcs.TrySetResult(allow); reg.Dispose(); },
+            };
+
+            // If the user hits Stop (cancels the turn) while this prompt is still open, resolve it as DENIED so
+            // the agent loop unwinds immediately — otherwise it parks forever on an unanswered prompt, leaving
+            // IsGenerating stuck on (and a late "Allow" could even apply an edit after the turn was cancelled).
+            reg = token.Register(() =>
+            {
+                if (tcs.TrySetResult(false))
+                    dispatcher.InvokeAsync(() =>
+                    {
+                        prompt.PermissionAnswered = true;
+                        if (!prompt.Content.Contains("(cancelled)")) prompt.Content += "  — (cancelled)";
+                    });
+                reg.Dispose();
+            });
+
+            dispatcher.InvokeAsync(() =>
+            {
+                Messages.Add(prompt);
+                ScrollToBottom?.Invoke();
+            });
+            return tcs.Task;
+        };
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;
@@ -579,7 +664,7 @@ public class ChatViewModel : ViewModelBase
                 {
                     App.Current?.Dispatcher.Invoke(() =>
                     {
-                        LoadedModelName = $"Failed to auto-load: {ex.Message}";
+                        LoadedModelName = $"Failed to auto-load: {SanitizeErrorMessage(ex.Message)}";
                         StatusText = "Model failed to load — go to Models tab";
                     });
                 }
@@ -971,15 +1056,13 @@ public class ChatViewModel : ViewModelBase
     // ─── Open / Close Project Folder ───
     private void OpenFolder()
     {
-        var dialog = new Microsoft.Win32.OpenFolderDialog
-        {
-            Title = "Open Project Folder",
-        };
-
-        if (dialog.ShowDialog() == true && !string.IsNullOrEmpty(dialog.FolderName))
-        {
-            SetWorkingDirectory(dialog.FolderName);
-        }
+        // Use the owner-aware COM picker (it passes the MainWindow hwnd). A plain
+        // Microsoft.Win32.OpenFolderDialog with NO owner opened its modal BEHIND our borderless
+        // (WindowStyle=None) main window — the dialog was invisible and the app looked frozen, so
+        // "Open Folder did nothing". FolderPicker is already what ModelManager/PluginManager use.
+        string? folder = CluadeX.Services.Helpers.FolderPicker.ShowDialog("Open Project Folder", WorkingDirectory);
+        if (!string.IsNullOrEmpty(folder))
+            SetWorkingDirectory(folder);
     }
 
     public void SetWorkingDirectory(string path)
@@ -1165,8 +1248,15 @@ public class ChatViewModel : ViewModelBase
         //    IsGenerating is set up-front and ALWAYS reset in finally so the
         //    Send button never gets stuck disabled if a downstream dispatcher
         //    InvokeAsync fails (e.g. window closing mid-call).
-        IsGenerating = true;
-        var historySnapshot = Messages.ToList();
+        List<ChatMessage> historySnapshot = new();
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            IsGenerating = true;
+            // SkipLast(1): the spec was just added as the last user message above; passing it again as
+            // `prompt` would duplicate the turn (mirrors RunAgentic). Marshaled to the UI thread — this
+            // method runs on the named-pipe background thread, and Messages is UI-bound.
+            historySnapshot = Messages.SkipLast(1).ToList();
+        });
         try
         {
             AgentLoopResult agentResult;
@@ -1176,7 +1266,7 @@ public class ChatViewModel : ViewModelBase
             }
             catch (Exception ex)
             {
-                string err = $"❌ Agent loop failed: {ex.Message}";
+                string err = $"❌ Agent loop failed: {SanitizeErrorMessage(ex.Message)}";
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     var errMsg = new ChatMessage { Role = MessageRole.Assistant, Content = err, HasError = true };
@@ -1397,6 +1487,8 @@ public class ChatViewModel : ViewModelBase
             // Skills always run in agentic mode
             if (!string.IsNullOrEmpty(skillPromptOverride) && HasProject)
                 await RunAgentic(input, _cts.Token);
+            else if (AutonomousMode && HasProject && _autonomousService != null)
+                await RunAutonomous(input, _cts.Token);
             else if (AgenticMode && HasProject)
                 await RunAgentic(input, _cts.Token);
             else if (AutoExecute)
@@ -1501,6 +1593,36 @@ public class ChatViewModel : ViewModelBase
     }
 
     // ─── Agentic Mode (tool use loop) ───
+    /// <summary>
+    /// Autonomous "drive to green": run the build-test-fix loop then the hidden-bug review loop via
+    /// AutonomousCodingService. Tool activity streams to the chat through the existing agent events;
+    /// phase banners arrive via OnPhase (wired in the ctor); the final response is posted + saved here.
+    /// </summary>
+    private async Task RunAutonomous(string input, CancellationToken ct)
+    {
+        if (_autonomousService == null) { await RunAgentic(input, ct); return; }
+
+        // Clear the generic "thinking" placeholder — the autonomous loop posts its own phase banners.
+        if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+
+        // Working history = the session so far, minus the user message we just added (passed as the goal).
+        var source = (IEnumerable<ChatMessage>?)CurrentSession?.Messages ?? Messages;
+        var history = source.SkipLast(1).ToList();
+
+        var result = await _autonomousService.RunAsync(history, input, ct);
+
+        var final = new ChatMessage
+        {
+            Role = MessageRole.Assistant,
+            Content = string.IsNullOrWhiteSpace(result.FinalResponse) ? result.Summary : result.FinalResponse,
+        };
+        Messages.Add(final);
+        CurrentSession?.Messages.Add(final);
+        _isDirty = true;
+        ScrollToBottom?.Invoke();
+        SaveNow();
+    }
+
     private async Task RunAgentic(string input, CancellationToken ct)
     {
         // Stopwatch & timer already started in SendMessage
@@ -1839,6 +1961,8 @@ public class ChatViewModel : ViewModelBase
                 ToolInputSummary = inputSummary,
                 ToolOutputLines = outputLines,
                 CollapsedToolNames = new List<string> { toolResult.ToolName },
+                DiffLines = toolResult.Diff?.Lines,
+                DiffStat = toolResult.Diff?.Stat,
             };
             Messages.Add(msg);
             CurrentSession?.Messages.Add(msg);
@@ -2185,7 +2309,7 @@ public class ChatViewModel : ViewModelBase
             CurrentSession?.Messages.Add(Messages.Last());
             ScrollToBottom?.Invoke();
         }
-        catch (Exception ex) { StatusText = $"Execution error: {ex.Message}"; }
+        catch (Exception ex) { StatusText = $"Execution error: {SanitizeErrorMessage(ex.Message)}"; }
         finally { IsGenerating = false; StatusText = "Ready"; }
     }
 
@@ -2268,7 +2392,7 @@ public class ChatViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            StatusText = $"Failed to load: {ex.Message}";
+            StatusText = $"Failed to load: {SanitizeErrorMessage(ex.Message)}";
         }
         finally
         {

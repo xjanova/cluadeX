@@ -93,6 +93,10 @@ public partial class App : Application
                 await host.StartAsync();
                 dbg?.Info("MCP", $"McpHostService listening on pipe '{host.PipeName}'");
 
+                // Self-register a discovery marker (~/.cluadex/install.json) so an external orchestrator
+                // (e.g. BrainX's CluadeXLauncher) can find THIS install's exe + pipe without guessing paths.
+                WriteInstallMarker(host.PipeName);
+
                 // Surface the host on MainViewModel so the sidebar status chip
                 // can data-bind to its observable properties. Do this on the UI
                 // thread because property setter raises PropertyChanged, which
@@ -127,6 +131,23 @@ public partial class App : Application
             try
             {
                 var hooks = _serviceProvider.GetRequiredService<HookService>();
+                // Workspace-trust prompt: if the opened project defines auto-run hooks and the folder
+                // isn't trusted yet, offer to trust it (once per folder per session) instead of silently
+                // running shell scripts from a possibly-hostile cloned repo.
+                var promptedHookFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                hooks.OnUntrustedProjectHooks += folder =>
+                {
+                    lock (promptedHookFolders) { if (!promptedHookFolders.Add(folder)) return; }
+                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        var r = System.Windows.MessageBox.Show(
+                            $"This project defines automation hooks that run shell commands automatically:\n\n{folder}\\.cluadex\\hooks.json\n\nOnly enable hooks from projects you trust. Trust and enable this project's hooks?",
+                            "Workspace trust — untrusted project hooks",
+                            System.Windows.MessageBoxButton.YesNo,
+                            System.Windows.MessageBoxImage.Warning);
+                        if (r == System.Windows.MessageBoxResult.Yes) hooks.TrustProjectHooks(folder);
+                    });
+                };
                 await hooks.ExecuteSessionStartHooksAsync(new HookSessionContext());
                 dbg?.Debug("Hooks", "SessionStart hooks fired");
             }
@@ -145,6 +166,36 @@ public partial class App : Application
     //  to the dispatcher internally — so nothing UI-touching runs here at
     //  this top level.
     // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Write ~/.cluadex/install.json describing THIS running install (exe path, version, pipe name, token
+    /// file) so a launcher/orchestrator can discover and start CluadeX, and connect to its named pipe,
+    /// without hard-coding paths. Best-effort — never blocks startup.
+    /// </summary>
+    private static void WriteInstallMarker(string pipeName)
+    {
+        try
+        {
+            string dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
+            System.IO.Directory.CreateDirectory(dir);
+
+            string exe = Environment.ProcessPath ?? "";
+            var marker = new
+            {
+                exePath = exe,
+                installDir = string.IsNullOrEmpty(exe) ? "" : System.IO.Path.GetDirectoryName(exe),
+                version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "",
+                pipeName,
+                tokenFile = System.IO.Path.Combine(dir, "mcp-host-token"),
+                updatedAt = DateTime.UtcNow.ToString("o"),
+            };
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(dir, "install.json"),
+                System.Text.Json.JsonSerializer.Serialize(marker, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* discovery marker is best-effort */ }
+    }
 
     private async Task<McpToolResult> HandleMcpToolAsync(McpToolInvocation invocation, CancellationToken ct)
     {
@@ -546,6 +597,9 @@ public partial class App : Application
         services.AddSingleton<CostTrackingService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<SessionMemoryService>();
+        services.AddSingleton<RepoMapService>();
+        services.AddSingleton<EmbeddingService>();
+        services.AddSingleton<AutonomousCodingService>();
         services.AddSingleton<HookService>();
         services.AddSingleton<McpServerManager>();
         // McpHostService — exposes CluadeX's coding agent as an MCP server over

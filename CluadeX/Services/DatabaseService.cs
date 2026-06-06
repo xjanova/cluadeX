@@ -106,10 +106,10 @@ public sealed class DatabaseService : IDisposable
         }
 
         // ─── Schema v2: project_path column on sessions ───
-        // Added so the sidebar can filter session list by the currently-open folder.
-        // SQLite ALTER TABLE ADD COLUMN is fine on live DBs — just ignore "duplicate column" if the user
-        // upgraded out of order.
-        if (currentVersion < 2)
+        // Only for DBs created at v1 BEFORE this column existed. A fresh install ran the v1 block above,
+        // whose CREATE TABLE already includes project_path — so gating on `== 1` (not `< 2`) avoids the
+        // ALTER firing on every fresh install and throwing/swallowing a "duplicate column" each launch.
+        if (currentVersion == 1)
         {
             try
             {
@@ -166,6 +166,10 @@ public sealed class DatabaseService : IDisposable
             for (int i = 0; i < session.Messages.Count; i++)
             {
                 var msg = session.Messages[i];
+                // Transient UI prompts are not history — and their Allow/Deny callback can't be persisted, so a
+                // reloaded one would render as a dead button. Skip them entirely (the resulting tool action,
+                // with its diff, is saved separately).
+                if (msg.Role == MessageRole.PermissionRequest) continue;
                 using var cmd = conn.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
@@ -509,6 +513,12 @@ public sealed class DatabaseService : IDisposable
     {
         var conn = new SqliteConnection(_connectionString);
         conn.Open();
+        // Per-connection pragmas. busy_timeout: wait instead of instantly throwing SQLITE_BUSY (→ silent
+        // save loss) when autosave and a background write contend. foreign_keys: SQLite defaults this OFF
+        // per connection — without it ON here, ON DELETE CASCADE wouldn't fire and deleting a session
+        // would orphan its messages.
+        Execute(conn, "PRAGMA busy_timeout=5000;");
+        Execute(conn, "PRAGMA foreign_keys=ON;");
         return conn;
     }
 

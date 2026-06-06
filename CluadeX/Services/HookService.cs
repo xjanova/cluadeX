@@ -44,6 +44,12 @@ public class HookService
     private readonly PluginService _pluginService;
 
     private List<HookDefinition>? _cachedHooks;
+    private HashSet<string>? _trustedFolders;
+    private readonly object _gate = new(); // guards _trustedFolders + _cachedHooks across UI/agent/read-loop threads
+
+    /// <summary>Raised when the open project defines .cluadex/hooks.json but the folder isn't trusted yet.
+    /// The UI should offer to trust it before those auto-run scripts are enabled.</summary>
+    public event Action<string>? OnUntrustedProjectHooks;
 
     public HookService(FileSystemService fileSystemService, SettingsService settingsService, PluginService pluginService)
     {
@@ -51,8 +57,80 @@ public class HookService
         _settingsService = settingsService;
         _pluginService = pluginService;
 
-        // Auto-reload hooks when plugins change
+        // Reload hooks when plugins change OR the open project changes — the latter so workspace trust
+        // is re-evaluated for the new folder and a previous project's hooks don't linger.
         _pluginService.PluginsChanged += ReloadHooks;
+        _fileSystemService.OnWorkingDirectoryChanged += ReloadHooks;
+    }
+
+    // ─── Workspace trust (project-local hooks come from the opened repo, which may be hostile) ───
+
+    private string TrustFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "trusted-hook-folders.json");
+
+    private static string NormalizeFolder(string folder)
+    {
+        try
+        {
+            string full = Path.GetFullPath(folder);
+            // Resolve junctions/symlinks to the REAL target so trust is keyed on actual content, not on a
+            // name that can be re-pointed after trust (trust-then-swap: trust C:\repo, later make it a
+            // junction to attacker content). Lexical GetFullPath alone doesn't resolve reparse points.
+            try
+            {
+                var target = new DirectoryInfo(full).ResolveLinkTarget(returnFinalTarget: true);
+                if (target != null) full = target.FullName;
+            }
+            catch { /* not a link / inaccessible → fall back to the lexical full path */ }
+            return full.TrimEnd('\\', '/').ToLowerInvariant();
+        }
+        catch { return folder.ToLowerInvariant(); }
+    }
+
+    private HashSet<string> LoadTrustedFolders()
+    {
+        if (_trustedFolders != null) return _trustedFolders;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            if (File.Exists(TrustFilePath))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(TrustFilePath));
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                        if (el.GetString() is { Length: > 0 } p) set.Add(NormalizeFolder(p));
+            }
+        }
+        catch { /* corrupt trust file → trust nothing (safe default) */ }
+        _trustedFolders = set;
+        return set;
+    }
+
+    /// <summary>True if the user has explicitly trusted project-local hooks for this folder.</summary>
+    public bool IsProjectHooksTrusted(string folder)
+    {
+        if (string.IsNullOrEmpty(folder)) return false;
+        string key = NormalizeFolder(folder);
+        lock (_gate) return LoadTrustedFolders().Contains(key);
+    }
+
+    /// <summary>Persist trust for a folder's project-local hooks, then reload so they take effect.</summary>
+    public void TrustProjectHooks(string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return;
+        string key = NormalizeFolder(folder);
+        lock (_gate)
+        {
+            var set = LoadTrustedFolders();
+            if (!set.Add(key)) return; // already trusted
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(TrustFilePath)!);
+                File.WriteAllText(TrustFilePath, JsonSerializer.Serialize(set.ToList()));
+            }
+            catch { /* best-effort persist */ }
+        }
+        ReloadHooks();
     }
 
     /// <summary>Execute pre-tool hooks. Returns false if any hook blocks execution.</summary>
@@ -244,16 +322,26 @@ public class HookService
     /// <summary>Load hooks from config files.</summary>
     private List<HookDefinition> LoadHooks()
     {
-        if (_cachedHooks != null) return _cachedHooks;
+        lock (_gate) { if (_cachedHooks != null) return _cachedHooks; }
 
         var hooks = new List<HookDefinition>();
+        string? untrustedProjectFolder = null;
 
-        // Project hooks (.cluadex/hooks.json)
+        // Project hooks (.cluadex/hooks.json) — WORKSPACE TRUST. These commands come from the OPENED
+        // repo, which may be hostile (clone → open → SessionStart hook auto-runs `cmd /c …` = RCE).
+        // Only load them if the user has explicitly trusted this folder; otherwise skip and let the UI
+        // offer to trust. User-global / bundled / plugin hooks below are the user's OWN config → trusted.
         if (_fileSystemService.HasWorkingDirectory)
         {
-            string projectHooksFile = Path.Combine(_fileSystemService.WorkingDirectory, ".cluadex", "hooks.json");
+            string dir = _fileSystemService.WorkingDirectory;
+            string projectHooksFile = Path.Combine(dir, ".cluadex", "hooks.json");
             if (File.Exists(projectHooksFile))
-                hooks.AddRange(ParseHooksFile(projectHooksFile));
+            {
+                if (IsProjectHooksTrusted(dir))
+                    hooks.AddRange(ParseHooksFile(projectHooksFile));
+                else
+                    untrustedProjectFolder = dir; // raise the event AFTER the lock is released (below)
+            }
         }
 
         // Global hooks (~/.cluadex/hooks.json)
@@ -298,7 +386,8 @@ public class HookService
         }
         catch { /* plugin loading is best-effort */ }
 
-        _cachedHooks = hooks;
+        lock (_gate) { _cachedHooks = hooks; }
+        if (untrustedProjectFolder != null) OnUntrustedProjectHooks?.Invoke(untrustedProjectFolder);
         return hooks;
     }
 
@@ -335,7 +424,7 @@ public class HookService
     }
 
     /// <summary>Clear cached hooks (for reload).</summary>
-    public void ReloadHooks() => _cachedHooks = null;
+    public void ReloadHooks() { lock (_gate) _cachedHooks = null; }
 
     /// <summary>
     /// Sanitize a value for safe shell argument insertion (prevent injection).

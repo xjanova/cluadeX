@@ -435,7 +435,39 @@
                     <CheckBox Content="{services:Loc settings.sessionMemory}" IsChecked="{Binding SessionMemoryEnabled}"
                               Margin="0,0,0,4"/>
                     <TextBlock Text="{services:Loc settings.sessionMemoryDesc}"
-                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,0" TextWrapping="Wrap"/>
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,12" TextWrapping="Wrap"/>
+
+                    <!-- ═══ Autonomous build-test-fix-review loop ═══ -->
+                    <TextBlock Text="Autonomous Loop (drive to green)" FontWeight="SemiBold"
+                               Foreground="{StaticResource Subtext0Brush}" Margin="0,4,0,4"/>
+                    <CheckBox Content="Enable autonomous mode (implement → run tests → fix → loop, then review)"
+                              IsChecked="{Binding AutonomousLoopEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Edits files, runs the project's build/tests on your machine, reads the failures, and loops back to fix — until it passes. Every loop is capped to avoid runaway cost."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="Max fix iterations:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding AutoFixMaxIterations}" Width="56" VerticalContentAlignment="Center"/>
+                        <TextBlock Text="Verify command (empty = auto-detect):" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="20,0,8,0"/>
+                        <TextBox Text="{Binding AutoVerifyCommand}" Width="220" VerticalContentAlignment="Center"
+                                 ToolTip="e.g. dotnet build / npm test / pytest. Empty = auto-detect from project files."/>
+                    </StackPanel>
+
+                    <CheckBox Content="Review for hidden bugs after the build is green"
+                              IsChecked="{Binding AutoReviewEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,0">
+                        <TextBlock Text="Review mode:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <ComboBox SelectedValue="{Binding AutoReviewMode}" SelectedValuePath="Tag" Width="150">
+                            <ComboBoxItem Content="Until clean" Tag="until_clean"/>
+                            <ComboBoxItem Content="Fixed rounds" Tag="fixed_rounds"/>
+                        </ComboBox>
+                        <TextBlock Text="Max review rounds:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="20,0,8,0"/>
+                        <TextBox Text="{Binding AutoReviewMaxRounds}" Width="56" VerticalContentAlignment="Center"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

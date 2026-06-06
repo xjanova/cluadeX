@@ -120,8 +120,18 @@ public class SettingsService
                     DecryptSecrets(_settings);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                // Don't silently reset to defaults over a recoverable file — a single bad parse would
+                // otherwise be overwritten by the next Save(), PERMANENTLY losing the user's config +
+                // API keys. Preserve the bad file for recovery first, then fall back to defaults.
+                try
+                {
+                    if (File.Exists(_settingsPath))
+                        File.Copy(_settingsPath, _settingsPath + $".corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: true);
+                }
+                catch { /* best-effort backup */ }
+                System.Diagnostics.Debug.WriteLine($"Settings load failed (backed up, using defaults): {ex.Message}");
                 _settings = new AppSettings();
             }
         }
@@ -150,7 +160,17 @@ public class SettingsService
                 // A crash mid-write previously left a zero-byte or partial settings.json
                 // and users would lose every preference on next launch.
                 string tempPath = _settingsPath + ".tmp";
-                File.WriteAllText(tempPath, json);
+                // fsync the temp file BEFORE swapping it in. File.Replace can commit the directory entry
+                // while the new file's data pages are still in the OS cache, so a power-loss in between
+                // would leave settings.json pointing at a zero/partial file — losing every preference and
+                // the (encrypted) API keys, the exact corruption this temp-write was meant to prevent.
+                using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var sw = new StreamWriter(fs, new System.Text.UTF8Encoding(false)))
+                {
+                    sw.Write(json);
+                    sw.Flush();
+                    fs.Flush(flushToDisk: true);
+                }
                 if (File.Exists(_settingsPath))
                     File.Replace(tempPath, _settingsPath, destinationBackupFileName: null);
                 else

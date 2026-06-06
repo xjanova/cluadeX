@@ -152,7 +152,9 @@ public class DebugLogService
         var today = DateTime.Now.Date;
         if (today == _currentLogDate && !string.IsNullOrEmpty(_currentLogPath)) return;
         _currentLogDate = today;
-        _currentLogPath = Path.Combine(_logDir, $"cluadex-{today:yyyyMMdd}.log");
+        // InvariantCulture: on a Thai-locale machine "yyyy" renders the Buddhist year (2569) → log files
+        // were named cluadex-25690606.log instead of cluadex-20260606.log (unsortable, unfindable).
+        _currentLogPath = Path.Combine(_logDir, $"cluadex-{today.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture)}.log");
 
         // Header on first write of the day
         if (!File.Exists(_currentLogPath))
@@ -161,7 +163,7 @@ public class DebugLogService
             {
                 var asm = System.Reflection.Assembly.GetExecutingAssembly().GetName();
                 File.WriteAllText(_currentLogPath,
-                    $"# CluadeX log {today:yyyy-MM-dd}{Environment.NewLine}" +
+                    $"# CluadeX log {today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}{Environment.NewLine}" +
                     $"# Version: {asm.Version?.ToString(3) ?? "?"}{Environment.NewLine}" +
                     $"# OS: {Environment.OSVersion.VersionString}{Environment.NewLine}" +
                     $"# CLR: {Environment.Version}{Environment.NewLine}{Environment.NewLine}");

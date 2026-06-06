@@ -399,15 +399,15 @@ public class LlamaInferenceService : IDisposable
         bool hasOutput = false;
         await foreach (var text in executor.InferAsync(prompt.ToString(), inferenceParams, ct))
         {
-            // Filter out anti-prompt tokens that leak into the output
-            string clean = text
-                .Replace("<|im_end|>", "")
-                .Replace("<|im_start|>", "");
+            // Strip leaked control tokens and cut at a turn-end marker (shared with the server path,
+            // so DeepSeek/Qwen/Llama templates are all handled the same way).
+            var (clean, stop) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(text);
             if (!string.IsNullOrEmpty(clean))
             {
                 hasOutput = true;
                 yield return clean;
             }
+            if (stop) break;
         }
 
         if (!hasOutput)

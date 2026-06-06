@@ -239,6 +239,10 @@ public class AnthropicProvider : ApiProviderBase
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
+        // Anthropic sends output_tokens in message_delta as a CUMULATIVE running total and may emit
+        // multiple message_delta frames — track the last recorded value so we bill only the increment.
+        int recordedOutputTokens = 0;
+
         while (!reader.EndOfStream)
         {
             ct.ThrowIfCancellationRequested();
@@ -278,19 +282,24 @@ public class AnthropicProvider : ApiProviderBase
                     }
                     else if (type == "message_delta" && root.TryGetProperty("usage", out var usageDelta))
                     {
-                        // Record output token usage (not a new request — input was recorded at message_start)
-                        int outTokens = usageDelta.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : 0;
-                        if (_costTracker != null && outTokens > 0)
-                            _costTracker.RecordUsage(model, 0, outTokens, isNewRequest: false);
+                        // output_tokens here is CUMULATIVE — record only the increment since the last
+                        // frame so multiple message_delta events don't multiply-count cost.
+                        int cumulative = usageDelta.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var otv) ? otv : recordedOutputTokens;
+                        int outDelta = cumulative - recordedOutputTokens;
+                        if (_costTracker != null && outDelta > 0)
+                        {
+                            _costTracker.RecordUsage(model, 0, outDelta, isNewRequest: false);
+                            recordedOutputTokens = cumulative;
+                        }
                     }
                     else if (type == "message_start" && root.TryGetProperty("message", out var msgStart))
                     {
                         // Record input token usage from message_start event
                         if (msgStart.TryGetProperty("usage", out var startUsage))
                         {
-                            int inTokens = startUsage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0;
-                            int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) ? cr.GetInt32() : 0;
-                            int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) ? cc.GetInt32() : 0;
+                            int inTokens = startUsage.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var itv) ? itv : 0;
+                            int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) && cr.TryGetInt32(out var crv) ? crv : 0;
+                            int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) && cc.TryGetInt32(out var ccv) ? ccv : 0;
                             if (_costTracker != null && inTokens > 0)
                                 _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate);
                         }

@@ -74,6 +74,20 @@ public class SettingsViewModel : ViewModelBase
     public bool MicrocompactEnabled { get => _microcompactEnabled; set => SetProperty(ref _microcompactEnabled, value); }
     public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
 
+    // Autonomous build-test-fix-review loop
+    private bool _autonomousLoopEnabled;
+    private int _autoFixMaxIterations = 5;
+    private string _autoVerifyCommand = "";
+    private bool _autoReviewEnabled = true;
+    private string _autoReviewMode = "until_clean";
+    private int _autoReviewMaxRounds = 3;
+    public bool AutonomousLoopEnabled { get => _autonomousLoopEnabled; set => SetProperty(ref _autonomousLoopEnabled, value); }
+    public int AutoFixMaxIterations { get => _autoFixMaxIterations; set => SetProperty(ref _autoFixMaxIterations, value); }
+    public string AutoVerifyCommand { get => _autoVerifyCommand; set => SetProperty(ref _autoVerifyCommand, value); }
+    public bool AutoReviewEnabled { get => _autoReviewEnabled; set => SetProperty(ref _autoReviewEnabled, value); }
+    public string AutoReviewMode { get => _autoReviewMode; set => SetProperty(ref _autoReviewMode, value); }
+    public int AutoReviewMaxRounds { get => _autoReviewMaxRounds; set => SetProperty(ref _autoReviewMaxRounds, value); }
+
     public bool AutoExecuteCode { get => _autoExecuteCode; set => SetProperty(ref _autoExecuteCode, value); }
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public string PreferredLanguage { get => _preferredLanguage; set => SetProperty(ref _preferredLanguage, value); }
@@ -513,6 +527,12 @@ public class SettingsViewModel : ViewModelBase
         PromptCachingEnabled = s.PromptCachingEnabled;
         MicrocompactEnabled = s.MicrocompactEnabled;
         SessionMemoryEnabled = s.SessionMemoryEnabled;
+        AutonomousLoopEnabled = s.AutonomousLoopEnabled;
+        AutoFixMaxIterations = s.AutoFixMaxIterations;
+        AutoVerifyCommand = s.AutoVerifyCommand;
+        AutoReviewEnabled = s.AutoReviewEnabled;
+        AutoReviewMode = s.AutoReviewMode;
+        AutoReviewMaxRounds = s.AutoReviewMaxRounds;
 
         // Load provider settings
         SelectedProvider = s.ActiveProvider;
@@ -548,12 +568,9 @@ public class SettingsViewModel : ViewModelBase
 
     private static string? BrowseFolder(string title, string currentPath)
     {
-        var dialog = new OpenFolderDialog
-        {
-            Title = title,
-            InitialDirectory = System.IO.Directory.Exists(currentPath) ? currentPath : "",
-        };
-        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+        // Owner-aware COM picker — a plain OpenFolderDialog with no owner opens behind the borderless
+        // (WindowStyle=None) main window and the app looks frozen. Mirrors ModelManager/PluginManager.
+        return CluadeX.Services.Helpers.FolderPicker.ShowDialog(title, currentPath);
     }
 
     private void Save()
@@ -585,6 +602,12 @@ public class SettingsViewModel : ViewModelBase
             s.PromptCachingEnabled = PromptCachingEnabled;
             s.MicrocompactEnabled = MicrocompactEnabled;
             s.SessionMemoryEnabled = SessionMemoryEnabled;
+            s.AutonomousLoopEnabled = AutonomousLoopEnabled;
+            s.AutoFixMaxIterations = AutoFixMaxIterations;
+            s.AutoVerifyCommand = AutoVerifyCommand;
+            s.AutoReviewEnabled = AutoReviewEnabled;
+            s.AutoReviewMode = AutoReviewMode;
+            s.AutoReviewMaxRounds = AutoReviewMaxRounds;
 
             // Provider CONFIG (api key, base url, default model) for the
             // currently-edited provider. Do NOT touch s.ActiveProvider here:
