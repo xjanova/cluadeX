@@ -268,6 +268,7 @@ public class AgentToolService : IDisposable
                 ToolType.SearchFiles => ExecuteSearchFiles(call),
                 ToolType.SearchContent => ExecuteSearchContent(call),
                 ToolType.RunCommand => await ExecuteRunCommandAsync(call, ct),
+                ToolType.RunBuild => await ExecuteRunBuildAsync(call, ct),
                 ToolType.CreateDirectory => ExecuteCreateDirectory(call),
 
                 // Git tools
@@ -466,7 +467,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "search_content", Description = "Search for text in file contents",
             InputSchema = MakeSchema(("query", "string", "Search text", true), ("path", "string", "Search directory", false), ("pattern", "string", "File pattern filter", false)) });
         schemas.Add(new() { Name = "run_command", Description = "Execute a shell command",
-            InputSchema = MakeSchema(("command", "string", "Shell command to run", true)) });
+            InputSchema = MakeSchema(("command", "string", "Shell command to run", true), ("timeout_ms", "string", "Optional timeout in ms (default 30000, max 600000) — raise it for slow builds/tests", false)) });
         schemas.Add(new() { Name = "create_directory", Description = "Create a directory",
             InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
 
@@ -551,6 +552,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "lsp_diagnostics", Description = "Check a source file for errors/warnings via its language server (OmniSharp/pylsp/tsserver/rust-analyzer/gopls, if installed). Use after editing to verify your change compiles. Returns a hint if no server is installed.", InputSchema = MakeSchema(("path", "string", "Path to the source file to check", true)) });
         schemas.Add(new() { Name = "list_symbols", Description = "Outline a source file — its classes/methods/functions with line numbers — WITHOUT reading the whole file. Use it to navigate a file cheaply before read_file/edit_file.", InputSchema = MakeSchema(("path", "string", "Path to the source file", true)) });
         schemas.Add(new() { Name = "find_symbol", Description = "Find where a symbol (class/method/function/type) is DEFINED across the project, by NAME — a lightweight 'go to definition' that needs no language server. Returns file:line for each likely definition. Use this instead of blind-grepping to locate where to edit.", InputSchema = MakeSchema(("name", "string", "The symbol name to locate (e.g. a class or method name)", true)) });
+        schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false)) });
         schemas.Add(new() { Name = "codebase_search", Description = "Find the most relevant files/lines for a natural-language query across the whole repo, ranked by filename + symbol + content relevance (smarter than raw grep for 'where is X handled?'). Then read_file the top hits.", InputSchema = MakeSchema(("query", "string", "What you're looking for (keywords or a question)", true), ("limit", "string", "Max results (default 12)", false)) });
         schemas.Add(new() { Name = "instinct_evolve", Description = "Housekeeping: merge near-duplicate learned instincts via embedding similarity (preserves occurrence/accept counts, deletes redundant copies). Needs an Ollama embedding model; no-ops gracefully without one.", InputSchema = MakeSchema() });
 
@@ -1104,6 +1106,7 @@ public class AgentToolService : IDisposable
             int off = int.TryParse(offStr, out var o) && o > 0 ? o : 1;
             int lim = int.TryParse(limStr, out var l) && l > 0 ? l : 2000;
             var (text, total) = _fileSystem.ReadLines(path, off, lim);
+            _fileSystem.MarkKnown(path);
             int end = Math.Min(off + lim - 1, total);
             return new ToolResult
             {
@@ -1116,6 +1119,7 @@ public class AgentToolService : IDisposable
         }
 
         string content = _fileSystem.ReadFile(path);
+        _fileSystem.MarkKnown(path);
         int lineCount = content.Split('\n').Length;
 
         return new ToolResult
@@ -1169,6 +1173,15 @@ public class AgentToolService : IDisposable
         return null;
     }
 
+    /// <summary>Enforce read-before-edit (gated by the EnforceReadBeforeEdit setting). Returns a Fail result
+    /// to short-circuit the tool, or null when the modification may proceed.</summary>
+    private ToolResult? CheckReadBeforeEdit(ToolCall call, string path)
+    {
+        if (!_settingsService.Settings.EnforceReadBeforeEdit) return null;
+        var block = _fileSystem.CheckCanModify(path);
+        return block == null ? null : Fail(call, block);
+    }
+
     private ToolResult ExecuteWriteFile(ToolCall call)
     {
         string path = call.GetArg("path");
@@ -1176,8 +1189,12 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
+        var rbe = CheckReadBeforeEdit(call, path);
+        if (rbe != null) return rbe;
+
         string? beforeWrite = _fileSystem.TryReadRaw(path);
         _fileSystem.WriteFile(path, content);
+        _fileSystem.MarkKnown(path);
         var writeDiff = CluadeX.Helpers.DiffUtil.Compute(beforeWrite ?? "", content);
 
         return new ToolResult
@@ -1202,6 +1219,9 @@ public class AgentToolService : IDisposable
             return Fail(call, "Missing 'path' argument");
         if (string.IsNullOrEmpty(find))
             return Fail(call, "Missing 'find' argument");
+
+        var rbe = CheckReadBeforeEdit(call, path);
+        if (rbe != null) return rbe;
 
         // Capture the file BEFORE editing so we can show the user an exact before/after diff.
         string? beforeEdit = _fileSystem.TryReadRaw(path);
@@ -1230,6 +1250,8 @@ public class AgentToolService : IDisposable
             };
         }
 
+        _fileSystem.MarkKnown(path);
+
         string? afterEdit = _fileSystem.TryReadRaw(path);
         var editDiff = (beforeEdit != null && afterEdit != null)
             ? CluadeX.Helpers.DiffUtil.Compute(beforeEdit, afterEdit)
@@ -1257,6 +1279,9 @@ public class AgentToolService : IDisposable
         if (parseError != null) return Fail(call, $"multi_edit: {parseError}");
         if (edits.Count == 0) return Fail(call, "multi_edit: no edits provided.");
 
+        var rbe = CheckReadBeforeEdit(call, path);
+        if (rbe != null) return rbe;
+
         string? before = _fileSystem.TryReadRaw(path);
         bool ok; int applied; string message;
         try { (ok, applied, message) = _fileSystem.MultiEdit(path, edits); }
@@ -1264,6 +1289,8 @@ public class AgentToolService : IDisposable
 
         if (!ok)
             return Fail(call, $"multi_edit aborted ({applied}/{edits.Count} applied) — NO changes written (atomic). {message}");
+
+        _fileSystem.MarkKnown(path);
 
         string? after = _fileSystem.TryReadRaw(path);
         var diff = (before != null && after != null) ? CluadeX.Helpers.DiffUtil.Compute(before, after) : null;
@@ -1359,6 +1386,27 @@ public class AgentToolService : IDisposable
             Output = sb.ToString().TrimEnd(),
             Summary = $"{hits.Count} definition(s) of {name}",
         };
+    }
+
+    private async Task<ToolResult> ExecuteRunBuildAsync(ToolCall call, CancellationToken ct)
+    {
+        string cmd = call.GetArg("command");
+        if (string.IsNullOrEmpty(cmd)) cmd = _fileSystem.DetectBuildCommand() ?? "";
+        if (string.IsNullOrEmpty(cmd))
+            return Fail(call, "run_build: couldn't detect a build system in the project root (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+
+        // Reuse the hardened command runner (dangerous-command blocklist, timeout, output budget, cwd).
+        var inner = new ToolCall
+        {
+            Type = ToolType.RunCommand,
+            ToolName = "run_command",
+            Arguments = new Dictionary<string, string> { ["command"] = cmd, ["timeout_ms"] = "180000" },
+        };
+        var result = await ExecuteRunCommandAsync(inner, ct);
+        result.Type = call.Type;
+        result.ToolName = call.ToolName;
+        result.Summary = result.Success ? $"Build OK ({cmd})" : $"Build FAILED ({cmd}) — read the errors and fix them";
+        return result;
     }
 
     private ToolResult ExecuteListFiles(ToolCall call)
@@ -1476,8 +1524,10 @@ public class AgentToolService : IDisposable
             if (process == null)
                 return Fail(call, "Failed to start process");
 
+            // Default 30s; callers (e.g. run_build) can pass a longer budget for slow builds/tests.
+            int timeoutMs = int.TryParse(call.GetArg("timeout_ms"), out var tms) && tms > 0 ? Math.Min(tms, 600000) : 30000;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(30000); // 30s timeout
+            cts.CancelAfter(timeoutMs);
 
             string stdout, stderr;
             try
@@ -1489,7 +1539,7 @@ public class AgentToolService : IDisposable
             catch (OperationCanceledException)
             {
                 try { process.Kill(true); } catch { }
-                return Fail(call, "Command timed out (30s limit)");
+                return Fail(call, $"Command timed out ({timeoutMs / 1000}s limit)");
             }
 
             string output = stdout;
@@ -2242,6 +2292,7 @@ public class AgentToolService : IDisposable
             "search_files" or "searchfiles" or "find_files" => ToolType.SearchFiles,
             "search_content" or "searchcontent" => ToolType.SearchContent,
             "run_command" or "runcommand" or "shell" or "exec" or "run" => ToolType.RunCommand,
+            "run_build" or "build" or "typecheck" or "type_check" => ToolType.RunBuild,
             "create_directory" or "mkdir" or "create_dir" => ToolType.CreateDirectory,
 
             // Git tools

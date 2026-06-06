@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -12,6 +13,12 @@ public class FileSystemService
 {
     private string _workingDirectory = string.Empty;
 
+    // Read-before-edit / stale-write tracking (Claude Code-style): full path → (mtime ticks, size) last seen
+    // by the agent via read_file (or after it wrote the file). Edits consult this; cleared per project.
+    // ConcurrentDictionary: read_file tools run in PARALLEL, so MarkKnown can be called from several
+    // threads at once — a plain Dictionary would corrupt/throw under that race.
+    private readonly ConcurrentDictionary<string, (long ticks, long size)> _readSnapshots = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Raised when the working directory changes — lets HookService re-evaluate workspace
     /// trust for the new folder and drop stale project hooks.</summary>
     public event Action? OnWorkingDirectoryChanged;
@@ -23,6 +30,7 @@ public class FileSystemService
         {
             if (string.Equals(_workingDirectory, value, StringComparison.OrdinalIgnoreCase)) return;
             _workingDirectory = value;
+            _readSnapshots.Clear();   // new project → the agent hasn't "read" anything here yet
             OnWorkingDirectoryChanged?.Invoke();
         }
     }
@@ -167,6 +175,75 @@ public class FileSystemService
             return File.ReadAllText(fullPath, Encoding.UTF8);
         }
         catch { return null; }
+    }
+
+    // ─── Read-before-edit / stale-write guard (Claude Code-style) ───
+    private (long ticks, long size)? SnapshotOf(string fullPath)
+    {
+        try { var fi = new FileInfo(fullPath); return fi.Exists ? (fi.LastWriteTimeUtc.Ticks, fi.Length) : null; }
+        catch { return null; }
+    }
+
+    /// <summary>Record that the agent has seen a file's CURRENT contents (call after a successful read or write).</summary>
+    public void MarkKnown(string relativePath)
+    {
+        try
+        {
+            string full = ResolveSafePath(relativePath);
+            var snap = SnapshotOf(full);
+            if (snap != null) _readSnapshots[full] = snap.Value;
+        }
+        catch { /* tracking is best-effort, never throws into a tool */ }
+    }
+
+    /// <summary>
+    /// Returns null if the file may be modified, or an actionable message to send back to the model when it
+    /// must not: an existing file that was never read this session, or one that changed on disk since the
+    /// last read. New files (not on disk) are always allowed.
+    /// </summary>
+    public string? CheckCanModify(string relativePath)
+    {
+        string full;
+        try { full = ResolveSafePath(relativePath); } catch { return null; }
+        if (!File.Exists(full)) return null;   // creating a brand-new file — nothing to read first
+
+        if (!_readSnapshots.TryGetValue(full, out var seen))
+            return $"You must read_file '{relativePath}' before editing it, so your change is based on its real current contents.";
+
+        var now = SnapshotOf(full);
+        if (now != null && (now.Value.ticks != seen.ticks || now.Value.size != seen.size))
+            return $"'{relativePath}' changed on disk since you last read it — read_file it again before editing (so you don't overwrite that change).";
+
+        return null;
+    }
+
+    // ─── Build-command detection (for the verify loop / run_build tool) ───
+    /// <summary>
+    /// Best-effort detection of the project's build / type-check command from marker files in the working
+    /// directory root. Returns null when no build system is recognised (e.g. plain scripts).
+    /// </summary>
+    public string? DetectBuildCommand()
+    {
+        if (!HasWorkingDirectory) return null;
+        string dir = _workingDirectory;
+        bool HasGlob(string pattern)
+        {
+            try { return Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly).Any(); }
+            catch { return false; }
+        }
+        bool HasFile(string name) => File.Exists(Path.Combine(dir, name));
+
+        if (HasGlob("*.sln")) return "dotnet build";
+        if (HasGlob("*.csproj") || HasGlob("*.fsproj")) return "dotnet build";
+        if (HasFile("Cargo.toml")) return "cargo build";
+        if (HasFile("go.mod")) return "go build ./...";
+        if (HasFile("tsconfig.json")) return "npx tsc --noEmit";
+        if (HasFile("package.json")) return "npm run build";
+        if (HasFile("pom.xml")) return "mvn -q -DskipTests compile";
+        if (HasFile("build.gradle") || HasFile("build.gradle.kts")) return "gradle build -x test";
+        if (HasFile("Makefile") || HasFile("makefile")) return "make";
+        if (HasFile("CMakeLists.txt")) return "cmake --build build";
+        return null;
     }
 
     // ─── Write File ───

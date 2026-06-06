@@ -46,6 +46,9 @@ public class AppSettings
     public int MaxAutoFixAttempts { get; set; } = 3;
     /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks.</summary>
     public int MaxAgentIterations { get; set; } = 25;
+    /// <summary>Require the agent to read a file before editing it, and block edits to a file that changed on
+    /// disk since the last read (Claude Code-style — prevents blind edits and clobbering external changes).</summary>
+    public bool EnforceReadBeforeEdit { get; set; } = true;
     public string PreferredLanguage { get; set; } = "C#";
 
     /// <summary>

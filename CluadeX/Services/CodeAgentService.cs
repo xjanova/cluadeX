@@ -188,14 +188,14 @@ public class CodeAgentService
               - จะหาว่า "X อยู่ตรงไหน / ทำงานยังไง" ใช้ codebase_search (จัดอันดับความเกี่ยวข้อง ฉลาดกว่า grep ดิบ) แล้ว read_file ผลลัพธ์อันดับต้น
               - หานิยามของชื่อ (class/method/function) ใช้ find_symbol "ชื่อ" (go-to-definition ไม่ต้องใช้ coord); ดูโครงไฟล์ (class/method พร้อมเลขบรรทัด) ใช้ list_symbols — แม่นกว่าและถูกกว่าการ read ทั้งไฟล์
               - งานที่ไม่ trivial: เรียก brain_recall ก่อนลงมือ เพื่อดูบทเรียน/การตัดสินใจ/บั๊กที่เคยเจอจาก BrainX (อย่าแก้บั๊กเดิมซ้ำรอย)
-              - หลังแก้โค้ด: เรียก lsp_diagnostics กับไฟล์ที่แก้ (หรือ build) เพื่อยืนยันว่าไม่มี error ก่อนบอกว่าเสร็จ
+              - หลังแก้โค้ด: ยืนยันก่อนบอกว่าเสร็จ — เรียก run_build (auto-detect คำสั่ง build/type-check) และ/หรือ lsp_diagnostics กับไฟล์ที่แก้ อ่าน error แล้วแก้ จน build ผ่าน
               """
             : """
               - A CODEBASE MAP (below) lists the project's types/functions. Use it to navigate, then read_file the relevant files — don't guess or blind-grep.
               - To locate "where is X handled?", use codebase_search (ranked relevance, smarter than raw grep), then read_file the top hits.
               - To find where a NAME (class/method/function) is DEFINED, use find_symbol "name" (go-to-definition, no coords needed). To outline a file (symbols + line numbers) use list_symbols — both beat reading the whole file.
               - For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX (don't re-solve a bug you already solved).
-              - After editing code, call lsp_diagnostics on the changed file (or build it) to verify there are no errors before claiming the task is done.
+              - After editing code, VERIFY before claiming done: call run_build (auto-detects the build/type-check command) and/or lsp_diagnostics on the changed file; read any errors and fix them, then build again until clean.
               """);
 
         // ═══════════════════════════════════════════
@@ -273,7 +273,7 @@ public class CodeAgentService
               4. ปฏิบัติตาม best practices และรูปแบบ idiomatic ของภาษานั้นๆ
               5. เมื่อแก้ error ให้วิเคราะห์ error message อย่างละเอียดและให้โค้ดที่แก้ไขแล้วทั้งหมด
               6. ใส่คอมเมนต์เฉพาะ logic ที่ซับซ้อนเท่านั้น — อย่าเพิ่มคอมเมนต์ในโค้ดที่ไม่ได้แก้
-              7. เมื่อแก้ไฟล์ ใช้ edit_file กับ find/replace ที่แม่นยำ แทนการเขียนไฟล์ใหม่ทั้งหมด — ถ้าต้องแก้หลายจุดในไฟล์เดียว ใช้ multi_edit (atomic: พลาดจุดใดจุดหนึ่งจะไม่เขียนทั้งไฟล์); อ่านไฟล์ใหญ่ใช้ read_file พร้อม offset/limit
+              7. อ่านไฟล์ด้วย read_file "ก่อน" แก้เสมอ (ระบบจะบล็อกการแก้ไฟล์ที่ยังไม่ได้อ่าน หรือไฟล์ที่เปลี่ยนบนดิสก์หลังอ่าน) แล้วใช้ edit_file find/replace ที่แม่นยำแทนการเขียนใหม่ทั้งไฟล์ — แก้หลายจุดใช้ multi_edit (atomic: พลาดจุดเดียวไม่เขียนทั้งไฟล์); ไฟล์ใหญ่ใช้ read_file offset/limit
               8. ตรวจสอบโค้ดในใจก่อนเขียน — ให้แน่ใจว่าวงเล็บ/ปีกกาสมดุล
               9. ห้ามแนะนำ security vulnerabilities (command injection, XSS, SQL injection)
               """
@@ -284,7 +284,7 @@ public class CodeAgentService
               4. Follow best practices and idiomatic patterns for the language
               5. When fixing errors, analyze the error message carefully and provide the complete corrected code
               6. Add comments for complex logic only — don't add comments to code you didn't change
-              7. When editing files, prefer minimal changes — use edit_file with precise find/replace over rewriting entire files. For SEVERAL edits to one file, use multi_edit (atomic — if any hunk fails to match, nothing is written). For large files, read_file with offset+limit.
+              7. ALWAYS read_file a file BEFORE you edit/write it (the system blocks edits to a file you haven't read, or one that changed on disk since you read it). Then prefer minimal changes — edit_file with precise find/replace over rewriting whole files. For SEVERAL edits to one file, use multi_edit (atomic — if any hunk fails to match, nothing is written). For large files, read_file with offset+limit.
               8. Validate your code mentally before writing — ensure brackets/braces balance
               9. Do not introduce security vulnerabilities (command injection, XSS, SQL injection, OWASP top 10)
               """);

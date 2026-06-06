@@ -14,6 +14,7 @@ public enum ToolType
     SearchFiles,
     SearchContent,
     RunCommand,
+    RunBuild,        // Auto-detect the project's build/type-check command and run it (the verify loop)
     CreateDirectory,
 
     // Git operations
