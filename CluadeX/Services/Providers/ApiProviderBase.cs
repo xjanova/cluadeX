@@ -172,6 +172,7 @@ public abstract class ApiProviderBase : IAiProvider
         List<NativeMessage> messages,
         string systemPrompt,
         List<ToolSchema> tools,
+        Action<string>? onTextDelta = null,
         CancellationToken ct = default)
         => Task.FromResult(new NativeToolResponse
         {

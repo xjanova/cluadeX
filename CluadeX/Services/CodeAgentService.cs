@@ -178,6 +178,25 @@ public class CodeAgentService
               """);
 
         // ═══════════════════════════════════════════
+        // Section 3a: Respond efficiently (don't over-call tools on trivial asks)
+        // ═══════════════════════════════════════════
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "# ตอบอย่างมีประสิทธิภาพ" : "# Respond Efficiently");
+        sb.AppendLine(isThai
+            ? """
+              - คำถามง่ายๆ ทักทาย หรือพูดคุยทั่วไป (เช่น "ใช้โมเดลอะไร", "สวัสดี") ให้ตอบตรงๆ ทันที — อย่าเรียก tool ถ้ามันไม่ได้ช่วยอะไร
+              - ข้อมูลพื้นฐาน (โมเดล, ไดเรกทอรี, branch) อยู่ในหัวข้อ Environment ด้านล่างแล้ว ตอบจากตรงนั้นได้เลย ไม่ต้องเรียก tool
+              - เรียกอ่านไฟล์/รันคำสั่งเฉพาะเมื่องานนั้นต้องใช้บริบทโปรเจกต์จริงๆ หรือต้องลงมือแก้/ตรวจสอบ
+              - ขึ้นต้นด้วยคำตอบเลย กระชับ ไม่ต้องเกริ่นยาว
+              """
+            : """
+              - For simple questions, greetings, or chit-chat (e.g. "what model are you?", "hi"), answer directly — do NOT call a tool when it adds nothing.
+              - Basic facts (model, working directory, branch) are already in the Environment section below — answer from there without any tool call.
+              - Only read files or run commands when the task genuinely needs project context or an actual change/check.
+              - Lead with the answer. Keep it concise; skip long preambles.
+              """);
+
+        // ═══════════════════════════════════════════
         // Section 3b: Code intelligence & memory (use what makes CluadeX unique)
         // ═══════════════════════════════════════════
         sb.AppendLine();
@@ -618,6 +637,20 @@ public class CodeAgentService
     {
         var sb = new StringBuilder(BuildBaseSystemPrompt());
 
+        // ─── Context-window awareness (fixes the local-model "hang / no response") ───
+        // Local providers run with a SMALL context (default 4096 tokens). The full Anthropic-grade context
+        // dump — tool definitions + project tree + codebase map + key files — is many thousands of tokens
+        // and OVERFLOWS that window. On a local model that means an agonizingly slow prefill or no output at
+        // all. So we scale what we inject to the active model's actual context size. (API providers with huge
+        // windows are unaffected — they still get the full prompt, identical to before.)
+        bool isLocalProvider = _providerManager.ActiveProviderType
+            is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        int contextTokens = isLocalProvider
+            ? Math.Max(2048, (int)_settingsService.Settings.ContextSize)
+            : 1_000_000;
+        bool includeToolDefs     = !isLocalProvider || contextTokens >= 8000;  // tool catalogue is ~3k tokens
+        bool includeHeavyContext = !isLocalProvider || contextTokens >= 16000; // codebase map + tree + key files
+
         // ═══════════════════════════════════════════
         // Dynamic Section: Environment Info
         // ═══════════════════════════════════════════
@@ -625,7 +658,15 @@ public class CodeAgentService
         sb.AppendLine("# Environment");
         sb.AppendLine($"- Platform: {Environment.OSVersion.VersionString}");
         sb.AppendLine($"- Shell: PowerShell / cmd");
-        sb.AppendLine($"- Model: {_providerManager.ActiveProvider?.GetType().Name ?? "Unknown"}");
+        sb.AppendLine($"- Provider: {_providerManager.ActiveProvider?.DisplayName ?? "Unknown"}");
+        try
+        {
+            string activeProviderId = _providerManager.ActiveProvider?.ProviderId ?? "";
+            if (_settingsService.Settings.ProviderConfigs.TryGetValue(activeProviderId, out var activeCfg)
+                && !string.IsNullOrWhiteSpace(activeCfg.EffectiveModelId))
+                sb.AppendLine($"- Model: {activeCfg.EffectiveModelId}");
+        }
+        catch { /* model id is best-effort */ }
         sb.AppendLine($"- Date: {DateTime.Now:yyyy-MM-dd}");
         sb.AppendLine($"- CluadeX Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.1.0"}");
 
@@ -674,46 +715,75 @@ public class CodeAgentService
             // Dynamic Section: Tool Definitions
             // ═══════════════════════════════════════════
             sb.AppendLine();
-            sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
+            if (includeToolDefs)
+            {
+                sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
+            }
+            else
+            {
+                // Too little context to fit the tool catalogue without crowding out the conversation.
+                // Run as a plain chat assistant rather than overflow the window (which is what hangs).
+                sb.AppendLine("NOTE: This local model's context window is small, so file/tool actions are "
+                    + "disabled for now to keep responses fast and reliable. Increase Context Size to ≥ 8192 "
+                    + "in Settings (or pick a larger-context model) to enable the full agentic toolset.");
+            }
             sb.AppendLine();
 
-            // Include project tree (up to 3 levels, larger budget)
-            try
+            if (includeHeavyContext)
             {
-                string tree = _fileSystemService.GetProjectTree(3);
-                if (tree.Length > 4000)
-                    tree = tree[..4000] + "\n... (truncated)";
-                sb.AppendLine("PROJECT STRUCTURE:");
-                sb.AppendLine(tree);
-            }
-            catch { /* ignore */ }
-
-            // Codebase map — a symbol-level outline so the agent knows the whole project's types and
-            // APIs without being pointed at files (IDE-grade awareness). Bounded + cached; on Anthropic
-            // it rides inside the prompt-cached system prompt, so it's effectively free after request #1.
-            try
-            {
-                string repoMap = _repoMap?.GetRepoMap(6000) ?? "";
-                if (!string.IsNullOrWhiteSpace(repoMap))
+                // Include project tree (up to 3 levels, larger budget)
+                try
                 {
-                    sb.AppendLine();
-                    sb.AppendLine("CODEBASE MAP (key declarations per file — read a file for full content):");
-                    sb.AppendLine(repoMap);
+                    string tree = _fileSystemService.GetProjectTree(3);
+                    if (tree.Length > 4000)
+                        tree = tree[..4000] + "\n... (truncated)";
+                    sb.AppendLine("PROJECT STRUCTURE:");
+                    sb.AppendLine(tree);
                 }
-            }
-            catch { /* ignore */ }
+                catch { /* ignore */ }
 
-            // Auto-read key project files for context
-            sb.AppendLine();
-            sb.AppendLine("KEY PROJECT FILES:");
-            AppendKeyFileIfExists(sb, "CLAUDE.md");
-            AppendKeyFileIfExists(sb, ".claude/CLAUDE.md");
-            AppendKeyFileIfExists(sb, ".cluadex/CLAUDE.md");
-            AppendKeyFileIfExists(sb, "README.md");
-            AppendKeyFileIfExists(sb, "package.json", 500);
-            AppendKeyFileIfExists(sb, "Cargo.toml", 300);
-            AppendKeyFileIfExists(sb, "pyproject.toml", 300);
-            AppendKeyFileIfExists(sb, ".gitignore", 200);
+                // Codebase map — a symbol-level outline so the agent knows the whole project's types and
+                // APIs without being pointed at files (IDE-grade awareness). Bounded + cached; on Anthropic
+                // it rides inside the prompt-cached system prompt, so it's effectively free after request #1.
+                try
+                {
+                    string repoMap = _repoMap?.GetRepoMap(6000) ?? "";
+                    if (!string.IsNullOrWhiteSpace(repoMap))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("CODEBASE MAP (key declarations per file — read a file for full content):");
+                        sb.AppendLine(repoMap);
+                    }
+                }
+                catch { /* ignore */ }
+
+                // Auto-read key project files for context
+                sb.AppendLine();
+                sb.AppendLine("KEY PROJECT FILES:");
+                AppendKeyFileIfExists(sb, "CLAUDE.md");
+                AppendKeyFileIfExists(sb, ".claude/CLAUDE.md");
+                AppendKeyFileIfExists(sb, ".cluadex/CLAUDE.md");
+                AppendKeyFileIfExists(sb, "README.md");
+                AppendKeyFileIfExists(sb, "package.json", 500);
+                AppendKeyFileIfExists(sb, "Cargo.toml", 300);
+                AppendKeyFileIfExists(sb, "pyproject.toml", 300);
+                AppendKeyFileIfExists(sb, ".gitignore", 200);
+            }
+            else
+            {
+                // Small local context: skip the multi-thousand-token codebase map + key-file dump that
+                // overflows the window (the root cause of the local "hang / no response"). Give just a
+                // shallow tree so the model knows the layout, and steer it to pull details on demand.
+                try
+                {
+                    string tree = _fileSystemService.GetProjectTree(2);
+                    if (tree.Length > 1200)
+                        tree = tree[..1200] + "\n... (truncated)";
+                    sb.AppendLine("PROJECT STRUCTURE (top level — use read_file / search tools to go deeper):");
+                    sb.AppendLine(tree);
+                }
+                catch { /* ignore */ }
+            }
 
             // Detect project type and add specific context
             string projType = DetectProjectType();
@@ -738,6 +808,25 @@ public class CodeAgentService
             }
         }
         catch { /* memory not available */ }
+
+        // ─── Hard fit-guard for local models ───
+        // Last line of defence: never hand a local model a system prompt that alone blows past its context
+        // window — prefilling an over-long prompt is the slow-hang we're killing. Keep the head (identity +
+        // tools + env) and drop the tail, leaving room for the conversation and the reply.
+        if (isLocalProvider)
+        {
+            string built = sb.ToString();
+            int budgetTokens = (int)(contextTokens * 0.7); // leave ~30% for the question + the answer
+            if (_contextMemoryService.EstimateTokens(built) > budgetTokens)
+            {
+                int charBudget = Math.Max(800, budgetTokens * 4); // ~4 chars/token heuristic
+                if (built.Length > charBudget)
+                    built = built[..charBudget]
+                        + "\n\n[System prompt trimmed to fit this model's context window. Increase Context Size "
+                        + "in Settings, or use a larger-context model, for fuller project awareness.]";
+                return built;
+            }
+        }
 
         return sb.ToString();
     }
@@ -895,6 +984,10 @@ public class CodeAgentService
     {
         if (_brainSync == null || !_settingsService.Settings.BrainAutoRecallEnabled) return userMessage;
         if (string.IsNullOrWhiteSpace(userMessage) || !_brainSync.IsBrainAvailable) return userMessage;
+        // Skip the brain round-trip for very short / conversational asks ("hi", "โมเดลอะไร", "thanks").
+        // Auto-recall targets non-trivial coding tasks; on a quick question the extra latency is exactly
+        // what makes the app feel sluggish — which is the whole complaint we're fixing here.
+        if (userMessage.Trim().Length < 25) return userMessage;
 
         try
         {
@@ -1424,39 +1517,63 @@ public class CodeAgentService
                     _settingsService.Settings.MicrocompactMaxOldResultChars)
                 : nativeMessages;
 
-            // Call API with native tools
-            Services.Providers.NativeToolResponse response;
-            try
+            // Call API with native tools. Two fixes for the "feels frozen / no response" problems live here:
+            //   1. onTextDelta streams the model's reply to the UI live (agentic mode used to stay silent
+            //      until the entire multi-step turn finished, so even a one-line answer looked like a hang).
+            //   2. An IDLE timeout wraps the request: the window resets on every streamed chunk, so a
+            //      healthy (even slow) generation is never cut off — only a genuinely stalled connection
+            //      trips it, surfacing a clean retryable error instead of the HttpClient's 5-minute ceiling.
+            int nativeStreamStep = iteration + 1;
+            int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
+            Services.Providers.NativeToolResponse response = null!;
+            using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
-                response = await _providerManager.ActiveProvider.ChatWithToolsAsync(
-                    outboundMessages, systemPrompt, toolSchemas, ct);
-            }
-            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
-            {
-                // ─── Reactive compaction on 413 (prompt too long) ───
-                if (!hasAttemptedReactiveCompact)
+                if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+                try
                 {
-                    hasAttemptedReactiveCompact = true;
-                    OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
-                    int keepCount = Math.Min(10, nativeMessages.Count);
-                    nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
-                    nativeMessages.Insert(0, new Services.Providers.NativeMessage
-                    {
-                        Role = "user",
-                        Content = { new Services.Providers.ContentBlock
+                    response = await _providerManager.ActiveProvider.ChatWithToolsAsync(
+                        outboundMessages, systemPrompt, toolSchemas,
+                        onTextDelta: token =>
                         {
-                            Type = "text",
-                            Text = "[Context was compacted due to length. Earlier conversation history has been summarized.]",
-                        }},
-                    });
-                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
-                    continue;
+                            if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); // reset idle window
+                            OnAgenticStreamingToken?.Invoke(token, nativeStreamStep);
+                        },
+                        ct: callCts.Token);
                 }
-                result.StopReason = "error";
-                result.FinalResponse = isThai
-                    ? "Context ยาวเกินไปแม้หลังบีบอัดแล้ว กรุณาเริ่ม session ใหม่"
-                    : "Context too long even after compaction. Please start a new session.";
-                break;
+                catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    // Per-call timeout fired (NOT a user cancel) — surface as retryable so the outer
+                    // auto-retry re-issues the request instead of leaving a dead spinner.
+                    throw new TimeoutException(
+                        $"Request timed out after {timeoutSec}s — the model did not respond (timeout).");
+                }
+                catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
+                {
+                    // ─── Reactive compaction on 413 (prompt too long) ───
+                    if (!hasAttemptedReactiveCompact)
+                    {
+                        hasAttemptedReactiveCompact = true;
+                        OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
+                        int keepCount = Math.Min(10, nativeMessages.Count);
+                        nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
+                        nativeMessages.Insert(0, new Services.Providers.NativeMessage
+                        {
+                            Role = "user",
+                            Content = { new Services.Providers.ContentBlock
+                            {
+                                Type = "text",
+                                Text = "[Context was compacted due to length. Earlier conversation history has been summarized.]",
+                            }},
+                        });
+                        nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                        continue;
+                    }
+                    result.StopReason = "error";
+                    result.FinalResponse = isThai
+                        ? "Context ยาวเกินไปแม้หลังบีบอัดแล้ว กรุณาเริ่ม session ใหม่"
+                        : "Context too long even after compaction. Please start a new session.";
+                    break;
+                }
             }
 
             // Display thinking content
@@ -1970,13 +2087,29 @@ public class CodeAgentService
                 // Use unique step ID per retry so UI creates fresh bubble (avoids appending to partial content)
                 int effectiveStep = stepNumber * 100 + retry;
 
+                // Idle timeout: the window resets on every streamed token (below), so a healthy stream is
+                // never cut off — only a stalled one becomes a retryable error instead of hanging on the
+                // shared HttpClient's 5-minute ceiling.
+                int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
+                using var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+
                 // Use streaming (ChatAsync) to fire tokens in real-time to UI
                 var sb = new System.Text.StringBuilder();
-                await foreach (var token in _providerManager.ActiveProvider.ChatAsync(
-                    history, message, systemPrompt, ct))
+                try
                 {
-                    sb.Append(token);
-                    OnAgenticStreamingToken?.Invoke(token, effectiveStep);
+                    await foreach (var token in _providerManager.ActiveProvider.ChatAsync(
+                        history, message, systemPrompt, callCts.Token))
+                    {
+                        if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); // reset idle window
+                        sb.Append(token);
+                        OnAgenticStreamingToken?.Invoke(token, effectiveStep);
+                    }
+                }
+                catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    // Timeout, not a user cancel — convert to a transient error so the retry loop re-issues.
+                    throw new TimeoutException($"Request timed out after {timeoutSec}s (timeout).");
                 }
                 return sb.ToString();
             }

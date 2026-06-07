@@ -50,8 +50,64 @@ public class LlamaInferenceService : IDisposable
         _settingsService = settingsService;
     }
 
+    // ─── Native backend selection (CUDA) ───────────────────────────────────────────────────────
+    // CRITICAL local-mode fix. The project references BOTH LLamaSharp.Backend.Cpu AND .Cuda12. Without an
+    // explicit NativeLibraryConfig, LLamaSharp's auto-probe can pick the CPU backend even on a CUDA box —
+    // so the model runs entirely on CPU (GPU sits idle) and a 7B prefill takes tens of seconds to minutes.
+    // That is the real "local chat hangs / 75s and no answer" report. We force CUDA (with CPU auto-fallback)
+    // exactly ONCE, before the first native call, and log which backend actually loads so it's verifiable.
+    private static int _nativeConfigured;
+
+    private static void EnsureNativeBackendConfigured()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _nativeConfigured, 1) != 0) return;
+        try
+        {
+            LLama.Native.NativeLibraryConfig.All
+                .WithCuda(true)
+                .WithAutoFallback(true)
+                .WithLogCallback((LLama.Native.LLamaLogLevel level, string message) =>
+                {
+                    if (string.IsNullOrEmpty(message)) return;
+                    // Keep the diag focused on backend/device selection, not per-token spam.
+                    if (message.IndexOf("cuda", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf("backend", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf("device", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf("offload", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf("VRAM", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf("fail", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf("fallback", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.IndexOf(".dll", StringComparison.OrdinalIgnoreCase) >= 0)
+                        DiagLog($"[native {level}] {message.TrimEnd()}");
+                });
+            DiagLog("[native-config] WithCuda(true) + WithAutoFallback(true) applied");
+        }
+        catch (Exception ex)
+        {
+            // If native was already initialised earlier this process, this throws — harmless, the guard
+            // means we only try once. Any other failure is logged but never blocks model loading.
+            DiagLog($"[native-config-skipped] {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Append a line to the local inference diagnostics log (best-effort, never throws).
+    /// File: %LocalAppData%\CluadeX\inference-diag.log — used to prove GPU vs CPU + prefill timing.</summary>
+    internal static void DiagLog(string line)
+    {
+        try
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "inference-diag.log"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {line}{Environment.NewLine}");
+        }
+        catch { /* diagnostics must never break inference */ }
+    }
+
     public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
     {
+        EnsureNativeBackendConfigured(); // force CUDA backend selection BEFORE the first native call
         if (_isLoading) return;
         if (_loadedModelPath == modelPath && IsModelLoaded) return;
 
@@ -211,6 +267,7 @@ public class LlamaInferenceService : IDisposable
 
             // Determine actual backend info
             string backendInfo = modelParams.GpuLayerCount > 0 ? $"GPU ({modelParams.GpuLayerCount} layers)" : "CPU";
+            DiagLog($"[load] {Path.GetFileName(modelPath)} ctx={modelParams.ContextSize} gpuLayers={modelParams.GpuLayerCount} batch={modelParams.BatchSize} backend={backendInfo}");
             progress?.Report($"Model loaded successfully! [{backendInfo}]");
             OnStatusChanged?.Invoke($"Ready: {Path.GetFileNameWithoutExtension(modelPath)} [{backendInfo}]");
         }
@@ -373,9 +430,20 @@ public class LlamaInferenceService : IDisposable
         // Open assistant turn for the model to complete
         prompt.Append("<|im_start|>assistant\n");
 
+        // ─── Clamp the generation budget to what actually fits the context window ───
+        // A common mis-set is MaxTokens == ContextSize (e.g. both 4096): generation alone would then try to
+        // consume the entire window, leaving ZERO room for the prompt → the model stalls or emits nothing
+        // (a big chunk of the "local chat hangs / never answers" report). Reserve the prompt's footprint
+        // (~4 chars/token heuristic) plus a small margin so there's always real room to answer. Reasoning
+        // models (DeepSeek-R1, etc.) especially need this — they spend tokens on <think> before the reply.
+        int ctxSize = Math.Max(512, (int)settings.ContextSize);
+        int approxPromptTokens = prompt.Length / 4;
+        int roomForGen = Math.Max(256, ctxSize - approxPromptTokens - 64);
+        int effectiveMaxTokens = Math.Min(settings.MaxTokens, roomForGen);
+
         var inferenceParams = new InferenceParams
         {
-            MaxTokens = settings.MaxTokens,
+            MaxTokens = effectiveMaxTokens,
             AntiPrompts = new List<string>
             {
                 "<|im_end|>", "<|im_start|>",       // ChatML
@@ -396,12 +464,23 @@ public class LlamaInferenceService : IDisposable
         using var inferenceContext = _model.CreateContext(_modelParams);
         var executor = new InteractiveExecutor(inferenceContext);
 
+        // Diagnostics so GPU-vs-CPU and prefill cost are provable from the log, not guessed.
+        DiagLog($"[infer-start] promptChars={prompt.Length} ~promptTokens={approxPromptTokens} ctx={ctxSize} maxGen={effectiveMaxTokens}");
+        var inferSw = System.Diagnostics.Stopwatch.StartNew();
+        long firstTokenMs = -1;
+        int rawChunks = 0;
+
+        // Stateful sanitizer: catches control tokens (<|im_end|>, etc.) even when the model streams them
+        // SPLIT across chunks (e.g. "<|im_" then "end|>") — the old per-chunk strip leaked those into chat.
+        var sanitizer = new CluadeX.Helpers.StreamingSanitizer();
+
         bool hasOutput = false;
         await foreach (var text in executor.InferAsync(prompt.ToString(), inferenceParams, ct))
         {
-            // Strip leaked control tokens and cut at a turn-end marker (shared with the server path,
-            // so DeepSeek/Qwen/Llama templates are all handled the same way).
-            var (clean, stop) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(text);
+            if (firstTokenMs < 0) { firstTokenMs = inferSw.ElapsedMilliseconds; DiagLog($"[infer-firsttoken] {firstTokenMs}ms"); }
+            rawChunks++;
+
+            var (clean, stop) = sanitizer.Push(text);
             if (!string.IsNullOrEmpty(clean))
             {
                 hasOutput = true;
@@ -409,6 +488,13 @@ public class LlamaInferenceService : IDisposable
             }
             if (stop) break;
         }
+
+        // Flush any held-back tail (text we were holding in case it was the start of a control token).
+        string tail = sanitizer.Flush();
+        if (!string.IsNullOrEmpty(tail)) { hasOutput = true; yield return tail; }
+
+        double inferSecs = inferSw.Elapsed.TotalSeconds;
+        DiagLog($"[infer-done] firstTokenMs={firstTokenMs} totalMs={inferSw.ElapsedMilliseconds} chunks={rawChunks} chunks/s={(inferSecs > 0 ? rawChunks / inferSecs : 0):F1} hadOutput={hasOutput}");
 
         if (!hasOutput)
         {

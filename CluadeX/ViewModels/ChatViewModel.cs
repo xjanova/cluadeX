@@ -1727,12 +1727,12 @@ public class ChatViewModel : ViewModelBase
 
             App.Current?.Dispatcher.Invoke(() =>
             {
-                // Finalize streaming message before adding thinking
+                // Stop the streaming cursor on the current text bubble, but KEEP the reference so the
+                // end-of-turn finalizer updates it in place instead of adding a duplicate. (The old code
+                // nulled streamingMsg here, which double-posted the final answer whenever extended
+                // thinking fired an OnThinkingUpdate after the text had already streamed.)
                 if (streamingMsg != null)
-                {
                     streamingMsg.IsStreaming = false;
-                    streamingMsg = null;
-                }
             });
         }
 
@@ -1752,7 +1752,9 @@ public class ChatViewModel : ViewModelBase
             }
         });
 
-        // Finalize streaming message — update in-place to avoid flash
+        // Finalize streaming message — update in-place to avoid flash, and GUARANTEE the turn leaves
+        // something visible. The old code could finish with no open bubble AND an empty final response
+        // and add nothing at all → the "ไม่ตอบไปเลย" (no response) report. The else branch closes that hole.
         App.Current?.Dispatcher.Invoke(() =>
         {
             string? finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
@@ -1761,16 +1763,17 @@ public class ChatViewModel : ViewModelBase
 
             if (streamingMsg != null)
             {
-                // Flush any remaining buffered tokens
+                // A streamed text bubble is open — it already holds the reply. Finalize it in place:
+                // prefer the clean final text; otherwise keep whatever streamed.
                 string buffered = streamSb.ToString();
-                if (!string.IsNullOrEmpty(buffered) && streamingMsg.Content != buffered)
-                    streamingMsg.Content = buffered;
-
-                // If we have a final response, update the existing message in-place
                 if (!string.IsNullOrWhiteSpace(finalText))
                 {
                     streamingMsg.Content = finalText;
                     streamingMsg.CodeBlocks = _codeExecutionService.ExtractCodeBlocks(finalText);
+                }
+                else if (!string.IsNullOrEmpty(buffered) && streamingMsg.Content != buffered)
+                {
+                    streamingMsg.Content = buffered;
                 }
                 streamingMsg.IsStreaming = false;
                 if (!CurrentSession?.Messages.Contains(streamingMsg) ?? false)
@@ -1779,12 +1782,37 @@ public class ChatViewModel : ViewModelBase
             }
             else if (!string.IsNullOrWhiteSpace(finalText))
             {
-                // No streaming message existed — add a new one
+                // No open bubble (answer arrived whole / wasn't streamed) — add it once.
                 var assistantMsg = new ChatMessage
                 {
                     Role = MessageRole.Assistant,
                     Content = finalText,
                     CodeBlocks = _codeExecutionService.ExtractCodeBlocks(finalText),
+                };
+                Messages.Add(assistantMsg);
+                CurrentSession?.Messages.Add(assistantMsg);
+            }
+            else
+            {
+                // ─── Safety net: the loop produced NO visible assistant text at all ───
+                // (model ended after a tool with nothing to say, returned only thinking, or hit the
+                // iteration cap). Never leave the user staring at a vanished spinner — surface an honest,
+                // actionable note. Also clear any lingering "⏳ thinking" placeholder that never got
+                // replaced by streamed text.
+                var placeholder = Messages.LastOrDefault(m =>
+                    m.Role == MessageRole.Assistant && (m.Content?.StartsWith("⏳") ?? false));
+                if (placeholder != null) Messages.Remove(placeholder);
+
+                int toolsRun = result.Steps?.Sum(s => s.ToolResults?.Count ?? 0) ?? 0;
+                string note = toolsRun > 0
+                    ? $"*(ทำงานเสร็จ {toolsRun} ขั้นแล้ว แต่โมเดลไม่ได้ส่งข้อความสรุป — พิมพ์ “สรุปให้หน่อย” หรือถามต่อได้เลยครับ)*"
+                    : "*(โมเดลไม่ได้ส่งข้อความตอบกลับ — ลองส่งใหม่อีกครั้ง หรือปรับคำถามดูครับ)*";
+
+                var assistantMsg = new ChatMessage
+                {
+                    Role = MessageRole.Assistant,
+                    Content = note,
+                    HasError = toolsRun == 0,
                 };
                 Messages.Add(assistantMsg);
                 CurrentSession?.Messages.Add(assistantMsg);
@@ -1869,6 +1897,10 @@ public class ChatViewModel : ViewModelBase
         return toolName; // unique category = no grouping
     }
 
+    /// <summary>Raised (on the UI thread) when the agent mutates a file: (relativePath, firstChangedLine).
+    /// The Code Editor subscribes to open/refresh that file live and scroll to the change.</summary>
+    public event Action<string, int>? FileMutatedByAgent;
+
     private void OnToolExecuted(ToolResult toolResult)
     {
         App.Current?.Dispatcher.BeginInvoke(() =>
@@ -1877,6 +1909,14 @@ public class ChatViewModel : ViewModelBase
             {
                 _activeAgentStatusMsg.IsStreaming = false;
                 _activeAgentStatusMsg = null;
+            }
+
+            // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit.
+            if (toolResult.Success
+                && _settingsService.Settings.LiveEditFollow
+                && !string.IsNullOrEmpty(toolResult.FilePath))
+            {
+                FileMutatedByAgent?.Invoke(toolResult.FilePath!, toolResult.Diff?.FirstChangedLine ?? 1);
             }
 
             // Format arguments for display

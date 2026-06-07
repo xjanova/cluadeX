@@ -46,9 +46,17 @@ public class AppSettings
     public int MaxAutoFixAttempts { get; set; } = 3;
     /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks.</summary>
     public int MaxAgentIterations { get; set; } = 25;
+    /// <summary>IDLE timeout (seconds) for an interactive model call in the chat/agent loop: the window
+    /// resets on every streamed token, so a healthy (even slow) generation is never cut off — only a
+    /// connection that produces NOTHING for this long is aborted, surfacing a clean "timed out" error
+    /// (which the auto-retry then handles) instead of sitting on the shared HttpClient's 5-minute ceiling.
+    /// 0 = no idle cap (rely on the HttpClient ceiling).</summary>
+    public int InteractiveRequestTimeoutSeconds { get; set; } = 120;
     /// <summary>Require the agent to read a file before editing it, and block edits to a file that changed on
     /// disk since the last read (Claude Code-style — prevents blind edits and clobbering external changes).</summary>
     public bool EnforceReadBeforeEdit { get; set; } = true;
+    /// <summary>When the agent edits a file, auto-open/refresh it in the Code Editor and scroll to the change.</summary>
+    public bool LiveEditFollow { get; set; } = true;
     public string PreferredLanguage { get; set; } = "C#";
 
     /// <summary>

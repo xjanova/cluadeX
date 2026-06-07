@@ -464,7 +464,8 @@ public class LlamaServerProvider : ApiProviderBase
     /// response per turn, exactly like the Anthropic path.
     /// </summary>
     public override async Task<NativeToolResponse> ChatWithToolsAsync(
-        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools, CancellationToken ct = default)
+        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
+        Action<string>? onTextDelta = null, CancellationToken ct = default)
     {
         if (!IsServerRunning || !IsReady)
             return new NativeToolResponse { TextContent = "llama-server is not running. Load a model first.", StopReason = "end_turn" };
@@ -521,6 +522,11 @@ public class LlamaServerProvider : ApiProviderBase
             return (false, $"Connection failed: {ex.Message}");
         }
     }
+
+    /// <summary>True if a llama-server.exe can be located (custom path, bundled llama-backend/, or PATH).
+    /// Lets the local router prefer this backend — it ships the full CUDA runtime and offloads to the GPU
+    /// reliably — when the user wants GPU but in-process LLamaSharp can't use CUDA (no CUDA Toolkit).</summary>
+    public bool IsServerBackendAvailable => FindServerExe() != null;
 
     private string? FindServerExe()
     {

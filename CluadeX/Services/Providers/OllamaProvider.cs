@@ -286,7 +286,8 @@ public class OllamaProvider : ApiProviderBase
     /// arguments as JSON OBJECTS (not strings) both ways — handled by argumentsAsObject + ParseToolArguments.
     /// </summary>
     public override async Task<NativeToolResponse> ChatWithToolsAsync(
-        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools, CancellationToken ct = default)
+        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
+        Action<string>? onTextDelta = null, CancellationToken ct = default)
     {
         LastPromptTokens = 0;
         LastCompletionTokens = 0;

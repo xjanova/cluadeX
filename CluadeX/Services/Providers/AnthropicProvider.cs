@@ -348,6 +348,7 @@ public class AnthropicProvider : ApiProviderBase
         List<NativeMessage> messages,
         string systemPrompt,
         List<ToolSchema> tools,
+        Action<string>? onTextDelta = null,
         CancellationToken ct = default)
     {
         var config = GetConfig();
@@ -392,6 +393,7 @@ public class AnthropicProvider : ApiProviderBase
             }).ToList(),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,
+            ["stream"] = true,
         };
 
         // Extended thinking for native tool use
@@ -462,73 +464,154 @@ public class AnthropicProvider : ApiProviderBase
                 response.StatusCode);
         }
 
-        var responseText = await response.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(responseText);
-        var root = doc.RootElement;
+        // ─── Streaming parse (SSE) ───
+        // We request stream:true so text appears live via onTextDelta instead of the user staring at a
+        // spinner until the whole turn lands. Anthropic emits each block as
+        // content_block_start → content_block_delta* → content_block_stop, interleaving text, thinking,
+        // and tool_use. tool_use arguments arrive as input_json_delta fragments we concatenate per block
+        // index, then parse once at the end.
+        using var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
 
         var result = new NativeToolResponse();
+        var textParts = new List<string>();
+        var thinkingParts = new List<string>();
+        var toolBlocks = new Dictionary<int, (string Id, string Name, StringBuilder Json)>();
+        int finalOutputTokens = 0;
+        bool streamEnded = false;
 
-        // Parse stop_reason
-        if (root.TryGetProperty("stop_reason", out var stopReasonProp))
-            result.StopReason = stopReasonProp.GetString() ?? "end_turn";
-
-        // Parse usage
-        if (root.TryGetProperty("usage", out var usage))
+        while (!streamEnded && !reader.EndOfStream)
         {
-            if (usage.TryGetProperty("input_tokens", out var inputTokens))
-                result.InputTokens = inputTokens.GetInt32();
-            if (usage.TryGetProperty("output_tokens", out var outputTokens))
-                result.OutputTokens = outputTokens.GetInt32();
+            ct.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(ct);
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (line.StartsWith("event: ")) continue;
+            if (!line.StartsWith("data: ")) continue;
+            var data = line["data: ".Length..];
 
-            // Record cost
-            int cacheRead = usage.TryGetProperty("cache_read_input_tokens", out var cr2) ? cr2.GetInt32() : 0;
-            int cacheCreate = usage.TryGetProperty("cache_creation_input_tokens", out var cc2) ? cc2.GetInt32() : 0;
-            _costTracker?.RecordUsage(model, result.InputTokens, result.OutputTokens, cacheRead, cacheCreate);
-        }
-
-        // Parse content blocks
-        if (root.TryGetProperty("content", out var contentArray))
-        {
-            var textParts = new List<string>();
-            var thinkingParts = new List<string>();
-
-            foreach (var block in contentArray.EnumerateArray())
+            try
             {
-                // Use TryGetProperty for safety — malformed blocks shouldn't crash parsing
-                if (!block.TryGetProperty("type", out var typeEl)) continue;
-                string type = typeEl.GetString() ?? "";
+                using var doc = JsonDocument.Parse(data);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var typeProp)) continue;
+                string evt = typeProp.GetString() ?? "";
 
-                switch (type)
+                switch (evt)
                 {
-                    case "text":
-                        if (block.TryGetProperty("text", out var textEl))
-                            textParts.Add(textEl.GetString() ?? "");
-                        break;
-
-                    case "tool_use":
-                        if (block.TryGetProperty("id", out var idEl) &&
-                            block.TryGetProperty("name", out var nameEl) &&
-                            block.TryGetProperty("input", out var inputEl))
+                    case "message_start":
+                        if (root.TryGetProperty("message", out var msgStart)
+                            && msgStart.TryGetProperty("usage", out var startUsage))
                         {
-                            result.ToolCalls.Add(new NativeToolCall
-                            {
-                                Id = idEl.GetString() ?? "",
-                                Name = nameEl.GetString() ?? "",
-                                Input = inputEl.Clone(),
-                            });
+                            int inTokens = startUsage.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var itv) ? itv : 0;
+                            int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) && cr.TryGetInt32(out var crv) ? crv : 0;
+                            int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) && cc.TryGetInt32(out var ccv) ? ccv : 0;
+                            result.InputTokens = inTokens;
+                            if (_costTracker != null && (inTokens > 0 || cacheRead > 0 || cacheCreate > 0))
+                                _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate);
                         }
                         break;
 
-                    case "thinking":
-                        if (block.TryGetProperty("thinking", out var thinking))
-                            thinkingParts.Add(thinking.GetString() ?? "");
+                    case "content_block_start":
+                        if (root.TryGetProperty("index", out var sIdxEl) && sIdxEl.TryGetInt32(out int sIdx)
+                            && root.TryGetProperty("content_block", out var cb)
+                            && cb.TryGetProperty("type", out var cbTypeEl))
+                        {
+                            string cbType = cbTypeEl.GetString() ?? "";
+                            if (cbType == "tool_use")
+                            {
+                                string id = cb.TryGetProperty("id", out var idp) ? idp.GetString() ?? "" : "";
+                                string name = cb.TryGetProperty("name", out var np) ? np.GetString() ?? "" : "";
+                                toolBlocks[sIdx] = (id, name, new StringBuilder());
+                            }
+                            else if (cbType == "text" && cb.TryGetProperty("text", out var tp))
+                            {
+                                string t = tp.GetString() ?? "";
+                                if (t.Length > 0) { textParts.Add(t); onTextDelta?.Invoke(t); }
+                            }
+                            else if (cbType == "thinking" && cb.TryGetProperty("thinking", out var thp))
+                            {
+                                string th = thp.GetString() ?? "";
+                                if (th.Length > 0) thinkingParts.Add(th);
+                            }
+                        }
+                        break;
+
+                    case "content_block_delta":
+                        if (root.TryGetProperty("index", out var dIdxEl) && dIdxEl.TryGetInt32(out int dIdx)
+                            && root.TryGetProperty("delta", out var delta)
+                            && delta.TryGetProperty("type", out var dtEl))
+                        {
+                            switch (dtEl.GetString())
+                            {
+                                case "text_delta":
+                                    if (delta.TryGetProperty("text", out var txt))
+                                    {
+                                        string s = txt.GetString() ?? "";
+                                        if (s.Length > 0) { textParts.Add(s); onTextDelta?.Invoke(s); }
+                                    }
+                                    break;
+                                case "thinking_delta":
+                                    if (delta.TryGetProperty("thinking", out var thd))
+                                        thinkingParts.Add(thd.GetString() ?? "");
+                                    break;
+                                case "input_json_delta":
+                                    if (delta.TryGetProperty("partial_json", out var pj)
+                                        && toolBlocks.TryGetValue(dIdx, out var tb))
+                                        tb.Json.Append(pj.GetString() ?? "");
+                                    break;
+                            }
+                        }
+                        break;
+
+                    case "message_delta":
+                        if (root.TryGetProperty("delta", out var mdDelta)
+                            && mdDelta.TryGetProperty("stop_reason", out var sr)
+                            && sr.ValueKind == JsonValueKind.String)
+                            result.StopReason = sr.GetString() ?? result.StopReason;
+                        if (root.TryGetProperty("usage", out var mdUsage)
+                            && mdUsage.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var otv))
+                            finalOutputTokens = otv;
+                        break;
+
+                    case "error":
+                        string errMsg = root.TryGetProperty("error", out var err) && err.TryGetProperty("message", out var em)
+                            ? em.GetString() ?? "Unknown error" : "Unknown error";
+                        // Throw (don't also RaiseError) so there's a SINGLE surfacing path — the agent loop's
+                        // caller sanitizes it and may retry. Calling both would double-post the error bubble.
+                        throw new HttpRequestException($"Anthropic streaming error: {errMsg}");
+
+                    case "message_stop":
+                        streamEnded = true;
                         break;
                 }
             }
-
-            result.TextContent = textParts.Count > 0 ? string.Join("\n", textParts) : null;
-            result.ThinkingContent = thinkingParts.Count > 0 ? string.Join("\n", thinkingParts) : null;
+            catch (OperationCanceledException) { throw; }
+            catch (HttpRequestException) { throw; }
+            catch (JsonException) { /* skip a malformed SSE chunk */ }
         }
+
+        // Assemble tool calls in the index order Claude emitted them.
+        foreach (var idx in toolBlocks.Keys.OrderBy(k => k))
+        {
+            var (id, name, json) = toolBlocks[idx];
+            string raw = json.ToString();
+            JsonElement input = _emptyJsonObject;
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                try { using var d = JsonDocument.Parse(raw); input = d.RootElement.Clone(); }
+                catch { input = _emptyJsonObject; }
+            }
+            result.ToolCalls.Add(new NativeToolCall { Id = id, Name = name, Input = input });
+        }
+
+        result.TextContent = textParts.Count > 0 ? string.Concat(textParts) : null;
+        result.ThinkingContent = thinkingParts.Count > 0 ? string.Concat(thinkingParts) : null;
+        result.OutputTokens = finalOutputTokens;
+        if (_costTracker != null && finalOutputTokens > 0)
+            _costTracker.RecordUsage(model, 0, finalOutputTokens, isNewRequest: false);
+
+        if (string.IsNullOrEmpty(result.StopReason))
+            result.StopReason = result.ToolCalls.Count > 0 ? "tool_use" : "end_turn";
 
         return result;
     }
