@@ -15,6 +15,7 @@ public enum ToolType
     SearchContent,
     RunCommand,
     RunBuild,        // Auto-detect the project's build/type-check command and run it (the verify loop)
+    RunTests,        // Auto-detect + run the project's test suite; returns a distilled pass/fail + failing tests
     CreateDirectory,
 
     // Git operations
@@ -177,6 +178,9 @@ public class ToolResult
 
     /// <summary>Colorized before/after diff for file-mutating tools (edit/write). Null when N/A.</summary>
     public EditDiffResult? Diff { get; set; }
+
+    /// <summary>For file-mutating tools: the (relative) path that changed — drives the live editor follow.</summary>
+    public string? FilePath { get; set; }
 }
 
 /// <summary>Payload for a human-in-the-loop permission prompt (carries an optional preview diff).</summary>

@@ -441,7 +441,7 @@
                     </StackPanel>
 
                     <!-- Editor surface -->
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                    <ScrollViewer x:Name="EditorScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                   Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -456,7 +456,7 @@
                                            Foreground="{StaticResource NeonInk3Brush}"/>
                             </Border>
                             <!-- Code text -->
-                            <TextBox Grid.Column="1"
+                            <TextBox Grid.Column="1" x:Name="EditorTextBox"
                                      Text="{Binding ActiveTab.Content, UpdateSourceTrigger=PropertyChanged}"
                                      AcceptsReturn="True" AcceptsTab="True"
                                      FontFamily="{StaticResource NeonMonoFont}" FontSize="13"

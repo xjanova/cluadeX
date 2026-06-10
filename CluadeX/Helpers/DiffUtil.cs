@@ -86,6 +86,7 @@ public static class DiffUtil
         var result = new EditDiffResult();
         int oldNo = 1, newNo = 1;   // 1-based line numbers as we walk
         bool inHunk = false;
+        bool firstHunk = true;
 
         for (int i = 0; i < k; i++)
         {
@@ -97,6 +98,7 @@ public static class DiffUtil
             {
                 if (!inHunk)
                 {
+                    if (firstHunk) { result.FirstChangedLine = newNo; firstHunk = false; }
                     result.Lines.Add(new EditDiffLine { Kind = EditDiffKind.Hunk, Text = $"@@ -{oldNo} +{newNo} @@" });
                     inHunk = true;
                 }

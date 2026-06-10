@@ -41,12 +41,16 @@ public interface IAiProvider : IDisposable
     /// <summary>Chat with native tool support. Only called when SupportsNativeToolUse is true.
     /// <paramref name="onTextDelta"/> (optional) is invoked with each streamed text chunk as it arrives,
     /// so the agent loop can render the model's reply live instead of waiting for the whole turn.</summary>
+    /// <param name="toolChoice">Constrain tool selection: null/"auto" = model's choice (default), "required" =
+    /// must call some tool, "none" = no tools, or an exact tool name = must call that tool. Used by the planner
+    /// and forced-retry to make a weak local model emit a constrained tool call instead of free prose.</param>
     Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages,
         string systemPrompt,
         List<ToolSchema> tools,
         Action<string>? onTextDelta = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? toolChoice = null)
         => Task.FromResult(new NativeToolResponse { TextContent = "Native tool use not supported by this provider." });
 }
 

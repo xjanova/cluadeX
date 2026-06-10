@@ -358,12 +358,17 @@ public class LlamaServerProvider : ApiProviderBase
         var settings = _settingsService.Settings;
         var messages = BuildChatMessages(history, userMessage, systemPrompt);
 
+        // Clamp generation budget so the prompt isn't starved of the window (the reopened chat-hang on the
+        // GPU path: ctx=4096 + max_tokens=4096 reserves the whole window for output). See TokenBudget.
+        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(messages));
+        int maxTokens = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
+
         var requestObj = new
         {
             model = "local",
             messages,
             stream = true,
-            max_tokens = settings.MaxTokens,
+            max_tokens = maxTokens,
             temperature = (double)settings.Temperature,
             top_p = (double)settings.TopP,
         };
@@ -465,26 +470,38 @@ public class LlamaServerProvider : ApiProviderBase
     /// </summary>
     public override async Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
-        Action<string>? onTextDelta = null, CancellationToken ct = default)
+        Action<string>? onTextDelta = null, CancellationToken ct = default, string? toolChoice = null)
     {
         if (!IsServerRunning || !IsReady)
             return new NativeToolResponse { TextContent = "llama-server is not running. Load a model first.", StopReason = "end_turn" };
 
         var settings = _settingsService.Settings;
+        // Weak-model tool path: low temperature + top_k/min_p/repeat_penalty for deterministic, well-formed
+        // tool-call JSON (chat temp 0.6 + only top_p let small models drift into broken/looping output here).
         var requestObj = new Dictionary<string, object>
         {
             ["model"] = "local",
             ["messages"] = BuildOpenAiToolMessages(messages, systemPrompt),
-            ["max_tokens"] = settings.MaxTokens,
-            ["temperature"] = (double)settings.Temperature,
+            ["temperature"] = (double)Math.Min(settings.Temperature, settings.ToolCallTemperature),
             ["top_p"] = (double)settings.TopP,
+            ["top_k"] = settings.TopK,
+            ["min_p"] = (double)settings.MinP,
+            ["repeat_penalty"] = (double)settings.RepeatPenalty,
             ["stream"] = false,
         };
         if (tools.Count > 0)
         {
             requestObj["tools"] = BuildOpenAiToolDefs(tools);
-            requestObj["tool_choice"] = "auto";
+            // Constrained tool decoding: "auto" by default; the planner / forced-retry pass "required" or a
+            // specific tool name so llama.cpp applies the tool grammar EAGERLY (guaranteeing a valid tool call
+            // instead of free prose) — the biggest reliability lever for weak local tool-callers.
+            requestObj["tool_choice"] = BuildOpenAiToolChoice(toolChoice);
         }
+
+        // Clamp AFTER assembling messages+tools so the estimate reflects the real prompt footprint (tool
+        // schemas are rendered into the prompt by --jinja, so they count toward the window too).
+        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj));
+        requestObj["max_tokens"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
 
         var body = JsonSerializer.Serialize(requestObj);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{ServerUrl}/v1/chat/completions");

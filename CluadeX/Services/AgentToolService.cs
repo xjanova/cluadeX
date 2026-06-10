@@ -162,6 +162,55 @@ public class AgentToolService : IDisposable
         return calls;
     }
 
+    /// <summary>
+    /// Names that appeared in an [ACTION:name] block but DON'T resolve to a registered tool. The legacy
+    /// loop uses this to give a weak model a corrective "unknown tool — did you mean X?" nudge instead of
+    /// silently dropping the call (which leaves the model with no signal about what went wrong).
+    /// </summary>
+    public List<string> GetUnknownActionNames(string modelOutput)
+    {
+        var unknown = new List<string>();
+        foreach (Match match in ActionRegex.Matches(modelOutput))
+        {
+            string toolName = match.Groups[1].Value.Trim();
+            if (string.IsNullOrWhiteSpace(toolName)) continue;
+            if (ResolveToolType(toolName.ToLowerInvariant()) == null
+                && !unknown.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+                unknown.Add(toolName);
+        }
+        return unknown;
+    }
+
+    /// <summary>All canonical tool names currently offered to the model (for "did you mean" suggestions).</summary>
+    public IEnumerable<string> GetRegisteredToolNames() => BuildNativeToolSchemas().Select(t => t.Name);
+
+    /// <summary>
+    /// Top high-confidence learned instincts formatted as a "- pattern → action" block for injection into the
+    /// system prompt, or null if none qualify. Closes the instinct READ-BACK loop — the model finally benefits
+    /// from what was extracted across sessions (extraction was write-only before). EMERGING+ confidence only.
+    /// </summary>
+    public string? GetTopInstinctsBlock(int max = 5)
+    {
+        if (_instinctService == null) return null;
+        try
+        {
+            var top = _instinctService.GetAll()
+                .Where(i => i.Confidence >= 0.45 && !string.IsNullOrWhiteSpace(i.Pattern))
+                .Take(max)
+                .ToList();
+            if (top.Count == 0) return null;
+            var sb = new StringBuilder();
+            foreach (var i in top)
+            {
+                string line = i.Pattern.Trim();
+                if (!string.IsNullOrWhiteSpace(i.Action)) line += $" → {i.Action.Trim()}";
+                sb.AppendLine($"- {line}");
+            }
+            return sb.ToString().TrimEnd();
+        }
+        catch { return null; }
+    }
+
     // ─── Check if output contains any tool calls ───
     public bool HasToolCalls(string modelOutput)
     {
@@ -269,6 +318,7 @@ public class AgentToolService : IDisposable
                 ToolType.SearchContent => ExecuteSearchContent(call),
                 ToolType.RunCommand => await ExecuteRunCommandAsync(call, ct),
                 ToolType.RunBuild => await ExecuteRunBuildAsync(call, ct),
+                ToolType.RunTests => await ExecuteRunTestsAsync(call, ct),
                 ToolType.CreateDirectory => ExecuteCreateDirectory(call),
 
                 // Git tools
@@ -553,6 +603,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "list_symbols", Description = "Outline a source file — its classes/methods/functions with line numbers — WITHOUT reading the whole file. Use it to navigate a file cheaply before read_file/edit_file.", InputSchema = MakeSchema(("path", "string", "Path to the source file", true)) });
         schemas.Add(new() { Name = "find_symbol", Description = "Find where a symbol (class/method/function/type) is DEFINED across the project, by NAME — a lightweight 'go to definition' that needs no language server. Returns file:line for each likely definition. Use this instead of blind-grepping to locate where to edit.", InputSchema = MakeSchema(("name", "string", "The symbol name to locate (e.g. a class or method name)", true)) });
         schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false)) });
+        schemas.Add(new() { Name = "run_tests", Description = "Run the project's test suite and get a DISTILLED result: a pass/fail summary plus only the failing tests + their assertions (not a giant stdout blob). Auto-detects the runner (dotnet test/cargo test/go test/pytest/npm test/maven/gradle). Use it to verify behavior after a change. Pass 'command' to override.", InputSchema = MakeSchema(("command", "string", "Optional explicit test command (otherwise auto-detected)", false)) });
         schemas.Add(new() { Name = "codebase_search", Description = "Find the most relevant files/lines for a natural-language query across the whole repo, ranked by filename + symbol + content relevance (smarter than raw grep for 'where is X handled?'). Then read_file the top hits.", InputSchema = MakeSchema(("query", "string", "What you're looking for (keywords or a question)", true), ("limit", "string", "Max results (default 12)", false)) });
         schemas.Add(new() { Name = "instinct_evolve", Description = "Housekeeping: merge near-duplicate learned instincts via embedding similarity (preserves occurrence/accept counts, deletes redundant copies). Needs an Ollama embedding model; no-ops gracefully without one.", InputSchema = MakeSchema() });
 
@@ -1205,6 +1256,7 @@ public class AgentToolService : IDisposable
             Output = $"File written: {path} ({content.Length} bytes)",
             Summary = $"Wrote {path}",
             Diff = writeDiff,
+            FilePath = path,
         };
     }
 
@@ -1240,12 +1292,14 @@ public class AgentToolService : IDisposable
 
         if (!found)
         {
+            string? anchor = _fileSystem.FindNearestAnchor(path, find);
+            string hint = anchor != null ? $" {anchor}" : "";
             return new ToolResult
             {
                 Type = call.Type,
                 ToolName = call.ToolName,
                 Success = false,
-                Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist — re-read the file and copy the exact block you want to change.",
+                Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist — re-read the file and copy the exact block you want to change.{hint}",
                 Summary = $"Edit failed: text not found in {path}",
             };
         }
@@ -1265,6 +1319,7 @@ public class AgentToolService : IDisposable
             Output = $"Edited {path}: {replacements} replacement(s) made",
             Summary = $"Edited {path} ({replacements} changes)",
             Diff = editDiff,
+            FilePath = path,
         };
     }
 
@@ -1302,6 +1357,7 @@ public class AgentToolService : IDisposable
             Output = $"multi_edit: {applied} edit(s) applied to {path}",
             Summary = $"Edited {path} ({applied} edits)",
             Diff = diff,
+            FilePath = path,
         };
     }
 
@@ -1407,6 +1463,45 @@ public class AgentToolService : IDisposable
         result.ToolName = call.ToolName;
         result.Summary = result.Success ? $"Build OK ({cmd})" : $"Build FAILED ({cmd}) — read the errors and fix them";
         return result;
+    }
+
+    private async Task<ToolResult> ExecuteRunTestsAsync(ToolCall call, CancellationToken ct)
+    {
+        string cmd = call.GetArg("command");
+        if (string.IsNullOrEmpty(cmd)) cmd = _fileSystem.DetectTestCommand() ?? "";
+        if (string.IsNullOrEmpty(cmd))
+            return Fail(call, "run_tests: couldn't detect a test runner in the project root (no .csproj/Cargo.toml/go.mod/pyproject/package.json/pom.xml/…). Pass an explicit 'command', or use run_command.");
+
+        // Reuse the hardened command runner (blocklist, timeout, output budget, cwd). Tests can be slow → 5 min.
+        var inner = new ToolCall
+        {
+            Type = ToolType.RunCommand,
+            ToolName = "run_command",
+            Arguments = new Dictionary<string, string> { ["command"] = cmd, ["timeout_ms"] = "300000" },
+        };
+        var result = await ExecuteRunCommandAsync(inner, ct);
+
+        // Success comes from the runner's EXIT CODE (reliable across runners). The distiller only shapes the
+        // text into a pass/fail summary + failing tests so a weak model gets an actionable signal.
+        string distilled = CluadeX.Helpers.TestOutputDistiller.Distill(result.Output ?? "", result.Error ?? "", cmd);
+        result.Type = call.Type;
+        result.ToolName = call.ToolName;
+        result.Output = distilled;
+        if (result.Success) result.Error = "";
+        result.Summary = result.Success ? $"Tests passed ({cmd})" : $"Tests FAILED ({cmd}) — read the failures and fix them";
+        return result;
+    }
+
+    /// <summary>Run the project's detected/configured build for an automatic verify-after-edit. System-initiated,
+    /// so it deliberately bypasses the model permission gate + PreToolUse hooks (same precedent as the autonomous
+    /// loop's verify step) — the dangerous-command blocklist inside the runner still applies. Honors
+    /// AutoVerifyCommand when the user set one.</summary>
+    public Task<ToolResult> RunVerifyBuildAsync(CancellationToken ct)
+    {
+        var call = new ToolCall { Type = ToolType.RunBuild, ToolName = "run_build" };
+        string custom = _settingsService.Settings.AutoVerifyCommand;
+        if (!string.IsNullOrWhiteSpace(custom)) call.Arguments["command"] = custom;
+        return ExecuteRunBuildAsync(call, ct);
     }
 
     private ToolResult ExecuteListFiles(ToolCall call)
@@ -2293,6 +2388,7 @@ public class AgentToolService : IDisposable
             "search_content" or "searchcontent" => ToolType.SearchContent,
             "run_command" or "runcommand" or "shell" or "exec" or "run" => ToolType.RunCommand,
             "run_build" or "build" or "typecheck" or "type_check" => ToolType.RunBuild,
+            "run_tests" or "runtests" or "test" or "tests" or "run_test" or "unittest" => ToolType.RunTests,
             "create_directory" or "mkdir" or "create_dir" => ToolType.CreateDirectory,
 
             // Git tools

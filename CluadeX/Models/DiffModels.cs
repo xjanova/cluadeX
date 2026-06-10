@@ -37,6 +37,9 @@ public class EditDiffResult
     /// <summary>True when the rendered line list was capped (the +/- counts are still totals).</summary>
     public bool Truncated { get; set; }
 
+    /// <summary>1-based line in the NEW file of the first changed region — the editor scrolls here.</summary>
+    public int FirstChangedLine { get; set; } = 1;
+
     /// <summary>Short stat like "+12  -3" for a header chip.</summary>
     public string Stat => $"+{Added}  -{Removed}" + (Truncated ? "  (diff truncated)" : "");
 

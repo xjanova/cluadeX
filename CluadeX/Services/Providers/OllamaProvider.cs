@@ -154,6 +154,11 @@ public class OllamaProvider : ApiProviderBase
             messages.Add(new ChatMsg("user", userMessage));
         }
 
+        // Clamp generation budget so the prompt isn't starved of the window (see TokenBudget — same
+        // prompt-starvation hang the in-process path already guards against).
+        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(messages));
+        int numPredict = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
+
         var requestObj = new
         {
             model,
@@ -163,7 +168,7 @@ public class OllamaProvider : ApiProviderBase
             {
                 temperature = (double)settings.Temperature,
                 top_p = (double)settings.TopP,
-                num_predict = settings.MaxTokens,
+                num_predict = numPredict,
                 repeat_penalty = (double)settings.RepeatPenalty,
                 repeat_last_n = settings.RepeatPenaltyTokens,
             },
@@ -287,8 +292,11 @@ public class OllamaProvider : ApiProviderBase
     /// </summary>
     public override async Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
-        Action<string>? onTextDelta = null, CancellationToken ct = default)
+        Action<string>? onTextDelta = null, CancellationToken ct = default, string? toolChoice = null)
     {
+        // NOTE: Ollama's /api/chat has no tool_choice field — a forced toolChoice can't be honored here.
+        // The planner falls back to prompt-level steering on Ollama; constrained forcing works on llama-server.
+        _ = toolChoice;
         LastPromptTokens = 0;
         LastCompletionTokens = 0;
         string baseUrl = GetBaseUrl();
@@ -296,20 +304,30 @@ public class OllamaProvider : ApiProviderBase
         string model = config.EffectiveModelId ?? "llama3.1";
         var settings = _settingsService.Settings;
 
+        // Weak-model tool path: low temperature + top_k/min_p/repeat_penalty for deterministic, well-formed
+        // tool-call JSON. options is shared by reference into requestObj so adding num_predict after the
+        // estimate still reaches the wire.
+        var options = new Dictionary<string, object>
+        {
+            ["temperature"] = (double)Math.Min(settings.Temperature, settings.ToolCallTemperature),
+            ["top_p"] = (double)settings.TopP,
+            ["top_k"] = settings.TopK,
+            ["min_p"] = (double)settings.MinP,
+            ["repeat_penalty"] = (double)settings.RepeatPenalty,
+        };
         var requestObj = new Dictionary<string, object>
         {
             ["model"] = model,
             ["messages"] = BuildOpenAiToolMessages(messages, systemPrompt, argumentsAsObject: true),
             ["stream"] = false,
-            ["options"] = new Dictionary<string, object>
-            {
-                ["temperature"] = (double)settings.Temperature,
-                ["top_p"] = (double)settings.TopP,
-                ["num_predict"] = settings.MaxTokens,
-            },
+            ["options"] = options,
         };
         if (tools.Count > 0)
             requestObj["tools"] = BuildOpenAiToolDefs(tools);
+
+        // Clamp AFTER assembling messages+tools so the estimate reflects the real prompt footprint.
+        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj));
+        options["num_predict"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
 
         var body = JsonSerializer.Serialize(requestObj);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/chat");

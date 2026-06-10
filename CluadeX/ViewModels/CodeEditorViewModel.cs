@@ -106,6 +106,41 @@ public class CodeEditorViewModel : ViewModelBase
                 _ = RefreshTreeAsync();
             }
         };
+
+        // Live-follow: when the agent edits a file, open/refresh it in the editor and scroll to the change.
+        ChatVM.FileMutatedByAgent += OnAgentFileMutated;
+    }
+
+    /// <summary>Raised when a live-followed edit lands — the View scrolls to / selects this 1-based line.</summary>
+    public event Action<int>? ScrollToLineRequested;
+
+    private async void OnAgentFileMutated(string relPath, int firstLine)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(relPath) || !_workspace.HasWorkingDirectory) return;
+            string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, relPath));
+
+            var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, full, StringComparison.OrdinalIgnoreCase));
+            var loaded = await _workspace.OpenFileAsync(full);
+            if (loaded == null) return;   // binary / too large — skip live-follow
+
+            if (existing != null)
+            {
+                existing.MarkOpened(loaded.Content);   // refresh content in place (keep the tab object)
+                ActiveTab = existing;
+            }
+            else
+            {
+                Tabs.Add(loaded);
+                ActiveTab = loaded;
+            }
+
+            StatusMessage = $"● Agent edited {Path.GetFileName(full)}";
+            ScrollToLineRequested?.Invoke(firstLine);
+            _ = _workspace.EnrichGitStatusAsync(Tree);   // live git badges
+        }
+        catch { /* live-follow is best-effort — never disrupt the agent run */ }
     }
 
     public async Task RefreshTreeAsync()

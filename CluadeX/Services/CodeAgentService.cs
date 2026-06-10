@@ -29,6 +29,15 @@ public class CodeAgentService
     // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
     private int MaxAgentIterations => Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
 
+    // High-value core tools offered to a SMALL-context local model (the full ~46-schema catalogue eats
+    // 40-70% of a 4k window). Kept in sync with the small-ctx NOTE in GetSystemPrompt so prompt + schemas agree.
+    private static readonly HashSet<string> CoreLocalToolNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "read_file", "list_files", "search_content", "search_files", "codebase_search",
+        "find_symbol", "list_symbols", "edit_file", "multi_edit", "write_file",
+        "run_command", "run_build", "run_tests",
+    };
+
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
     private string? _cachedSystemPrompt;
     private DateTime _promptCacheExpiry = DateTime.MinValue;
@@ -207,14 +216,14 @@ public class CodeAgentService
               - จะหาว่า "X อยู่ตรงไหน / ทำงานยังไง" ใช้ codebase_search (จัดอันดับความเกี่ยวข้อง ฉลาดกว่า grep ดิบ) แล้ว read_file ผลลัพธ์อันดับต้น
               - หานิยามของชื่อ (class/method/function) ใช้ find_symbol "ชื่อ" (go-to-definition ไม่ต้องใช้ coord); ดูโครงไฟล์ (class/method พร้อมเลขบรรทัด) ใช้ list_symbols — แม่นกว่าและถูกกว่าการ read ทั้งไฟล์
               - งานที่ไม่ trivial: เรียก brain_recall ก่อนลงมือ เพื่อดูบทเรียน/การตัดสินใจ/บั๊กที่เคยเจอจาก BrainX (อย่าแก้บั๊กเดิมซ้ำรอย)
-              - หลังแก้โค้ด: ยืนยันก่อนบอกว่าเสร็จ — เรียก run_build (auto-detect คำสั่ง build/type-check) และ/หรือ lsp_diagnostics กับไฟล์ที่แก้ อ่าน error แล้วแก้ จน build ผ่าน
+              - หลังแก้โค้ด: ยืนยันก่อนบอกว่าเสร็จ — เรียก run_build (auto-detect คำสั่ง build/type-check) และ run_tests (สรุป pass/fail + เทสต์ที่ fail) และ/หรือ lsp_diagnostics กับไฟล์ที่แก้ อ่าน error แล้วแก้ จน build ผ่านและเทสต์เขียว
               """
             : """
               - A CODEBASE MAP (below) lists the project's types/functions. Use it to navigate, then read_file the relevant files — don't guess or blind-grep.
               - To locate "where is X handled?", use codebase_search (ranked relevance, smarter than raw grep), then read_file the top hits.
               - To find where a NAME (class/method/function) is DEFINED, use find_symbol "name" (go-to-definition, no coords needed). To outline a file (symbols + line numbers) use list_symbols — both beat reading the whole file.
               - For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX (don't re-solve a bug you already solved).
-              - After editing code, VERIFY before claiming done: call run_build (auto-detects the build/type-check command) and/or lsp_diagnostics on the changed file; read any errors and fix them, then build again until clean.
+              - After editing code, VERIFY before claiming done: call run_build (auto-detects the build/type-check command), run_tests (distilled pass/fail + failing tests), and/or lsp_diagnostics on the changed file; read any errors and fix them, then build again until clean and tests pass.
               """);
 
         // ═══════════════════════════════════════════
@@ -719,15 +728,38 @@ public class CodeAgentService
             {
                 sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
             }
+            else if (_settingsService.Settings.LocalNativeToolUseEnabled)
+            {
+                // Small ctx + native tool use: we still send a CORE tool subset (see CoreLocalToolNames), so
+                // the prompt must AGREE — telling the model tools are "disabled" while handing it schemas is
+                // the contradiction that wrecks weak-model tool selection.
+                sb.AppendLine("NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, "
+                    + "search_content, search_files, codebase_search, find_symbol, list_symbols, edit_file, "
+                    + "multi_edit, write_file, run_command, run_build, run_tests. ALWAYS read_file before editing; "
+                    + "after an edit, run_build (and run_tests) to verify. Increase Context Size to ≥ 8192 for the full toolset.");
+            }
             else
             {
-                // Too little context to fit the tool catalogue without crowding out the conversation.
-                // Run as a plain chat assistant rather than overflow the window (which is what hangs).
+                // Legacy [ACTION:] path with no tool catalogue fits — run as a plain chat assistant rather
+                // than overflow the window (which is what hangs).
                 sb.AppendLine("NOTE: This local model's context window is small, so file/tool actions are "
                     + "disabled for now to keep responses fast and reliable. Increase Context Size to ≥ 8192 "
                     + "in Settings (or pick a larger-context model) to enable the full agentic toolset.");
             }
             sb.AppendLine();
+
+            // ─── Few-shot trace (weak local models) ───
+            // Showing the read→edit→verify shape once teaches the call FORMAT + discipline far better than
+            // prose rules. Local-only + only when tools are in the prompt (it costs a few tokens).
+            if (isLocalProvider && includeToolDefs)
+            {
+                sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
+                sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
+                sb.AppendLine("  2. multi_edit(\"src/Calc.cs\", edits=[{find:\"return a - b;\", replace:\"return a + b;\"}]) — atomic find/replace.");
+                sb.AppendLine("  3. run_build — if it FAILS, read the error, fix with another edit, build again until green; then run_tests.");
+                sb.AppendLine("  4. Only after it's green do you say you're done.");
+                sb.AppendLine();
+            }
 
             if (includeHeavyContext)
             {
@@ -783,6 +815,25 @@ public class CodeAgentService
                     sb.AppendLine(tree);
                 }
                 catch { /* ignore */ }
+
+                // ─── Shrunk repo map at the 8k tier ───
+                // The full 6k-char map is reserved for ≥16k, but even ~400-800 tokens of "these are the real
+                // files + class names" massively cuts path/symbol hallucination — the #1 weak-model failure.
+                // So inject a tiny map from 8k upward instead of all-or-nothing at 16k.
+                if (contextTokens >= 8000)
+                {
+                    try
+                    {
+                        string smallMap = _repoMap?.GetRepoMap(1500) ?? "";
+                        if (!string.IsNullOrWhiteSpace(smallMap))
+                        {
+                            sb.AppendLine();
+                            sb.AppendLine("CODEBASE MAP (key types per file — read a file for full content):");
+                            sb.AppendLine(smallMap);
+                        }
+                    }
+                    catch { /* ignore */ }
+                }
             }
 
             // Detect project type and add specific context
@@ -808,6 +859,21 @@ public class CodeAgentService
             }
         }
         catch { /* memory not available */ }
+
+        // ─── Learned habits (instinct read-back) ───
+        // Closes the learning loop: instincts extracted across past sessions are finally re-injected so the
+        // model benefits from them (before, extraction was write-only and the model never saw them again).
+        try
+        {
+            string? instincts = _agentToolService.GetTopInstinctsBlock(5);
+            if (!string.IsNullOrWhiteSpace(instincts))
+            {
+                sb.AppendLine();
+                sb.AppendLine("# Learned habits (apply when relevant)");
+                sb.AppendLine(instincts);
+            }
+        }
+        catch { /* instincts optional */ }
 
         // ─── Hard fit-guard for local models ───
         // Last line of defence: never hand a local model a system prompt that alone blows past its context
@@ -1097,6 +1163,8 @@ public class CodeAgentService
         int maxTokenRecoveryCount = 0;
         bool hasAttemptedReactiveCompact = false;
         const int MaxOutputTokenRecoveries = 3;
+        int unknownToolFeedbackCount = 0;          // legacy-path "unknown tool — did you mean" nudges (bounded)
+        const int MaxUnknownToolFeedbacks = 3;
 
         for (int iteration = 0; iteration < MaxAgentIterations; iteration++)
         {
@@ -1164,6 +1232,33 @@ public class CodeAgentService
 
             if (toolCalls.Count == 0)
             {
+                // ─── Unknown-tool feedback (weak models, legacy [ACTION:] path) ───
+                // The model may have written an [ACTION:foo] for a tool that doesn't exist; ParseToolCalls
+                // drops those silently. Give it ONE bounded corrective nudge so it can retry with a real
+                // tool name instead of us treating the malformed attempt as a finished answer.
+                if (unknownToolFeedbackCount < MaxUnknownToolFeedbacks && iteration < MaxAgentIterations - 1)
+                {
+                    var unknownNames = _agentToolService.GetUnknownActionNames(response);
+                    if (unknownNames.Count > 0)
+                    {
+                        unknownToolFeedbackCount++;
+                        var known = _agentToolService.GetRegisteredToolNames().ToList();
+                        string fb = "These tool names are not registered: " + string.Join(", ", unknownNames.Select(u =>
+                        {
+                            var s = CluadeX.Helpers.ToolCallSalvage.SuggestClosestName(u, known);
+                            return s != null ? $"'{u}' (did you mean '{s}'?)" : $"'{u}'";
+                        })) + ". Re-issue your action using one of the exact tool names you were given.";
+
+                        step.ThinkingText = _agentToolService.StripToolCalls(response);
+                        OnThinkingUpdate?.Invoke(step.ThinkingText ?? "", iteration + 1);
+                        result.Steps.Add(step);
+                        workingHistory.Add(new ChatMessage { Role = MessageRole.Assistant, Content = response });
+                        workingHistory.Add(new ChatMessage { Role = MessageRole.System, Content = fb });
+                        currentMessage = fb;
+                        continue; // let the model retry with a valid tool name
+                    }
+                }
+
                 // No tools used — validate any code blocks in the final response
                 var validationFeedback = ValidateResponseCode(response);
                 if (validationFeedback != null && iteration < MaxAgentIterations - 1)
@@ -1430,6 +1525,25 @@ public class CodeAgentService
         int maxTokenRecoveryCount = 0;
         const int MaxOutputTokenRecoveries = 3;
         bool hasAttemptedReactiveCompact = false;
+        int autoVerifyCount = 0;                 // bounded auto-build-after-edit (in-loop reflexion)
+        const int MaxAutoVerifies = 6;
+        bool loopIsLocal = _providerManager.ActiveProviderType
+            is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        // Plan-first: force a tool call on step 0 of a non-trivial LOCAL task so the model acts instead of
+        // stalling with prose. Off for API models (they don't need it) and trivial questions.
+        bool planFirstPending = loopIsLocal
+            && _settingsService.Settings.PlanFirstForceToolEnabled
+            && LooksNonTrivialTask(userMessage);
+
+        // ─── Escalation ladder ───
+        // When the local model stalls, hand the task (with full accumulated context) to a stronger API model.
+        var loopProvider = _providerManager.ActiveProvider;
+        int iterationBudget = MaxAgentIterations;
+        bool hasEscalated = false;
+        const int EscalationBonusIterations = 8;
+        Services.Providers.IAiProvider? escalationProvider = loopIsLocal ? ResolveEscalationProvider(loopProvider) : null;
+        string? lastErrorSig = null;
+        int repeatErrorCount = 0;
 
         // ─── Smart context enrichment (respects SmartEditing toggle) ───
         if (_fileSystemService.HasWorkingDirectory && _settingsService.Settings.Features.SmartEditing)
@@ -1444,6 +1558,19 @@ public class CodeAgentService
 
         // Build native tool schemas
         var toolSchemas = _agentToolService.BuildNativeToolSchemas();
+
+        // ─── Ctx-aware tool subset (weak local models) ───
+        // A 4k-8k local model handed all ~46 schemas (40-70% of the window) picks the wrong tool far more
+        // often and crowds out the conversation. Trim to a high-value core so the menu fits + the choice is
+        // clearer. The prompt's small-ctx NOTE lists exactly this set, so the two paths now agree.
+        bool localSmallCtx = (_providerManager.ActiveProviderType
+                is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+            && (int)_settingsService.Settings.ContextSize < 8000;
+        if (localSmallCtx)
+        {
+            var trimmed = toolSchemas.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
+            if (trimmed.Count > 0) toolSchemas = trimmed; // guard: never nuke all tools on a name mismatch
+        }
 
         // Build initial messages (with history compaction)
         var nativeMessages = new List<Services.Providers.NativeMessage>();
@@ -1475,7 +1602,7 @@ public class CodeAgentService
         // Ensure alternating roles
         nativeMessages = EnsureAlternatingRoles(nativeMessages);
 
-        for (int iteration = 0; iteration < MaxAgentIterations; iteration++)
+        for (int iteration = 0; iteration < iterationBudget; iteration++)
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
@@ -1529,16 +1656,20 @@ public class CodeAgentService
             using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+                // Force a tool call only on step 0 of a non-trivial local task (constrained decoding via A3).
+                string? iterToolChoice = (iteration == 0 && planFirstPending && toolSchemas.Count > 0)
+                    ? "required" : null;
                 try
                 {
-                    response = await _providerManager.ActiveProvider.ChatWithToolsAsync(
+                    response = await loopProvider.ChatWithToolsAsync(
                         outboundMessages, systemPrompt, toolSchemas,
                         onTextDelta: token =>
                         {
                             if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); // reset idle window
                             OnAgenticStreamingToken?.Invoke(token, nativeStreamStep);
                         },
-                        ct: callCts.Token);
+                        ct: callCts.Token,
+                        toolChoice: iterToolChoice);
                 }
                 catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
@@ -1576,6 +1707,15 @@ public class CodeAgentService
                 }
             }
 
+            // ─── Strip leaked control tokens from local-model tool-turn text ───
+            // The streaming chat path sanitizes, but the native tool path surfaces TextContent raw — a weak
+            // local model that leaks <|im_end|>/<|eot_id|>/role tokens on a tool turn would show them verbatim.
+            if (loopIsLocal && !string.IsNullOrEmpty(response.TextContent))
+            {
+                var (cleanText, _) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(response.TextContent);
+                response.TextContent = cleanText;
+            }
+
             // Display thinking content
             if (!string.IsNullOrEmpty(response.ThinkingContent))
             {
@@ -1610,6 +1750,30 @@ public class CodeAgentService
                 nativeMessages = EnsureAlternatingRoles(nativeMessages);
                 result.Steps.Add(step);
                 continue;
+            }
+
+            // ─── Tool-call repair (weak local models) ───
+            // A small model often emits the tool call as JSON/prose in content instead of via the
+            // structured tool_calls channel. Salvage it so the loop continues instead of treating the
+            // attempt as a final answer. Deterministic; only names that resolve to a real tool are accepted.
+            if (response.ToolCalls.Count == 0 && _settingsService.Settings.LocalToolCallRepairEnabled)
+            {
+                var salvaged = CluadeX.Helpers.ToolCallSalvage.ExtractFromText(
+                    response.TextContent, name => _agentToolService.ResolveToolTypePublic(name) != null);
+                if (salvaged.Count > 0)
+                {
+                    int si = 0;
+                    foreach (var (name, input) in salvaged)
+                        response.ToolCalls.Add(new Services.Providers.NativeToolCall
+                        {
+                            Id = $"call_salvage_{iteration}_{si++}",
+                            Name = name,
+                            Input = input,
+                        });
+                    response.StopReason = "tool_use";
+                    response.TextContent = null; // the "text" WAS the tool call — don't echo the raw JSON back
+                    OnAgentStatus?.Invoke(isThai ? "กู้คืน tool call จากข้อความ..." : "Recovered tool call from text...");
+                }
             }
 
             // No tool calls = final response
@@ -1701,8 +1865,13 @@ public class CodeAgentService
                     // NEVER silently fall back to RunCommand: a misspelled tool name must not become a shell exec.
                     var resolvedType = _agentToolService.ResolveToolTypePublic(toolCall.Name);
                     if (resolvedType == null)
+                    {
+                        var suggestion = CluadeX.Helpers.ToolCallSalvage.SuggestClosestName(
+                            toolCall.Name, toolSchemas.Select(t => t.Name));
+                        string didYouMean = suggestion != null ? $" Did you mean '{suggestion}'?" : "";
                         throw new InvalidOperationException(
-                            $"Unknown tool '{toolCall.Name}' — not a registered tool. Only call tools that were provided to you.");
+                            $"Unknown tool '{toolCall.Name}' — not a registered tool.{didYouMean} Only call tools that were provided to you.");
+                    }
 
                     var call = new ToolCall
                     {
@@ -1781,6 +1950,92 @@ public class CodeAgentService
             foreach (var toolCall in writeCalls)
                 await ExecuteNativeToolCall(toolCall);
 
+            // ─── Auto-verify after edits (in-loop reflexion) ───
+            // A weak model edits, claims done, and never runs the build. If this turn changed files (and the
+            // model didn't already verify), run the detected build and feed failures back so it's FORCED to
+            // confront real compiler errors instead of declaring false victory. Bounded so a slow build can't
+            // dominate the task; system-initiated so it doesn't prompt for permission.
+            if (_settingsService.Settings.AutoVerifyAfterEditEnabled
+                && autoVerifyCount < MaxAutoVerifies
+                && !ct.IsCancellationRequested
+                && toolResults.Any(r => r.Success && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit)
+                && !toolResults.Any(r => r.Type is ToolType.RunBuild)
+                && _fileSystemService.DetectBuildCommand() != null)
+            {
+                autoVerifyCount++;
+                OnAgentStatus?.Invoke(isThai ? "ตรวจ build อัตโนมัติหลังแก้ไข..." : "Auto-verifying build after edit...");
+                try
+                {
+                    var verify = await _agentToolService.RunVerifyBuildAsync(ct);
+                    OnToolExecuted?.Invoke(verify);
+                    string note;
+                    if (verify.Success)
+                    {
+                        note = "[auto-verify] ✓ Build passed after your edit.";
+                    }
+                    else
+                    {
+                        string raw = ((verify.Output ?? "") + "\n" + (verify.Error ?? "")).Trim();
+                        if (raw.Length > 2000) raw = raw[..2000] + "\n... (truncated)";
+                        note = "[auto-verify] ✗ Build FAILED after your edit — fix these errors before continuing:\n" + raw;
+                    }
+                    userResultMsg.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = note });
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* verify is best-effort; never break the turn */ }
+            }
+
+            // ─── Mid-loop goal re-injection (anti-drift for weak small-ctx models) ───
+            // After microcompaction trims old turns, a small model loses the thread. Periodically re-state the
+            // original request + the read→verify rule so it keeps finishing the task instead of wandering.
+            int reminderEvery = Math.Max(2, _settingsService.Settings.MidLoopReminderEvery);
+            if (_settingsService.Settings.MidLoopReminderEnabled && loopIsLocal
+                && iteration > 0 && (iteration + 1) % reminderEvery == 0)
+            {
+                string goal = userMessage.Replace("\n", " ").Trim();
+                if (goal.Length > 200) goal = goal[..200] + "…";
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = $"[reminder] The user's request: \"{goal}\". Stay focused on completing it — read a file "
+                         + "before editing it, then run_build / run_tests to verify before you say you're done.",
+                });
+            }
+
+            // ─── Escalation trigger (local model stuck → hand off to a stronger API model) ───
+            if (escalationProvider != null && !hasEscalated)
+            {
+                string errSig = string.Join("|", toolResults
+                    .Where(r => !r.Success).Select(r => (r.Error ?? "").Trim()).Where(e => e.Length > 0).Take(3));
+                bool stagnating = false;
+                if (errSig.Length > 0)
+                {
+                    if (errSig == lastErrorSig) repeatErrorCount++;
+                    else { repeatErrorCount = 0; lastErrorSig = errSig; }
+                    stagnating = repeatErrorCount >= 2; // the same error 3 turns running
+                }
+                bool nearExhaustion = !result.Success && iteration >= iterationBudget - 1;
+                if (stagnating || nearExhaustion)
+                {
+                    hasEscalated = true;
+                    loopProvider = escalationProvider;
+                    toolSchemas = _agentToolService.BuildNativeToolSchemas(); // full catalogue for the strong model
+                    iterationBudget = iteration + 1 + EscalationBonusIterations;
+                    string elabel = escalationProvider.DisplayName ?? escalationProvider.ProviderId;
+                    OnAgentStatus?.Invoke(isThai
+                        ? $"⤴ ส่งต่อให้ {elabel} (โมเดล local ติด)..."
+                        : $"⤴ Escalating to {elabel} (local model stuck)...");
+                    userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = "[escalation] A smaller local model was working on this task and got stuck "
+                             + (stagnating ? "(it kept repeating the same error). " : "(it ran out of steps). ")
+                             + "You are a stronger model — review the conversation and tool results above, then "
+                             + "finish the task correctly.",
+                    });
+                }
+            }
+
             step.ToolResults = toolResults;
             step.ToolCalls = toolResults.Select(r => new ToolCall
             {
@@ -1823,6 +2078,36 @@ public class CodeAgentService
         progress?.Report("Done");
         OnAgentStatus?.Invoke("Ready");
         return result;
+    }
+
+    /// <summary>The configured escalation-target provider, or null when escalation is off / mis-configured /
+    /// points back at the current provider / can't run the native tool loop.</summary>
+    private Services.Providers.IAiProvider? ResolveEscalationProvider(Services.Providers.IAiProvider current)
+    {
+        var s = _settingsService.Settings;
+        if (!s.EscalationEnabled) return null;
+        if (!Enum.TryParse<AiProviderType>(s.EscalationProviderName, ignoreCase: true, out var t)) return null;
+        var p = _providerManager.GetProvider(t);
+        if (p == null || ReferenceEquals(p, current)) return null;
+        if (!p.SupportsNativeToolUse) return null; // escalation rides the native tool loop
+        return p;
+    }
+
+    /// <summary>Heuristic: does the user message describe a non-trivial coding TASK (worth forcing a first
+    /// tool call / planning) vs a trivial question? Length or an action verb (EN or TH) ⇒ non-trivial.</summary>
+    private static bool LooksNonTrivialTask(string userMessage)
+    {
+        if (string.IsNullOrWhiteSpace(userMessage)) return false;
+        string m = userMessage.ToLowerInvariant();
+        if (m.Length > 200) return true;
+        string[] verbs =
+        {
+            "implement", "add ", "create", "build", "fix", "refactor", "write ", "change", "update",
+            "rename", "move ", "delete", "remove", "replace", "migrate", "wire ", "extract", "generate",
+            "แก้", "เพิ่ม", "สร้าง", "ทำ", "เขียน", "ย้าย", "ลบ", "ปรับ", "รีแฟกเตอร์",
+        };
+        foreach (var v in verbs) if (m.Contains(v)) return true;
+        return false;
     }
 
     /// <summary>Parse JSON input element to string dictionary for ToolCall args.</summary>

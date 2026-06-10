@@ -349,7 +349,8 @@ public class AnthropicProvider : ApiProviderBase
         string systemPrompt,
         List<ToolSchema> tools,
         Action<string>? onTextDelta = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? toolChoice = null)
     {
         var config = GetConfig();
         string baseUrl = config.BaseUrl?.TrimEnd('/') ?? "https://api.anthropic.com";
@@ -432,6 +433,18 @@ public class AnthropicProvider : ApiProviderBase
             {
                 requestObj["system"] = systemPrompt;
             }
+        }
+
+        // Honor a forced tool choice (planner / forced-retry). Default (null/"auto") leaves Claude free.
+        if (tools.Count > 0 && !string.IsNullOrWhiteSpace(toolChoice)
+            && !toolChoice.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            requestObj["tool_choice"] =
+                toolChoice.Equals("required", StringComparison.OrdinalIgnoreCase) || toolChoice.Equals("any", StringComparison.OrdinalIgnoreCase)
+                    ? new Dictionary<string, object> { ["type"] = "any" }
+                : toolChoice.Equals("none", StringComparison.OrdinalIgnoreCase)
+                    ? new Dictionary<string, object> { ["type"] = "auto" } // Anthropic: no "none" → leave unforced
+                    : new Dictionary<string, object> { ["type"] = "tool", ["name"] = toolChoice };
         }
 
         var body = JsonSerializer.Serialize(requestObj, new JsonSerializerOptions { WriteIndented = false });

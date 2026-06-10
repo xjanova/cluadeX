@@ -173,12 +173,33 @@ public abstract class ApiProviderBase : IAiProvider
         string systemPrompt,
         List<ToolSchema> tools,
         Action<string>? onTextDelta = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? toolChoice = null)
         => Task.FromResult(new NativeToolResponse
         {
             TextContent = "Native tool use not supported by this provider.",
             StopReason = "end_turn",
         });
+
+    /// <summary>Map a provider-neutral toolChoice ("auto"/"none"/"required"/"&lt;toolName&gt;") to the OpenAI
+    /// tool_choice wire value. Null/empty/"auto" → "auto" (the model decides).</summary>
+    protected static object BuildOpenAiToolChoice(string? toolChoice)
+    {
+        if (string.IsNullOrWhiteSpace(toolChoice)) return "auto";
+        switch (toolChoice.Trim().ToLowerInvariant())
+        {
+            case "auto": return "auto";
+            case "none": return "none";
+            case "required":
+            case "any": return "required";
+            default:
+                return new Dictionary<string, object>
+                {
+                    ["type"] = "function",
+                    ["function"] = new Dictionary<string, object> { ["name"] = toolChoice.Trim() },
+                };
+        }
+    }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────
     // OpenAI-style native tool-calling helpers (shared by llama-server + Ollama).

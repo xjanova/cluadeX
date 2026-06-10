@@ -28,6 +28,16 @@ public class AppSettings
     public int MaxTokens { get; set; } = 4096;
     public int RepeatPenaltyTokens { get; set; } = 64;
     public float RepeatPenalty { get; set; } = 1.1f;
+    /// <summary>top-k sampling sent on the local native tool-call path (llama-server/Ollama). Weak
+    /// models drift into low-probability garbage without it, exactly when emitting structured JSON.</summary>
+    public int TopK { get; set; } = 40;
+    /// <summary>min-p sampling sent on the local native tool-call path. Trims the low-probability tail
+    /// so tool-call JSON stays well-formed. 0 disables.</summary>
+    public float MinP { get; set; } = 0.05f;
+    /// <summary>Temperature used on the native tool-calling path — lower than the chat temperature because
+    /// structured tool-call JSON needs determinism, not creativity. The tool path uses
+    /// Min(Temperature, ToolCallTemperature) so an already-low chat temp is respected.</summary>
+    public float ToolCallTemperature { get; set; } = 0.2f;
 
     // Backend settings
     public string GpuBackend { get; set; } = "Auto";
@@ -69,6 +79,29 @@ public class AppSettings
     public bool LocalNativeToolUseEnabled { get; set; } = true;
 
     /// <summary>
+    /// Tool-call repair for weak local models. When ON, if the model emits NO structured tool_call but its
+    /// text contains a JSON/fenced tool-call ({name,arguments} / OpenAI tool_calls shape), CluadeX salvages
+    /// it and continues the loop instead of ending the turn; and unknown/misspelled tool names get a
+    /// "did you mean X?" suggestion fed back. Deterministic + only accepts names that resolve to real tools.
+    /// </summary>
+    public bool LocalToolCallRepairEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Plan-first for weak local models: on the FIRST step of a non-trivial task, force a tool call
+    /// (constrained decoding) so the model STARTS acting (read/search/plan via todo_write) instead of
+    /// stalling with prose and ending the turn. Local-only; uses the provider's tool_choice="required".
+    /// </summary>
+    public bool PlanFirstForceToolEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Mid-loop goal re-injection: every few agent steps, re-state the user's original request + the
+    /// read→verify rule so a weak small-context model doesn't drift after microcompaction trims old turns.
+    /// </summary>
+    public bool MidLoopReminderEnabled { get; set; } = true;
+    /// <summary>Re-inject the goal reminder every N agent steps (min 2).</summary>
+    public int MidLoopReminderEvery { get; set; } = 4;
+
+    /// <summary>
     /// Auto-recall from BrainX. When ON, before each agentic task CluadeX searches the connected
     /// BrainX MCP brain for relevant coding-lessons / past decisions and injects the top hits into
     /// the model's context. Best-effort + short-timeout: if the brain is offline the task proceeds
@@ -90,6 +123,27 @@ public class AppSettings
     // ─── Autonomous coding loop (selling-point) ───
     // Edit → run the project's build/tests ON THIS MACHINE → read failures → fix → repeat until green,
     // then review the changes for hidden bugs, iterating. All loops are capped to avoid runaway cost.
+    /// <summary>
+    /// Auto-verify after edit, in the DEFAULT interactive loop (not just the opt-in autonomous mode). When ON,
+    /// after a turn that edited/wrote files — and the model didn't already verify — CluadeX auto-runs the
+    /// detected build and feeds failures back, so a weak model is forced to confront real compiler errors
+    /// instead of declaring false victory. Bounded per task. System-initiated, so it doesn't prompt for
+    /// permission. Set AutoVerifyCommand to override the detected build command.
+    /// </summary>
+    public bool AutoVerifyAfterEditEnabled { get; set; } = true;
+
+    // ─── Model-escalation ladder (local → stronger API model) ───
+    /// <summary>
+    /// Escalate to a stronger API model when the LOCAL model stalls (hits max iterations OR repeats the same
+    /// error several turns). This is the "local-first with a safety net" lever: the ~30% of work a small model
+    /// can't finish (deep architecture, novel design, gnarly debugging) gets handed to Claude/etc.
+    /// OPT-IN — it SENDS your conversation + tool results to the external provider below and costs money.
+    /// </summary>
+    public bool EscalationEnabled { get; set; } = false;
+    /// <summary>Provider to escalate to. Must support native tool use ("Anthropic" today; OpenAI/Gemini need a
+    /// native tool-loop implementation first). Configure that provider's API key + model in its own settings.</summary>
+    public string EscalationProviderName { get; set; } = "Anthropic";
+
     /// <summary>Master switch for the autonomous build-test-fix-review loop (opt-in: it runs commands + spends tokens).</summary>
     public bool AutonomousLoopEnabled { get; set; } = false;
     /// <summary>Max build/test → fix attempts before giving up (1-25).</summary>
@@ -130,7 +184,7 @@ public class AppSettings
     /// worked) into the Instinct system; STRONG instincts then sync to BrainX. Opt-in (off by default)
     /// because it spends tokens the user didn't explicitly request — essentially free on a local model.
     /// </summary>
-    public bool InstinctLearningEnabled { get; set; } = false;
+    public bool InstinctLearningEnabled { get; set; } = true;
 
     // Strategic Compaction Toast (Sprint 2 #2) — non-blocking nudge that
     // appears at logical breakpoints (50+ tool calls / context ≥ 60% / 75%),

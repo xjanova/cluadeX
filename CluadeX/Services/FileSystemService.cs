@@ -246,6 +246,31 @@ public class FileSystemService
         return null;
     }
 
+    /// <summary>
+    /// Best-effort detection of the project's TEST command from marker files in the working-directory root.
+    /// Returns null when no test setup is recognised. Mirrors <see cref="DetectBuildCommand"/>.
+    /// </summary>
+    public string? DetectTestCommand()
+    {
+        if (!HasWorkingDirectory) return null;
+        string dir = _workingDirectory;
+        bool HasGlob(string pattern)
+        {
+            try { return Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly).Any(); }
+            catch { return false; }
+        }
+        bool HasFile(string name) => File.Exists(Path.Combine(dir, name));
+
+        if (HasGlob("*.sln") || HasGlob("*.csproj") || HasGlob("*.fsproj")) return "dotnet test";
+        if (HasFile("Cargo.toml")) return "cargo test";
+        if (HasFile("go.mod")) return "go test ./...";
+        if (HasFile("pyproject.toml") || HasFile("pytest.ini") || HasFile("tox.ini") || HasFile("setup.py")) return "pytest -q";
+        if (HasFile("package.json")) return "npm test";
+        if (HasFile("pom.xml")) return "mvn -q test";
+        if (HasFile("build.gradle") || HasFile("build.gradle.kts")) return "gradle test";
+        return null;
+    }
+
     // ─── Write File ───
     public void WriteFile(string relativePath, string content)
     {
@@ -348,6 +373,65 @@ public class FileSystemService
             return (true, content, after);
         }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// When an edit's find-block doesn't match, locate the single file line most similar to the find-block's
+    /// first non-blank line and return a "path:line → text" pointer, so a weak model's retry is GUIDED rather
+    /// than blind (the spot small models loop on). Returns null when nothing is close enough or unreadable.
+    /// </summary>
+    public string? FindNearestAnchor(string relativePath, string find)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(find)) return null;
+            string? raw = TryReadRaw(relativePath);
+            if (raw == null) return null;
+
+            string anchor = find.Replace("\r\n", "\n").Split('\n')
+                .Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) ?? "";
+            if (anchor.Length < 3) return null;
+
+            var lines = raw.Replace("\r\n", "\n").Split('\n');
+            int bestLine = -1, bestDist = int.MaxValue; string bestText = "";
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string t = lines[i].Trim();
+                if (t.Length == 0) continue;
+                if (Math.Abs(t.Length - anchor.Length) > anchor.Length) continue; // cheap length prefilter
+                int d = BoundedLevenshtein(anchor, t);
+                if (d < bestDist) { bestDist = d; bestLine = i + 1; bestText = lines[i].TrimEnd(); }
+            }
+            // Only suggest when genuinely close: within half the anchor length (min 4 edits).
+            if (bestLine < 0 || bestDist > Math.Max(4, anchor.Length / 2)) return null;
+            string shown = bestText.Length > 160 ? bestText[..160] + "…" : bestText;
+            return $"Closest existing line is {relativePath}:{bestLine} → {shown.Trim()}";
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Levenshtein over the first 200 chars of each side (lines longer than that are clamped — the
+    /// anchor heuristic only needs a rough closeness, not exact distance on pathological lines).</summary>
+    private static int BoundedLevenshtein(string a, string b)
+    {
+        if (a.Length > 200) a = a[..200];
+        if (b.Length > 200) b = b[..200];
+        if (a.Length == 0) return b.Length;
+        if (b.Length == 0) return a.Length;
+        var prev = new int[b.Length + 1];
+        var cur = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
+        for (int i = 1; i <= a.Length; i++)
+        {
+            cur[0] = i;
+            for (int j = 1; j <= b.Length; j++)
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                cur[j] = Math.Min(Math.Min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
+            }
+            (prev, cur) = (cur, prev);
+        }
+        return prev[b.Length];
     }
 
     private static int CountOccurrences(string haystack, string needle)
