@@ -21,7 +21,11 @@ public class AppSettings
     public string? SelectedModelName { get; set; }
 
     // Inference settings
-    public uint ContextSize { get; set; } = 4096;
+    // 8192 (was 4096): CluadeX's agentic system prompt + the core tool schemas alone are ~4.4k tokens, so a
+    // 4096 window overflowed on the VERY FIRST agentic message ("request exceeds the available context size").
+    // 8192 fits the agent loop with room for a real conversation and costs only ~tens of MB extra KV cache on
+    // an 8B model — well within the GPUs that run local mode. Raise further for big-repo work.
+    public uint ContextSize { get; set; } = 8192;
     public int GpuLayerCount { get; set; } = -1; // -1 = auto (all layers)
     public float Temperature { get; set; } = 0.6f;
     public float TopP { get; set; } = 0.9f;

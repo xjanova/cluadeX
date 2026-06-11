@@ -521,13 +521,43 @@ public class LlamaServerProvider : ApiProviderBase
             // loop surfaces "error" responses as provider errors instead.
             return new NativeToolResponse
             {
-                TextContent = $"llama-server tool call failed ({(int)response.StatusCode}): {(error.Length > 300 ? error[..300] : error)}",
+                TextContent = HumanizeServerError((int)response.StatusCode, error),
                 StopReason = "error",
             };
         }
 
         var responseText = await response.Content.ReadAsStringAsync(ct);
         return ParseOpenAiToolResponse(responseText);
+    }
+
+    /// <summary>Turn llama-server's raw JSON error into a short, actionable message. The most common one for
+    /// local mode is context overflow on the first agentic message — the system prompt + tool schemas alone
+    /// exceed a small n_ctx — so we name the real fix (raise Context Size + reload) instead of dumping JSON.</summary>
+    private string HumanizeServerError(int status, string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.TryGetProperty("error", out var err))
+            {
+                string type = err.TryGetProperty("type", out var t) ? (t.GetString() ?? "") : "";
+                string msg = err.TryGetProperty("message", out var m) ? (m.GetString() ?? "") : "";
+                if (type.Contains("context", StringComparison.OrdinalIgnoreCase)
+                    || msg.Contains("context size", StringComparison.OrdinalIgnoreCase))
+                {
+                    int nCtx = err.TryGetProperty("n_ctx", out var c) && c.TryGetInt32(out var ci) ? ci : (int)_settingsService.Settings.ContextSize;
+                    int nPrompt = err.TryGetProperty("n_prompt_tokens", out var p) && p.TryGetInt32(out var pi) ? pi : 0;
+                    int suggest = Math.Max(8192, nPrompt > 0 ? ((nPrompt + 2048 + 4095) / 4096) * 4096 : 8192);
+                    return $"⚠ Context window too small: this request needs ~{nPrompt} tokens but the model is "
+                         + $"loaded with only {nCtx}. Raise **Context Size** to ≥ {suggest} in Settings → Inference, "
+                         + $"then reload the model.\n(บริบทเล็กเกินไป — ตั้ง Context Size ≥ {suggest} แล้วโหลดโมเดลใหม่)";
+                }
+                if (!string.IsNullOrWhiteSpace(msg))
+                    return $"llama-server error ({status}): {msg}";
+            }
+        }
+        catch { /* not JSON — fall through to the raw text */ }
+        return $"llama-server tool call failed ({status}): {(raw.Length > 300 ? raw[..300] : raw)}";
     }
 
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)

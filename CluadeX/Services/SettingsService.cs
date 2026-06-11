@@ -118,6 +118,12 @@ public class SettingsService
                     string json = File.ReadAllText(_settingsPath);
                     _settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
                     DecryptSecrets(_settings);
+
+                    // Migration: lift the stale 4096 default to 8192. The agentic system prompt + core tool
+                    // schemas are ~4.4k tokens, so a 4096 window overflows on the first agentic message. 4096
+                    // was the OLD default, so an exact 4096 means "never deliberately changed" — bump it; a
+                    // user who set 2048/6000/etc on purpose is left alone.
+                    if (_settings.ContextSize == 4096) _settings.ContextSize = 8192;
                 }
             }
             catch (Exception ex)
