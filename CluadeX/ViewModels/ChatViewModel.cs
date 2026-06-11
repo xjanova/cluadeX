@@ -820,6 +820,7 @@ public class ChatViewModel : ViewModelBase
 
         // Temporarily stop dirty tracking during load
         Messages.CollectionChanged -= OnMessagesChanged;
+        ResolvePendingPermissionPrompts();
         Messages.Clear();
         foreach (var msg in session.Messages)
             Messages.Add(msg);
@@ -879,6 +880,7 @@ public class ChatViewModel : ViewModelBase
             if (CurrentSession?.Id == sessionId)
             {
                 CurrentSession = null;
+                ResolvePendingPermissionPrompts();
                 Messages.Clear();
                 NewSession();
             }
@@ -1154,6 +1156,7 @@ public class ChatViewModel : ViewModelBase
             ProjectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "",
         };
         CurrentSession = session;
+        ResolvePendingPermissionPrompts();
         Messages.Clear();
         Sessions.Insert(0, session);
         _isDirty = false;
@@ -1736,11 +1739,29 @@ public class ChatViewModel : ViewModelBase
             });
         }
 
+        // Surface the harness's own notices (auto-verify, escalation, tool-call salvage, compaction)
+        // inline in chat. These fire only via OnAgentStatus — with no subscriber they were invisible,
+        // so a 60s auto-verify build or a silent provider escalation looked exactly like a hang.
+        // Tool statuses are excluded: OnToolStarting already renders those (avoids double bubbles).
+        void OnAgentStatusNotice(string status)
+        {
+            bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
+                || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
+                || status.Contains("compacting") || status.Contains("บีบอัด")
+                || status.Contains("truncated") || status.Contains("ถูกตัด");
+            if (notable) OnToolStarting("agent", status);
+        }
         _agentService.OnThinkingUpdate += OnThinking;
         _agentService.OnAgenticStreamingToken += OnStreamToken;
+        _agentService.OnAgentStatus += OnAgentStatusNotice;
         try
         {
-            var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
+            // Task.Run: the agentic loop interleaves async I/O with plenty of SYNCHRONOUS work (tool
+            // implementations, repo scans, JSON/token math, in-proc inference). Awaited directly from
+            // this UI-thread context, every one of those chunks ran ON the dispatcher thread — the
+            // window froze for their combined duration. All UI updates inside the loop's event
+            // handlers already marshal via Dispatcher, so running the loop on the pool is safe.
+            var result = await Task.Run(() => _agentService.ExecuteAgenticAsync(history, input, progress, ct), CancellationToken.None);
 
         // Finalize any remaining inline status
         App.Current?.Dispatcher.Invoke(() =>
@@ -1836,6 +1857,7 @@ public class ChatViewModel : ViewModelBase
         {
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
+            _agentService.OnAgentStatus -= OnAgentStatusNotice;
             StopElapsedTimer();
             // Ensure inline status is finalized on cancel/error
             App.Current?.Dispatcher.Invoke(() =>
@@ -2512,10 +2534,28 @@ public class ChatViewModel : ViewModelBase
             if (result != System.Windows.MessageBoxResult.Yes) return;
         }
 
+        ResolvePendingPermissionPrompts();
         Messages.Clear();
         CurrentSession?.Messages.Clear();
         _isDirty = true;
         StatusText = "Chat cleared.";
+    }
+
+    /// <summary>Auto-deny any still-unanswered permission prompts before the message list is cleared
+    /// or swapped (session switch / new chat / delete / clear). The agent loop awaits the prompt's
+    /// TaskCompletionSource — destroying the bubble without resolving it parked the loop forever and
+    /// left IsGenerating stuck on, which the user experienced as a hard hang.</summary>
+    private void ResolvePendingPermissionPrompts()
+    {
+        foreach (var m in Messages)
+        {
+            if (m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered && m.PermissionCallback != null)
+            {
+                m.PermissionAnswered = true;
+                if (!m.Content.Contains("(dismissed)")) m.Content += "  — (dismissed)";
+                try { m.PermissionCallback(false); } catch { /* resolving twice is a no-op */ }
+            }
+        }
     }
 
     // ─── Code Review ───

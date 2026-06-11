@@ -212,6 +212,30 @@ public class LocalGgufProvider : IAiProvider
             ? _serverProvider.GenerateAsync(history, userMessage, systemPrompt, ct)
             : _llamaService.GenerateAsync(history, userMessage, systemPrompt, ct);
 
+    // ─── Native tool use: forward to the llama-server backend ───
+    // Without these overrides this router fell back to IAiProvider's default (SupportsNativeToolUse=false),
+    // so the ENTIRE weak-model tool harness (constrained decoding, salvage, auto-verify, escalation) was
+    // dead whenever the user picked "Local GGUF" — the default local path. LlamaSharp (in-proc) has no
+    // native tool calling, so only the server backend advertises support; the agent loop uses the
+    // legacy [ACTION:] text loop for LlamaSharp models as before.
+    public bool SupportsNativeToolUse
+        => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsNativeToolUse;
+
+    public Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages,
+        string systemPrompt,
+        List<ToolSchema> tools,
+        Action<string>? onTextDelta = null,
+        CancellationToken ct = default,
+        string? toolChoice = null)
+        => _activeBackend == Backend.LlamaServer
+            ? _serverProvider.ChatWithToolsAsync(messages, systemPrompt, tools, onTextDelta, ct, toolChoice)
+            : Task.FromResult(new NativeToolResponse
+            {
+                TextContent = "Native tool use is not supported by the in-process LLamaSharp backend.",
+                StopReason = "error",
+            });
+
     public Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)
     {
         return _activeBackend switch

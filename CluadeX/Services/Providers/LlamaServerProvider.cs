@@ -390,10 +390,15 @@ public class LlamaServerProvider : ApiProviderBase
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        // NOTE: never loop on reader.EndOfStream — it is a SYNCHRONOUS property that blocks the calling
+        // thread on the network read until the next byte arrives. During a long local prefill (no bytes
+        // for 30-120s) that froze the consuming thread — the literal "app hangs while loading" bug.
+        // ReadLineAsync returns null at end-of-stream, which is the fully-async equivalent.
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
+            if (line == null) break;
             if (string.IsNullOrWhiteSpace(line)) continue;
 
             if (!line.StartsWith("data: ")) continue;
@@ -511,10 +516,13 @@ public class LlamaServerProvider : ApiProviderBase
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
+            // StopReason "error" (NOT "end_turn"): end_turn made the agent loop treat the HTTP failure text
+            // as the model's final ANSWER — a silent failure the user saw as a weird one-line reply. The
+            // loop surfaces "error" responses as provider errors instead.
             return new NativeToolResponse
             {
                 TextContent = $"llama-server tool call failed ({(int)response.StatusCode}): {(error.Length > 300 ? error[..300] : error)}",
-                StopReason = "end_turn",
+                StopReason = "error",
             };
         }
 

@@ -1627,9 +1627,14 @@ public class AgentToolService : IDisposable
             string stdout, stderr;
             try
             {
+                // Start BOTH pipe reads before waiting for exit. Waiting first deadlocks any verbose
+                // command: the child blocks writing into a full 4KB pipe buffer while we block in
+                // WaitForExitAsync — neither side progresses until the timeout kills the process.
+                var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+                var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
                 await process.WaitForExitAsync(cts.Token);
-                stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);
-                stderr = await process.StandardError.ReadToEndAsync(cts.Token);
+                stdout = await stdoutTask;
+                stderr = await stderrTask;
             }
             catch (OperationCanceledException)
             {

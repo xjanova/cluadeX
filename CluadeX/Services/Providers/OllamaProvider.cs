@@ -171,6 +171,10 @@ public class OllamaProvider : ApiProviderBase
                 num_predict = numPredict,
                 repeat_penalty = (double)settings.RepeatPenalty,
                 repeat_last_n = settings.RepeatPenaltyTokens,
+                // Without num_ctx Ollama loads the model at its DEFAULT window (often 2048/4096) while
+                // all our budget math clamps against settings.ContextSize — the prompt silently truncated
+                // at the server even though the client believed it fit.
+                num_ctx = (int)settings.ContextSize,
             },
         };
 
@@ -314,6 +318,7 @@ public class OllamaProvider : ApiProviderBase
             ["top_k"] = settings.TopK,
             ["min_p"] = (double)settings.MinP,
             ["repeat_penalty"] = (double)settings.RepeatPenalty,
+            ["num_ctx"] = (int)settings.ContextSize, // same gap as the chat path: clamp math must match the server's real window
         };
         var requestObj = new Dictionary<string, object>
         {

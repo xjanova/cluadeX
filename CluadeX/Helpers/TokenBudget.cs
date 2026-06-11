@@ -12,12 +12,19 @@ namespace CluadeX.Helpers;
 public static class TokenBudget
 {
     /// <summary>
-    /// Rough token estimate from raw text (~4 chars/token). Intentionally biased high when fed
-    /// serialized JSON (keys/quotes inflate the char count), which over-reserves prompt room — the
-    /// SAFE direction (better to clamp generation a little short than to starve the prompt and hang).
+    /// Rough token estimate from raw text. ASCII ≈ 4 chars/token; non-ASCII (Thai, CJK, emoji) is
+    /// counted at 1 token/char — BPE vocabularies split Thai into 1-2 tokens per character, so the old
+    /// flat /4 UNDER-counted Thai prompts 2-4×, over-allocating generation and re-opening the
+    /// prompt-starvation hang for exactly the Thai-language sessions this clamp exists to protect.
+    /// Intentionally biased high overall (JSON keys/quotes inflate ASCII counts) — the SAFE direction.
     /// </summary>
     public static int EstimateTokens(string? text)
-        => string.IsNullOrEmpty(text) ? 0 : text.Length / 4;
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        int nonAscii = 0;
+        foreach (char c in text) if (c > 127) nonAscii++;
+        return (text.Length - nonAscii) / 4 + nonAscii;
+    }
 
     /// <summary>
     /// Clamp the requested generation budget so prompt + generation fits the context window.

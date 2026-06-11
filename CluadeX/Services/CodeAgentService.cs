@@ -36,6 +36,10 @@ public class CodeAgentService
         "read_file", "list_files", "search_content", "search_files", "codebase_search",
         "find_symbol", "list_symbols", "edit_file", "multi_edit", "write_file",
         "run_command", "run_build", "run_tests",
+        // brain_recall stays in the core set: the system prompt instructs the model to consult BrainX,
+        // and stripping the tool here while keeping the instruction made small-ctx local models the ONLY
+        // tier that couldn't reach the brain (CluadeX ↔ BrainX are meant to be used together, always).
+        "brain_recall",
     };
 
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
@@ -735,7 +739,7 @@ public class CodeAgentService
                 // the contradiction that wrecks weak-model tool selection.
                 sb.AppendLine("NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, "
                     + "search_content, search_files, codebase_search, find_symbol, list_symbols, edit_file, "
-                    + "multi_edit, write_file, run_command, run_build, run_tests. ALWAYS read_file before editing; "
+                    + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall. ALWAYS read_file before editing; "
                     + "after an edit, run_build (and run_tests) to verify. Increase Context Size to ≥ 8192 for the full toolset.");
             }
             else
@@ -1059,10 +1063,16 @@ public class CodeAgentService
         {
             progress?.Report("Recalling from BrainX...");
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(3));
+            // 6s (was 3s): semantic search adds an embedding round-trip; still best-effort and skipped
+            // entirely for short conversational prompts, so the worst case stays bounded.
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(6));
 
             string query = userMessage.Length > 200 ? userMessage[..200] : userMessage;
-            string lessons = await _brainSync.SearchAsync(query, limit: 3, semantic: false, timeoutCts.Token);
+            // semantic:true — a raw 200-char task sentence (especially Thai) almost never keyword-matches
+            // note titles, so keyword search returned 0 hits and auto-recall was effectively dead. The
+            // brain's semantic search embeds the query and finds topical neighbors; it falls back to
+            // keyword search server-side when embeddings are unavailable.
+            string lessons = await _brainSync.SearchAsync(query, limit: 3, semantic: true, timeoutCts.Token);
 
             // SearchAsync returns "(...)" sentinels for not-connected / error / empty — skip those.
             if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith("(", StringComparison.Ordinal))
@@ -1652,6 +1662,11 @@ public class CodeAgentService
             //      trips it, surfacing a clean retryable error instead of the HttpClient's 5-minute ceiling.
             int nativeStreamStep = iteration + 1;
             int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
+            // The local native tool path is NON-streaming: onTextDelta never fires, so the idle window
+            // can never reset. A long prefill + generation on a big local model routinely exceeds the
+            // interactive timeout — the "idle" timer was killing perfectly healthy turns. A local server
+            // is compute-bound, not network-flaky, so give it a much larger absolute budget instead.
+            if (timeoutSec > 0 && loopIsLocal) timeoutSec = Math.Max(timeoutSec, 600);
             Services.Providers.NativeToolResponse response = null!;
             using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
@@ -1678,7 +1693,13 @@ public class CodeAgentService
                     throw new TimeoutException(
                         $"Request timed out after {timeoutSec}s — the model did not respond (timeout).");
                 }
-                catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
+                catch (HttpRequestException ex) when (
+                    ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge
+                    // Anthropic reports context overflow as 400 invalid_request_error "prompt is too long",
+                    // not 413 — without this clause the compaction path never fired for Anthropic at all.
+                    || (ex.StatusCode == System.Net.HttpStatusCode.BadRequest
+                        && (ex.Message.Contains("too long", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("context", StringComparison.OrdinalIgnoreCase))))
                 {
                     // ─── Reactive compaction on 413 (prompt too long) ───
                     if (!hasAttemptedReactiveCompact)
@@ -1687,6 +1708,10 @@ public class CodeAgentService
                         OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
                         int keepCount = Math.Min(10, nativeMessages.Count);
                         nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
+                        // TakeLast can sever a tool_use/tool_result pair (assistant tool_use dropped, its
+                        // user tool_result kept) — Anthropic rejects the very next request with a 400,
+                        // which used to surface as an immediate unrecoverable error right after compacting.
+                        StripOrphanedToolBlocks(nativeMessages);
                         nativeMessages.Insert(0, new Services.Providers.NativeMessage
                         {
                             Role = "user",
@@ -1725,6 +1750,20 @@ public class CodeAgentService
 
             step.ResponseText = response.TextContent ?? "";
 
+            // ─── Provider-reported error (HTTP failure, unsupported backend) ───
+            // Providers signal hard failures with StopReason="error" instead of throwing, so the
+            // tool_use/tool_result bookkeeping above stays balanced. Surface it as a failed turn —
+            // previously these arrived as "end_turn" and the error text was shown as the model's answer.
+            if (response.StopReason == "error")
+            {
+                result.Steps.Add(step);
+                result.StopReason = "error";
+                result.FinalResponse = string.IsNullOrWhiteSpace(response.TextContent)
+                    ? (isThai ? "Provider ตอบกลับผิดพลาด (ไม่มีรายละเอียด)" : "The provider returned an error (no details).")
+                    : response.TextContent;
+                break;
+            }
+
             // ─── Max output token recovery ───
             if (response.StopReason == "max_tokens" && maxTokenRecoveryCount < MaxOutputTokenRecoveries)
             {
@@ -1733,10 +1772,15 @@ public class CodeAgentService
                     ? $"คำตอบถูกตัด — กำลังขอต่อ... ({maxTokenRecoveryCount}/{MaxOutputTokenRecoveries})"
                     : $"Response truncated — requesting continuation... ({maxTokenRecoveryCount}/{MaxOutputTokenRecoveries})");
 
-                // Add the partial response as assistant, then ask to continue
+                // Add the partial response as assistant, then ask to continue. The text block must never
+                // be empty: a thinking-only truncation leaves TextContent null, and an assistant message
+                // with zero content blocks is rejected by the API (400) — killing the recovery it's part of.
                 var partialAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
-                if (!string.IsNullOrEmpty(response.TextContent))
-                    partialAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = response.TextContent });
+                partialAssistant.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = !string.IsNullOrEmpty(response.TextContent) ? response.TextContent : "(response truncated before any text was produced)",
+                });
                 nativeMessages.Add(partialAssistant);
                 nativeMessages.Add(new Services.Providers.NativeMessage
                 {
@@ -1756,7 +1800,10 @@ public class CodeAgentService
             // A small model often emits the tool call as JSON/prose in content instead of via the
             // structured tool_calls channel. Salvage it so the loop continues instead of treating the
             // attempt as a final answer. Deterministic; only names that resolve to a real tool are accepted.
-            if (response.ToolCalls.Count == 0 && _settingsService.Settings.LocalToolCallRepairEnabled)
+            // loopIsLocal gate: salvage exists for weak local models that emit tool JSON as prose. An API
+            // model's final answer that merely QUOTES tool-call JSON (examples, docs) must never be
+            // hijacked into an actual tool execution.
+            if (response.ToolCalls.Count == 0 && loopIsLocal && !hasEscalated && _settingsService.Settings.LocalToolCallRepairEnabled)
             {
                 var salvaged = CluadeX.Helpers.ToolCallSalvage.ExtractFromText(
                     response.TextContent, name => _agentToolService.ResolveToolTypePublic(name) != null);
@@ -1992,7 +2039,12 @@ public class CodeAgentService
             if (_settingsService.Settings.MidLoopReminderEnabled && loopIsLocal
                 && iteration > 0 && (iteration + 1) % reminderEvery == 0)
             {
-                string goal = userMessage.Replace("\n", " ").Trim();
+                // userMessage may have a <brainx_recall> block prepended by auto-recall — skip past it so
+                // the reminder quotes the user's actual request, not the first 200 chars of brain JSON.
+                string goal = userMessage;
+                int recallEnd = goal.IndexOf("</brainx_recall>", StringComparison.Ordinal);
+                if (recallEnd >= 0) goal = goal[(recallEnd + "</brainx_recall>".Length)..];
+                goal = goal.Replace("\n", " ").Trim();
                 if (goal.Length > 200) goal = goal[..200] + "…";
                 userResultMsg.Content.Add(new Services.Providers.ContentBlock
                 {
@@ -2013,6 +2065,13 @@ public class CodeAgentService
                     if (errSig == lastErrorSig) repeatErrorCount++;
                     else { repeatErrorCount = 0; lastErrorSig = errSig; }
                     stagnating = repeatErrorCount >= 2; // the same error 3 turns running
+                }
+                else
+                {
+                    // Clean turn breaks the streak — without this, error→success→same-error counted as
+                    // "consecutive" and escalated (paid hand-off) off non-consecutive hiccups.
+                    repeatErrorCount = 0;
+                    lastErrorSig = "";
                 }
                 bool nearExhaustion = !result.Success && iteration >= iterationBudget - 1;
                 if (stagnating || nearExhaustion)
@@ -2049,10 +2108,17 @@ public class CodeAgentService
             nativeMessages.Add(userResultMsg);
         }
 
-        if (!result.Success)
+        if (!result.Success && string.IsNullOrEmpty(result.StopReason))
         {
             result.StopReason = "max_iterations";
-            result.FinalResponse = result.Steps.LastOrDefault()?.ResponseText ?? "Agent reached maximum iterations.";
+            string lastText = result.Steps.LastOrDefault()?.ResponseText ?? "";
+            // Never end the turn with an empty bubble: when the last step produced no text (it was a
+            // tool-only step), say plainly that the step budget ran out instead of showing nothing.
+            result.FinalResponse = !string.IsNullOrWhiteSpace(lastText)
+                ? lastText
+                : (isThai
+                    ? $"หมดงบ {result.Steps.Count} ขั้นตอนก่อนงานเสร็จ — งานอาจค้างกลางทาง พิมพ์ \"ทำต่อ\" เพื่อให้ทำต่อจากจุดเดิม"
+                    : $"Ran out of steps ({result.Steps.Count}) before finishing — the task may be incomplete. Say \"continue\" to pick up where it left off.");
         }
 
         // Stop hook — runs after the agentic loop returns, with session telemetry.
@@ -2080,6 +2146,31 @@ public class CodeAgentService
         return result;
     }
 
+    /// <summary>Remove tool_result blocks whose matching assistant tool_use was dropped (and vice versa)
+    /// after a hard truncation like TakeLast — an unpaired block makes the next API request invalid.
+    /// Messages left with no content are removed entirely.</summary>
+    private static void StripOrphanedToolBlocks(List<Services.Providers.NativeMessage> messages)
+    {
+        var toolUseIds = new HashSet<string>(
+            messages.Where(m => m.Role == "assistant")
+                    .SelectMany(m => m.Content)
+                    .Where(b => b.Type == "tool_use" && !string.IsNullOrEmpty(b.Id))
+                    .Select(b => b.Id!));
+        var toolResultIds = new HashSet<string>(
+            messages.Where(m => m.Role == "user")
+                    .SelectMany(m => m.Content)
+                    .Where(b => b.Type == "tool_result" && !string.IsNullOrEmpty(b.ToolUseId))
+                    .Select(b => b.ToolUseId!));
+
+        foreach (var msg in messages)
+        {
+            msg.Content.RemoveAll(b =>
+                (b.Type == "tool_result" && (string.IsNullOrEmpty(b.ToolUseId) || !toolUseIds.Contains(b.ToolUseId)))
+                || (b.Type == "tool_use" && (string.IsNullOrEmpty(b.Id) || !toolResultIds.Contains(b.Id))));
+        }
+        messages.RemoveAll(m => m.Content.Count == 0);
+    }
+
     /// <summary>The configured escalation-target provider, or null when escalation is off / mis-configured /
     /// points back at the current provider / can't run the native tool loop.</summary>
     private Services.Providers.IAiProvider? ResolveEscalationProvider(Services.Providers.IAiProvider current)
@@ -2089,6 +2180,7 @@ public class CodeAgentService
         if (!Enum.TryParse<AiProviderType>(s.EscalationProviderName, ignoreCase: true, out var t)) return null;
         var p = _providerManager.GetProvider(t);
         if (p == null || ReferenceEquals(p, current)) return null;
+        if (!p.IsReady) return null; // unconfigured target (no API key / not connected) must not kill a live task
         if (!p.SupportsNativeToolUse) return null; // escalation rides the native tool loop
         return p;
     }
