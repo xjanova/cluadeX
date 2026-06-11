@@ -230,6 +230,16 @@
                             <TextBlock Text="CluadeX" FontFamily="{StaticResource NeonMonoFont}"
                                        FontSize="12" FontWeight="SemiBold"
                                        Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                            <!-- Version chip: vX.Y.Z · commit · build time — set in code-behind from the
+                                 assembly InformationalVersion, so which build is running is never a guess. -->
+                            <Border Margin="8,0,0,0" Padding="6,2" CornerRadius="4" VerticalAlignment="Center"
+                                    Background="#3311152E" BorderThickness="1"
+                                    BorderBrush="{StaticResource NeonLineBrush}">
+                                <TextBlock x:Name="VersionChip" Text="v?"
+                                           FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                           Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center"
+                                           ToolTip="Version · commit · build time of this running binary"/>
+                            </Border>
                             <TextBlock Text="›" Margin="8,0" FontSize="11"
                                        Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center"

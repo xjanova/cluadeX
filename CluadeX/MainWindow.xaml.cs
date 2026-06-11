@@ -18,10 +18,40 @@ public partial class MainWindow : Window
         StateChanged += OnStateChanged;
         Closing += OnClosing;
 
-        // Set title with real version from assembly
-        string version = System.Reflection.Assembly.GetExecutingAssembly()
-            .GetName().Version?.ToString(3) ?? "2.0.0";
-        Title = $"CluadeX v{version} — AI Coding Assistant";
+        // Version + commit + build time — visible in the custom title bar (VersionChip) AND the
+        // taskbar Title, so "which build am I actually running?" is answerable at a glance.
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        string version = asm.GetName().Version?.ToString(3) ?? "?";
+
+        // InformationalVersion is "<Version>+<git short hash>" (embedded by the EmbedGitCommitHash
+        // msbuild target); strip anything after a second '+' just in case the SDK appends its own.
+        string info = asm.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .FirstOrDefault()?.InformationalVersion ?? "";
+        string commit = "";
+        int plus = info.IndexOf('+');
+        if (plus >= 0 && plus < info.Length - 1)
+        {
+            // Defensive: some SDK paths join extra revision metadata with '.' or '+' — keep only
+            // our short hash segment, capped to 9 chars.
+            commit = info[(plus + 1)..].Split('+', '.', ';')[0].Trim();
+            if (commit.Length > 9) commit = commit[..9];
+        }
+
+        string buildTime = "";
+        try
+        {
+            string exe = Environment.ProcessPath ?? asm.Location;
+            if (!string.IsNullOrEmpty(exe))
+                buildTime = System.IO.File.GetLastWriteTime(exe).ToString("d MMM HH:mm");
+        }
+        catch { /* cosmetic */ }
+
+        string chip = $"v{version}";
+        if (commit.Length > 0 && commit != "local") chip += $" · {commit}";
+        if (buildTime.Length > 0) chip += $" · {buildTime}";
+        VersionChip.Text = chip;
+        Title = $"CluadeX {chip} — AI Coding Assistant";
 
         // Keyboard shortcut: Ctrl+N = New Chat
         InputBindings.Add(new KeyBinding(viewModel.ChatVM.NewSessionCommand, Key.N, ModifierKeys.Control));
