@@ -17,6 +17,7 @@ public class CodeEditorViewModel : ViewModelBase
 {
     private readonly CodeWorkspaceService _workspace;
     private readonly FileSystemService _fs;
+    private readonly SettingsService _settings;
 
     public ChatViewModel ChatVM { get; }
 
@@ -83,10 +84,11 @@ public class CodeEditorViewModel : ViewModelBase
     public ICommand ToggleNodeCommand { get; }
     public ICommand OpenFolderCommand { get; }
 
-    public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm)
+    public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm, SettingsService settings)
     {
         _workspace = workspace;
         _fs = fs;
+        _settings = settings;
         ChatVM = chatVm;
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
@@ -114,6 +116,15 @@ public class CodeEditorViewModel : ViewModelBase
     /// <summary>Raised when a live-followed edit lands — the View scrolls to / selects this 1-based line.</summary>
     public event Action<int>? ScrollToLineRequested;
 
+    /// <summary>Raised when a live-typing reveal finishes: the View flash-selects (charStart, charLength)
+    /// so the freshly typed region glows for a moment.</summary>
+    public event Action<int, int>? AgentEditFlashRequested;
+
+    // ── Agent live-typing reveal state ──
+    private System.Windows.Threading.DispatcherTimer? _typeTimer;
+    private OpenFileTab? _typingTab;
+    private string _typingFinal = "";
+
     private async void OnAgentFileMutated(string relPath, int firstLine)
     {
         try
@@ -122,25 +133,125 @@ public class CodeEditorViewModel : ViewModelBase
             string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, relPath));
 
             var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, full, StringComparison.OrdinalIgnoreCase));
+
+            // NEVER clobber unsaved human edits: the old refresh-in-place silently discarded whatever
+            // the user had typed in a dirty tab the moment the agent touched the same file on disk.
+            if (existing != null && existing.IsDirty)
+            {
+                StatusMessage = $"⚠ Agent edited {Path.GetFileName(full)} on disk — tab kept (it has your unsaved changes)";
+                return;
+            }
+
             var loaded = await _workspace.OpenFileAsync(full);
             if (loaded == null) return;   // binary / too large — skip live-follow
 
-            if (existing != null)
-            {
-                existing.MarkOpened(loaded.Content);   // refresh content in place (keep the tab object)
-                ActiveTab = existing;
-            }
-            else
+            FinishTypingInstantly();      // a newer edit arrived — fast-forward any reveal still running
+
+            if (existing == null)
             {
                 Tabs.Add(loaded);
                 ActiveTab = loaded;
+                StatusMessage = $"● Agent edited {Path.GetFileName(full)}";
+                ScrollToLineRequested?.Invoke(firstLine);
+            }
+            else
+            {
+                ActiveTab = existing;
+                if (!_settings.Settings.LiveCodingAnimationEnabled
+                    || !TryStartTypingReveal(existing, existing.Content, loaded.Content))
+                {
+                    existing.MarkOpened(loaded.Content);   // instant refresh fallback
+                    StatusMessage = $"● Agent edited {Path.GetFileName(full)}";
+                    ScrollToLineRequested?.Invoke(firstLine);
+                }
             }
 
-            StatusMessage = $"● Agent edited {Path.GetFileName(full)}";
-            ScrollToLineRequested?.Invoke(firstLine);
             _ = _workspace.EnrichGitStatusAsync(Tree);   // live git badges
         }
         catch { /* live-follow is best-effort — never disrupt the agent run */ }
+    }
+
+    /// <summary>
+    /// Live-typing reveal: instantly remove the OLD changed region, then "type" the new region in
+    /// chunks (~1s total) so the agent's edit unfolds in the editor like a human typing, with the
+    /// view following the insertion point. Implemented as successive MarkOpened states — binding-
+    /// friendly and never marks the tab dirty. Returns false when the change doesn't animate well
+    /// (identical text, pure deletion, or a huge rewrite) — caller falls back to instant refresh.
+    /// </summary>
+    private bool TryStartTypingReveal(OpenFileTab tab, string oldText, string newText)
+    {
+        if (string.Equals(oldText, newText, StringComparison.Ordinal)) return false;
+        if (newText.Length > 1_000_000) return false;    // intermediate strings would be too costly
+
+        // Common prefix/suffix → the changed window
+        int limit = Math.Min(oldText.Length, newText.Length);
+        int prefix = 0;
+        while (prefix < limit && oldText[prefix] == newText[prefix]) prefix++;
+        int suffix = 0;
+        while (suffix < limit - prefix
+            && oldText[oldText.Length - 1 - suffix] == newText[newText.Length - 1 - suffix]) suffix++;
+
+        int insertLen = newText.Length - prefix - suffix;
+        if (insertLen <= 0) return false;                // pure deletion — nothing to "type"
+        if (insertLen > 6000) return false;              // huge rewrite — instant is kinder
+
+        string head = newText[..prefix];
+        string tail = newText[(prefix + insertLen)..];
+        string insert = newText.Substring(prefix, insertLen);
+
+        _typingTab = tab;
+        _typingFinal = newText;
+        tab.MarkOpened(head + tail);                     // phase 1: the old region vanishes (the "delete")
+        StatusMessage = $"⌨ Agent typing {tab.FileName}…";
+
+        int pos = 0;
+        int tick = 0;
+        int chunk = Math.Max(4, insertLen / 56);         // ~56 frames ≈ 0.9s at 16ms/frame
+
+        _typeTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(16),
+        };
+        _typeTimer.Tick += (_, _) =>
+        {
+            pos = Math.Min(insertLen, pos + chunk);
+            tab.MarkOpened(head + insert[..pos] + tail); // phase 2: type the new region chunk by chunk
+
+            // Follow the typing point every few frames (only while this tab is in front)
+            if ((++tick % 4 == 0 || pos >= insertLen) && ReferenceEquals(ActiveTab, tab))
+            {
+                int line = 1;
+                int upto = Math.Min(prefix + pos, tab.Content.Length);
+                for (int i = 0; i < upto; i++) if (tab.Content[i] == '\n') line++;
+                ScrollToLineRequested?.Invoke(line);
+            }
+
+            if (pos >= insertLen)
+            {
+                StopTypeTimer();
+                StatusMessage = $"● Agent edited {tab.FileName}";
+                AgentEditFlashRequested?.Invoke(prefix, insertLen);
+            }
+        };
+        _typeTimer.Start();
+        return true;
+    }
+
+    private void StopTypeTimer()
+    {
+        _typeTimer?.Stop();
+        _typeTimer = null;
+        _typingTab = null;
+    }
+
+    /// <summary>Fast-forward an in-flight reveal to its final content (a newer edit arrived).</summary>
+    private void FinishTypingInstantly()
+    {
+        if (_typeTimer == null) return;
+        var tab = _typingTab;
+        string final = _typingFinal;
+        StopTypeTimer();
+        tab?.MarkOpened(final);
     }
 
     public async Task RefreshTreeAsync()
