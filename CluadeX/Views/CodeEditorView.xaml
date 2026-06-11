@@ -4,6 +4,7 @@
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
              xmlns:m="clr-namespace:CluadeX.Models"
              xmlns:views="clr-namespace:CluadeX.Views"
+             xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
@@ -440,40 +441,21 @@
                                    Foreground="{StaticResource NeonInk3Brush}" FontStyle="Italic"/>
                     </StackPanel>
 
-                    <!-- Editor surface -->
-                    <ScrollViewer x:Name="EditorScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                  Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <!-- Line numbers -->
-                            <Border Grid.Column="0" Background="#3311152E" Padding="14,12,14,12">
-                                <TextBlock Text="{Binding ActiveTab.LineNumbers}"
-                                           TextAlignment="Right" FontFamily="{StaticResource NeonMonoFont}"
-                                           FontSize="13" LineHeight="20"
-                                           Foreground="{StaticResource NeonInk3Brush}"/>
-                            </Border>
-                            <!-- Code text -->
-                            <TextBox Grid.Column="1" x:Name="EditorTextBox"
-                                     Text="{Binding ActiveTab.Content, UpdateSourceTrigger=PropertyChanged}"
-                                     AcceptsReturn="True" AcceptsTab="True"
-                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="13"
-                                     TextBlock.LineHeight="20" TextBlock.LineStackingStrategy="BlockLineHeight"
-                                     Background="Transparent" Foreground="{StaticResource NeonInk0Brush}"
-                                     CaretBrush="{StaticResource NeonCyanBrush}"
-                                     SelectionBrush="{StaticResource NeonVioletBrush}"
-                                     SelectionOpacity="0.35"
-                                     IsInactiveSelectionHighlightEnabled="True"
-                                     BorderThickness="0" Padding="14,12"
-                                     HorizontalScrollBarVisibility="Disabled"
-                                     VerticalScrollBarVisibility="Disabled"
-                                     TextWrapping="NoWrap"
-                                     IsReadOnlyCaretVisible="True"
-                                     SpellCheck.IsEnabled="False"/>
-                        </Grid>
-                    </ScrollViewer>
+                    <!-- Editor surface — AvalonEdit (real syntax highlighting + built-in gutter).
+                         Content sync, neon theme, caret-follow and the changed-region glow renderer
+                         are wired in code-behind (CodeEditorView.xaml.cs). -->
+                    <avalonedit:TextEditor x:Name="Editor"
+                                           Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}"
+                                           FontFamily="{StaticResource NeonMonoFont}" FontSize="13"
+                                           Background="Transparent"
+                                           Foreground="{StaticResource NeonInk0Brush}"
+                                           LineNumbersForeground="{StaticResource NeonInk3Brush}"
+                                           ShowLineNumbers="True"
+                                           WordWrap="False"
+                                           BorderThickness="0"
+                                           Padding="8,12,0,12"
+                                           HorizontalScrollBarVisibility="Auto"
+                                           VerticalScrollBarVisibility="Auto"/>
                 </Grid>
 
                 <!-- Minimap placeholder (vertical color gradient stripe) -->
