@@ -661,7 +661,12 @@ public class CodeAgentService
         int contextTokens = isLocalProvider
             ? Math.Max(2048, (int)_settingsService.Settings.ContextSize)
             : 1_000_000;
-        bool includeToolDefs     = !isLocalProvider || contextTokens >= 8000;  // tool catalogue is ~3k tokens
+        // The legacy TEXT tool catalogue (~3k tokens) is only for the [ACTION:] loop. When native tool
+        // use is on, schemas are sent via the API "tools" field (and rendered into the prompt by the
+        // server's chat template) — including the text catalogue too DOUBLE-pays those tokens, which is
+        // exactly what blew a ctx-8192 request up to ~13.7k and overflowed the window.
+        bool localNativeTools = isLocalProvider && _settingsService.Settings.LocalNativeToolUseEnabled;
+        bool includeToolDefs     = !isLocalProvider || (!localNativeTools && contextTokens >= 8000);
         bool includeHeavyContext = !isLocalProvider || contextTokens >= 16000; // codebase map + tree + key files
 
         // ═══════════════════════════════════════════
@@ -732,15 +737,22 @@ public class CodeAgentService
             {
                 sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
             }
+            else if (localNativeTools && contextTokens >= 16000)
+            {
+                // Big-ctx native: the FULL schema catalogue rides the API "tools" field — the prompt only
+                // needs the discipline line, not a token-expensive text copy of every tool.
+                sb.AppendLine("NOTE: You have the full tool catalogue (provided as structured tool schemas). "
+                    + "ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify before you say you're done.");
+            }
             else if (_settingsService.Settings.LocalNativeToolUseEnabled)
             {
-                // Small ctx + native tool use: we still send a CORE tool subset (see CoreLocalToolNames), so
+                // Small/medium ctx + native tool use: we send a CORE tool subset (see CoreLocalToolNames), so
                 // the prompt must AGREE — telling the model tools are "disabled" while handing it schemas is
                 // the contradiction that wrecks weak-model tool selection.
                 sb.AppendLine("NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, "
                     + "search_content, search_files, codebase_search, find_symbol, list_symbols, edit_file, "
                     + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall. ALWAYS read_file before editing; "
-                    + "after an edit, run_build (and run_tests) to verify. Increase Context Size to ≥ 8192 for the full toolset.");
+                    + "after an edit, run_build (and run_tests) to verify. Increase Context Size to ≥ 16384 for the full toolset.");
             }
             else
             {
@@ -754,8 +766,8 @@ public class CodeAgentService
 
             // ─── Few-shot trace (weak local models) ───
             // Showing the read→edit→verify shape once teaches the call FORMAT + discipline far better than
-            // prose rules. Local-only + only when tools are in the prompt (it costs a few tokens).
-            if (isLocalProvider && includeToolDefs)
+            // prose rules. Local-only + whenever tools are actually available (text catalogue OR native schemas).
+            if (isLocalProvider && (includeToolDefs || localNativeTools))
             {
                 sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
                 sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
@@ -1570,12 +1582,13 @@ public class CodeAgentService
         var toolSchemas = _agentToolService.BuildNativeToolSchemas();
 
         // ─── Ctx-aware tool subset (weak local models) ───
-        // A 4k-8k local model handed all ~46 schemas (40-70% of the window) picks the wrong tool far more
-        // often and crowds out the conversation. Trim to a high-value core so the menu fits + the choice is
-        // clearer. The prompt's small-ctx NOTE lists exactly this set, so the two paths now agree.
+        // The full ~46-schema catalogue costs ~6-8k tokens once the server's chat template renders it —
+        // it only fits comfortably from 16k ctx upward (at 8192 it blew the request up to ~13.7k and
+        // overflowed). Below that, trim to a high-value core so the menu fits + the choice is clearer.
+        // The prompt's small-ctx NOTE lists exactly this set, so the two paths agree.
         bool localSmallCtx = (_providerManager.ActiveProviderType
                 is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
-            && (int)_settingsService.Settings.ContextSize < 8000;
+            && (int)_settingsService.Settings.ContextSize < 16000;
         if (localSmallCtx)
         {
             var trimmed = toolSchemas.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
