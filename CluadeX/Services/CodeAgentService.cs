@@ -627,8 +627,10 @@ public class CodeAgentService
         HookService? hookService = null,
         CostTrackingService? costTrackingService = null,
         BrainSyncService? brainSync = null,
-        RepoMapService? repoMap = null)
+        RepoMapService? repoMap = null,
+        DebugLogService? debugLog = null)
     {
+        _debugLog = debugLog;
         _brainSync = brainSync;
         _repoMap = repoMap;
         _providerManager = providerManager;
@@ -644,6 +646,10 @@ public class CodeAgentService
         _hookService = hookService;
         _costTrackingService = costTrackingService;
     }
+
+    // Agent-loop tracing: when the user reports "it just doesn't work", the daily log file must be
+    // able to answer WHAT the model returned and WHERE the turn died. Startup lines alone can't.
+    private readonly DebugLogService? _debugLog;
 
     /// <summary>Gets system prompt with or without tool definitions based on whether a project is open.</summary>
     public string GetSystemPrompt()
@@ -1595,6 +1601,9 @@ public class CodeAgentService
             if (trimmed.Count > 0) toolSchemas = trimmed; // guard: never nuke all tools on a name mismatch
         }
 
+        _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
+            + $"schemas={toolSchemas.Count}{(localSmallCtx ? " (core subset)" : " (full)")} sysPrompt~{systemPrompt.Length / 4}tok");
+
         // Build initial messages (with history compaction)
         var nativeMessages = new List<Services.Providers.NativeMessage>();
 
@@ -1763,12 +1772,17 @@ public class CodeAgentService
 
             step.ResponseText = response.TextContent ?? "";
 
+            _debugLog?.Info("Agent", $"step {iteration + 1}: stop={response.StopReason} toolCalls={response.ToolCalls.Count} "
+                + $"textLen={(response.TextContent ?? "").Length} in={response.InputTokens} out={response.OutputTokens}"
+                + (response.ToolCalls.Count > 0 ? $" [{string.Join(",", response.ToolCalls.Select(t => t.Name))}]" : ""));
+
             // ─── Provider-reported error (HTTP failure, unsupported backend) ───
             // Providers signal hard failures with StopReason="error" instead of throwing, so the
             // tool_use/tool_result bookkeeping above stays balanced. Surface it as a failed turn —
             // previously these arrived as "end_turn" and the error text was shown as the model's answer.
             if (response.StopReason == "error")
             {
+                _debugLog?.Error("Agent", $"provider error at step {iteration + 1}: {(response.TextContent ?? "").Replace("\n", " ")}");
                 result.Steps.Add(step);
                 result.StopReason = "error";
                 result.FinalResponse = string.IsNullOrWhiteSpace(response.TextContent)
@@ -1833,6 +1847,7 @@ public class CodeAgentService
                     response.StopReason = "tool_use";
                     response.TextContent = null; // the "text" WAS the tool call — don't echo the raw JSON back
                     OnAgentStatus?.Invoke(isThai ? "กู้คืน tool call จากข้อความ..." : "Recovered tool call from text...");
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: salvaged {salvaged.Count} tool call(s) from prose [{string.Join(",", salvaged.Select(s => s.Name))}]");
                 }
             }
 
@@ -1965,6 +1980,12 @@ public class CodeAgentService
 
                     lock (toolResults) { toolResults.Add(toolResult); }
                     OnToolExecuted?.Invoke(toolResult);
+                    if (_debugLog != null)
+                    {
+                        string errHead = (toolResult.Error ?? "").Replace("\n", " ").Trim();
+                        if (errHead.Length > 160) errHead = errHead[..160];
+                        _debugLog.Info("Agent", $"tool {toolCall.Name}: {(toolResult.Success ? "OK" : "FAIL · " + errHead)}");
+                    }
 
                     // Per-tool and aggregate budget enforcement
                     resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
@@ -2090,6 +2111,7 @@ public class CodeAgentService
                 if (stagnating || nearExhaustion)
                 {
                     hasEscalated = true;
+                    _debugLog?.Warn("Agent", $"escalating to {escalationProvider.ProviderId} · reason={(stagnating ? "repeated error" : "near exhaustion")} · errSig={lastErrorSig[..Math.Min(120, lastErrorSig.Length)]}");
                     loopProvider = escalationProvider;
                     toolSchemas = _agentToolService.BuildNativeToolSchemas(); // full catalogue for the strong model
                     iterationBudget = iteration + 1 + EscalationBonusIterations;
@@ -2120,6 +2142,9 @@ public class CodeAgentService
             nativeMessages.Add(assistantMsg);
             nativeMessages.Add(userResultMsg);
         }
+
+        if (!result.Success)
+            _debugLog?.Warn("Agent", $"loop ended NOT successful · stop={result.StopReason} steps={result.Steps.Count}");
 
         if (!result.Success && string.IsNullOrEmpty(result.StopReason))
         {

@@ -30,6 +30,15 @@ public class LlamaServerProvider : ApiProviderBase
     public LlamaServerProvider(SettingsService settingsService, GpuDetectionService? gpuDetection = null) : base(settingsService)
     {
         _gpuDetection = gpuDetection;
+
+        // Take the server down with the app. Without this, closing CluadeX orphaned a llama-server
+        // that kept ~5GB of VRAM hostage; the NEXT app start then dodged its port and loaded a second
+        // copy — two models on one GPU, everything spilling to system RAM at a crawl.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try { if (_serverProcess is { HasExited: false }) _serverProcess.Kill(entireProcessTree: true); }
+            catch { /* shutdown is best-effort */ }
+        };
     }
 
     public override async Task InitializeAsync(CancellationToken ct = default)
@@ -54,6 +63,11 @@ public class LlamaServerProvider : ApiProviderBase
 
         // Stop existing server
         await StopServerAsync();
+
+        // Kill servers ORPHANED by previous CluadeX instances. FindFreePort politely dodges them,
+        // which left TWO 8B models fighting for the same GPU — the second spilled to system RAM and
+        // every turn crawled (the live-confirmed "two llama-servers on 8087+8088" zombie).
+        KillOrphanedServers();
 
         // Pick a free port (8087 may be held by another app or a stale llama-server). Binding a
         // taken port makes llama-server die on startup and surface only a vague timeout, so probe first.
@@ -171,6 +185,15 @@ public class LlamaServerProvider : ApiProviderBase
             psi.EnvironmentVariables["PATH"] = dllDir + ";" + existingPath;
 
             _serverProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            // Crash detection: without this the UI kept showing "Ready" against a DEAD server and the
+            // next request failed with a vague connection error (audit: "no Exited handler, stale Ready").
+            _serverProcess.Exited += (_, _) =>
+            {
+                if (_stoppingIntentionally) return; // our own StopServerAsync kill — not a crash
+                IsReady = false;
+                SetStatus("llama-server exited unexpectedly");
+                RaiseError("llama-server stopped (crashed or was killed). Reload the model from the Models page.");
+            };
             _serverProcess.Start();
             _loadedModelPath = modelPath;
 
@@ -322,6 +345,7 @@ public class LlamaServerProvider : ApiProviderBase
     public async Task StopServerAsync()
     {
         IsReady = false;
+        _stoppingIntentionally = true;
 
         if (_serverProcess != null)
         {
@@ -339,8 +363,43 @@ public class LlamaServerProvider : ApiProviderBase
             _serverProcess = null;
         }
 
+        _stoppingIntentionally = false;
         _loadedModelPath = null;
         SetStatus("llama-server stopped");
+    }
+
+    /// <summary>True while StopServerAsync is killing our own process — the Exited handler must not
+    /// report an intentional stop as a crash.</summary>
+    private volatile bool _stoppingIntentionally;
+
+    /// <summary>Kill llama-server.exe processes left over from previous CluadeX instances. Only
+    /// processes running OUR bundled/custom server binary are touched; an unrelated llama-server the
+    /// user runs from somewhere else is left alone. Frees the VRAM a zombie was still holding.</summary>
+    private void KillOrphanedServers()
+    {
+        string? ourExe = FindServerExe();
+        if (ourExe == null) return;
+        string ourDir;
+        try { ourDir = Path.GetDirectoryName(Path.GetFullPath(ourExe)) ?? ""; }
+        catch { return; }
+        if (ourDir.Length == 0) return;
+
+        foreach (var p in Process.GetProcessesByName("llama-server"))
+        {
+            try
+            {
+                if (_serverProcess != null && p.Id == _serverProcess.Id) continue;
+                string? path = p.MainModule?.FileName;
+                string? dir = path != null ? Path.GetDirectoryName(Path.GetFullPath(path)) : null;
+                if (dir != null && dir.Equals(ourDir, StringComparison.OrdinalIgnoreCase))
+                {
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(3000);
+                }
+            }
+            catch { /* access denied / already exited */ }
+            finally { p.Dispose(); }
+        }
     }
 
     public override async IAsyncEnumerable<string> ChatAsync(
