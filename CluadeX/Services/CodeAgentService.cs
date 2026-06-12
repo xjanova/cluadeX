@@ -1050,8 +1050,15 @@ public class CodeAgentService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        // Entry trace FIRST — a turn that dies before the loop (brain recall, system prompt build,
+        // provider not ready) used to leave the log completely empty, which is indistinguishable
+        // from "the user never sent anything".
+        var prov = _providerManager.ActiveProvider;
+        _debugLog?.Info("Agent", $"turn start · provider={prov?.ProviderId ?? "null"} ready={prov?.IsReady} "
+            + $"nativeTools={prov?.SupportsNativeToolUse} msgLen={userMessage?.Length ?? 0} history={history.Count}");
+
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
-        userMessage = await MaybePrependBrainContextAsync(userMessage, progress, ct);
+        userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
 
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
@@ -1059,6 +1066,8 @@ public class CodeAgentService
             return await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct);
         }
 
+        _debugLog?.Warn("Agent", "dispatching to LEGACY [ACTION:] loop (provider has no native tool use) — "
+            + "local file-edit reliability is much lower on this path");
         return await ExecuteLegacyToolLoopAsync(history, userMessage, progress, ct);
     }
 
@@ -1555,6 +1564,13 @@ public class CodeAgentService
         bool hasAttemptedReactiveCompact = false;
         int autoVerifyCount = 0;                 // bounded auto-build-after-edit (in-loop reflexion)
         const int MaxAutoVerifies = 6;
+        // Write→review→finish discipline (the "เหมือนคุณ" loop): after the model has successfully
+        // changed files, it should review the result once and CONCLUDE — not wander (observed live:
+        // after a perfect write+edit it kept exploring/run_build-ing a txt project until the budget).
+        bool anyWriteSucceeded = false;
+        int stepsSinceMutation = 0;              // steps since the last successful file change
+        bool postWriteReviewNudged = false;
+        bool wrapUpForced = false;
         bool loopIsLocal = _providerManager.ActiveProviderType
             is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
         // Plan-first: force a tool call on step 0 of a non-trivial LOCAL task so the model acts instead of
@@ -1696,6 +1712,10 @@ public class CodeAgentService
                 // Force a tool call only on step 0 of a non-trivial local task (constrained decoding via A3).
                 string? iterToolChoice = (iteration == 0 && planFirstPending && toolSchemas.Count > 0)
                     ? "required" : null;
+                // Anti-wander: the task's files are written and the model has burned several steps
+                // without changing anything since — force a FINAL prose answer (tool_choice=none) so
+                // the turn concludes instead of exploring until the iteration budget dies.
+                if (wrapUpForced && iterToolChoice == null) iterToolChoice = "none";
                 try
                 {
                     response = await loopProvider.ChatWithToolsAsync(
@@ -2091,6 +2111,46 @@ public class CodeAgentService
                 }
                 catch (OperationCanceledException) { throw; }
                 catch { /* verify is best-effort; never break the turn */ }
+            }
+
+            // ─── Write→review→finish bookkeeping ───
+            bool mutatedThisStep = toolResults.Any(r => r.Success
+                && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit);
+            if (mutatedThisStep) { anyWriteSucceeded = true; stepsSinceMutation = 0; }
+            else if (anyWriteSucceeded) stepsSinceMutation++;
+
+            // After a successful write in a project with NO build system (html/docs/scripts), there is
+            // no compiler oracle — teach the same review loop a strong assistant uses: read the file
+            // back once, then CONCLUDE. Without this the weak model kept "verifying" a txt project
+            // with dotnet build and wandering until the step budget died.
+            if (mutatedThisStep && !postWriteReviewNudged
+                && _settingsService.Settings.AutoVerifyAfterEditEnabled
+                && _fileSystemService.DetectBuildCommand() == null)
+            {
+                postWriteReviewNudged = true;
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = "[post-write review] There is no build system in this project, so do NOT run build "
+                         + "commands. Review your work like this: read_file the file you just wrote ONCE to "
+                         + "confirm it is correct and complete; then give your FINAL answer summarizing what "
+                         + "you created. Do not explore other files.",
+                });
+            }
+
+            // Wandering breaker: files were written, and several consecutive steps changed nothing —
+            // next step forces a final prose answer (see iterToolChoice above).
+            if (anyWriteSucceeded && !wrapUpForced && stepsSinceMutation >= 4 && loopIsLocal)
+            {
+                wrapUpForced = true;
+                _debugLog?.Info("Agent", $"wrap-up forced at step {iteration + 1} (no file changes for {stepsSinceMutation} steps after a successful write)");
+                OnAgentStatus?.Invoke(isThai ? "งานหลักเสร็จแล้ว — ให้สรุปปิดงาน..." : "Main work done — wrapping up...");
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = "[wrap up] The files are written. Stop exploring — give your final answer NOW: "
+                         + "state what you created/changed and where. Keep it short.",
+                });
             }
 
             // ─── Mid-loop goal re-injection (anti-drift for weak small-ctx models) ───

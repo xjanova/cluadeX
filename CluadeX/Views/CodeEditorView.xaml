@@ -428,15 +428,51 @@
             <!-- Tab strip -->
             <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}"
                     Background="#8C0A0C22">
-                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <ItemsControl ItemsSource="{Binding Tabs}" ItemTemplate="{StaticResource EditorTabTemplate}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                    </ItemsControl>
-                </ScrollViewer>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding Tabs}" ItemTemplate="{StaticResource EditorTabTemplate}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <!-- Preview / open externally: review the result the way the agent's user would —
+                         HTML opens in the browser, anything else in its default app. -->
+                    <Button Grid.Column="1" Margin="6,3,8,3" Padding="8,3" Cursor="Hand"
+                            Background="Transparent" BorderThickness="1"
+                            BorderBrush="{StaticResource NeonLineBrush}"
+                            Click="OnPreviewClick"
+                            Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}"
+                            ToolTip="Open this file in its default app (browser for HTML) to review the result">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE7B3;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonMintBrush}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Preview" FontSize="11" Foreground="{StaticResource NeonMintBrush}"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
             </Border>
 
             <!-- Code area + minimap -->

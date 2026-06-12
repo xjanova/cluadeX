@@ -225,4 +225,24 @@ public partial class CodeEditorView : UserControl
             e.Handled = true;
         }
     }
+
+    // Review the result like a human would: open the active file with its default app
+    // (HTML lands in the browser). Dirty tabs are saved first so the preview matches the editor.
+    private async void OnPreviewClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (DataContext is not CodeEditorViewModel vm || vm.ActiveTab is not { } tab) return;
+            if (tab.IsDirty && vm.SaveActiveCommand.CanExecute(null))
+            {
+                vm.SaveActiveCommand.Execute(null);
+                await Task.Delay(150); // let the async save land before the external app reads the file
+            }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(tab.FullPath)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch { /* preview is best-effort (no associated app, file deleted, …) */ }
+    }
 }

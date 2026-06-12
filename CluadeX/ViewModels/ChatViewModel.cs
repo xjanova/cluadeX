@@ -2115,14 +2115,17 @@ public class ChatViewModel : ViewModelBase
             double elapsed = _generationStopwatch.Elapsed.TotalSeconds;
             string elapsedText = elapsed < 10 ? $"{elapsed:F1}s" : $"{(int)elapsed}s";
 
-            // Stage-based status so user knows what's happening
+            // Stage-based status so user knows what's happening. The long-wait stage must explain
+            // WHY (local prompt processing) — a bare "taking longer than usual" reads as a hang, and
+            // users killed the app during a perfectly healthy 1-2 minute first prefill.
             string stage = elapsed switch
             {
                 < 1.0 => "Building context",
                 < 3.0 => "Sending request",
                 < 8.0 => "Waiting for response",
                 < 15.0 => "Still waiting",
-                _ => "Taking longer than usual",
+                < 45.0 => "Taking longer than usual",
+                _ => "Model is reading the prompt — the first local turn can take 1-2 minutes",
             };
 
             // If we already got tokens, show token count instead of stages
