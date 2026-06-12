@@ -1,4 +1,4 @@
-# Hook: precompact-save-snapshot
+﻿# Hook: precompact-save-snapshot
 # Phase: PreCompact
 # Writes a marker file noting that compaction is about to run on a session of
 # this size. The actual chat content is saved by CluadeX itself; this hook

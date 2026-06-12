@@ -1782,7 +1782,34 @@ public class CodeAgentService
             // previously these arrived as "end_turn" and the error text was shown as the model's answer.
             if (response.StopReason == "error")
             {
-                _debugLog?.Error("Agent", $"provider error at step {iteration + 1}: {(response.TextContent ?? "").Replace("\n", " ")}");
+                // Context overflow arrives as a NON-thrown error on the local path (llama-server 400 →
+                // StopReason=error), which bypassed the HttpRequestException compaction catch above —
+                // a long turn died at the exact step compaction exists to save. Route it there.
+                string errText = response.TextContent ?? "";
+                if (!hasAttemptedReactiveCompact
+                    && (errText.Contains("Context window too small", StringComparison.OrdinalIgnoreCase)
+                        || errText.Contains("context size", StringComparison.OrdinalIgnoreCase)))
+                {
+                    hasAttemptedReactiveCompact = true;
+                    _debugLog?.Warn("Agent", $"context overflow at step {iteration + 1} — compacting and retrying");
+                    OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
+                    int keepCount = Math.Min(10, nativeMessages.Count);
+                    nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
+                    StripOrphanedToolBlocks(nativeMessages);
+                    nativeMessages.Insert(0, new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = "[Context was compacted due to length. Earlier conversation history has been summarized. Continue the task.]",
+                        }},
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    continue;
+                }
+
+                _debugLog?.Error("Agent", $"provider error at step {iteration + 1}: {errText.Replace("\n", " ")}");
                 result.Steps.Add(step);
                 result.StopReason = "error";
                 result.FinalResponse = string.IsNullOrWhiteSpace(response.TextContent)

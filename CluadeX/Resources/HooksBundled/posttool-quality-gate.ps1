@@ -1,4 +1,4 @@
-# Hook: posttool-quality-gate
+﻿# Hook: posttool-quality-gate
 # Phase: PostToolUse / matcher write_file
 # After C# file write, runs `dotnet build --no-restore -nologo` and logs result.
 param(

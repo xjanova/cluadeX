@@ -1,4 +1,4 @@
-# Hook: sessionstart-detect-pkg-mgr
+﻿# Hook: sessionstart-detect-pkg-mgr
 # Phase: SessionStart
 # Detects which package manager the workspace uses and writes it to
 # ~/.cluadex/logs/last-package-manager.txt.

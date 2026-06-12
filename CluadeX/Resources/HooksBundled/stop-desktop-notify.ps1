@@ -1,4 +1,4 @@
-# Hook: stop-desktop-notify
+﻿# Hook: stop-desktop-notify
 # Phase: Stop
 # Pops a Windows toast when the agent finishes. Falls back to a balloon tip if
 # BurntToast isn't installed.

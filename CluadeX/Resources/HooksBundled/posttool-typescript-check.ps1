@@ -1,4 +1,4 @@
-# Hook: posttool-typescript-check
+﻿# Hook: posttool-typescript-check
 # Phase: PostToolUse / matcher write_file
 # Type-check a .ts/.tsx file after writing. Logs errors to debug log.
 param([string]$Path = "")

@@ -1,4 +1,4 @@
-# Hook: pretool-pre-commit-quality
+﻿# Hook: pretool-pre-commit-quality
 # Phase: PreToolUse / matcher run_command
 # Before `git commit`, refuses if .env / *.key / *.pem are staged.
 param(

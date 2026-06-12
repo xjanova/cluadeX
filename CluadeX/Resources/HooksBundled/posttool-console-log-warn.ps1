@@ -1,4 +1,4 @@
-# Hook: posttool-console-log-warn
+﻿# Hook: posttool-console-log-warn
 # Phase: PostToolUse / matcher write_file
 # Warns about forgotten console.log statements after a JS/TS write.
 param([string]$Path = "")

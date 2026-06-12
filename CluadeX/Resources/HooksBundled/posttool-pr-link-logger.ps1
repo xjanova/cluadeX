@@ -1,4 +1,4 @@
-# Hook: posttool-pr-link-logger
+﻿# Hook: posttool-pr-link-logger
 # Phase: PostToolUse / matcher run_command
 # After a successful `git push`, logs branch & remote.
 # If `gh pr view --json url -q .url` works, also logs the PR URL.

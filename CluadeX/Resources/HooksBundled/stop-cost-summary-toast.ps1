@@ -1,4 +1,4 @@
-# Hook: stop-cost-summary-toast
+﻿# Hook: stop-cost-summary-toast
 # Phase: Stop
 # Appends a CSV row with this session's cost summary.
 param(

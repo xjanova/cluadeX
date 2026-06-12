@@ -297,6 +297,25 @@ public class HookService
             string stdout = await stdoutTask;
             string stderr = await stderrTask;
 
+            // A hook that CRASHES (script parse error, missing cmdlet, …) is not the same as a hook
+            // that deliberately blocks. A single mis-encoded bundled .ps1 used to parse-fail on every
+            // run and silently brick EVERY write_file ("hook blocked execution") until someone read the
+            // raw stderr. Treat broken-script signatures as a hook failure: report it, do NOT block.
+            bool scriptBroken = proc.ExitCode != 0
+                && (stderr.Contains("ParserError", StringComparison.OrdinalIgnoreCase)
+                    || stderr.Contains("ParseException", StringComparison.OrdinalIgnoreCase)
+                    || stderr.Contains("is not recognized as the name of a cmdlet", StringComparison.OrdinalIgnoreCase)
+                    || stderr.Contains("Missing closing", StringComparison.OrdinalIgnoreCase));
+            if (scriptBroken)
+            {
+                return new HookResult
+                {
+                    Success = true, // never block the tool on OUR broken script
+                    Message = $"[hook script error — not blocking] {stderr.Trim().Split('\n')[0]}",
+                    ExitCode = 0,
+                };
+            }
+
             return new HookResult
             {
                 Success = proc.ExitCode == 0,

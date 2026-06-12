@@ -1,4 +1,4 @@
-# Hook: pretool-git-push-confirm
+﻿# Hook: pretool-git-push-confirm
 # Phase: PreToolUse / matcher run_command
 # Blocks `git push` to main/master/production unless an override marker is present.
 # Override: create file ~/.cluadex/allow-push-main OR include "--force-confirmed" in the command.

@@ -675,9 +675,26 @@ public class FileSystemService
         // Normalize path
         string normalized = relativePath.Replace('/', Path.DirectorySeparatorChar);
 
-        // Reject absolute paths entirely — only relative paths allowed
+        // Absolute path INSIDE the project → auto-convert to relative instead of failing. The system
+        // prompt tells the model the working directory as an absolute path, so (especially weak local)
+        // models constantly echo absolute paths back; rejecting those burned 4-5 loop steps per task on
+        // "Absolute paths are not allowed" retries. Anything OUTSIDE the project still falls through to
+        // the containment check below and is denied as before.
         if (Path.IsPathRooted(normalized))
-            throw new UnauthorizedAccessException("Absolute paths are not allowed. Use relative paths from the project root.");
+        {
+            string rootedFull;
+            try { rootedFull = Path.GetFullPath(normalized); }
+            catch { throw new UnauthorizedAccessException("Absolute paths are not allowed. Use relative paths from the project root."); }
+            string wdFull = Path.GetFullPath(_workingDirectory);
+            string wdSep = wdFull.EndsWith(Path.DirectorySeparatorChar) ? wdFull : wdFull + Path.DirectorySeparatorChar;
+            if (rootedFull.Equals(wdFull, StringComparison.OrdinalIgnoreCase))
+                normalized = ".";
+            else if (rootedFull.StartsWith(wdSep, StringComparison.OrdinalIgnoreCase))
+                normalized = rootedFull[wdSep.Length..];
+            else
+                throw new UnauthorizedAccessException(
+                    $"Access denied: '{relativePath}' is outside the project root. Use relative paths from the project root.");
+        }
 
         string fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, normalized));
 

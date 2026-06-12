@@ -1,4 +1,4 @@
-# Hook: posttool-prettier-format
+﻿# Hook: posttool-prettier-format
 # Phase: PostToolUse / matcher write_file
 # After a write, run prettier --write on the file if prettier is installed and
 # the file extension is supported. Best-effort, never blocks.

@@ -1,4 +1,4 @@
-# Hook: sessionstart-load-handoff
+﻿# Hook: sessionstart-load-handoff
 # Phase: SessionStart
 # Copies the most recent Notes/Claude-Sessions/handoff-*.md found under {cwd}
 # to ~/.cluadex/logs/last-handoff.md so the AI can read it on next prompt.

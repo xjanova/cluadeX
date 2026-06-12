@@ -1,4 +1,4 @@
-# Hook: pretool-block-dev-server
+﻿# Hook: pretool-block-dev-server
 # Phase: PreToolUse / matcher run_command
 # Blocks commands that spawn a long-running dev server outside the active workspace.
 # Exit 0 = allow, non-zero = block.

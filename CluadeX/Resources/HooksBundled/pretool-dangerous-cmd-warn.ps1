@@ -1,4 +1,4 @@
-# Hook: pretool-dangerous-cmd-warn
+﻿# Hook: pretool-dangerous-cmd-warn
 # Phase: PreToolUse / matcher run_command
 # Refuses obviously destructive commands.
 param([string]$Command = "")

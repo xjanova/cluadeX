@@ -1,4 +1,4 @@
-# Hook: stop-pattern-extract
+﻿# Hook: stop-pattern-extract
 # Phase: Stop
 # Appends a JSONL row to ~/.cluadex/instincts-inbox.jsonl that InstinctService
 # can later ingest as an observation. v1 just records the end-of-turn fact;

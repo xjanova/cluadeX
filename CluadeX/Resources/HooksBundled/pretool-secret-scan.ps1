@@ -1,4 +1,4 @@
-# Hook: pretool-secret-scan
+﻿# Hook: pretool-secret-scan
 # Phase: PreToolUse / matcher write_file
 # Scans the *target file path* (after write — peek the new contents from the
 # tool args JSON) for common secret patterns. Blocks the write if any hit.
