@@ -2378,7 +2378,12 @@ public class CodeAgentService
         {
             "implement", "add ", "create", "build", "fix", "refactor", "write ", "change", "update",
             "rename", "move ", "delete", "remove", "replace", "migrate", "wire ", "extract", "generate",
+            // git / repo / shell tasks — these need a tool call, but weak models otherwise chat/refuse.
+            "clone", "git", "repo", "download", "fetch", "install", "setup", "run ", "npm", "dotnet",
+            // analysis tasks that still require reading files / running tools before answering.
+            "read", "explain", "summari", "review", "analyz", "explore", "find ", "search", "list ",
             "แก้", "เพิ่ม", "สร้าง", "ทำ", "เขียน", "ย้าย", "ลบ", "ปรับ", "รีแฟกเตอร์",
+            "โคลน", "ดาวน์โหลด", "ติดตั้ง", "รัน", "อ่าน", "สรุป", "อธิบาย", "ตรวจ", "ดู", "หา", "ค้นหา", "รีวิว",
         };
         foreach (var v in verbs) if (m.Contains(v)) return true;
         return false;
