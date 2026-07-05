@@ -833,19 +833,31 @@
                 </Button>
             </WrapPanel>
 
-            <Button Style="{StaticResource SecondaryButton}"
-                    Command="{Binding OpenFolderCommand}"
-                    HorizontalAlignment="Center"
-                    Margin="0,20,0,0" Padding="16,10">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                               FontSize="16" VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
-                    <TextBlock Text="Open Project Folder" FontFamily="{StaticResource MainFont}"
-                               FontSize="13" VerticalAlignment="Center"/>
-                </StackPanel>
-            </Button>
-            <TextBlock Text="Open a folder to enable agent mode (file access, editing, commands)"
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                <Button Style="{StaticResource SecondaryButton}"
+                        Command="{Binding OpenFolderCommand}"
+                        Padding="16,10" Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="16" VerticalAlignment="Center"
+                                   Margin="0,0,8,0"/>
+                        <TextBlock Text="Open Project Folder" FontFamily="{StaticResource MainFont}"
+                                   FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}"
+                        Command="{Binding CloneRepoCommand}"
+                        Padding="16,10" Margin="8,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="16" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" Foreground="{StaticResource MauveBrush}"/>
+                        <TextBlock Text="Connect GitHub repo" FontFamily="{StaticResource MainFont}"
+                                   FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+            <TextBlock Text="Open a folder or clone a repo to enable agent mode (file access, editing, Git)"
                        Foreground="{StaticResource Overlay0Brush}"
                        FontSize="11" HorizontalAlignment="Center"
                        Margin="0,6,0,0"/>

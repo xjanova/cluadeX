@@ -310,7 +310,10 @@ public class GitService
 
         Directory.CreateDirectory(parentDir);
 
-        return await RunGitCommandAsync($"clone {repoUrl} \"{folderName}\"", parentDir, ct, 120000);
+        // `--` stops git option parsing so a URL starting with '-' (e.g. an "ext::" /
+        // "--upload-pack=" arg-injection payload) can't smuggle extra flags into git.
+        // Quote the URL too so an embedded space can't split it into a second positional arg.
+        return await RunGitCommandAsync($"clone -- \"{repoUrl}\" \"{folderName}\"", parentDir, ct, 120000);
     }
 
     /// <summary>Initialize a new git repository in the working directory.</summary>

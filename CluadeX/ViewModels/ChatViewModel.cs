@@ -1160,10 +1160,113 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
-    private Task CloneRepo()
+    private async Task CloneRepo()
     {
-        StatusText = "Type the GitHub URL in chat: e.g. 'clone https://github.com/owner/repo'";
-        return Task.CompletedTask;
+        // 1) Ask for the repo URL.
+        string? url = CluadeX.Services.Helpers.InputDialog.Show(
+            "Connect GitHub repo",
+            "Paste a repository URL (https://github.com/owner/repo, or a git@ / .git URL). It will be cloned and opened as your project.",
+            placeholder: "https://github.com/owner/repo");
+        if (string.IsNullOrWhiteSpace(url)) return;
+        url = url.Trim();
+
+        // Reject anything that isn't a plain repo URL — a quote/newline could break the
+        // quoting in `git clone -- "<url>"`, and a leading '-' is an arg-injection smell.
+        if (url.Contains('"') || url.Contains('\n') || url.Contains('\r') || url.StartsWith("-"))
+        {
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = $"⚠ That doesn't look like a valid repository URL: \"{url}\"",
+            });
+            ScrollToBottom?.Invoke();
+            return;
+        }
+
+        string repoName = DeriveRepoFolderName(url);
+        if (string.IsNullOrWhiteSpace(repoName))
+        {
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = $"⚠ Couldn't read a repository name from \"{url}\". Expected something like https://github.com/owner/repo.",
+            });
+            ScrollToBottom?.Invoke();
+            return;
+        }
+
+        // 2) Choose where to put it (default to the last working dir's parent, else Documents).
+        string? initial = !string.IsNullOrEmpty(WorkingDirectory)
+            ? (Path.GetDirectoryName(WorkingDirectory) ?? WorkingDirectory)
+            : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        string? parent = CluadeX.Services.Helpers.FolderPicker.ShowDialog(
+            $"Choose where to clone \"{repoName}\"", initial);
+        if (string.IsNullOrWhiteSpace(parent)) return;
+
+        string targetDir = Path.Combine(parent, repoName);
+        if (Directory.Exists(targetDir) && Directory.EnumerateFileSystemEntries(targetDir).Any())
+        {
+            var res = MessageBox.Show(
+                $"\"{targetDir}\" already exists and isn't empty.\n\nOpen it as the project instead of cloning?",
+                "Folder exists", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (res == MessageBoxResult.Yes) SetWorkingDirectory(targetDir);
+            return;
+        }
+
+        // 3) Clone with a live status line.
+        Messages.Add(new ChatMessage
+        {
+            Role = MessageRole.System,
+            Content = $"⬇ Cloning {url}\n→ {targetDir}",
+        });
+        ScrollToBottom?.Invoke();
+        StatusText = $"Cloning {repoName}…";
+
+        GitResult result;
+        try
+        {
+            result = await _gitService.CloneAsync(url, targetDir);
+        }
+        catch (Exception ex)
+        {
+            result = new GitResult { Success = false, Error = ex.Message };
+        }
+
+        if (result.Success)
+        {
+            StatusText = $"Cloned {repoName}";
+            // Opening the folder emits its own "Opened project" system message + enables agent mode.
+            SetWorkingDirectory(targetDir);
+        }
+        else
+        {
+            string err = (result.Error ?? result.Output ?? "unknown error").Trim();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = $"❌ Clone failed: {err}",
+            });
+            ScrollToBottom?.Invoke();
+            StatusText = "Clone failed";
+        }
+    }
+
+    /// <summary>
+    /// Pull the repo folder name out of a git URL. Handles https://host/owner/repo(.git),
+    /// git@host:owner/repo.git, and bare owner/repo forms.
+    /// </summary>
+    private static string DeriveRepoFolderName(string url)
+    {
+        string s = url.Trim().TrimEnd('/');
+        // git@github.com:owner/repo.git → take the part after the last '/' or ':'
+        int slash = s.LastIndexOfAny(new[] { '/', ':' });
+        string last = slash >= 0 ? s[(slash + 1)..] : s;
+        if (last.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            last = last[..^4];
+        // Strip anything unsafe for a folder name.
+        foreach (char c in Path.GetInvalidFileNameChars())
+            last = last.Replace(c, '-');
+        return last.Trim();
     }
 
     private void CloseFolder()
