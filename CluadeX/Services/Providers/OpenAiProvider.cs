@@ -12,18 +12,24 @@ public class OpenAiProvider : ApiProviderBase
     public override string ProviderId => "OpenAI";
     public override string DisplayName => "OpenAI";
 
+    // Newest first. GPT-5 tier + o-series reasoning models lead; GPT-4o kept for compatibility.
     public static readonly string[] KnownModels =
     [
+        "gpt-5", "gpt-5-mini", "gpt-5-nano",
+        "o4", "o4-mini", "o3-pro", "o3", "o3-mini",
         "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",
-        "gpt-3.5-turbo", "o1", "o1-mini", "o1-pro", "o3", "o3-mini", "o4-mini",
+        "o1", "o1-mini", "o1-pro", "gpt-3.5-turbo",
     ];
 
     /// <summary>
     /// Reasoning models that don't support temperature/top_p and use max_completion_tokens.
+    /// The GPT-5 family and o-series all follow the reasoning-model request shape.
     /// </summary>
     private static readonly HashSet<string> ReasoningModels = new(StringComparer.OrdinalIgnoreCase)
     {
-        "o1", "o1-mini", "o1-pro", "o3", "o3-mini", "o4-mini",
+        "gpt-5", "gpt-5-mini", "gpt-5-nano",
+        "o4", "o4-mini", "o3-pro", "o3", "o3-mini",
+        "o1", "o1-mini", "o1-pro",
     };
 
     private static bool IsReasoningModel(string model)

@@ -18,11 +18,85 @@ public class AnthropicProvider : ApiProviderBase
     public override string ProviderId => "Anthropic";
     public override string DisplayName => "Anthropic Claude";
 
+    // Newest first — the Claude 5 family + Opus 4.8 lead. IDs are the exact strings the API expects
+    // (no date suffix on the current-gen aliases). Fable 5 is Anthropic's most capable widely-released
+    // model; Opus 4.8 is the default high tier; Sonnet 5 / Haiku 4.5 trade down for speed/cost.
     public static readonly string[] KnownModels =
     [
+        "claude-fable-5",          // most capable (1M ctx) — "มหาเทพ"
+        "claude-opus-4-8",         // top Opus tier (default for hard work)
+        "claude-opus-4-7",
+        "claude-sonnet-5",         // near-Opus quality at Sonnet cost
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",        // fastest / cheapest
+        // legacy (still callable)
+        "claude-opus-4-5", "claude-sonnet-4-5",
         "claude-sonnet-4-20250514", "claude-opus-4-20250514",
-        "claude-haiku-3-5-20241022", "claude-3-5-sonnet-20241022",
     ];
+
+    /// <summary>Claude 5 family + Opus 4.8/4.7 use ADAPTIVE thinking only and REJECT (HTTP 400)
+    /// temperature/top_p/top_k and thinking.budget_tokens. Sending the legacy request shape to these
+    /// models fails outright — so they need a different payload than Opus 4.6 / Sonnet 4.5 and older.</summary>
+    private static bool IsModernThinkingModel(string model)
+    {
+        if (string.IsNullOrEmpty(model)) return false;
+        string m = model.ToLowerInvariant();
+        return m.StartsWith("claude-fable-") || m.StartsWith("claude-mythos-")
+            || m.StartsWith("claude-opus-4-8") || m.StartsWith("claude-opus-4-7")
+            || m.StartsWith("claude-sonnet-5");
+    }
+
+    /// <summary>Fable 5 / Mythos 5 reject an explicit thinking:{type:disabled} — the thinking param
+    /// must be omitted entirely to run without visible thinking.</summary>
+    private static bool ThinkingMustBeOmittedWhenOff(string model)
+    {
+        if (string.IsNullOrEmpty(model)) return false;
+        string m = model.ToLowerInvariant();
+        return m.StartsWith("claude-fable-") || m.StartsWith("claude-mythos-");
+    }
+
+    /// <summary>Build the thinking + sampling parameters correctly for the target model. Modern models
+    /// (Claude 5 family, Opus 4.8/4.7) use adaptive thinking + effort and REJECT temperature/top_p/top_k
+    /// and budget_tokens; older models keep the legacy enabled/budget_tokens + temperature/top_p shape.
+    /// Mutates <paramref name="requestObj"/> in place (may raise max_tokens for the legacy budget path).</summary>
+    private static void ApplyThinkingAndSampling(Dictionary<string, object> requestObj, string model, AppSettings settings)
+    {
+        if (IsModernThinkingModel(model))
+        {
+            // No temperature/top_p/top_k on these models (400). Thinking is adaptive or omitted.
+            if (settings.ExtendedThinkingEnabled)
+            {
+                requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "adaptive" };
+                // Depth is controlled by effort, not a token budget, on the modern surface.
+                requestObj["output_config"] = new Dictionary<string, object> { ["effort"] = "high" };
+            }
+            else if (!ThinkingMustBeOmittedWhenOff(model))
+            {
+                // Opus 4.8/4.7 / Sonnet 5 accept an explicit disable; Fable/Mythos must omit entirely.
+                requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
+            }
+            return;
+        }
+
+        // Legacy models: enabled+budget_tokens (disables sampling), else temperature/top_p.
+        if (settings.ExtendedThinkingEnabled)
+        {
+            int budgetTokens = settings.ThinkingBudgetTokens;
+            int maxTokens = settings.MaxTokens;
+            if (maxTokens <= budgetTokens) maxTokens = budgetTokens + 4096; // API requires max_tokens > budget
+            requestObj["max_tokens"] = maxTokens;
+            requestObj["thinking"] = new Dictionary<string, object>
+            {
+                ["type"] = "enabled",
+                ["budget_tokens"] = budgetTokens,
+            };
+        }
+        else
+        {
+            requestObj["temperature"] = (double)settings.Temperature;
+            requestObj["top_p"] = (double)settings.TopP;
+        }
+    }
 
     public AnthropicProvider(SettingsService settingsService, CostTrackingService? costTracker = null)
         : base(settingsService)
@@ -165,28 +239,7 @@ public class AnthropicProvider : ApiProviderBase
             ["stream"] = true,
         };
 
-        // Extended thinking: when enabled, send thinking parameter (disables temperature/top_p)
-        if (settings.ExtendedThinkingEnabled)
-        {
-            // Ensure max_tokens > budget_tokens (Anthropic API requirement)
-            int budgetTokens = settings.ThinkingBudgetTokens;
-            int maxTokens = settings.MaxTokens;
-            if (maxTokens <= budgetTokens)
-                maxTokens = budgetTokens + 4096; // Auto-raise max_tokens
-            requestObj["max_tokens"] = maxTokens;
-
-            requestObj["thinking"] = new Dictionary<string, object>
-            {
-                ["type"] = "enabled",
-                ["budget_tokens"] = budgetTokens,
-            };
-            // Note: temperature and top_p are not allowed with extended thinking
-        }
-        else
-        {
-            requestObj["temperature"] = (double)settings.Temperature;
-            requestObj["top_p"] = (double)settings.TopP;
-        }
+        ApplyThinkingAndSampling(requestObj, model, settings);
 
         // Prompt caching: wrap system prompt in cache_control blocks
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -216,7 +269,9 @@ public class AnthropicProvider : ApiProviderBase
         request.Headers.Add("anthropic-version", "2023-06-01");
         {
             var betaFeatures = new List<string>();
-            if (settings.ExtendedThinkingEnabled)
+            // interleaved-thinking is a legacy beta; adaptive thinking (modern models) enables it
+            // automatically, and the modern models don't accept the flag path — only send it for legacy.
+            if (settings.ExtendedThinkingEnabled && !IsModernThinkingModel(model))
                 betaFeatures.Add("interleaved-thinking-2025-05-14");
             if (settings.PromptCachingEnabled)
                 betaFeatures.Add("prompt-caching-2024-07-31");
@@ -397,22 +452,8 @@ public class AnthropicProvider : ApiProviderBase
             ["stream"] = true,
         };
 
-        // Extended thinking for native tool use
-        if (settings.ExtendedThinkingEnabled)
-        {
-            int budgetTokens = settings.ThinkingBudgetTokens;
-            int maxTokens = settings.MaxTokens;
-            // Ensure max_tokens > budget_tokens (Anthropic API requirement)
-            if (maxTokens <= budgetTokens)
-                maxTokens = budgetTokens + 4096;
-            requestObj["max_tokens"] = maxTokens;
-
-            requestObj["thinking"] = new Dictionary<string, object>
-            {
-                ["type"] = "enabled",
-                ["budget_tokens"] = budgetTokens,
-            };
-        }
+        // Extended thinking for native tool use (model-aware — see ApplyThinkingAndSampling)
+        ApplyThinkingAndSampling(requestObj, model, settings);
 
         // Prompt caching for system prompt
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -454,7 +495,9 @@ public class AnthropicProvider : ApiProviderBase
         request.Headers.Add("anthropic-version", "2023-06-01");
         {
             var betaFeatures = new List<string>();
-            if (settings.ExtendedThinkingEnabled)
+            // interleaved-thinking is a legacy beta; adaptive thinking (modern models) enables it
+            // automatically, and the modern models don't accept the flag path — only send it for legacy.
+            if (settings.ExtendedThinkingEnabled && !IsModernThinkingModel(model))
                 betaFeatures.Add("interleaved-thinking-2025-05-14");
             if (settings.PromptCachingEnabled)
                 betaFeatures.Add("prompt-caching-2024-07-31");

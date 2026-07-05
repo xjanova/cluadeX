@@ -118,10 +118,15 @@ public class CostTrackingService
         string m = model.ToLowerInvariant();
         return m switch
         {
-            // ── Anthropic Models ──
-            // Opus 4/4.5/4.6: $15 input, $75 output
+            // ── Anthropic Models ── (ModelPricing = input, output, cacheRead, cacheWrite per MTok)
+            // Fable 5 / Mythos 5: $10 in / $50 out (most capable, above Opus tier)
+            _ when m.Contains("fable") || m.Contains("mythos") => new(10.0m, 50.0m, 1.0m, 12.5m),
+            // Opus 4.6/4.7/4.8: $5 in / $25 out (1M ctx, no long-context premium) — NOT the old $15/$75
+            _ when m.Contains("opus-4-8") || m.Contains("opus-4-7") || m.Contains("opus-4-6")
+                => new(5.0m, 25.0m, 0.5m, 6.25m),
+            // Opus 4 / 4.1 / 4.5 (legacy): $15 in / $75 out
             _ when m.Contains("opus") => new(15.0m, 75.0m, 1.5m, 18.75m),
-            // Sonnet 4/4.5/4.6: $3 input, $15 output
+            // Sonnet 4/4.5/4.6/5: $3 input, $15 output
             _ when m.Contains("sonnet") => new(3.0m, 15.0m, 0.3m, 3.75m),
             // Haiku 4.5: $1 input, $5 output
             _ when m.Contains("haiku-4") || m.Contains("haiku-3.5") => new(1.0m, 5.0m, 0.1m, 1.25m),
@@ -129,6 +134,12 @@ public class CostTrackingService
             _ when m.Contains("haiku") => new(0.25m, 1.25m, 0.025m, 0.3m),
 
             // ── OpenAI Models ──
+            _ when m.Contains("gpt-5-nano") => new(0.05m, 0.40m, 0m, 0m),
+            _ when m.Contains("gpt-5-mini") => new(0.25m, 2.0m, 0m, 0m),
+            _ when m.Contains("gpt-5") => new(1.25m, 10.0m, 0m, 0m),
+            _ when m.Contains("o4-mini") => new(1.10m, 4.40m, 0m, 0m),
+            _ when m.Contains("o4") => new(10.0m, 40.0m, 0m, 0m),
+            _ when m.Contains("o3-pro") => new(20.0m, 80.0m, 0m, 0m),
             _ when m.Contains("gpt-4o-mini") => new(0.15m, 0.6m, 0m, 0m),
             _ when m.Contains("gpt-4o") => new(2.5m, 10.0m, 0m, 0m),
             _ when m.Contains("o4-mini") => new(1.10m, 4.40m, 0m, 0m),
@@ -138,6 +149,8 @@ public class CostTrackingService
             _ when m.Contains("o1") => new(15.0m, 60.0m, 0m, 0m),
 
             // ── Google Gemini Models ──
+            _ when m.Contains("gemini-3-pro") => new(2.0m, 12.0m, 0m, 0m),
+            _ when m.Contains("gemini-3-flash") => new(0.30m, 2.5m, 0m, 0m),
             _ when m.Contains("gemini-2.5-pro") => new(1.25m, 10.0m, 0m, 0m),
             _ when m.Contains("gemini-2.5-flash") => new(0.15m, 0.6m, 0m, 0m),
             _ when m.Contains("gemini-2.0") => new(0.10m, 0.40m, 0m, 0m),
