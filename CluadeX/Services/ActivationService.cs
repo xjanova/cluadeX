@@ -207,13 +207,16 @@ public class ActivationService
             "feature.codeExecution" => true,
             "feature.fileSystem" => true,
             "feature.ollama" => true, // Ollama is free (local)
+            // Local Git is a basic dev capability (like Claude Code) — free tier:
+            // commit, add, status, merge, branch, checkout, diff, log, stash, init, clone.
+            // Publishing to a remote (git_push) + GitHub PRs stay behind feature.github.
+            "feature.git" => true,
             // These require activation:
             "feature.openai" => false,
             "feature.anthropic" => false,
             "feature.gemini" => false,
             "feature.multiProvider" => false, // Cloud providers need activation
             "feature.huggingface" => false,
-            "feature.git" => false,
             "feature.github" => false,
             "feature.webFetch" => false,
             "feature.contextMemory" => false,

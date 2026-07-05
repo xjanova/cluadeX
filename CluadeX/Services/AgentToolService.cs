@@ -244,7 +244,7 @@ public class AgentToolService : IDisposable
                 {
                     ToolType.GitStatus or ToolType.GitAdd or ToolType.GitCommit or
                     ToolType.GitPush or ToolType.GitPull or ToolType.GitBranch or
-                    ToolType.GitCheckout or ToolType.GitDiff or ToolType.GitLog or
+                    ToolType.GitCheckout or ToolType.GitMerge or ToolType.GitDiff or ToolType.GitLog or
                     ToolType.GitClone or ToolType.GitInit or ToolType.GitStash => "Git",
                     ToolType.GhPrCreate or ToolType.GhPrList or
                     ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView => "GitHub",
@@ -329,6 +329,7 @@ public class AgentToolService : IDisposable
                 ToolType.GitPull => await ExecuteGitPullAsync(call),
                 ToolType.GitBranch => await ExecuteGitBranchAsync(call),
                 ToolType.GitCheckout => await ExecuteGitCheckoutAsync(call),
+                ToolType.GitMerge => await ExecuteGitMergeAsync(call),
                 ToolType.GitDiff => await ExecuteGitDiffAsync(call),
                 ToolType.GitLog => await ExecuteGitLogAsync(call),
                 ToolType.GitClone => await ExecuteGitCloneAsync(call, ct),
@@ -532,13 +533,13 @@ public class AgentToolService : IDisposable
         {
             schemas.Add(new() { Name = "git_status", Description = "Show git working tree status", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "git_add", Description = "Stage files for commit", InputSchema = MakeSchema(("paths", "string", "Files to stage (space-separated)", true)) });
-            schemas.Add(new() { Name = "git_commit", Description = "Create a git commit", InputSchema = MakeSchema(("message", "string", "Commit message", true)) });
+            schemas.Add(new() { Name = "git_commit", Description = "Create a git commit. Pass stage_all=true to stage every change first (like 'git add -A' then commit) so you don't need a separate git_add.", InputSchema = MakeSchema(("message", "string", "Commit message", true), ("stage_all", "string", "true to stage all changes before committing", false)) });
             schemas.Add(new() { Name = "git_diff", Description = "Show changes", InputSchema = MakeSchema(("args", "string", "Diff arguments", false)) });
             schemas.Add(new() { Name = "git_log", Description = "Show commit history", InputSchema = MakeSchema(("args", "string", "Log arguments", false)) });
             schemas.Add(new() { Name = "git_branch", Description = "List or create branches", InputSchema = MakeSchema(("args", "string", "Branch arguments", false)) });
-            schemas.Add(new() { Name = "git_push", Description = "Push to remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
             schemas.Add(new() { Name = "git_pull", Description = "Pull from remote", InputSchema = MakeSchema(("args", "string", "Pull arguments", false)) });
             schemas.Add(new() { Name = "git_checkout", Description = "Switch branches or restore files", InputSchema = MakeSchema(("target", "string", "Branch or file", true)) });
+            schemas.Add(new() { Name = "git_merge", Description = "Merge a branch into the current branch", InputSchema = MakeSchema(("branch", "string", "Branch to merge into the current one", true)) });
             schemas.Add(new() { Name = "git_stash", Description = "Stash changes", InputSchema = MakeSchema(("action", "string", "push|pop|list|drop", false)) });
             schemas.Add(new() { Name = "git_clone", Description = "Clone a repository", InputSchema = MakeSchema(("url", "string", "Repository URL", true), ("path", "string", "Target directory", false)) });
             schemas.Add(new() { Name = "git_init", Description = "Initialize a git repository", InputSchema = MakeSchema() });
@@ -546,9 +547,10 @@ public class AgentToolService : IDisposable
             schemas.Add(new() { Name = "git_worktree_remove", Description = "Remove a git worktree", InputSchema = MakeSchema(("path", "string", "Worktree path", true)) });
         }
 
-        // GitHub tools
+        // GitHub / publish tools — pushing to a remote is the monetized "publish" step.
         if (githubEnabled)
         {
+            schemas.Add(new() { Name = "git_push", Description = "Push commits to a remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
             schemas.Add(new() { Name = "gh_pr_create", Description = "Create a GitHub pull request", InputSchema = MakeSchema(("title", "string", "PR title", true), ("body", "string", "PR body", false), ("base", "string", "Base branch", false)) });
             schemas.Add(new() { Name = "gh_pr_list", Description = "List pull requests", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "gh_issue_create", Description = "Create a GitHub issue", InputSchema = MakeSchema(("title", "string", "Issue title", true), ("body", "string", "Issue body", false)) });
@@ -751,6 +753,11 @@ public class AgentToolService : IDisposable
             15. git_checkout - Switch branches
                 [ACTION: git_checkout]
                 branch: main
+                [/ACTION]
+
+            15b. git_merge - Merge a branch into the current one
+                [ACTION: git_merge]
+                branch: feature-branch
                 [/ACTION]
 
             16. git_diff - Show changes
@@ -1069,12 +1076,16 @@ public class AgentToolService : IDisposable
         var features = _settingsService.Settings.Features;
         return type switch
         {
-            // Git tools — require Git feature enabled + activation
+            // Local Git tools — free tier (feature.git is unlocked by default)
             ToolType.GitStatus or ToolType.GitAdd or ToolType.GitCommit or
-            ToolType.GitPush or ToolType.GitPull or ToolType.GitBranch or
-            ToolType.GitCheckout or ToolType.GitDiff or ToolType.GitLog or
+            ToolType.GitPull or ToolType.GitBranch or
+            ToolType.GitCheckout or ToolType.GitMerge or ToolType.GitDiff or ToolType.GitLog or
             ToolType.GitClone or ToolType.GitInit or ToolType.GitStash
                 => features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"),
+
+            // Pushing to a remote is the monetized "publish" step — gate behind GitHub activation.
+            ToolType.GitPush
+                => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
 
             // GitHub tools — require GitHub feature enabled + activation
             ToolType.GhPrCreate or ToolType.GhPrList or
@@ -1730,8 +1741,31 @@ public class AgentToolService : IDisposable
         string message = call.GetArg("message");
         if (string.IsNullOrEmpty(message))
             return Fail(call, "Missing 'message' argument");
+
+        // stage_all lets the model commit in one shot without a separate git_add —
+        // this mirrors what a user means by "commit my changes".
+        bool stageAll = call.GetArg("stage_all", "false").Trim().ToLowerInvariant() is "true" or "1" or "yes";
+        if (stageAll)
+        {
+            var add = await _gitService.AddAsync(".");
+            if (!add.Success)
+                return GitToToolResult(call, add, "Stage-all before commit");
+        }
+
         var r = await _gitService.CommitAsync(message);
         return GitToToolResult(call, r, $"Committed: {message}");
+    }
+
+    private async Task<ToolResult> ExecuteGitMergeAsync(ToolCall call)
+    {
+        // Accept "branch" (native schema) or "target"/"name" for robustness with weak models.
+        string branch = call.GetArg("branch", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("target", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("name", "");
+        if (string.IsNullOrEmpty(branch))
+            return Fail(call, "Missing 'branch' argument (the branch to merge into the current one)");
+        var r = await _gitService.MergeAsync(branch);
+        return GitToToolResult(call, r, $"Merged {branch}");
     }
 
     private async Task<ToolResult> ExecuteGitPushAsync(ToolCall call)
@@ -2421,6 +2455,7 @@ public class AgentToolService : IDisposable
             "git_pull" or "gitpull" => ToolType.GitPull,
             "git_branch" or "gitbranch" => ToolType.GitBranch,
             "git_checkout" or "gitcheckout" => ToolType.GitCheckout,
+            "git_merge" or "gitmerge" or "merge" => ToolType.GitMerge,
             "git_diff" or "gitdiff" => ToolType.GitDiff,
             "git_log" or "gitlog" => ToolType.GitLog,
             "git_clone" or "gitclone" => ToolType.GitClone,

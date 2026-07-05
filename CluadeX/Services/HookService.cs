@@ -305,7 +305,13 @@ public class HookService
                 && (stderr.Contains("ParserError", StringComparison.OrdinalIgnoreCase)
                     || stderr.Contains("ParseException", StringComparison.OrdinalIgnoreCase)
                     || stderr.Contains("is not recognized as the name of a cmdlet", StringComparison.OrdinalIgnoreCase)
-                    || stderr.Contains("Missing closing", StringComparison.OrdinalIgnoreCase));
+                    || stderr.Contains("Missing closing", StringComparison.OrdinalIgnoreCase)
+                    // cmd.exe / batch parse & lookup errors — a hook that references batch-only
+                    // syntax (e.g. `%%b` outside a .bat) or a missing exe is BROKEN, not a
+                    // deliberate block. Fail open so one bad hook can't brick every commit.
+                    || stderr.Contains("was unexpected at this time", StringComparison.OrdinalIgnoreCase)
+                    || stderr.Contains("The syntax of the command is incorrect", StringComparison.OrdinalIgnoreCase)
+                    || stderr.Contains("is not recognized as an internal or external command", StringComparison.OrdinalIgnoreCase));
             if (scriptBroken)
             {
                 return new HookResult

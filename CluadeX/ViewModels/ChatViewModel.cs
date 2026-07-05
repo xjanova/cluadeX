@@ -2202,6 +2202,7 @@ public class ChatViewModel : ViewModelBase
         ["git_clone"] = "Cloned",
         ["git_init"] = "Initialized",
         ["git_checkout"] = "Checked out",
+        ["git_merge"] = "Merged",
         ["git_branch"] = "Branched",
         ["git_add"] = "Staged",
         ["git_stash"] = "Stashed",

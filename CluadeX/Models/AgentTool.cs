@@ -26,6 +26,7 @@ public enum ToolType
     GitPull,
     GitBranch,
     GitCheckout,
+    GitMerge,
     GitDiff,
     GitLog,
     GitClone,

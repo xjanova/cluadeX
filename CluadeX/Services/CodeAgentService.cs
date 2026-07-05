@@ -36,6 +36,12 @@ public class CodeAgentService
         "read_file", "list_files", "search_content", "search_files", "codebase_search",
         "find_symbol", "list_symbols", "edit_file", "multi_edit", "write_file",
         "run_command", "run_build", "run_tests",
+        // Git finishing tools — small-ctx local models otherwise only have run_command for git, and
+        // weak models tend to shell-chain `git add && git commit && git merge` with POSIX quoting that
+        // breaks on Windows. The dedicated tools are reliable (temp-file commit msg, validated branch).
+        // These names only survive the subset filter when the Git feature already emitted their schemas.
+        // git_push is intentionally excluded — it's the paid "publish to remote" step (feature.github).
+        "git_status", "git_add", "git_commit", "git_merge",
         // brain_recall stays in the core set: the system prompt instructs the model to consult BrainX,
         // and stripping the tool here while keeping the instruction made small-ctx local models the ONLY
         // tier that couldn't reach the brain (CluadeX ↔ BrainX are meant to be used together, always).
@@ -493,6 +499,7 @@ public class CodeAgentService
         ["git_diff"] = "Diffing",
         ["git_log"] = "Reading git log",
         ["git_commit"] = "Committing",
+        ["git_merge"] = "Merging",
         ["git_push"] = "Pushing",
         ["git_pull"] = "Pulling",
         ["git_clone"] = "Cloning",
@@ -757,8 +764,12 @@ public class CodeAgentService
                 // the contradiction that wrecks weak-model tool selection.
                 sb.AppendLine("NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, "
                     + "search_content, search_files, codebase_search, find_symbol, list_symbols, edit_file, "
-                    + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall. ALWAYS read_file before editing; "
-                    + "after an edit, run_build (and run_tests) to verify. Increase Context Size to ≥ 16384 for the full toolset.");
+                    + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall, "
+                    + "git_status, git_add, git_commit, git_merge. ALWAYS read_file before editing; "
+                    + "after an edit, run_build (and run_tests) to verify. "
+                    + "For git, PREFER the dedicated tools over run_command 'git ...': use git_commit "
+                    + "(pass stage_all=true to stage everything first) and git_merge — shell quoting for git is "
+                    + "unreliable on Windows. Increase Context Size to ≥ 16384 for the full toolset.");
             }
             else
             {
