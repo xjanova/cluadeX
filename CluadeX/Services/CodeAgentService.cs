@@ -1572,7 +1572,9 @@ public class CodeAgentService
         bool postWriteReviewNudged = false;
         bool wrapUpForced = false;
         int failedEditAttempts = 0;              // edits/writes the model TRIED that all failed
-        bool falseFinishGuarded = false;         // one-shot block on "done" with zero successful changes
+        int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
+        bool lastEditFailNeededRead = false;     // last edit failed the read-before-edit guard (recoverable)
+        string? forceToolNextStep = null;        // constrained-decoding override for the next turn (A3)
         bool loopIsLocal = _providerManager.ActiveProviderType
             is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
         // Plan-first: force a tool call on step 0 of a non-trivial LOCAL task so the model acts instead of
@@ -1714,10 +1716,18 @@ public class CodeAgentService
                 // Force a tool call only on step 0 of a non-trivial local task (constrained decoding via A3).
                 string? iterToolChoice = (iteration == 0 && planFirstPending && toolSchemas.Count > 0)
                     ? "required" : null;
+                // Forced recovery (set by the false-finish guard): a weak model that failed an edit and
+                // then reverts to PROSE instead of reading/writing. Force the exact recovery tool so it
+                // acts instead of apologizing. Takes priority over plan-first/wrap-up for this one turn.
+                if (forceToolNextStep != null && toolSchemas.Any(t => t.Name == forceToolNextStep || forceToolNextStep is "required"))
+                {
+                    iterToolChoice = forceToolNextStep;
+                    forceToolNextStep = null;
+                }
                 // Anti-wander: the task's files are written and the model has burned several steps
                 // without changing anything since — force a FINAL prose answer (tool_choice=none) so
                 // the turn concludes instead of exploring until the iteration budget dies.
-                if (wrapUpForced && iterToolChoice == null) iterToolChoice = "none";
+                else if (wrapUpForced && iterToolChoice == null) iterToolChoice = "none";
                 try
                 {
                     response = await loopProvider.ChatWithToolsAsync(
@@ -1908,25 +1918,34 @@ public class CodeAgentService
                 // NOTHING was ever successfully written (the observed "edit failed x2 → build/test the
                 // unchanged file → 'tests passed!'" fake finish). Don't let it claim success — send it
                 // back once with an explicit instruction to actually make the change via write_file.
-                if (!falseFinishGuarded && !anyWriteSucceeded && failedEditAttempts >= 2
+                // Trigger on the FIRST failed edit with zero successful writes (a weak model that hits the
+                // read-before-edit guard or one find-mismatch and then gives up / fake-finishes). >=1, not >=2.
+                if (falseFinishGuards < 2 && !anyWriteSucceeded && failedEditAttempts >= 1
                     && iteration < MaxAgentIterations - 1)
                 {
-                    falseFinishGuarded = true;
-                    _debugLog?.Warn("Agent", $"false-finish blocked at step {iteration + 1}: {failedEditAttempts} failed edits, 0 successful writes");
-                    OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้แก้ไฟล์จริง — ให้เขียนใหม่..." : "No change was actually written — retrying...");
+                    falseFinishGuards++;
+                    // Force the model's hand on the recovery turn: read the file (if that was the blocker),
+                    // else force SOME tool so it can't apologize its way out again.
+                    forceToolNextStep = lastEditFailNeededRead ? "read_file" : "required";
+                    _debugLog?.Warn("Agent", $"false-finish blocked at step {iteration + 1}: {failedEditAttempts} failed edit(s), 0 successful writes, neededRead={lastEditFailNeededRead}, force={forceToolNextStep}");
+                    OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้แก้ไฟล์จริง — ให้ทำต่อ..." : "No change was actually written — retrying...");
                     result.Steps.Add(step);
                     var fakeAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
                     fakeAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text",
                         Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent });
                     nativeMessages.Add(fakeAssistant);
+                    // read-before-edit failure is fully recoverable BY YOU — don't ask the user, just read+edit.
+                    string recover = lastEditFailNeededRead
+                        ? "STOP — you have NOT changed the file yet. Your edit failed because you must read the "
+                          + "file FIRST. Do it yourself now — do NOT ask the user. Call read_file(path), then "
+                          + "edit_file / multi_edit with the exact lines, then run_build to verify."
+                        : "STOP — you have NOT changed any file yet. Your edit failed (find-text did not match), so "
+                          + "the file is unchanged. Do NOT say you are done and do NOT ask the user. read_file(path) "
+                          + "to see the real content, then call write_file with the COMPLETE corrected file, then verify.";
                     nativeMessages.Add(new Services.Providers.NativeMessage
                     {
                         Role = "user",
-                        Content = { new Services.Providers.ContentBlock { Type = "text",
-                            Text = "STOP — you have NOT changed any file yet. Every edit_file/multi_edit you tried "
-                                 + "failed (the find-text did not match), so the file is unchanged and the build/tests "
-                                 + "passed only because nothing changed. Do NOT say you are done. Call write_file with "
-                                 + "the COMPLETE corrected file content now, then verify." } },
+                        Content = { new Services.Providers.ContentBlock { Type = "text", Text = recover } },
                     });
                     nativeMessages = EnsureAlternatingRoles(nativeMessages);
                     continue;
@@ -2150,9 +2169,12 @@ public class CodeAgentService
             if (mutatedThisStep) { anyWriteSucceeded = true; stepsSinceMutation = 0; }
             else if (anyWriteSucceeded) stepsSinceMutation++;
             // Count edit/write attempts that FAILED (find-block mismatch, etc.) — used to catch the
-            // "all edits failed, then declared success on the unchanged file" false finish.
-            failedEditAttempts += toolResults.Count(r => !r.Success
-                && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit);
+            // "edit failed, then gave up / declared success on the unchanged file" false finish.
+            var failedEdits = toolResults.Where(r => !r.Success
+                && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit).ToList();
+            failedEditAttempts += failedEdits.Count;
+            if (failedEdits.Count > 0) lastEditFailNeededRead =
+                (failedEdits[^1].Error ?? "").Contains("must read", StringComparison.OrdinalIgnoreCase);
 
             // After a successful write in a project with NO build system (html/docs/scripts), there is
             // no compiler oracle — teach the same review loop a strong assistant uses: read the file

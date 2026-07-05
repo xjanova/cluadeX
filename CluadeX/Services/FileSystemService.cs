@@ -208,7 +208,16 @@ public class FileSystemService
         if (!File.Exists(full)) return null;   // creating a brand-new file — nothing to read first
 
         if (!_readSnapshots.TryGetValue(full, out var seen))
-            return $"You must read_file '{relativePath}' before editing it, so your change is based on its real current contents.";
+        {
+            // NEVER-read file: auto-snapshot and ALLOW the edit instead of dead-ending. Weak local
+            // models frequently jump straight to edit_file, hit "you must read first", and then can't
+            // recover (they apologize in prose instead of reading) — a false finish. The edit itself
+            // still validates its find-block against the real on-disk content via the fuzzy matcher,
+            // so a blind edit fails cleanly with a nearest-match hint rather than being blocked outright.
+            var snap0 = SnapshotOf(full);
+            if (snap0 != null) _readSnapshots[full] = snap0.Value;
+            return null;
+        }
 
         var now = SnapshotOf(full);
         if (now != null && (now.Value.ticks != seen.ticks || now.Value.size != seen.size))
