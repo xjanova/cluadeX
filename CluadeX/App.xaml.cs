@@ -12,6 +12,7 @@ namespace CluadeX;
 public partial class App : Application
 {
     private ServiceProvider? _serviceProvider;
+    private System.Threading.Mutex? _singleInstanceMutex;
 
     /// <summary>Directory crash logs are written to. Kept lightweight (no directory-exists check on each access).</summary>
     private static string CrashLogDir => Path.Combine(
@@ -21,6 +22,19 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // ─── Single instance ───
+        // Two CluadeX processes fight over the SAME settings.json/session DB, and the second
+        // instance's llama-server startup sweep kills the first instance's (still-owned) server —
+        // observed live as "llama-server stopped (crashed or was killed)" in the first window.
+        _singleInstanceMutex = new System.Threading.Mutex(true, @"Local\CluadeX_SingleInstance", out bool isFirstInstance);
+        if (!isFirstInstance)
+        {
+            MessageBox.Show("CluadeX is already running — check your taskbar.\n(เปิดอยู่แล้ว — ดูที่ taskbar)",
+                "CluadeX", MessageBoxButton.OK, MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
 
         // ─── Global Exception Handlers (must be installed BEFORE any real work) ───
         // Without these, an unhandled exception anywhere in the app silently kills the process

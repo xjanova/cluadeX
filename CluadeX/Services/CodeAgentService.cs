@@ -1571,6 +1571,8 @@ public class CodeAgentService
         int stepsSinceMutation = 0;              // steps since the last successful file change
         bool postWriteReviewNudged = false;
         bool wrapUpForced = false;
+        int failedEditAttempts = 0;              // edits/writes the model TRIED that all failed
+        bool falseFinishGuarded = false;         // one-shot block on "done" with zero successful changes
         bool loopIsLocal = _providerManager.ActiveProviderType
             is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
         // Plan-first: force a tool call on step 0 of a non-trivial LOCAL task so the model acts instead of
@@ -1901,6 +1903,35 @@ public class CodeAgentService
             // No tool calls = final response
             if (response.ToolCalls.Count == 0)
             {
+                // ─── False-finish guard ───
+                // The model is concluding, but it TRIED to change files and every attempt failed while
+                // NOTHING was ever successfully written (the observed "edit failed x2 → build/test the
+                // unchanged file → 'tests passed!'" fake finish). Don't let it claim success — send it
+                // back once with an explicit instruction to actually make the change via write_file.
+                if (!falseFinishGuarded && !anyWriteSucceeded && failedEditAttempts >= 2
+                    && iteration < MaxAgentIterations - 1)
+                {
+                    falseFinishGuarded = true;
+                    _debugLog?.Warn("Agent", $"false-finish blocked at step {iteration + 1}: {failedEditAttempts} failed edits, 0 successful writes");
+                    OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้แก้ไฟล์จริง — ให้เขียนใหม่..." : "No change was actually written — retrying...");
+                    result.Steps.Add(step);
+                    var fakeAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    fakeAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent });
+                    nativeMessages.Add(fakeAssistant);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock { Type = "text",
+                            Text = "STOP — you have NOT changed any file yet. Every edit_file/multi_edit you tried "
+                                 + "failed (the find-text did not match), so the file is unchanged and the build/tests "
+                                 + "passed only because nothing changed. Do NOT say you are done. Call write_file with "
+                                 + "the COMPLETE corrected file content now, then verify." } },
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    continue;
+                }
+
                 // ─── Self-correction: validate code blocks in final response ───
                 string textContent = response.TextContent ?? "";
                 var validationFeedback = ValidateResponseCode(textContent);
@@ -2118,6 +2149,10 @@ public class CodeAgentService
                 && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit);
             if (mutatedThisStep) { anyWriteSucceeded = true; stepsSinceMutation = 0; }
             else if (anyWriteSucceeded) stepsSinceMutation++;
+            // Count edit/write attempts that FAILED (find-block mismatch, etc.) — used to catch the
+            // "all edits failed, then declared success on the unchanged file" false finish.
+            failedEditAttempts += toolResults.Count(r => !r.Success
+                && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit);
 
             // After a successful write in a project with NO build system (html/docs/scripts), there is
             // no compiler oracle — teach the same review loop a strong assistant uses: read the file

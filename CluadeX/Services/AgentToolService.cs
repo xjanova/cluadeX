@@ -1294,12 +1294,21 @@ public class AgentToolService : IDisposable
         {
             string? anchor = _fileSystem.FindNearestAnchor(path, find);
             string hint = anchor != null ? $" {anchor}" : "";
+            // Weak local models frequently can't reproduce the exact find-block for find/replace, then
+            // give up and "verify" the UNCHANGED file (a false finish). For a small file, hand them the
+            // whole current content and tell them to WRITE the complete new file instead — a rewrite the
+            // model CAN do reliably. This is what turns a stuck edit into an actual change.
+            string? current = _fileSystem.TryReadRaw(path);
+            string rewriteHint = "";
+            if (current != null && current.Length <= 6000)
+                rewriteHint = $"\n\nThe file is small — instead of edit_file, call write_file('{path}', <full new content>) "
+                            + $"with the ENTIRE corrected file. Current content:\n---\n{current}\n---";
             return new ToolResult
             {
                 Type = call.Type,
                 ToolName = call.ToolName,
                 Success = false,
-                Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist — re-read the file and copy the exact block you want to change.{hint}",
+                Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist.{hint}{rewriteHint}",
                 Summary = $"Edit failed: text not found in {path}",
             };
         }
@@ -1343,7 +1352,15 @@ public class AgentToolService : IDisposable
         catch (Exception ex) when (ex is FileNotFoundException or ArgumentException) { return Fail(call, ex.Message); }
 
         if (!ok)
-            return Fail(call, $"multi_edit aborted ({applied}/{edits.Count} applied) — NO changes written (atomic). {message}");
+        {
+            // Same weak-model rescue as edit_file: on a small file, steer to a full write_file rewrite
+            // rather than let the model retry a find/replace it can't match and then fake-finish.
+            string rewriteHint = "";
+            if (before != null && before.Length <= 6000)
+                rewriteHint = $" The file is small — instead of multi_edit, call write_file('{path}', <full new content>) "
+                            + $"with the ENTIRE corrected file. Current content:\n---\n{before}\n---";
+            return Fail(call, $"multi_edit aborted ({applied}/{edits.Count} applied) — NO changes written (atomic). {message}{rewriteHint}");
+        }
 
         _fileSystem.MarkKnown(path);
 

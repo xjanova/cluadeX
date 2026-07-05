@@ -63,6 +63,7 @@ public class ChatViewModel : ViewModelBase
     private DispatcherTimer? _elapsedTimer;
     private string _lastStatusBase = "";  // status without elapsed time suffix
     private ChatMessage? _activeAgentStatusMsg;  // tracks the inline agent status for OnToolExecuted cleanup
+    private ChatMessage? _todoListMsg;           // the live plan-checklist bubble (updated in place)
     private int _streamingTokenCount;
     private int _retryCount;
     private string _chatSearchQuery = "";
@@ -428,6 +429,49 @@ public class ChatViewModel : ViewModelBase
                 }
                 Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = $"**⚠ {safe}**", HasError = true });
                 StatusText = safe;
+                ScrollToBottom?.Invoke();
+            });
+        };
+
+        // Live plan checklist (Claude Code-style TodoWrite pills). TodoChanged had ZERO subscribers —
+        // the agent maintained a real plan in memory that no one could see. Render it as a single
+        // checklist bubble that updates in place as items are added/completed.
+        _agentToolService.TodoChanged += () =>
+        {
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var items = _agentToolService.TodoItems;
+                if (items.Count == 0)
+                {
+                    if (_todoListMsg != null) { Messages.Remove(_todoListMsg); _todoListMsg = null; }
+                    return;
+                }
+                var sb = new System.Text.StringBuilder("📋 **Plan**\n");
+                foreach (var t in items)
+                {
+                    string mark = t.Status?.ToLowerInvariant() switch
+                    {
+                        "completed" or "done" => "✅",
+                        "in_progress" or "active" => "🔄",
+                        _ => "⬜",
+                    };
+                    sb.Append(mark).Append(' ').Append(t.Content).Append('\n');
+                }
+                if (_todoListMsg == null || !Messages.Contains(_todoListMsg))
+                {
+                    _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd() };
+                    Messages.Add(_todoListMsg);
+                }
+                else
+                {
+                    _todoListMsg.Content = sb.ToString().TrimEnd();
+                    // Keep the plan near the action: if newer messages buried it, move it to the bottom.
+                    if (Messages.IndexOf(_todoListMsg) < Messages.Count - 3)
+                    {
+                        Messages.Remove(_todoListMsg);
+                        Messages.Add(_todoListMsg);
+                    }
+                }
                 ScrollToBottom?.Invoke();
             });
         };
