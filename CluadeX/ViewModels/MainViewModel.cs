@@ -252,6 +252,18 @@ public class MainViewModel : ViewModelBase
         // Auto-navigate to Chat when user clicks a session from another page
         chatVM.NavigateToChatRequested += () => NavigateTo("Chat");
 
+        // Opening/cloning a project lands the user in the workbench (Code page) — the IDE moment.
+        chatVM.NavigateToEditorRequested += () => NavigateTo("Code");
+
+        // Cowork follow: the agent just mutated a file while the user is on the Chat page —
+        // bring the Code page forward so the live edit is visible (the editor embeds the same
+        // chat docked right, so the conversation stays on screen). Raised on the UI thread.
+        chatVM.FileMutatedByAgent += (_, _) =>
+        {
+            if (_settingsService.Settings.AutoOpenEditorOnAgentEdit && ReferenceEquals(CurrentView, ChatVM))
+                NavigateTo("Code");
+        };
+
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
         PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);

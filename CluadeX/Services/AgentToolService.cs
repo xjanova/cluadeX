@@ -1280,6 +1280,36 @@ public class AgentToolService : IDisposable
 
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
+
+        // Weak models express "append to the file" as find:"" with the new text in replace —
+        // honor the intent instead of failing the turn (the executor is the last line of ergonomics).
+        if (string.IsNullOrEmpty(find) && !string.IsNullOrEmpty(replace))
+        {
+            var rbeA = CheckReadBeforeEdit(call, path);
+            if (rbeA != null) return rbeA;
+
+            string? cur = _fileSystem.TryReadRaw(path);
+            if (cur == null)
+                return Fail(call, $"File not found: {path} — to create a new file use write_file.");
+
+            string glue = cur.Length > 0 && !cur.EndsWith("\n") && !replace.StartsWith("\n") && !replace.StartsWith("\r")
+                ? "\n" : "";
+            string appendedContent = cur + glue + replace;
+            _fileSystem.WriteFile(path, appendedContent);
+            _fileSystem.MarkKnown(path);
+            var appendDiff = CluadeX.Helpers.DiffUtil.Compute(cur, appendedContent);
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = $"Appended to {path} (empty 'find' = append)",
+                Summary = $"Appended to {path}",
+                Diff = appendDiff,
+                FilePath = path,
+            };
+        }
+
         if (string.IsNullOrEmpty(find))
             return Fail(call, "Missing 'find' argument");
 
@@ -1321,6 +1351,7 @@ public class AgentToolService : IDisposable
                 Success = false,
                 Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist.{hint}{rewriteHint}",
                 Summary = $"Edit failed: text not found in {path}",
+                FilePath = path,
             };
         }
 

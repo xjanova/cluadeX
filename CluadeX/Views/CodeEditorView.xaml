@@ -234,15 +234,35 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="EXPLORER" FontSize="10" FontWeight="Bold"
                                    FontFamily="{StaticResource NeonMonoFont}"
                                    Foreground="{StaticResource NeonInk3Brush}"
                                    VerticalAlignment="Center"
                                    Style="{StaticResource Letterspacing15}"/>
+                        <!-- Clone a GitHub repo straight from the workbench -->
+                        <Button Grid.Column="1" Width="22" Height="22" Margin="0,0,2,0"
+                                Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                Command="{Binding CloneRepoCommand}" ToolTip="Connect GitHub repo (clone + open)">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="4">
+                                        <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                   Foreground="{StaticResource NeonCyanBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
                         <!-- Open / change project folder — always reachable (was only on the empty-state,
                              which hides once a folder is open, so there was no way to switch projects). -->
-                        <Button Grid.Column="1" Width="22" Height="22" Margin="0,0,2,0"
+                        <Button Grid.Column="2" Width="22" Height="22" Margin="0,0,2,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding OpenFolderCommand}" ToolTip="Open / change project folder">
                             <Button.Template>
@@ -260,7 +280,7 @@
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
-                        <Button Grid.Column="2" Width="22" Height="22"
+                        <Button Grid.Column="3" Width="22" Height="22"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding RefreshTreeCommand}" ToolTip="Refresh tree">
                             <Button.Template>
@@ -349,13 +369,14 @@
                     </TreeView.ItemContainerStyle>
                 </TreeView>
 
-                <!-- Source Control panel -->
+                <!-- Source Control panel — real git state: branch, changed files, commit box -->
                 <Border Grid.Row="3" Padding="10" BorderThickness="0,1,0,0"
-                        BorderBrush="{StaticResource NeonLineBrush}" MaxHeight="160">
+                        BorderBrush="{StaticResource NeonLineBrush}" MaxHeight="300">
                     <StackPanel>
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="SOURCE CONTROL" FontSize="10" FontWeight="Bold"
@@ -363,14 +384,115 @@
                                        Foreground="{StaticResource NeonInk3Brush}"
                                        Style="{StaticResource Letterspacing15}"
                                        VerticalAlignment="Center"/>
-                            <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="3" Padding="6,1">
-                                <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonAmberBrush}">
-                                    <Run Text="{Binding Tabs.Count, Mode=OneWay}"/>
-                                    <Run Text=" open"/>
-                                </TextBlock>
+                            <!-- Branch chip -->
+                            <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="3" Padding="6,1" Margin="0,0,4,0"
+                                    Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                               Foreground="{StaticResource NeonAmberBrush}" Margin="0,0,3,0" VerticalAlignment="Center"/>
+                                    <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
+                                               Foreground="{StaticResource NeonAmberBrush}"
+                                               Text="{Binding GitBranch}"/>
+                                </StackPanel>
                             </Border>
+                            <!-- Refresh -->
+                            <Button Grid.Column="2" Width="18" Height="18" Background="Transparent" BorderThickness="0"
+                                    Cursor="Hand" Command="{Binding RefreshGitCommand}" ToolTip="Refresh git status">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Background="Transparent" CornerRadius="3">
+                                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
                         </Grid>
+
+                        <!-- Changed files (click to open) -->
+                        <TextBlock Text="{Binding GitChangeCount}" FontSize="9" Margin="0,0,0,4"
+                                   FontFamily="{StaticResource NeonMonoFont}"
+                                   Foreground="{StaticResource NeonInk3Brush}"
+                                   Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}"/>
+                        <ScrollViewer MaxHeight="96" VerticalScrollBarVisibility="Auto"
+                                      Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}">
+                            <ItemsControl ItemsSource="{Binding GitChanges}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                HorizontalContentAlignment="Left" Padding="2,1"
+                                                Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="{Binding Path}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="bd" Background="Transparent" CornerRadius="3"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Status}" FontSize="9" Width="18"
+                                                           FontFamily="{StaticResource NeonMonoFont}" FontWeight="Bold"
+                                                           Foreground="{Binding StatusColor}"/>
+                                                <TextBlock Text="{Binding FileName}" FontSize="10"
+                                                           FontFamily="{StaticResource NeonMonoFont}"
+                                                           Foreground="{StaticResource NeonInk1Brush}"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <!-- Commit box -->
+                        <Grid Margin="0,6,0,8" Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Background="#3311132E" BorderBrush="{StaticResource NeonLineHiBrush}"
+                                    BorderThickness="1" CornerRadius="4" Margin="0,0,4,0">
+                                <TextBox Text="{Binding CommitMessage, UpdateSourceTrigger=PropertyChanged}"
+                                         Background="Transparent" BorderThickness="0" Padding="6,3"
+                                         FontSize="10" FontFamily="{StaticResource NeonMonoFont}"
+                                         Foreground="{StaticResource NeonInk0Brush}"
+                                         CaretBrush="{StaticResource NeonAmberBrush}"
+                                         ToolTip="Commit message"/>
+                            </Border>
+                            <Button Grid.Column="1" Command="{Binding CommitCommand}" Cursor="Hand"
+                                    Padding="8,3" Background="#5528a06E" BorderBrush="{StaticResource NeonLineHiBrush}"
+                                    BorderThickness="1" Foreground="{StaticResource NeonInk0Brush}" FontSize="10"
+                                    ToolTip="Stage all changes and commit">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,4,0"/>
+                                    <TextBlock Text="Commit"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+
                         <!-- Save buttons -->
                         <StackPanel Orientation="Horizontal">
                             <Button Command="{Binding SaveActiveCommand}" Cursor="Hand"

@@ -71,6 +71,9 @@ public class AppSettings
     public bool EnforceReadBeforeEdit { get; set; } = true;
     /// <summary>When the agent edits a file, auto-open/refresh it in the Code Editor and scroll to the change.</summary>
     public bool LiveEditFollow { get; set; } = true;
+    /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
+    /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).</summary>
+    public bool AutoOpenEditorOnAgentEdit { get; set; } = true;
     /// <summary>Animate agent edits in the Code Editor as live typing (typewriter reveal of the changed
     /// region + flash highlight when done). Falls back to an instant refresh for very large changes.</summary>
     public bool LiveCodingAnimationEnabled { get; set; } = true;

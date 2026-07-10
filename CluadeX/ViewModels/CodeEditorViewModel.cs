@@ -18,6 +18,7 @@ public class CodeEditorViewModel : ViewModelBase
     private readonly CodeWorkspaceService _workspace;
     private readonly FileSystemService _fs;
     private readonly SettingsService _settings;
+    private readonly GitService _git;
 
     public ChatViewModel ChatVM { get; }
 
@@ -83,12 +84,32 @@ public class CodeEditorViewModel : ViewModelBase
     public ICommand SaveAllCommand { get; }
     public ICommand ToggleNodeCommand { get; }
     public ICommand OpenFolderCommand { get; }
+    public ICommand CloneRepoCommand { get; }
+    public ICommand CommitCommand { get; }
+    public ICommand RefreshGitCommand { get; }
+    public ICommand OpenChangeCommand { get; }
 
-    public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm, SettingsService settings)
+    // ── Source control (real git state, not just save buttons) ──
+    public ObservableCollection<GitChangeItem> GitChanges { get; } = new();
+
+    private string _gitBranch = "";
+    public string GitBranch { get => _gitBranch; set { if (SetProperty(ref _gitBranch, value)) OnPropertyChanged(nameof(HasGitRepo)); } }
+    public bool HasGitRepo => !string.IsNullOrEmpty(_gitBranch);
+
+    private string _commitMessage = "";
+    public string CommitMessage { get => _commitMessage; set => SetProperty(ref _commitMessage, value); }
+
+    private bool _isCommitting;
+    public bool IsCommitting { get => _isCommitting; set => SetProperty(ref _isCommitting, value); }
+
+    public string GitChangeCount => GitChanges.Count == 0 ? "clean" : $"{GitChanges.Count} changed";
+
+    public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm, SettingsService settings, GitService git)
     {
         _workspace = workspace;
         _fs = fs;
         _settings = settings;
+        _git = git;
         ChatVM = chatVm;
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
@@ -99,6 +120,12 @@ public class CodeEditorViewModel : ViewModelBase
         SaveAllCommand = new AsyncRelayCommand(SaveAllAsync);
         ToggleNodeCommand = new AsyncRelayCommand<FileTreeNode>(ToggleNodeAsync);
         OpenFolderCommand = ChatVM.OpenFolderCommand;
+        CloneRepoCommand = ChatVM.CloneRepoCommand;
+        // No CanExecute predicate — GitChanges mutates outside the focus cycle so a predicate would go
+        // stale; CommitAsync self-guards (empty message / already committing) with a clear status line.
+        CommitCommand = new AsyncRelayCommand(CommitAsync);
+        RefreshGitCommand = new AsyncRelayCommand(RefreshGitAsync);
+        OpenChangeCommand = new AsyncRelayCommand<GitChangeItem>(OpenChangeAsync);
 
         // Refresh tree when working directory changes via ChatVM
         ChatVM.PropertyChanged += (_, e) =>
@@ -111,6 +138,97 @@ public class CodeEditorViewModel : ViewModelBase
 
         // Live-follow: when the agent edits a file, open/refresh it in the editor and scroll to the change.
         ChatVM.FileMutatedByAgent += OnAgentFileMutated;
+    }
+
+    // ═══════════════ Source control ═══════════════
+
+    /// <summary>Reload branch + changed-file list from `git status --short --branch`.</summary>
+    public async Task RefreshGitAsync()
+    {
+        if (!_workspace.HasWorkingDirectory) { GitBranch = ""; GitChanges.Clear(); OnPropertyChanged(nameof(GitChangeCount)); return; }
+        try
+        {
+            var r = await _git.StatusAsync();
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                GitChanges.Clear();
+                if (!r.Success) { GitBranch = ""; OnPropertyChanged(nameof(GitChangeCount)); return; }
+
+                foreach (var raw in (r.Output ?? "").Split('\n'))
+                {
+                    var line = raw.TrimEnd('\r');
+                    if (line.Length == 0) continue;
+                    if (line.StartsWith("## "))
+                    {
+                        // "## dev...origin/dev [ahead 1]" or "## master" — branch is up to the first '.' or space
+                        string b = line[3..];
+                        int cut = b.IndexOfAny(new[] { '.', ' ' });
+                        GitBranch = cut > 0 ? b[..cut] : b;
+                        continue;
+                    }
+                    if (line.Length < 4) continue;
+                    string status = line[..2].Trim();
+                    string path = line[3..].Trim();
+                    // rename: "R  old -> new" — show the new name
+                    int arrow = path.IndexOf(" -> ", StringComparison.Ordinal);
+                    if (arrow >= 0) path = path[(arrow + 4)..];
+                    GitChanges.Add(new GitChangeItem { Status = string.IsNullOrEmpty(status) ? "?" : status, Path = path });
+                }
+                OnPropertyChanged(nameof(GitChangeCount));
+            });
+        }
+        catch { /* git panel is best-effort */ }
+    }
+
+    /// <summary>Stage everything and commit with the panel's message — the IDE-style commit.</summary>
+    private async Task CommitAsync()
+    {
+        string msg = CommitMessage?.Trim() ?? "";
+        if (string.IsNullOrEmpty(msg)) { StatusMessage = "⚠ Type a commit message first"; return; }
+        if (IsCommitting) return;
+
+        IsCommitting = true;
+        try
+        {
+            var add = await _git.AddAsync(".");
+            if (!add.Success) { StatusMessage = $"✗ stage failed: {add.Error}".Trim(); return; }
+            var commit = await _git.CommitAsync(msg);
+            if (commit.Success)
+            {
+                CommitMessage = "";
+                // "​[dev 537804b] update readme" → surface the first line
+                string first = (commit.Output ?? "").Split('\n').FirstOrDefault()?.Trim() ?? "committed";
+                StatusMessage = $"✓ {first}";
+            }
+            else
+            {
+                StatusMessage = $"✗ commit failed: {(commit.Error ?? commit.Output ?? "").Split('\n').FirstOrDefault()}".Trim();
+            }
+        }
+        catch (Exception ex) { StatusMessage = $"✗ commit failed: {ex.Message}"; }
+        finally
+        {
+            IsCommitting = false;
+            await RefreshGitAsync();
+            _ = _workspace.EnrichGitStatusAsync(Tree);
+        }
+    }
+
+    /// <summary>Open a changed file from the source-control list in an editor tab.</summary>
+    private async Task OpenChangeAsync(GitChangeItem? item)
+    {
+        if (item == null || !_workspace.HasWorkingDirectory) return;
+        try
+        {
+            string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, item.Path));
+            var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, full, StringComparison.OrdinalIgnoreCase));
+            if (existing != null) { ActiveTab = existing; return; }
+            var loaded = await _workspace.OpenFileAsync(full);
+            if (loaded == null) return;
+            Tabs.Add(loaded);
+            ActiveTab = loaded;
+        }
+        catch { /* best-effort */ }
     }
 
     /// <summary>Raised when a live-followed edit lands — the View scrolls to / selects this 1-based line.</summary>
@@ -166,9 +284,54 @@ public class CodeEditorViewModel : ViewModelBase
                 }
             }
 
+            // A brand-new file (write_file created it) isn't in the explorer yet — refresh the
+            // deepest populated ancestor folder so the tree shows it without collapsing the rest.
+            if (!TreeContains(full))
+                RefreshAncestorFolder(full);
+
             _ = _workspace.EnrichGitStatusAsync(Tree);   // live git badges
+            _ = RefreshGitAsync();                        // live source-control panel
         }
         catch { /* live-follow is best-effort — never disrupt the agent run */ }
+    }
+
+    private bool TreeContains(string fullPath)
+    {
+        bool Walk(FileTreeNode n)
+        {
+            if (string.Equals(n.FullPath, fullPath, StringComparison.OrdinalIgnoreCase)) return true;
+            foreach (var c in n.Children) if (Walk(c)) return true;
+            return false;
+        }
+        foreach (var r in Tree) if (Walk(r)) return true;
+        return false;
+    }
+
+    /// <summary>Re-populate the deepest already-loaded folder that should contain this path, so a
+    /// newly created file appears in the explorer without rebuilding (and collapsing) the whole tree.</summary>
+    private void RefreshAncestorFolder(string fullPath)
+    {
+        try
+        {
+            if (Tree.Count == 0) { _ = RefreshTreeAsync(); return; }
+
+            FileTreeNode? best = null;
+            void Walk(FileTreeNode n)
+            {
+                if (!n.IsDirectory) return;
+                if (!fullPath.StartsWith(n.FullPath, StringComparison.OrdinalIgnoreCase)) return;
+                if (best == null || n.FullPath.Length > best.FullPath.Length) best = n;
+                foreach (var c in n.Children) Walk(c);
+            }
+            foreach (var r in Tree) Walk(r);
+
+            if (best == null) { _ = RefreshTreeAsync(); return; }
+            _workspace.PopulateChildren(best);
+            best.IsExpanded = true;
+            _ = _workspace.EnrichGitStatusAsync(new[] { best });
+            OnPropertyChanged(nameof(ProjectFileCount));
+        }
+        catch { /* explorer refresh is best-effort */ }
     }
 
     /// <summary>
@@ -271,8 +434,9 @@ public class CodeEditorViewModel : ViewModelBase
             var tree = await Task.Run(() => _workspace.BuildTree());
             foreach (var n in tree) Tree.Add(n);
 
-            // Best-effort: tag with git status badges
+            // Best-effort: tag with git status badges + load the source-control panel
             _ = _workspace.EnrichGitStatusAsync(Tree);
+            _ = RefreshGitAsync();
 
             OnPropertyChanged(nameof(ProjectName));
             OnPropertyChanged(nameof(ProjectFileCount));
@@ -365,4 +529,20 @@ public class CodeEditorViewModel : ViewModelBase
         }
         StatusMessage = n == 0 ? "Nothing to save" : $"Saved {n} file(s)";
     }
+}
+
+/// <summary>One changed file in the source-control panel (from `git status --short`).</summary>
+public class GitChangeItem
+{
+    public string Status { get; set; } = "?";   // M / A / D / R / ?? …
+    public string Path { get; set; } = "";
+    public string FileName => System.IO.Path.GetFileName(Path);
+    /// <summary>VS Code-style status color: modified=amber, added/untracked=green, deleted=red.</summary>
+    public string StatusColor => Status switch
+    {
+        "A" or "??" => "#7EE0A3",
+        "D" => "#FF7A93",
+        "R" => "#8AB8FF",
+        _ => "#FFD37E",
+    };
 }

@@ -326,6 +326,9 @@ public class ChatViewModel : ViewModelBase
     public event Action? ScrollToBottom;
     /// <summary>Raised when ChatVM needs to be the active view (e.g. user clicked chat history from another page).</summary>
     public event Action? NavigateToChatRequested;
+    /// <summary>Raised when the workbench (Code Editor page) should come forward — after a project is
+    /// opened/cloned, so the user lands in the IDE view with the file tree loaded.</summary>
+    public event Action? NavigateToEditorRequested;
 
     public ChatViewModel(
         AiProviderManager providerManager,
@@ -1135,6 +1138,9 @@ public class ChatViewModel : ViewModelBase
             Content = $"\U0001F4C1 Opened project: {path}\nAgent mode enabled \u2014 I can now read, edit, create files and use Git in this project.",
         });
         ScrollToBottom?.Invoke();
+
+        // Land the user in the workbench: opening a project in an IDE should show the project.
+        NavigateToEditorRequested?.Invoke();
     }
 
     private async Task DetectGitInfoAsync()

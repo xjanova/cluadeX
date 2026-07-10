@@ -1583,6 +1583,7 @@ public class CodeAgentService
         bool postWriteReviewNudged = false;
         bool wrapUpForced = false;
         int failedEditAttempts = 0;              // edits/writes the model TRIED that all failed
+        string? lastEditFailPath = null;         // file of the last failed edit — lets recovery name the exact call
         int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
         bool lastEditFailNeededRead = false;     // last edit failed the read-before-edit guard (recoverable)
         string? forceToolNextStep = null;        // constrained-decoding override for the next turn (A3)
@@ -1946,13 +1947,20 @@ public class CodeAgentService
                         Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent });
                     nativeMessages.Add(fakeAssistant);
                     // read-before-edit failure is fully recoverable BY YOU — don't ask the user, just read+edit.
-                    string recover = lastEditFailNeededRead
+                    // Second block = the model already got a chance (and typically already read the file);
+                    // stop suggesting reads entirely and dictate the ONE call that finishes the job.
+                    string pathArg = lastEditFailPath != null ? $"'{lastEditFailPath}'" : "path";
+                    string recover = falseFinishGuards >= 2
+                        ? $"STOP — the file is STILL unchanged and you have already read it. Do NOT read again, do NOT "
+                          + $"explain, do NOT ask. Your NEXT message must be exactly ONE tool call: "
+                          + $"write_file({pathArg}, <the ENTIRE corrected file content — every line, including your change>)."
+                        : lastEditFailNeededRead
                         ? "STOP — you have NOT changed the file yet. Your edit failed because you must read the "
                           + "file FIRST. Do it yourself now — do NOT ask the user. Call read_file(path), then "
                           + "edit_file / multi_edit with the exact lines, then run_build to verify."
-                        : "STOP — you have NOT changed any file yet. Your edit failed (find-text did not match), so "
-                          + "the file is unchanged. Do NOT say you are done and do NOT ask the user. read_file(path) "
-                          + "to see the real content, then call write_file with the COMPLETE corrected file, then verify.";
+                        : $"STOP — you have NOT changed any file yet. Your edit failed, so the file is unchanged. "
+                          + $"Do NOT say you are done and do NOT ask the user. Call write_file({pathArg}, <the "
+                          + $"COMPLETE corrected file content>) now, then verify.";
                     nativeMessages.Add(new Services.Providers.NativeMessage
                     {
                         Role = "user",
@@ -2184,8 +2192,12 @@ public class CodeAgentService
             var failedEdits = toolResults.Where(r => !r.Success
                 && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit).ToList();
             failedEditAttempts += failedEdits.Count;
-            if (failedEdits.Count > 0) lastEditFailNeededRead =
-                (failedEdits[^1].Error ?? "").Contains("must read", StringComparison.OrdinalIgnoreCase);
+            if (failedEdits.Count > 0)
+            {
+                lastEditFailNeededRead =
+                    (failedEdits[^1].Error ?? "").Contains("must read", StringComparison.OrdinalIgnoreCase);
+                lastEditFailPath = failedEdits[^1].FilePath ?? lastEditFailPath;
+            }
 
             // After a successful write in a project with NO build system (html/docs/scripts), there is
             // no compiler oracle — teach the same review loop a strong assistant uses: read the file
