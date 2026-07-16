@@ -44,6 +44,7 @@ public partial class CodeEditorView : UserControl
                 Editor.Options.EnableHyperlinks = false;
                 Editor.Options.EnableEmailHyperlinks = false;
                 Editor.TextChanged += OnEditorTextChanged;
+                Minimap.Attach(Editor);
 
                 BindActiveTab(vm.ActiveTab);
             }
@@ -222,6 +223,23 @@ public partial class CodeEditorView : UserControl
             && DataContext is CodeEditorViewModel vm)
         {
             vm.CloseTabCommand.Execute(tab);
+            e.Handled = true;
+        }
+    }
+
+    // ── Embedded terminal ──
+
+    private void OnTerminalOutputChanged(object sender, TextChangedEventArgs e)
+    {
+        // Follow the tail like a real terminal.
+        TerminalOut.ScrollToEnd();
+    }
+
+    private void OnTerminalInputKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && DataContext is CodeEditorViewModel vm)
+        {
+            vm.RunTerminalCommand.Execute(null);
             e.Handled = true;
         }
     }

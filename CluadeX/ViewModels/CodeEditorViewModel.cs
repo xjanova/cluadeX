@@ -88,6 +88,7 @@ public class CodeEditorViewModel : ViewModelBase
     public ICommand CommitCommand { get; }
     public ICommand RefreshGitCommand { get; }
     public ICommand OpenChangeCommand { get; }
+    public ICommand ShowDiffCommand { get; }
 
     // ── Source control (real git state, not just save buttons) ──
     public ObservableCollection<GitChangeItem> GitChanges { get; } = new();
@@ -103,6 +104,58 @@ public class CodeEditorViewModel : ViewModelBase
     public bool IsCommitting { get => _isCommitting; set => SetProperty(ref _isCommitting, value); }
 
     public string GitChangeCount => GitChanges.Count == 0 ? "clean" : $"{GitChanges.Count} changed";
+
+    // ── Embedded terminal (real shell, not the old decorative strip) ──
+    private readonly EmbeddedTerminal _terminal = new();
+
+    private bool _isTerminalOpen;
+    public bool IsTerminalOpen
+    {
+        get => _isTerminalOpen;
+        set
+        {
+            if (!SetProperty(ref _isTerminalOpen, value)) return;
+            if (value && !_terminal.IsRunning && _workspace.HasWorkingDirectory)
+            {
+                AppendTerminal($"— PowerShell · {_workspace.WorkingDirectory} —");
+                _terminal.Start(_workspace.WorkingDirectory);
+            }
+        }
+    }
+
+    private string _terminalOutput = "";
+    public string TerminalOutput { get => _terminalOutput; private set => SetProperty(ref _terminalOutput, value); }
+
+    private string _terminalInput = "";
+    public string TerminalInput { get => _terminalInput; set => SetProperty(ref _terminalInput, value); }
+
+    public ICommand ToggleTerminalCommand => _toggleTerminalCommand ??= new RelayCommand(() => IsTerminalOpen = !IsTerminalOpen);
+    private ICommand? _toggleTerminalCommand;
+
+    public ICommand RunTerminalCommand => _runTerminalCommand ??= new RelayCommand(RunTerminalInput);
+    private ICommand? _runTerminalCommand;
+
+    private void RunTerminalInput()
+    {
+        string cmd = TerminalInput?.Trim() ?? "";
+        if (cmd.Length == 0) return;
+        AppendTerminal($"> {cmd}");
+        _terminal.Send(cmd);
+        TerminalInput = "";
+    }
+
+    private const int TerminalMaxChars = 200_000;
+    private void AppendTerminal(string line)
+    {
+        void Apply()
+        {
+            string next = _terminalOutput.Length == 0 ? line : _terminalOutput + "\n" + line;
+            if (next.Length > TerminalMaxChars) next = next[^TerminalMaxChars..];
+            TerminalOutput = next;
+        }
+        if (App.Current?.Dispatcher.CheckAccess() == true) Apply();
+        else App.Current?.Dispatcher.BeginInvoke(Apply);
+    }
 
     public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm, SettingsService settings, GitService git)
     {
@@ -126,6 +179,7 @@ public class CodeEditorViewModel : ViewModelBase
         CommitCommand = new AsyncRelayCommand(CommitAsync);
         RefreshGitCommand = new AsyncRelayCommand(RefreshGitAsync);
         OpenChangeCommand = new AsyncRelayCommand<GitChangeItem>(OpenChangeAsync);
+        ShowDiffCommand = new AsyncRelayCommand<GitChangeItem>(ShowDiffAsync);
 
         // Refresh tree when working directory changes via ChatVM
         ChatVM.PropertyChanged += (_, e) =>
@@ -133,22 +187,28 @@ public class CodeEditorViewModel : ViewModelBase
             if (e.PropertyName == nameof(ChatViewModel.WorkingDirectory))
             {
                 _ = RefreshTreeAsync();
+                if (_workspace.HasWorkingDirectory)
+                    _terminal.ChangeDirectory(_workspace.WorkingDirectory);
             }
         };
 
         // Live-follow: when the agent edits a file, open/refresh it in the editor and scroll to the change.
         ChatVM.FileMutatedByAgent += OnAgentFileMutated;
+
+        _terminal.OutputReceived += AppendTerminal;
+        _terminal.Exited += () => AppendTerminal("[terminal exited — next command restarts it]");
     }
 
     // ═══════════════ Source control ═══════════════
 
-    /// <summary>Reload branch + changed-file list from `git status --short --branch`.</summary>
+    /// <summary>Reload branch + changed-file list from `git status --short --branch` + local branches.</summary>
     public async Task RefreshGitAsync()
     {
         if (!_workspace.HasWorkingDirectory) { GitBranch = ""; GitChanges.Clear(); OnPropertyChanged(nameof(GitChangeCount)); return; }
         try
         {
             var r = await _git.StatusAsync();
+            var branches = await _git.ListBranchesAsync(includeRemote: false);
             App.Current?.Dispatcher.Invoke(() =>
             {
                 GitChanges.Clear();
@@ -175,6 +235,25 @@ public class CodeEditorViewModel : ViewModelBase
                     GitChanges.Add(new GitChangeItem { Status = string.IsNullOrEmpty(status) ? "?" : status, Path = path });
                 }
                 OnPropertyChanged(nameof(GitChangeCount));
+
+                // Local branches → switcher dropdown; keep the selection synced WITHOUT
+                // re-triggering a checkout.
+                _suppressBranchSwitch = true;
+                try
+                {
+                    GitBranches.Clear();
+                    if (branches.Success)
+                    {
+                        foreach (var bl in (branches.Output ?? "").Split('\n'))
+                        {
+                            string name = bl.TrimEnd('\r').TrimStart('*', '+', ' ').Trim();
+                            if (name.Length == 0 || name.Contains("HEAD")) continue;
+                            GitBranches.Add(name);
+                        }
+                    }
+                    SelectedBranch = GitBranch;
+                }
+                finally { _suppressBranchSwitch = false; }
             });
         }
         catch { /* git panel is best-effort */ }
@@ -229,6 +308,85 @@ public class CodeEditorViewModel : ViewModelBase
             ActiveTab = loaded;
         }
         catch { /* best-effort */ }
+    }
+
+    /// <summary>Show a changed file's diff (git diff; untracked = whole file as additions) in a
+    /// read-only-ish tab with Patch highlighting — the review step before committing.</summary>
+    private async Task ShowDiffAsync(GitChangeItem? item)
+    {
+        if (item == null || !_workspace.HasWorkingDirectory) return;
+        try
+        {
+            string diffText;
+            if (item.Status.StartsWith("?"))
+            {
+                // Untracked — git diff shows nothing; present the whole file as an addition.
+                string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, item.Path));
+                string body = File.Exists(full) ? await File.ReadAllTextAsync(full) : "";
+                var lines = body.Replace("\r\n", "\n").Split('\n');
+                diffText = $"--- /dev/null\n+++ b/{item.Path}\n@@ -0,0 +1,{lines.Length} @@\n"
+                         + string.Join("\n", lines.Select(l => "+" + l));
+            }
+            else
+            {
+                var r = await _git.DiffAsync(item.Path);
+                diffText = r.Success && !string.IsNullOrWhiteSpace(r.Output)
+                    ? r.Output
+                    : $"(no unstaged diff for {item.Path} — the change may already be staged)";
+            }
+
+            // Materialize as a real .diff file so the normal tab pipeline (and Patch highlighting) applies.
+            string tmpDir = Path.Combine(Path.GetTempPath(), "cluadex-diffs");
+            Directory.CreateDirectory(tmpDir);
+            string tmp = Path.Combine(tmpDir, item.FileName + ".diff");
+            await File.WriteAllTextAsync(tmp, diffText);
+
+            var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, tmp, StringComparison.OrdinalIgnoreCase));
+            if (existing != null) { existing.MarkOpened(diffText); ActiveTab = existing; return; }
+            var loaded = await _workspace.OpenFileAsync(tmp);
+            if (loaded == null) return;
+            Tabs.Add(loaded);
+            ActiveTab = loaded;
+        }
+        catch { /* diff view is best-effort */ }
+    }
+
+    // ── Branch switcher ──
+    public ObservableCollection<string> GitBranches { get; } = new();
+
+    private bool _suppressBranchSwitch;
+    private string? _selectedBranch;
+    public string? SelectedBranch
+    {
+        get => _selectedBranch;
+        set
+        {
+            if (!SetProperty(ref _selectedBranch, value)) return;
+            if (_suppressBranchSwitch || string.IsNullOrEmpty(value) || value == GitBranch) return;
+            _ = SwitchBranchAsync(value);
+        }
+    }
+
+    private async Task SwitchBranchAsync(string branch)
+    {
+        try
+        {
+            var r = await _git.CheckoutAsync(branch);
+            if (r.Success)
+            {
+                StatusMessage = $"✓ Switched to {branch}";
+                await RefreshTreeAsync();   // tree content may differ on the new branch (also reloads git)
+            }
+            else
+            {
+                string err = (r.Error ?? r.Output ?? "").Split('\n').FirstOrDefault() ?? "checkout failed";
+                StatusMessage = $"✗ {err}";
+                // Revert the dropdown to the real branch without re-triggering a checkout.
+                _suppressBranchSwitch = true;
+                try { SelectedBranch = GitBranch; } finally { _suppressBranchSwitch = false; }
+            }
+        }
+        catch (Exception ex) { StatusMessage = $"✗ checkout failed: {ex.Message}"; }
     }
 
     /// <summary>Raised when a live-followed edit lands — the View scrolls to / selects this 1-based line.</summary>

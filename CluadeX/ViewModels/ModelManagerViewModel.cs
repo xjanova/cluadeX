@@ -116,6 +116,18 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand AddModelDirectoryCommand { get; }
     public ICommand OpenUrlCommand { get; }
     public ICommand OpenModelFolderCommand { get; }
+    public ICommand ApplyFitCommand { get; }
+
+    /// <summary>One-click "Apply recommended settings": persist the card's suggested -ngl
+    /// (GpuLayerCount) so the next model load uses it — closes the old do-it-manually gap.</summary>
+    private void ApplyFit(RecommendedModel? model)
+    {
+        if (model == null) return;
+        _settingsService.UpdateSettings(s => s.GpuLayerCount = model.RecommendedGpuLayers);
+        ModelLoadStatus = model.RecommendedGpuLayers == -1
+            ? $"✓ Applied: all layers on GPU (-ngl auto) for {model.DisplayName}"
+            : $"✓ Applied: -ngl {model.RecommendedGpuLayers} for {model.DisplayName} — takes effect on next load";
+    }
 
     private List<RecommendedModel> _allRecommended = new();
 
@@ -147,6 +159,7 @@ public class ModelManagerViewModel : ViewModelBase
         AddModelDirectoryCommand = new RelayCommand(AddModelDirectory);
         OpenUrlCommand = new RelayCommand<string>(OpenUrl);
         OpenModelFolderCommand = new RelayCommand(OpenModelFolder);
+        ApplyFitCommand = new RelayCommand<RecommendedModel>(ApplyFit);
 
         // Populate model sources
         foreach (var source in HuggingFaceService.PopularSources)

@@ -204,7 +204,7 @@ public class GitService
     /// <summary>git diff (unstaged changes).</summary>
     public async Task<GitResult> DiffAsync(string path = "")
     {
-        string args = string.IsNullOrEmpty(path) ? "diff" : $"diff -- {path}";
+        string args = string.IsNullOrEmpty(path) ? "diff" : $"diff -- \"{path}\"";
         return await RunGitAsync(args);
     }
 
