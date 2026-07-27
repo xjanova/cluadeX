@@ -1167,8 +1167,15 @@ public class CodeEditorViewModel : ViewModelBase
     }
 
     /// <summary>Push a scan result into the results list + summary. Caps that actually bit are
-    /// stated — a silent truncation reads as "that's everything" when it isn't.</summary>
-    private void ApplyOutcome(SearchOutcome outcome)
+    /// stated — a silent truncation reads as "that's everything" when it isn't.
+    ///
+    /// Marshalled to the UI thread: WPF refuses collection changes from any other thread, and these
+    /// run after an await whose continuation is only guaranteed to be on the dispatcher when the
+    /// caller had a SynchronizationContext. A command invoked from the UI does; the MCP host driving
+    /// the workbench programmatically does not — and that difference used to be a hard crash.</summary>
+    private void ApplyOutcome(SearchOutcome outcome) => OnUi(() => ApplyOutcomeCore(outcome));
+
+    private void ApplyOutcomeCore(SearchOutcome outcome)
     {
         ResetResults();
         HasSearched = true;
@@ -1194,11 +1201,11 @@ public class CodeEditorViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasNoResults));
     }
 
-    private void ResetResults()
+    private void ResetResults() => OnUi(() =>
     {
         SearchResults.Clear();
         OnPropertyChanged(nameof(HasNoResults));
-    }
+    });
 
     /// <summary>Open the file a match lives in and select the matched text.</summary>
     private async Task OpenMatchAsync(SearchMatch? match)
@@ -1290,6 +1297,9 @@ public class CodeEditorViewModel : ViewModelBase
     }
 
     private void ShowLocations(List<CodeLocation> locations, WorkbenchSearchMode mode, string context)
+        => OnUi(() => ShowLocationsCore(locations, mode, context));
+
+    private void ShowLocationsCore(List<CodeLocation> locations, WorkbenchSearchMode mode, string context)
     {
         IsSearchPanelActive = true;
         SetSearchMode(mode);
