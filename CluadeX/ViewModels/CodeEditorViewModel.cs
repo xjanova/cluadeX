@@ -299,6 +299,25 @@ public class CodeEditorViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Open any file by absolute path in an editor tab (used by the command palette).</summary>
+    public async Task OpenPathAsync(string fullPath)
+    {
+        try
+        {
+            var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
+            if (existing != null) { ActiveTab = existing; return; }
+            var loaded = await _workspace.OpenFileAsync(fullPath);
+            if (loaded == null)
+            {
+                StatusMessage = $"Can't open {Path.GetFileName(fullPath)} (binary or too large)";
+                return;
+            }
+            Tabs.Add(loaded);
+            ActiveTab = loaded;
+        }
+        catch (Exception ex) { StatusMessage = $"Open failed: {ex.Message}"; }
+    }
+
     /// <summary>Open a changed file from the source-control list in an editor tab.</summary>
     private async Task OpenChangeAsync(GitChangeItem? item)
     {

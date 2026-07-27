@@ -1,6 +1,7 @@
-<UserControl x:Class="CluadeX.Views.ModelManagerView"
+﻿<UserControl x:Class="CluadeX.Views.ModelManagerView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:conv="clr-namespace:CluadeX.Converters"
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
@@ -94,24 +95,24 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="Model Manager" FontSize="24" FontWeight="Bold"
+                    <TextBlock Text="{services:Loc models.managerTitle}" FontSize="24" FontWeight="Bold"
                                Foreground="{StaticResource TextBrush}"
                                FontFamily="{StaticResource MainFont}"/>
-                    <TextBlock Text="Download, browse, and load AI models for local inference"
+                    <TextBlock Text="{services:Loc models.managerSubtitle}"
                                Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Content="&#xE838;" Style="{StaticResource IconButton}"
                             FontFamily="Segoe MDL2 Assets" FontSize="14"
                             Command="{Binding OpenModelFolderCommand}"
-                            ToolTip="Open model folder" Margin="0,0,4,0"/>
+                            ToolTip="{services:Loc models.openFolderTip}" Margin="0,0,4,0"/>
                     <Button Style="{StaticResource PrimaryButton}"
                             Command="{Binding BrowseAndLoadModelCommand}"
                             Padding="14,8">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xED25;" FontFamily="Segoe MDL2 Assets"
                                        FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="Load GGUF File" FontSize="12" FontWeight="SemiBold"/>
+                            <TextBlock Text="{services:Loc models.loadGgufFile}" FontSize="12" FontWeight="SemiBold"/>
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -131,7 +132,7 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="GPU Status" FontWeight="SemiBold" FontSize="14"
+                        <TextBlock Text="{services:Loc models.gpuStatus}" FontWeight="SemiBold" FontSize="14"
                                    Foreground="{StaticResource TextBrush}"/>
                         <TextBlock Text="{Binding GpuRecommendation}"
                                    Foreground="{StaticResource Subtext0Brush}"
@@ -156,7 +157,7 @@
                         <TextBlock Grid.Column="1" Text="{Binding DownloadStatus}"
                                    Foreground="{StaticResource TextBrush}" FontSize="13"
                                    VerticalAlignment="Center"/>
-                        <Button Grid.Column="2" Content="Cancel" Style="{StaticResource DangerButton}"
+                        <Button Grid.Column="2" Content="{services:Loc models.cancel}" Style="{StaticResource DangerButton}"
                                 Command="{Binding CancelDownloadCommand}" Padding="12,4" FontSize="12"/>
                     </Grid>
                     <ProgressBar Value="{Binding DownloadProgress}" Maximum="100"
@@ -194,13 +195,13 @@
             <Border BorderThickness="0,0,0,1" BorderBrush="{StaticResource Surface0Brush}"
                     Margin="0,16,0,0" Padding="0,0,0,0">
                 <StackPanel Orientation="Horizontal">
-                    <RadioButton Content="Recommended" Style="{StaticResource NavButton}" Tag="&#xE735;"
+                    <RadioButton Content="{services:Loc models.tabRecommended}" Style="{StaticResource NavButton}" Tag="&#xE735;"
                                  IsChecked="True" GroupName="ModelTabs" x:Name="RecommendedTab"/>
-                    <RadioButton Content="My Models" Style="{StaticResource NavButton}" Tag="&#xE8B7;"
+                    <RadioButton Content="{services:Loc models.tabMyModels}" Style="{StaticResource NavButton}" Tag="&#xE8B7;"
                                  GroupName="ModelTabs" x:Name="LocalTab"/>
-                    <RadioButton Content="Search HuggingFace" Style="{StaticResource NavButton}" Tag="&#xE721;"
+                    <RadioButton Content="{services:Loc models.tabSearchHf}" Style="{StaticResource NavButton}" Tag="&#xE721;"
                                  GroupName="ModelTabs" x:Name="SearchTab"/>
-                    <RadioButton Content="Where to Get Models" Style="{StaticResource NavButton}" Tag="&#xE774;"
+                    <RadioButton Content="{services:Loc models.tabWhereToGet}" Style="{StaticResource NavButton}" Tag="&#xE774;"
                                  GroupName="ModelTabs" x:Name="SourcesTab"/>
                 </StackPanel>
             </Border>
@@ -217,7 +218,7 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Popular Models for Your GPU" FontWeight="SemiBold"
+                    <TextBlock Text="{services:Loc models.popularForGpu}" FontWeight="SemiBold"
                                Foreground="{StaticResource TextBrush}" FontSize="15"
                                VerticalAlignment="Center"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
@@ -227,7 +228,7 @@
                             <StackPanel Orientation="Horizontal">
                                 <ToggleButton IsChecked="{Binding IsListView, Mode=OneWay}"
                                               Command="{Binding SwitchToListViewCommand}"
-                                              ToolTip="List view"
+                                              ToolTip="{services:Loc models.listView}"
                                               Padding="8,4" MinWidth="32"
                                               Background="Transparent" BorderThickness="0"
                                               Content="&#xE8FD;" FontFamily="Segoe MDL2 Assets" FontSize="12">
@@ -245,7 +246,7 @@
                                 </ToggleButton>
                                 <ToggleButton IsChecked="{Binding IsGridView, Mode=OneWay}"
                                               Command="{Binding SwitchToGridViewCommand}"
-                                              ToolTip="Grid view"
+                                              ToolTip="{services:Loc models.gridView}"
                                               Padding="8,4" MinWidth="32"
                                               Background="Transparent" BorderThickness="0"
                                               Content="&#xF0E2;" FontFamily="Segoe MDL2 Assets" FontSize="12">
@@ -263,7 +264,7 @@
                                 </ToggleButton>
                             </StackPanel>
                         </Border>
-                        <TextBlock Text="Category:" Foreground="{StaticResource Overlay0Brush}"
+                        <TextBlock Text="{services:Loc models.category}" Foreground="{StaticResource Overlay0Brush}"
                                    FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding Categories}"
                                   SelectedItem="{Binding SelectedCategory}"
@@ -428,7 +429,7 @@
                                                     <TextBlock Text="&#x2713;" FontSize="10" FontWeight="Bold"
                                                                Foreground="{StaticResource GreenBrush}"
                                                                VerticalAlignment="Center" Margin="0,0,3,0"/>
-                                                    <TextBlock Text="Installed" FontSize="10" FontWeight="SemiBold"
+                                                    <TextBlock Text="{services:Loc models.installed}" FontSize="10" FontWeight="SemiBold"
                                                                Foreground="{StaticResource GreenBrush}"/>
                                                 </StackPanel>
                                             </Border>
@@ -454,7 +455,7 @@
                                                         </ControlTemplate.Triggers>
                                                     </ControlTemplate>
                                                 </Button.Template>
-                                                <TextBlock Text="Apply fit" FontSize="10" FontWeight="SemiBold"
+                                                <TextBlock Text="{services:Loc models.applyFit}" FontSize="10" FontWeight="SemiBold"
                                                            Foreground="{StaticResource TealBrush}"/>
                                             </Button>
                                         </StackPanel>
@@ -466,8 +467,8 @@
                                             <TextBlock Text="{Binding StarDisplay}" FontSize="11"
                                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
                                             <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
-                                                <Run Text="VRAM: "/><Run Text="{Binding RequiredVramMB, StringFormat='{}{0:N0} MB'}"/>
-                                                <Run Text="  |  Size: "/>
+                                                <Run Text="{services:Loc models.vramLabel}"/><Run Text="{Binding RequiredVramMB, StringFormat='{}{0:N0} MB'}"/>
+                                                <Run Text="{services:Loc models.sizeLabel}"/>
                                                 <Run Text="{Binding ApproxSizeBytes, Converter={StaticResource FileSize}}"/>
                                             </TextBlock>
                                         </StackPanel>
@@ -477,16 +478,16 @@
                                                 FontFamily="Segoe MDL2 Assets" FontSize="13"
                                                 Command="{Binding DataContext.OpenUrlCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding Url}"
-                                                ToolTip="View on HuggingFace" Margin="0,0,6,0"/>
+                                                ToolTip="{services:Loc models.viewOnHf}" Margin="0,0,6,0"/>
                                         <!-- Load button (shown when installed) -->
-                                        <Button Content="Load"
+                                        <Button Content="{services:Loc models.load}"
                                                 Style="{StaticResource PrimaryButton}"
                                                 Command="{Binding DataContext.LoadModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding InstalledPath}"
                                                 Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}"
                                                 Padding="16,8"/>
                                         <!-- Download button (shown when NOT installed) -->
-                                        <Button Content="Download"
+                                        <Button Content="{services:Loc models.download}"
                                                 Style="{StaticResource SecondaryButton}"
                                                 Command="{Binding DataContext.DownloadRecommendedCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
@@ -512,7 +513,7 @@
                 </StackPanel>
 
                 <!-- Empty state for filtered -->
-                <TextBlock Text="No models match this category for your GPU VRAM."
+                <TextBlock Text="{services:Loc models.noMatchVram}"
                            Foreground="{StaticResource Overlay0Brush}" FontSize="13"
                            HorizontalAlignment="Center" Margin="0,20" FontStyle="Italic">
                     <TextBlock.Style>
@@ -538,22 +539,22 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="Downloaded Models" FontWeight="SemiBold"
+                    <TextBlock Text="{services:Loc models.downloadedModels}" FontWeight="SemiBold"
                                Foreground="{StaticResource TextBrush}" FontSize="15"
                                VerticalAlignment="Center"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <Button Style="{StaticResource SecondaryButton}"
                                 Command="{Binding AddModelDirectoryCommand}"
-                                Margin="0,0,6,0" Padding="10,6" ToolTip="Scan another folder for GGUF files">
+                                Margin="0,0,6,0" Padding="10,6" ToolTip="{services:Loc models.scanFolderTip}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets"
                                            FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                <TextBlock Text="Add Folder" FontSize="11"/>
+                                <TextBlock Text="{services:Loc models.addFolder}" FontSize="11"/>
                             </StackPanel>
                         </Button>
-                        <Button Content="Unload" Style="{StaticResource SecondaryButton}"
+                        <Button Content="{services:Loc models.unload}" Style="{StaticResource SecondaryButton}"
                                 Command="{Binding UnloadModelCommand}" Margin="0,0,6,0" Padding="12,6"/>
-                        <Button Content="Refresh" Style="{StaticResource SecondaryButton}"
+                        <Button Content="{services:Loc models.refresh}" Style="{StaticResource SecondaryButton}"
                                 Command="{Binding RefreshLocalModelsCommand}" Padding="12,6"/>
                     </StackPanel>
                 </Grid>
@@ -597,7 +598,7 @@
                                                    FontFamily="{StaticResource MonoFont}" Opacity="0.7"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <Button Content="Load" Style="{StaticResource PrimaryButton}"
+                                        <Button Content="{services:Loc models.load}" Style="{StaticResource PrimaryButton}"
                                                 Command="{Binding DataContext.LoadModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding LocalPath}"
                                                 Padding="14,8" Margin="0,0,6,0"/>
@@ -605,7 +606,7 @@
                                                 FontFamily="Segoe MDL2 Assets"
                                                 Command="{Binding DataContext.DeleteModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
-                                                Padding="10,8" ToolTip="Delete model"/>
+                                                Padding="10,8" ToolTip="{services:Loc models.deleteTip}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -629,7 +630,7 @@
                         <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="36"
                                    Foreground="{StaticResource Overlay0Brush}"
                                    HorizontalAlignment="Center" Margin="0,0,0,10"/>
-                        <TextBlock Text="No models found" Foreground="{StaticResource Subtext0Brush}"
+                        <TextBlock Text="{services:Loc models.noModelsFound}" Foreground="{StaticResource Subtext0Brush}"
                                    FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
                         <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="12"
                                    HorizontalAlignment="Center" Margin="0,4,0,12" TextAlignment="Center">
@@ -642,7 +643,7 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xED25;" FontFamily="Segoe MDL2 Assets"
                                                FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBlock Text="Browse for GGUF File" FontSize="12"/>
+                                    <TextBlock Text="{services:Loc models.browseGguf}" FontSize="12"/>
                                 </StackPanel>
                             </Button>
                             <Button Style="{StaticResource SecondaryButton}"
@@ -651,7 +652,7 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE8F4;" FontFamily="Segoe MDL2 Assets"
                                                FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                    <TextBlock Text="Add Model Folder" FontSize="12"/>
+                                    <TextBlock Text="{services:Loc models.addModelFolder}" FontSize="12"/>
                                 </StackPanel>
                             </Button>
                         </StackPanel>
@@ -664,7 +665,7 @@
             <!-- ═══════════════════════════════════════════════════════ -->
             <StackPanel Visibility="{Binding IsChecked, ElementName=SearchTab, Converter={StaticResource BoolVis}}"
                         Margin="0,16,0,0">
-                <TextBlock Text="Search HuggingFace for GGUF Models" FontWeight="SemiBold"
+                <TextBlock Text="{services:Loc models.searchHfTitle}" FontWeight="SemiBold"
                            Foreground="{StaticResource TextBrush}" FontSize="15" Margin="0,0,0,4"/>
                 <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="12" Margin="0,0,0,12">
                     Search for any model. Try: "codellama", "deepseek coder", "qwen", "mistral", "phi"
@@ -688,7 +689,7 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
                                        FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="Search" FontSize="12" FontWeight="SemiBold"/>
+                            <TextBlock Text="{services:Loc models.search}" FontSize="12" FontWeight="SemiBold"/>
                         </StackPanel>
                     </Button>
                 </Grid>
@@ -699,7 +700,7 @@
                     <TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="14"
                                Foreground="{StaticResource BlueBrush}" VerticalAlignment="Center"
                                Margin="0,0,8,0"/>
-                    <TextBlock Text="Searching HuggingFace..." Foreground="{StaticResource BlueBrush}"
+                    <TextBlock Text="{services:Loc models.searching}" Foreground="{StaticResource BlueBrush}"
                                FontSize="13"/>
                 </StackPanel>
 
@@ -742,7 +743,7 @@
                                                     <TextBlock Text="&#x2713;" FontSize="10" FontWeight="Bold"
                                                                Foreground="{StaticResource GreenBrush}"
                                                                VerticalAlignment="Center" Margin="0,0,3,0"/>
-                                                    <TextBlock Text="Installed" FontSize="10" FontWeight="SemiBold"
+                                                    <TextBlock Text="{services:Loc models.installed}" FontSize="10" FontWeight="SemiBold"
                                                                Foreground="{StaticResource GreenBrush}"/>
                                                 </StackPanel>
                                             </Border>
@@ -797,27 +798,27 @@
                                         <Button Style="{StaticResource IconButton}"
                                                 Command="{Binding DataContext.OpenUrlCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding HuggingFaceUrl}"
-                                                ToolTip="Open model card on HuggingFace"
+                                                ToolTip="{services:Loc models.openCardTip}"
                                                 Padding="6,4" Margin="0,0,6,0">
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets"
                                                            FontSize="11" VerticalAlignment="Center"
                                                            Foreground="{StaticResource BlueBrush}"
                                                            Margin="0,0,4,0"/>
-                                                <TextBlock Text="Read more" FontSize="11"
+                                                <TextBlock Text="{services:Loc models.readMore}" FontSize="11"
                                                            Foreground="{StaticResource BlueBrush}"
                                                            VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </Button>
                                         <!-- Load button (shown when installed) -->
-                                        <Button Content="Load"
+                                        <Button Content="{services:Loc models.load}"
                                                 Style="{StaticResource PrimaryButton}"
                                                 Command="{Binding DataContext.LoadModelCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding LocalPath}"
                                                 Visibility="{Binding IsDownloaded, Converter={StaticResource BoolVis}}"
                                                 Padding="14,8"/>
                                         <!-- Download button (shown when NOT installed) -->
-                                        <Button Content="Download"
+                                        <Button Content="{services:Loc models.download}"
                                                 Style="{StaticResource SecondaryButton}"
                                                 Command="{Binding DataContext.DownloadSearchResultCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
@@ -851,7 +852,7 @@
             <!-- ═══════════════════════════════════════════════════════ -->
             <StackPanel Visibility="{Binding IsChecked, ElementName=SourcesTab, Converter={StaticResource BoolVis}}"
                         Margin="0,16,0,0">
-                <TextBlock Text="Where to Get GGUF Models" FontWeight="SemiBold"
+                <TextBlock Text="{services:Loc models.whereToGetTitle}" FontWeight="SemiBold"
                            Foreground="{StaticResource TextBrush}" FontSize="15" Margin="0,0,0,4"/>
                 <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap">
                     GGUF is the standard format for local LLM inference. Download .gguf files and load them with the "Load GGUF File" button.
@@ -910,7 +911,7 @@
                 <!-- Tips Section -->
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
-                        <TextBlock Text="Tips for Choosing Models" FontWeight="SemiBold"
+                        <TextBlock Text="{services:Loc models.tipsTitle}" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextBrush}" FontSize="14" Margin="0,0,0,10"/>
 
                         <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"

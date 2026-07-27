@@ -18,6 +18,13 @@ public partial class MainWindow : Window
         StateChanged += OnStateChanged;
         Closing += OnClosing;
 
+        // Focus the palette box as soon as it opens — a palette you have to click into first
+        // is not a keyboard palette.
+        viewModel.Palette.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(CommandPaletteViewModel.IsOpen)) OnPaletteOpenChanged();
+        };
+
         // Version + commit + build time — visible in the custom title bar (VersionChip) AND the
         // taskbar Title, so "which build am I actually running?" is answerable at a glance.
         var asm = System.Reflection.Assembly.GetExecutingAssembly();
@@ -79,6 +86,49 @@ public partial class MainWindow : Window
     {
         _viewModel.BuddyService.Pet();
         e.Handled = true;
+    }
+
+    // ── Command palette (Ctrl+K) ──
+
+    /// <summary>Arrow keys move the highlight, Enter runs it, Esc closes.</summary>
+    private void PaletteBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        var palette = _viewModel.Palette;
+        switch (e.Key)
+        {
+            case Key.Down:
+                palette.MoveSelection(1);
+                PaletteList.ScrollIntoView(PaletteList.SelectedItem);
+                e.Handled = true;
+                break;
+            case Key.Up:
+                palette.MoveSelection(-1);
+                PaletteList.ScrollIntoView(PaletteList.SelectedItem);
+                e.Handled = true;
+                break;
+            case Key.Enter:
+                palette.RunSelected();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                palette.Close();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void PaletteList_Click(object sender, MouseButtonEventArgs e)
+        => _viewModel.Palette.RunSelected();
+
+    /// <summary>Put the caret in the palette box the moment it opens.</summary>
+    private void OnPaletteOpenChanged()
+    {
+        if (!_viewModel.Palette.IsOpen) return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            PaletteBox.Focus();
+            Keyboard.Focus(PaletteBox);
+        }), System.Windows.Threading.DispatcherPriority.Input);
     }
 
     private void OnStateChanged(object? sender, EventArgs e)

@@ -1,6 +1,7 @@
-<UserControl x:Class="CluadeX.Views.TaskManagerView"
+﻿<UserControl x:Class="CluadeX.Views.TaskManagerView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
@@ -57,13 +58,13 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="Task Manager" FontSize="24" FontWeight="Bold"
+                    <TextBlock Text="{services:Loc tasks.title}" FontSize="24" FontWeight="Bold"
                                Foreground="{StaticResource TextBrush}"
                                FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
-                    <TextBlock Text="Run and monitor system commands"
+                    <TextBlock Text="{services:Loc tasks.subtitle}"
                                Foreground="{StaticResource Subtext0Brush}" FontSize="13"/>
                 </StackPanel>
-                <Button Grid.Column="1" Content="Clear Completed"
+                <Button Grid.Column="1" Content="{services:Loc tasks.clearCompleted}"
                         Style="{StaticResource SecondaryButton}"
                         Command="{Binding ClearCompletedCommand}"
                         VerticalAlignment="Center"/>
@@ -115,7 +116,7 @@
                         </GridViewColumn>
 
                         <!-- Name Column -->
-                        <GridViewColumn Header="Name" Width="180">
+                        <GridViewColumn Header="{services:Loc tasks.colName}" Width="180">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}"
@@ -126,7 +127,7 @@
                         </GridViewColumn>
 
                         <!-- Status Column -->
-                        <GridViewColumn Header="Status" Width="110">
+                        <GridViewColumn Header="{services:Loc tasks.colStatus}" Width="110">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <Border Margin="4,2">
@@ -180,7 +181,7 @@
                         </GridViewColumn>
 
                         <!-- Command Column -->
-                        <GridViewColumn Header="Command" Width="300">
+                        <GridViewColumn Header="{services:Loc tasks.colCommand}" Width="300">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Command}" Foreground="{StaticResource Subtext0Brush}"
@@ -194,7 +195,7 @@
                         <GridViewColumn Header="" Width="80">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <Button Content="Stop"
+                                    <Button Content="{services:Loc tasks.stop}"
                                             Padding="8,3" FontSize="11"
                                             Command="{Binding DataContext.StopTaskCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
                                             CommandParameter="{Binding}">
@@ -247,7 +248,7 @@
                          Tag="Command to run..."
                          Margin="0,0,8,0"/>
 
-                <Button Grid.Column="2" Content="Start Task"
+                <Button Grid.Column="2" Content="{services:Loc tasks.start}"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding CreateTaskCommand}"
                         Padding="16,8"/>
@@ -268,7 +269,7 @@
                         CornerRadius="8,8,0,0">
                     <TextBlock FontFamily="{StaticResource MainFont}" FontSize="12"
                                Foreground="{StaticResource Subtext0Brush}">
-                        <Run Text="Output"/>
+                        <Run Text="{services:Loc tasks.output}"/>
                         <Run Text=" - "/>
                         <Run Text="{Binding SelectedTask.Name, FallbackValue='(select a task)', Mode=OneWay}"
                              Foreground="{StaticResource TealBrush}"/>

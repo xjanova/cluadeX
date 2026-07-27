@@ -1,6 +1,7 @@
-<UserControl x:Class="CluadeX.Views.SkillsView"
+﻿<UserControl x:Class="CluadeX.Views.SkillsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
              xmlns:m="clr-namespace:CluadeX.Models"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -65,7 +66,7 @@
                                     Background="#225CFFB0"
                                     BorderThickness="1" BorderBrush="{StaticResource NeonMintBrush}"
                                     Visibility="{Binding IsBuiltIn, Converter={StaticResource BoolVis}}">
-                                <TextBlock Text="built-in" FontSize="9"
+                                <TextBlock Text="{services:Loc skills.builtInBadge}" FontSize="9"
                                            FontFamily="{StaticResource NeonMonoFont}"
                                            Foreground="{StaticResource NeonMintBrush}"/>
                             </Border>
@@ -159,14 +160,14 @@
                     </Border>
 
                     <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="Skills" FontSize="20" FontWeight="Bold"
+                        <TextBlock Text="{services:Loc skills.title}" FontSize="20" FontWeight="Bold"
                                    Foreground="{StaticResource NeonInk0Brush}"/>
                         <TextBlock FontSize="11" Foreground="{StaticResource NeonInk2Brush}" Margin="0,2,0,0">
-                            <Run Text="Reusable slash-command prompts · "/>
+                            <Run Text="{services:Loc skills.subtitle}"/>
                             <Run Text="{Binding BuiltInCount, Mode=OneWay}"/>
-                            <Run Text=" built-in · "/>
+                            <Run Text="{services:Loc skills.builtInSuffix}"/>
                             <Run Text="{Binding CustomCount, Mode=OneWay}"/>
-                            <Run Text=" custom"/>
+                            <Run Text="{services:Loc skills.customSuffix}"/>
                         </TextBlock>
                     </StackPanel>
 
@@ -174,13 +175,13 @@
                         <Button Command="{Binding OpenUserSkillsFolderCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
-                                <TextBlock Text="Open skills folder"/>
+                                <TextBlock Text="{services:Loc skills.openFolder}"/>
                             </StackPanel>
                         </Button>
                         <Button Command="{Binding RefreshCommand}" Style="{StaticResource NeonAction}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
-                                <TextBlock Text="Refresh"/>
+                                <TextBlock Text="{services:Loc skills.refresh}"/>
                             </StackPanel>
                         </Button>
                     </StackPanel>
@@ -248,7 +249,7 @@
                                     BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
                                     Margin="0,0,0,12">
                                 <StackPanel>
-                                    <TextBlock Text="ALLOWED TOOLS" FontFamily="{StaticResource NeonMonoFont}"
+                                    <TextBlock Text="{services:Loc skills.allowedTools}" FontFamily="{StaticResource NeonMonoFont}"
                                                FontSize="9" FontWeight="Bold"
                                                Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,6"/>
                                     <TextBlock Text="{Binding SelectedToolsDisplay}"
@@ -266,10 +267,10 @@
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="INVOKE FROM CHAT" FontFamily="{StaticResource NeonMonoFont}"
+                                        <TextBlock Text="{services:Loc skills.invokeFromChat}" FontFamily="{StaticResource NeonMonoFont}"
                                                    FontSize="9" FontWeight="Bold"
                                                    Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
-                                        <Button Grid.Column="1" Content="📋 Copy"
+                                        <Button Grid.Column="1" Content="{services:Loc skills.copy}"
                                                 Command="{Binding CopyInvokeCommand}"
                                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                                 Padding="6,2" Foreground="{StaticResource NeonCyanBrush}" FontSize="10"/>
@@ -287,7 +288,7 @@
                                     Background="#7011152E"
                                     BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
                                 <StackPanel>
-                                    <TextBlock Text="PROMPT BODY" FontFamily="{StaticResource NeonMonoFont}"
+                                    <TextBlock Text="{services:Loc skills.promptBody}" FontFamily="{StaticResource NeonMonoFont}"
                                                FontSize="9" FontWeight="Bold"
                                                Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,8"/>
                                     <TextBox Text="{Binding Selected.PromptContent, Mode=OneWay}"

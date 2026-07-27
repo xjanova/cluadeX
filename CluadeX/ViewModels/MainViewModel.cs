@@ -9,6 +9,7 @@ namespace CluadeX.ViewModels;
 public class MainViewModel : ViewModelBase
 {
     private readonly SettingsService _settingsService;
+    private readonly AgentToolService _agentToolService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;
     private readonly BuddyService _buddyService;
@@ -186,6 +187,80 @@ public class MainViewModel : ViewModelBase
     public HexEditorViewModel HexEditorVM { get; }
 
     public ICommand NavigateToCommand { get; }
+
+    // ── Command palette (Ctrl+K) ──
+    public CommandPaletteViewModel Palette { get; private set; } = null!;
+    public ICommand OpenPaletteCommand { get; private set; } = null!;
+    public ICommand TogglePaletteCommand { get; private set; } = null!;
+    public ICommand ClosePaletteCommand { get; private set; } = null!;
+    public ICommand RunPaletteItemCommand { get; private set; } = null!;
+
+    /// <summary>Everything the palette can jump to: pages, skills, and project files.</summary>
+    private IEnumerable<PaletteItem> BuildPaletteItems()
+    {
+        var items = new List<PaletteItem>();
+
+        // Pages — the same targets NavigateTo understands.
+        (string Target, string Title, string Glyph)[] pages =
+        {
+            ("Chat", "Chat", ""), ("Code", "Code Editor", ""),
+            ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
+            ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
+            ("McpServers", "MCP Servers", ""), ("Tasks", "Tasks", ""),
+            ("Permissions", "Permissions", ""), ("Features", "Features", ""),
+            ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
+            ("Instincts", "Instincts", ""), ("DebugLog", "Debug Log", ""),
+            ("SecurityShield", "SecurityShield", ""), ("HookLibrary", "Hook Library", ""),
+            ("Settings", "Settings", ""),
+        };
+        foreach (var (target, title, glyph) in pages)
+        {
+            string t = target;
+            items.Add(new PaletteItem
+            {
+                Icon = glyph, Title = title, Subtitle = "Go to page", Kind = "Page",
+                KindColor = "#4CDFFF",
+                Haystack = (title + " page " + target).ToLowerInvariant(),
+                Run = () => NavigateTo(t),
+            });
+        }
+
+        // Skills — running one drops its slash command into the chat box.
+        try
+        {
+            foreach (var (name, desc) in _agentToolService.GetAvailableSkillNames())
+            {
+                string n = name;
+                items.Add(new PaletteItem
+                {
+                    Icon = "", Title = "/" + name, Subtitle = desc, Kind = "Skill",
+                    KindColor = "#A672FF",
+                    Haystack = (name + " " + desc).ToLowerInvariant(),
+                    Run = () =>
+                    {
+                        NavigateTo("Chat");
+                        ChatVM.UserInput = "/" + n + " ";
+                    },
+                });
+            }
+        }
+        catch { /* skills are optional */ }
+
+        // Project files — open in the editor.
+        try
+        {
+            items.AddRange(CommandPaletteViewModel.BuildFileItems(
+                ChatVM.WorkingDirectory,
+                path =>
+                {
+                    NavigateTo("Code");
+                    _ = CodeEditorVM.OpenPathAsync(path);
+                }));
+        }
+        catch { /* no project open */ }
+
+        return items;
+    }
     public ICommand PetBuddyCommand { get; }
     public ICommand InstallUpdateCommand { get; }
     public ICommand DismissUpdateCommand { get; }
@@ -238,6 +313,7 @@ public class MainViewModel : ViewModelBase
 
         // When the AI agent invokes hex_open, switch the active page to the
         // Hex Editor so the user can see the file the agent is working on.
+        _agentToolService = agentToolService;
         agentToolService.OnHexEditorRequested += _ =>
             App.Current?.Dispatcher.Invoke(() => NavigateTo("HexEditor"));
         _settingsService = settingsService;
@@ -265,6 +341,19 @@ public class MainViewModel : ViewModelBase
         };
 
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
+
+        // Real Ctrl+K command palette. The title-bar pill used to be cosmetic — it advertised
+        // "Search files, symbols & commands…" and just opened Settings.
+        Palette = new CommandPaletteViewModel(BuildPaletteItems);
+        OpenPaletteCommand = new RelayCommand(() => Palette.Open());
+        TogglePaletteCommand = new RelayCommand(() => Palette.Toggle());
+        ClosePaletteCommand = new RelayCommand(() => Palette.Close());
+        RunPaletteItemCommand = new RelayCommand<PaletteItem>(item =>
+        {
+            if (item == null) return;
+            Palette.Close();
+            try { item.Run(); } catch (Exception ex) { CommandErrorSink.Report("CommandPalette", ex); }
+        });
         PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
         DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);

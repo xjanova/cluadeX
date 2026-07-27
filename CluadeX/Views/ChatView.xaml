@@ -132,24 +132,24 @@
                               IsChecked="{Binding AgenticMode}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
-                              ToolTip="Enable agentic mode (file access, commands, Git)"/>
-                    <CheckBox Content="Auto" Margin="4,0"
+                              ToolTip="{services:Loc chat.agentTip}"/>
+                    <CheckBox Content="{services:Loc chat.auto}" Margin="4,0"
                               IsChecked="{Binding AutonomousMode}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
-                              ToolTip="Autonomous mode: implement → run the project's tests → fix → loop until green, then review for hidden bugs. Set iteration counts in Settings."/>
-                    <CheckBox Content="Thinking" Margin="4,0"
+                              ToolTip="{services:Loc chat.autoTip}"/>
+                    <CheckBox Content="{services:Loc chat.thinkingToggle}" Margin="4,0"
                               IsChecked="{Binding ShowThinking}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
-                              ToolTip="Show AI thinking/reasoning steps in real-time"/>
+                              ToolTip="{services:Loc chat.thinkingTip}"/>
                 </StackPanel>
 
                 <Button Grid.Column="4" Content="&#xE711;"
                         FontFamily="Segoe MDL2 Assets"
                         Style="{StaticResource IconButton}"
                         Command="{Binding CloseFolderCommand}"
-                        ToolTip="Close project folder"
+                        ToolTip="{services:Loc chat.closeProjectTip}"
                         FontSize="11" Padding="6,4"/>
             </Grid>
         </Border>
@@ -186,7 +186,7 @@
                 <Button Grid.Column="3" Content="&#xE711;" FontFamily="Segoe MDL2 Assets"
                         Style="{StaticResource IconButton}" FontSize="10" Padding="4,4"
                         Command="{Binding CloseChatSearchCommand}"
-                        ToolTip="Close search (Esc)"/>
+                        ToolTip="{services:Loc chat.closeSearchTip}"/>
             </Grid>
         </Border>
 
@@ -251,7 +251,7 @@
                                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets"
                                                        FontSize="10" Foreground="{StaticResource MauveBrush}"
                                                        VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="Thinking" FontSize="11" FontStyle="Italic"
+                                            <TextBlock Text="{services:Loc chat.thinkingToggle}" FontSize="11" FontStyle="Italic"
                                                        Foreground="{StaticResource MauveBrush}"
                                                        VerticalAlignment="Center"/>
                                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="8"
@@ -353,11 +353,11 @@
                                         </Border>
 
                                         <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
-                                            <Button Content="Allow" Padding="16,4" Margin="0,0,8,0"
+                                            <Button Content="{services:Loc chat.allow}" Padding="16,4" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionAllow_Click"/>
-                                            <Button Content="Deny" Padding="16,4"
+                                            <Button Content="{services:Loc chat.deny}" Padding="16,4"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionDeny_Click"/>
@@ -559,7 +559,7 @@
                                                 <Border CornerRadius="4" Padding="4,1" Margin="6,0,0,0"
                                                         Background="#30F38BA8"
                                                         Visibility="{Binding IsInterrupted, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                    <TextBlock Text="interrupted" FontSize="9"
+                                                    <TextBlock Text="{services:Loc chat.interrupted}" FontSize="9"
                                                                Foreground="{StaticResource RedBrush}"
                                                                FontFamily="{StaticResource MonoFont}"/>
                                                 </Border>
@@ -581,14 +581,14 @@
                                                 <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
                                                         Style="{StaticResource IconButton}"
                                                         FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="Copy message"
+                                                        ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
                                                 <!-- Retry (only for error messages) -->
                                                 <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
                                                         Style="{StaticResource IconButton}"
                                                         FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="Retry"
+                                                        ToolTip="{services:Loc chat.retryTip}"
                                                         Click="RetryMessage_Click"
                                                         Visibility="{Binding HasError, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                             </StackPanel>
@@ -650,7 +650,7 @@
                                                      Style="{StaticResource PulseDot}"/>
                                             <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}"
                                                      Style="{StaticResource PulseDot}"/>
-                                            <TextBlock Text="  Thinking..."
+                                            <TextBlock Text="{services:Loc chat.thinkingInline}"
                                                        Foreground="{StaticResource Subtext0Brush}"
                                                        FontSize="11" FontStyle="Italic"
                                                        FontFamily="{StaticResource MainFont}"
@@ -668,7 +668,7 @@
                                                 <StackPanel Orientation="Horizontal" Margin="10,2,10,4">
                                                     <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="10"
                                                                Foreground="{StaticResource Overlay0Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                    <TextBlock Text="Changes" FontSize="10" Foreground="{StaticResource Overlay0Brush}"
+                                                    <TextBlock Text="{services:Loc chat.changes}" FontSize="10" Foreground="{StaticResource Overlay0Brush}"
                                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
                                                     <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
                                                                Foreground="{StaticResource Subtext0Brush}" VerticalAlignment="Center"/>
@@ -712,10 +712,10 @@
                                         <Expander IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
                                                 <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
-                                                    <Run Text="Show output"/>
+                                                    <Run Text="{services:Loc chat.showOutput}"/>
                                                     <Run Text=" ("/>
                                                     <Run Text="{Binding ToolOutputLines, Mode=OneWay}"/>
-                                                    <Run Text=" lines)"/>
+                                                    <Run Text="{services:Loc chat.linesSuffix}"/>
                                                 </TextBlock>
                                             </Expander.Header>
                                             <Border Background="{StaticResource Surface0Brush}"
@@ -749,7 +749,7 @@
                                             <TextBlock FontSize="10" Foreground="{StaticResource RedBrush}"
                                                        FontFamily="{StaticResource MainFont}">
                                                 <Run Text="&#xE783;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
-                                                <Run Text=" An error occurred. Hover for retry button."/>
+                                                <Run Text="{services:Loc chat.errorHover}"/>
                                             </TextBlock>
                                         </Border>
 
@@ -784,12 +784,12 @@
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
             <TextBlock Text="&#x2728;" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
-            <TextBlock Text="CluadeX AI Coding Assistant"
+            <TextBlock Text="{services:Loc chat.welcomeTitle}"
                        Foreground="{StaticResource TextBrush}"
                        FontSize="24" FontWeight="Bold"
                        FontFamily="{StaticResource MainFont}"
                        HorizontalAlignment="Center"/>
-            <TextBlock Text="Ask me to write, debug, or explain any code."
+            <TextBlock Text="{services:Loc chat.welcomeSubtitle}"
                        Foreground="{StaticResource Subtext0Brush}"
                        FontSize="14" HorizontalAlignment="Center"
                        Margin="0,8,0,0"/>
@@ -802,7 +802,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource MauveBrush}"/>
-                        <TextBlock Text="Explain codebase" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestExplain}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -811,7 +811,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource RedBrush}"/>
-                        <TextBlock Text="Find bugs" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestBugs}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -820,7 +820,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8A0;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource GreenBrush}"/>
-                        <TextBlock Text="Write tests" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestTests}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -829,7 +829,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource TealBrush}"/>
-                        <TextBlock Text="Code review" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestReview}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
             </WrapPanel>
@@ -842,7 +842,7 @@
                         <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="16" VerticalAlignment="Center"
                                    Margin="0,0,8,0"/>
-                        <TextBlock Text="Open Project Folder" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{StaticResource MainFont}"
                                    FontSize="13" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -853,12 +853,12 @@
                         <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="16" VerticalAlignment="Center"
                                    Margin="0,0,8,0" Foreground="{StaticResource MauveBrush}"/>
-                        <TextBlock Text="Connect GitHub repo" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.connectRepo}" FontFamily="{StaticResource MainFont}"
                                    FontSize="13" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
             </StackPanel>
-            <TextBlock Text="Open a folder or clone a repo to enable agent mode (file access, editing, Git)"
+            <TextBlock Text="{services:Loc chat.openHint}"
                        Foreground="{StaticResource Overlay0Brush}"
                        FontSize="11" HorizontalAlignment="Center"
                        Margin="0,6,0,0"/>
@@ -900,7 +900,7 @@
                     <Button Content="&#xE838;" Style="{StaticResource IconButton}"
                             Command="{Binding OpenFolderCommand}"
                             FontFamily="Segoe MDL2 Assets"
-                            ToolTip="Open project folder"
+                            ToolTip="{services:Loc chat.openProjectTip}"
                             Margin="0,0,4,0"/>
 
                     <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
@@ -920,7 +920,7 @@
                     <Button Content="&#xE74D;" Style="{StaticResource IconButton}"
                             Command="{Binding ClearChatCommand}"
                             FontFamily="Segoe MDL2 Assets"
-                            ToolTip="Clear chat"/>
+                            ToolTip="{services:Loc chat.clearChatTip}"/>
                 </StackPanel>
             </Grid>
         </Border>
@@ -1018,7 +1018,7 @@
                 <Button Grid.Column="2" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
                         Command="{Binding AcceptCompactionToastCommand}"
                         Background="#A672FF" BorderThickness="0" Foreground="White"
-                        ToolTip="Compact the conversation now">
+                        ToolTip="{services:Loc chat.compactNowTip}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="bd" Background="{TemplateBinding Background}"
@@ -1035,7 +1035,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                    Margin="0,0,6,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="Compact now" FontSize="11" FontWeight="SemiBold"/>
+                        <TextBlock Text="{services:Loc chat.compactNow}" FontSize="11" FontWeight="SemiBold"/>
                     </StackPanel>
                 </Button>
 
@@ -1045,7 +1045,7 @@
                         Background="Transparent"
                         BorderBrush="{StaticResource Surface2Brush}" BorderThickness="1"
                         Foreground="{StaticResource Subtext0Brush}"
-                        ToolTip="Don't ask for 10 more turns">
+                        ToolTip="{services:Loc chat.snoozeTip}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="bd" Background="{TemplateBinding Background}"
@@ -1064,7 +1064,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xEC92;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                    Margin="0,0,6,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="Snooze 10 turns" FontSize="11"/>
+                        <TextBlock Text="{services:Loc chat.snooze}" FontSize="11"/>
                     </StackPanel>
                 </Button>
 
@@ -1072,7 +1072,7 @@
                 <Button Grid.Column="4" Width="28" Height="28" Cursor="Hand"
                         Command="{Binding DismissCompactionToastCommand}"
                         Background="Transparent" BorderThickness="0"
-                        ToolTip="Dismiss">
+                        ToolTip="{services:Loc chat.dismissTip}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="bd" Background="Transparent" CornerRadius="14">
@@ -1146,11 +1146,11 @@
                 <Button Grid.Column="2" Padding="8,3" Margin="4,0"
                         Style="{StaticResource SecondaryButton}"
                         Command="{Binding CompactCommand}"
-                        ToolTip="Compress conversation to free up context">
+                        ToolTip="{services:Loc chat.compactTip}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Compact" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.compact}" FontFamily="{StaticResource MainFont}"
                                    FontSize="10" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -1159,11 +1159,11 @@
                 <Button Grid.Column="3" Padding="10,4" Margin="4,0,0,0"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding NewSessionCommand}"
-                        ToolTip="Start a new chat to reset context">
+                        ToolTip="{services:Loc chat.newChatTip}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                        <TextBlock Text="New Chat" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.newChat}" FontFamily="{StaticResource MainFont}"
                                    FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -1192,7 +1192,7 @@
                               SelectedItem="{Binding SelectedLocalModel}"
                               Style="{StaticResource ModernComboBox}"
                               Width="220" FontSize="11"
-                              ToolTip="Select a local model to load">
+                              ToolTip="{services:Loc chat.selectModelTip}">
                         <ComboBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
@@ -1213,9 +1213,9 @@
                     <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
                             Style="{StaticResource IconButton}"
                             Command="{Binding RefreshModelsCommand}"
-                            ToolTip="Refresh model list"
+                            ToolTip="{services:Loc chat.refreshModelsTip}"
                             FontSize="10" Padding="4,4" Margin="2,0,0,0"/>
-                    <TextBlock Text="Loading..."
+                    <TextBlock Text="{services:Loc chat.loading}"
                                Foreground="{StaticResource YellowBrush}"
                                FontSize="10" FontWeight="SemiBold"
                                VerticalAlignment="Center" Margin="6,0,0,0"
@@ -1261,7 +1261,7 @@
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
-                        <TextBlock Text="Generating..."
+                        <TextBlock Text="{services:Loc chat.generating}"
                                    Foreground="{StaticResource MauveBrush}"
                                    FontSize="11" FontWeight="SemiBold"
                                    VerticalAlignment="Center">
@@ -1293,7 +1293,7 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0"
                             VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
-                                ToolTip="Context Memory — AI quality degrades as this fills up">
+                                ToolTip="{services:Loc chat.ctxTip}">
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
                             <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=0}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
@@ -1332,43 +1332,43 @@
                            Foreground="{StaticResource Overlay0Brush}"
                            FontSize="9" FontFamily="{StaticResource MonoFont}"
                            VerticalAlignment="Center" Margin="6,0"
-                           ToolTip="Last turn: tokens · time · speed"/>
+                           ToolTip="{services:Loc chat.lastTurnTip}"/>
 
                 <!-- API Cost -->
                 <TextBlock Grid.Column="3" Text="{Binding CostText}"
                            Foreground="{StaticResource MauveBrush}"
                            FontSize="9" FontFamily="{StaticResource MonoFont}"
                            VerticalAlignment="Center" Margin="6,0"
-                           ToolTip="Session API cost (USD)"/>
+                           ToolTip="{services:Loc chat.costTip}"/>
 
                 <!-- Review + Auto-Execute -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource IconButton}"
                             Command="{Binding ReviewCodeCommand}"
-                            ToolTip="Review code changes"
+                            ToolTip="{services:Loc chat.reviewTip}"
                             FontSize="10" Padding="4,3" Margin="0,0,4,0"
                             Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
                     </Button>
-                    <CheckBox Content="Auto" IsChecked="{Binding AutoExecute}"
+                    <CheckBox Content="{services:Loc chat.auto}" IsChecked="{Binding AutoExecute}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center"
-                              ToolTip="Automatically run code blocks and fix errors"/>
+                              ToolTip="{services:Loc chat.autoRunTip}"/>
                     <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
                               Foreground="{StaticResource MauveBrush}"
                               FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="Extended Thinking — enables deeper reasoning (Anthropic only)">
+                              ToolTip="{services:Loc chat.extendedThinkingTip}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="10"
                                        VerticalAlignment="Center" Margin="0,0,3,0"/>
-                            <TextBlock Text="Think" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc chat.think}" VerticalAlignment="Center"/>
                         </StackPanel>
                     </CheckBox>
                 </StackPanel>
 
                 <Button Grid.Column="5" Style="{StaticResource IconButton}"
                         Command="{Binding NewSessionCommand}"
-                        ToolTip="New Chat"
+                        ToolTip="{services:Loc chat.newChat}"
                         FontSize="12" Padding="6,4" Margin="4,0">
                     <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
                 </Button>

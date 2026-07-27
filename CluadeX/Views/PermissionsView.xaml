@@ -1,6 +1,7 @@
-<UserControl x:Class="CluadeX.Views.PermissionsView"
+﻿<UserControl x:Class="CluadeX.Views.PermissionsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
@@ -80,14 +81,14 @@
         <StackPanel Margin="24,16,24,24" MaxWidth="700">
 
             <!-- Page Title -->
-            <TextBlock Text="Permissions" FontSize="24" FontWeight="Bold"
+            <TextBlock Text="{services:Loc perms.title}" FontSize="24" FontWeight="Bold"
                        Foreground="{StaticResource TextBrush}"
                        FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
-            <TextBlock Text="Control what CluadeX is allowed to access. Rules are evaluated top-down, first match wins."
+            <TextBlock Text="{services:Loc perms.subtitle}"
                        Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,0,0,8"/>
 
             <!-- ═══════ RULES LIST ═══════ -->
-            <TextBlock Text="Active Rules" Style="{StaticResource SectionTitle}" Margin="0,4,0,12"/>
+            <TextBlock Text="{services:Loc perms.activeRules}" Style="{StaticResource SectionTitle}" Margin="0,4,0,12"/>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
                     <ListBox ItemsSource="{Binding Rules}"
@@ -171,7 +172,7 @@
                     </ListBox>
 
                     <!-- Empty state -->
-                    <TextBlock Text="No rules defined. All actions will prompt for confirmation."
+                    <TextBlock Text="{services:Loc perms.noRules}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="12"
                                Margin="4,8,0,4" FontStyle="Italic">
                         <TextBlock.Style>
@@ -187,26 +188,26 @@
                     </TextBlock>
 
                     <!-- Remove button -->
-                    <Button Content="Remove Selected Rule" Style="{StaticResource SecondaryButton}"
+                    <Button Content="{services:Loc perms.removeSelected}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding RemoveRuleCommand}"
                             HorizontalAlignment="Left" Margin="0,12,0,0"/>
                 </StackPanel>
             </Border>
 
             <!-- ═══════ ADD RULE ═══════ -->
-            <TextBlock Text="Add Rule" Style="{StaticResource SectionTitle}"/>
+            <TextBlock Text="{services:Loc perms.addRule}" Style="{StaticResource SectionTitle}"/>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
                     <!-- Pattern -->
-                    <TextBlock Text="Pattern" Style="{StaticResource SettingLabel}"/>
-                    <TextBlock Text="Glob pattern to match resources. Use * as wildcard (e.g. *.exe, /home/user/*, https://*.example.com/*)"
+                    <TextBlock Text="{services:Loc perms.pattern}" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="{services:Loc perms.patternDesc}"
                                Style="{StaticResource SettingDesc}"/>
                     <TextBox Text="{Binding NewPattern, UpdateSourceTrigger=PropertyChanged}"
                              Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
 
                     <!-- Scope -->
-                    <TextBlock Text="Scope" Style="{StaticResource SettingLabel}"/>
-                    <TextBlock Text="What type of access this rule applies to"
+                    <TextBlock Text="{services:Loc perms.scope}" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="{services:Loc perms.scopeDesc}"
                                Style="{StaticResource SettingDesc}"/>
                     <ComboBox ItemsSource="{Binding ScopeOptions}"
                               SelectedItem="{Binding NewScope}"
@@ -215,9 +216,9 @@
 
                     <!-- Action buttons -->
                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                        <Button Content="Add as Allow" Style="{StaticResource PrimaryButton}"
+                        <Button Content="{services:Loc perms.addAllow}" Style="{StaticResource PrimaryButton}"
                                 Command="{Binding AddAllowCommand}" Margin="0,0,12,0"/>
-                        <Button Content="Add as Deny" Style="{StaticResource SecondaryButton}"
+                        <Button Content="{services:Loc perms.addDeny}" Style="{StaticResource SecondaryButton}"
                                 Command="{Binding AddDenyCommand}"/>
                     </StackPanel>
                 </StackPanel>
@@ -225,9 +226,9 @@
 
             <!-- ═══════ ACTIONS ═══════ -->
             <StackPanel Orientation="Horizontal" Margin="0,20,0,24">
-                <Button Content="Save" Style="{StaticResource PrimaryButton}"
+                <Button Content="{services:Loc perms.save}" Style="{StaticResource PrimaryButton}"
                         Command="{Binding SaveCommand}" Margin="0,0,12,0"/>
-                <Button Content="Refresh" Style="{StaticResource SecondaryButton}"
+                <Button Content="{services:Loc perms.refresh}" Style="{StaticResource SecondaryButton}"
                         Command="{Binding RefreshCommand}"/>
             </StackPanel>
 
