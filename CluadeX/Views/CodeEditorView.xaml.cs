@@ -5,6 +5,7 @@ using System.Windows.Media;
 using CluadeX.Models;
 using CluadeX.ViewModels;
 using CluadeX.Views.Editor;
+using ICSharpCode.AvalonEdit.CodeCompletion;
 using ICSharpCode.AvalonEdit.Rendering;
 
 namespace CluadeX.Views;
@@ -18,6 +19,8 @@ public partial class CodeEditorView : UserControl
     private string _lastSynced = "";
     private bool _suppressSync;
     private bool _hooked;
+    private CompletionWindow? _completionWindow;
+    private int _completionRequest;
 
     public CodeEditorView()
     {
@@ -34,7 +37,16 @@ public partial class CodeEditorView : UserControl
                 _vm = vm;
                 vm.ScrollToLineRequested += OnScrollToLine;
                 vm.AgentEditFlashRequested += OnAgentEditFlash;
+                vm.SelectRangeRequested += OnSelectRange;
+                vm.SearchFocusRequested += () => FocusBox(SearchBox, selectAll: true);
+                vm.RenameFocusRequested += () => FocusBox(RenameBox, selectAll: true);
                 vm.PropertyChanged += OnVmPropertyChanged;
+
+                // Code navigation lives on the editor's own key handler so it can read the caret.
+                Editor.PreviewKeyDown += OnEditorPreviewKeyDown;
+                // TextEntered fires only for real keyboard input, never for the agent's programmatic
+                // Document.Replace — so the popup can't gatecrash a live-typing reveal.
+                Editor.TextArea.TextEntered += OnTextEntered;
 
                 // Editor chrome XAML can't reach (TextArea exists only at runtime)
                 Editor.TextArea.Caret.CaretBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0xDF, 0xFF));
@@ -252,6 +264,214 @@ public partial class CodeEditorView : UserControl
             vm.RunTerminalCommand.Execute(null);
             e.Handled = true;
         }
+    }
+
+    // ── Search panel + code navigation ──
+
+    /// <summary>The symbol the navigation commands act on: the selection if there is one, else the
+    /// word under the caret (so F12 works from "put the cursor in the name and press it").</summary>
+    private string SymbolAtCaret()
+    {
+        string selected = Editor.SelectedText;
+        if (!string.IsNullOrWhiteSpace(selected) && selected.Length <= 200 && !selected.Contains('\n'))
+            return selected.Trim();
+        return CluadeX.Services.CodeIntelligenceService.WordAt(Editor.Text, Editor.CaretOffset);
+    }
+
+    private async void OnEditorPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (DataContext is not CodeEditorViewModel vm) return;
+
+        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+        try
+        {
+            // Shift+F12 = find references, F12 = go to definition.
+            if (e.Key == Key.F12 && !ctrl)
+            {
+                e.Handled = true;
+                string symbol = SymbolAtCaret();
+                if (shift) await vm.FindReferencesAsync(symbol);
+                else
+                    await vm.GoToDefinitionAsync(symbol, _boundTab?.FullPath,
+                        Editor.TextArea.Caret.Line - 1, Editor.TextArea.Caret.Column - 1);
+            }
+            else if (e.Key == Key.F2 && !ctrl && !shift)
+            {
+                e.Handled = true;
+                vm.BeginRename(SymbolAtCaret());
+            }
+            else if (e.Key == Key.Space && ctrl && !shift)
+            {
+                e.Handled = true;
+                await ShowCompletionAsync(explicitRequest: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            // async void — an escaped exception would hit the global crash dialog.
+            CommandErrorSink.Report(nameof(OnEditorPreviewKeyDown), ex);
+        }
+    }
+
+    // ── Autocomplete ──
+
+    /// <summary>
+    /// Typing a word character opens the popup once there are 2+ characters to go on. Deliberately
+    /// conservative: firing on the first keystroke turns every variable name into a fight with a
+    /// popup, and firing on punctuation pops it open in the middle of strings and operators.
+    /// </summary>
+    private async void OnTextEntered(object sender, TextCompositionEventArgs e)
+    {
+        try
+        {
+            if (_completionWindow != null) return;             // already open — it filters itself
+            if (e.Text.Length != 1) return;
+            char c = e.Text[0];
+            if (!char.IsLetter(c) && c != '_') return;
+
+            await ShowCompletionAsync(explicitRequest: false);
+        }
+        catch (Exception ex)
+        {
+            CommandErrorSink.Report(nameof(OnTextEntered), ex);
+        }
+    }
+
+    private async Task ShowCompletionAsync(bool explicitRequest)
+    {
+        if (DataContext is not CodeEditorViewModel vm || _boundTab == null) return;
+
+        string text = Editor.Text;
+        int caret = Editor.CaretOffset;
+        string prefix = CluadeX.Services.CodeIntelligenceService.PrefixAt(text, caret);
+        if (!explicitRequest && prefix.Length < 2) return;
+
+        // Only the newest request may open a window — the user keeps typing while the scan runs.
+        int request = ++_completionRequest;
+
+        var items = await vm.GetCompletionsAsync(_boundTab.FullPath, text, caret);
+
+        if (request != _completionRequest) return;             // superseded by a later keystroke
+        if (_completionWindow != null) return;                 // one opened in the meantime
+        if (items.Count == 0) return;
+
+        // The caret moved (arrow keys, a click, the agent edited) — the candidates are for a
+        // position that no longer exists, so showing them would insert text in the wrong place.
+        if (Editor.CaretOffset != caret) return;
+        if (!ReferenceEquals(Editor.Text, text) && Editor.Text != text) return;
+
+        var window = new CompletionWindow(Editor.TextArea)
+        {
+            // Replace the whole partial word, not just the character that triggered us.
+            StartOffset = caret - prefix.Length,
+            EndOffset = caret,
+            CloseAutomatically = true,
+            SizeToContent = System.Windows.SizeToContent.Height,
+            MaxHeight = 260,
+            Width = 340,
+        };
+
+        foreach (var item in items)
+            window.CompletionList.CompletionData.Add(new CompletionData(item));
+
+        if (prefix.Length > 0) window.CompletionList.SelectItem(prefix);
+
+        window.Closed += (_, _) => _completionWindow = null;
+        _completionWindow = window;
+        window.Show();
+    }
+
+    /// <summary>Ctrl+Shift+F anywhere on the page opens Search with the editor selection prefilled.</summary>
+    private void OnPageKeyDown(object sender, KeyEventArgs e)
+    {
+        if (DataContext is not CodeEditorViewModel vm) return;
+
+        if (e.Key == Key.F && (Keyboard.Modifiers & ModifierKeys.Control) != 0
+                           && (Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        {
+            e.Handled = true;
+            string selected = Editor.SelectedText;
+            if (!string.IsNullOrWhiteSpace(selected) && !selected.Contains('\n'))
+                vm.SearchText = selected.Trim();
+            vm.ShowSearchCommand.Execute(null);
+        }
+    }
+
+    private void OnSearchBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (DataContext is not CodeEditorViewModel vm) return;
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            vm.RunSearchCommand.Execute(null);   // re-run immediately instead of waiting out the debounce
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            vm.ClearSearchCommand.Execute(null);
+            Editor.TextArea.Focus();
+        }
+    }
+
+    private void OnRenameBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (DataContext is not CodeEditorViewModel vm) return;
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            // Enter previews; it never writes to disk on its own — applying is a separate,
+            // confirmed click. A rename that fires on one keystroke is how repos get shredded.
+            vm.PreviewRenameCommand.Execute(null);
+        }
+        else if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            vm.CancelRenameCommand.Execute(null);
+            Editor.TextArea.Focus();
+        }
+    }
+
+    private void FocusBox(TextBox box, bool selectAll)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                box.Focus();
+                Keyboard.Focus(box);
+                if (selectAll) box.SelectAll();
+            }
+            catch { /* focus is best-effort */ }
+        }, System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    /// <summary>Jump to a search result: scroll the line into view and select the matched span so the
+    /// hit is visible in the editor, not just in the list.</summary>
+    private void OnSelectRange(int line, int column, int length)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                var doc = Editor.Document;
+                if (doc.LineCount == 0) return;
+
+                int clampedLine = Math.Clamp(line, 1, doc.LineCount);
+                var docLine = doc.GetLineByNumber(clampedLine);
+                int offset = docLine.Offset + Math.Clamp(column, 0, docLine.Length);
+                int len = Math.Clamp(length, 0, Math.Max(0, docLine.EndOffset - offset));
+
+                Editor.ScrollToLine(clampedLine);
+                Editor.CaretOffset = offset;
+                if (len > 0) Editor.Select(offset, len);
+                else Editor.TextArea.ClearSelection();
+                Editor.TextArea.Caret.BringCaretToView();
+                Editor.TextArea.Focus();
+            }
+            catch { /* the file may have changed under us — never crash on a navigation */ }
+        }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     // Review the result like a human would: open the active file with its default app

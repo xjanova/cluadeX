@@ -19,6 +19,7 @@ public class CodeEditorViewModel : ViewModelBase
     private readonly FileSystemService _fs;
     private readonly SettingsService _settings;
     private readonly GitService _git;
+    private readonly CodeIntelligenceService _intel;
 
     public ChatViewModel ChatVM { get; }
 
@@ -163,12 +164,15 @@ public class CodeEditorViewModel : ViewModelBase
         else App.Current?.Dispatcher.BeginInvoke(Apply);
     }
 
-    public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm, SettingsService settings, GitService git)
+    public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm,
+        SettingsService settings, GitService git, CodeIntelligenceService intel, RepoMapService repoMap)
     {
         _workspace = workspace;
         _fs = fs;
         _settings = settings;
         _git = git;
+        _intel = intel;
+        _repoMapInvalidate = repoMap.Invalidate;
         ChatVM = chatVm;
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
@@ -195,6 +199,11 @@ public class CodeEditorViewModel : ViewModelBase
                 _ = RefreshTreeAsync();
                 if (_workspace.HasWorkingDirectory)
                     _terminal.ChangeDirectory(_workspace.WorkingDirectory);
+                // Results (and any half-built rename plan) belong to the OLD project — keeping them
+                // would offer to open paths that no longer exist, or rename files in a different repo.
+                ClearSearchCommand.Execute(null);
+                CancelRenameCommand.Execute(null);
+                _intel.InvalidateSymbolIndex();   // completions must not offer the old project's symbols
             }
         };
 
@@ -712,6 +721,608 @@ public class CodeEditorViewModel : ViewModelBase
         }
         StatusMessage = n == 0 ? "Nothing to save" : $"Saved {n} file(s)";
     }
+
+    // ═══════════════ Search across files + code navigation ═══════════════
+    // The left panel switches between EXPLORER and SEARCH (VS Code's activity model). The SEARCH
+    // side is also where go-to-definition (multiple candidates), find-references and rename preview
+    // land, so there is one results list to learn instead of three.
+
+    private bool _isSearchPanelActive;
+    public bool IsSearchPanelActive
+    {
+        get => _isSearchPanelActive;
+        set
+        {
+            if (!SetProperty(ref _isSearchPanelActive, value)) return;
+            OnPropertyChanged(nameof(IsExplorerPanelActive));
+        }
+    }
+    public bool IsExplorerPanelActive => !_isSearchPanelActive;
+
+    public ICommand ShowExplorerCommand => _showExplorerCommand ??= new RelayCommand(() => IsSearchPanelActive = false);
+    private ICommand? _showExplorerCommand;
+
+    public ICommand ShowSearchCommand => _showSearchCommand ??= new RelayCommand(() =>
+    {
+        IsSearchPanelActive = true;
+        SearchFocusRequested?.Invoke();
+    });
+    private ICommand? _showSearchCommand;
+
+    /// <summary>Raised when the search box should take keyboard focus (Ctrl+Shift+F, panel switch).</summary>
+    public event Action? SearchFocusRequested;
+
+    /// <summary>Raised after a result is opened: select (1-based line, 0-based column, length).</summary>
+    public event Action<int, int, int>? SelectRangeRequested;
+
+    // ── Query + options ──
+
+    private string _searchText = "";
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value)) return;
+            // Typing replaces a definition/reference/rename result set with a plain text search.
+            if (_searchMode != WorkbenchSearchMode.Text) SetSearchMode(WorkbenchSearchMode.Text);
+            ScheduleSearch();
+        }
+    }
+
+    private bool _searchIsRegex;
+    public bool SearchIsRegex { get => _searchIsRegex; set { if (SetProperty(ref _searchIsRegex, value)) ScheduleSearch(); } }
+
+    private bool _searchMatchCase;
+    public bool SearchMatchCase { get => _searchMatchCase; set { if (SetProperty(ref _searchMatchCase, value)) ScheduleSearch(); } }
+
+    private bool _searchWholeWord;
+    public bool SearchWholeWord { get => _searchWholeWord; set { if (SetProperty(ref _searchWholeWord, value)) ScheduleSearch(); } }
+
+    private string _searchInclude = "";
+    public string SearchInclude { get => _searchInclude; set { if (SetProperty(ref _searchInclude, value)) ScheduleSearch(); } }
+
+    private string _searchExclude = "";
+    public string SearchExclude { get => _searchExclude; set { if (SetProperty(ref _searchExclude, value)) ScheduleSearch(); } }
+
+    private bool _searchFiltersExpanded;
+    public bool SearchFiltersExpanded { get => _searchFiltersExpanded; set => SetProperty(ref _searchFiltersExpanded, value); }
+
+    public ICommand ToggleSearchFiltersCommand => _toggleSearchFiltersCommand ??=
+        new RelayCommand(() => SearchFiltersExpanded = !SearchFiltersExpanded);
+    private ICommand? _toggleSearchFiltersCommand;
+
+    // ── Results ──
+
+    public ObservableCollection<SearchResultGroup> SearchResults { get; } = new();
+
+    private string _searchSummary = "";
+    public string SearchSummary { get => _searchSummary; set => SetProperty(ref _searchSummary, value); }
+
+    private string _searchError = "";
+    public string SearchError
+    {
+        get => _searchError;
+        set
+        {
+            if (!SetProperty(ref _searchError, value)) return;
+            OnPropertyChanged(nameof(HasSearchError));
+            OnPropertyChanged(nameof(HasNoResults));   // an error replaces the "no results" line
+        }
+    }
+    public bool HasSearchError => !string.IsNullOrEmpty(_searchError);
+
+    private bool _isSearching;
+    public bool IsSearching
+    {
+        get => _isSearching;
+        // HasNoResults is derived from this — without the extra notify, "No results." stays on
+        // screen through the next scan (and after a cancel) because nothing told the UI to re-ask.
+        set { if (SetProperty(ref _isSearching, value)) OnPropertyChanged(nameof(HasNoResults)); }
+    }
+
+    private bool _hasSearched;
+    public bool HasSearched
+    {
+        get => _hasSearched;
+        set { if (SetProperty(ref _hasSearched, value)) OnPropertyChanged(nameof(HasNoResults)); }
+    }
+
+    public bool HasNoResults => _hasSearched && !_isSearching && SearchResults.Count == 0 && !HasSearchError;
+
+    private WorkbenchSearchMode _searchMode = WorkbenchSearchMode.Text;
+    public WorkbenchSearchMode SearchMode => _searchMode;
+    public bool IsRenameMode => _searchMode == WorkbenchSearchMode.Rename;
+
+    /// <summary>Explains what the current result list actually is — a plain text search, a
+    /// definition lookup, a reference sweep, or a pending rename.</summary>
+    private string _searchContextLabel = "";
+    public string SearchContextLabel
+    {
+        get => _searchContextLabel;
+        set { if (SetProperty(ref _searchContextLabel, value)) OnPropertyChanged(nameof(HasSearchContext)); }
+    }
+    public bool HasSearchContext => !string.IsNullOrEmpty(_searchContextLabel);
+
+    private void SetSearchMode(WorkbenchSearchMode mode)
+    {
+        if (_searchMode == mode) return;
+        _searchMode = mode;
+        OnPropertyChanged(nameof(SearchMode));
+        OnPropertyChanged(nameof(IsRenameMode));
+        if (mode != WorkbenchSearchMode.Rename) SearchContextLabel = "";
+    }
+
+    public ICommand ClearSearchCommand => _clearSearchCommand ??= new RelayCommand(() =>
+    {
+        _searchDebounce?.Stop();
+        _searchCts?.Cancel();
+        _searchText = "";
+        OnPropertyChanged(nameof(SearchText));
+        SetSearchMode(WorkbenchSearchMode.Text);
+        SearchContextLabel = "";
+        ResetResults();
+        HasSearched = false;
+        SearchSummary = "";
+        SearchError = "";
+    });
+    private ICommand? _clearSearchCommand;
+
+    public ICommand OpenMatchCommand => _openMatchCommand ??= new AsyncRelayCommand<SearchMatch>(OpenMatchAsync);
+    private ICommand? _openMatchCommand;
+
+    public ICommand ToggleResultGroupCommand => _toggleResultGroupCommand ??=
+        new RelayCommand<SearchResultGroup>(g => { if (g != null) g.IsExpanded = !g.IsExpanded; });
+    private ICommand? _toggleResultGroupCommand;
+
+    // ── Debounced, cancellable execution ──
+
+    private System.Windows.Threading.DispatcherTimer? _searchDebounce;
+    private CancellationTokenSource? _searchCts;
+
+    /// <summary>
+    /// Coalesce keystrokes into one scan. Without this, typing "Service" fires seven full-workspace
+    /// scans and the last one to finish (not the last one started) wins.
+    /// </summary>
+    private void ScheduleSearch()
+    {
+        _searchDebounce ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(250),
+        };
+        _searchDebounce.Tick -= OnSearchDebounceTick;
+        _searchDebounce.Tick += OnSearchDebounceTick;
+        _searchDebounce.Stop();
+
+        if (string.IsNullOrEmpty(_searchText))
+        {
+            _searchCts?.Cancel();
+            ResetResults();
+            HasSearched = false;
+            SearchSummary = "";
+            SearchError = "";
+            IsSearching = false;
+            return;
+        }
+        _searchDebounce.Start();
+    }
+
+    private void OnSearchDebounceTick(object? sender, EventArgs e)
+    {
+        _searchDebounce?.Stop();
+        _ = RunSearchAsync();
+    }
+
+    public ICommand RunSearchCommand => _runSearchCommand ??= new AsyncRelayCommand(RunSearchAsync);
+    private ICommand? _runSearchCommand;
+
+    private async Task RunSearchAsync()
+    {
+        if (string.IsNullOrEmpty(_searchText)) return;
+
+        _searchCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
+        IsSearching = true;
+        SearchError = "";
+        try
+        {
+            var outcome = await _intel.SearchAsync(new SearchQuery
+            {
+                Text = _searchText,
+                IsRegex = _searchIsRegex,
+                MatchCase = _searchMatchCase,
+                WholeWord = _searchWholeWord,
+                Include = _searchInclude,
+                Exclude = _searchExclude,
+            }, cts.Token);
+
+            // A newer search started while this one ran — its results are the stale ones, drop them.
+            if (!ReferenceEquals(_searchCts, cts)) return;
+            ApplyOutcome(outcome);
+        }
+        catch (OperationCanceledException) { /* superseded — the newer scan owns the UI */ }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_searchCts, cts)) SearchError = ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_searchCts, cts)) IsSearching = false;
+        }
+    }
+
+    /// <summary>Push a scan result into the results list + summary. Caps that actually bit are
+    /// stated — a silent truncation reads as "that's everything" when it isn't.</summary>
+    private void ApplyOutcome(SearchOutcome outcome)
+    {
+        ResetResults();
+        HasSearched = true;
+
+        if (!string.IsNullOrEmpty(outcome.Error))
+        {
+            SearchError = outcome.Error!;
+            SearchSummary = "";
+            OnPropertyChanged(nameof(HasNoResults));
+            return;
+        }
+
+        foreach (var g in outcome.Files)
+            SearchResults.Add(new SearchResultGroup(g));
+
+        SearchSummary = outcome.TotalMatches == 0
+            ? $"No results · {outcome.FilesScanned:N0} files searched"
+            : $"{outcome.TotalMatches:N0} result{(outcome.TotalMatches == 1 ? "" : "s")} in "
+              + $"{outcome.Files.Count:N0} file{(outcome.Files.Count == 1 ? "" : "s")} · "
+              + $"{outcome.FilesScanned:N0} searched · {outcome.Elapsed.TotalSeconds:0.00}s"
+              + (outcome.Truncated ? " · ⚠ capped (results incomplete)" : "");
+
+        OnPropertyChanged(nameof(HasNoResults));
+    }
+
+    private void ResetResults()
+    {
+        SearchResults.Clear();
+        OnPropertyChanged(nameof(HasNoResults));
+    }
+
+    /// <summary>Open the file a match lives in and select the matched text.</summary>
+    private async Task OpenMatchAsync(SearchMatch? match)
+    {
+        if (match == null) return;
+        await OpenPathAsync(match.FullPath);
+        SelectRangeRequested?.Invoke(match.Line, match.Column, match.Length);
+    }
+
+    // ── Go to definition / find references (driven from the editor, F12 / Shift+F12) ──
+
+    /// <summary>
+    /// Jump to a symbol's declaration. One hit jumps straight there; several list themselves in the
+    /// search panel so the user picks. <paramref name="file"/>/<paramref name="line"/>/<paramref
+    /// name="character"/> are 0-based LSP coordinates, used only when a language server is connected.
+    /// </summary>
+    public async Task GoToDefinitionAsync(string symbol, string? file, int line, int character)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            StatusMessage = "Put the caret on a symbol first";
+            return;
+        }
+
+        StatusMessage = $"Looking up {symbol}…";
+        var result = await _intel.FindDefinitionsAsync(symbol, file, line, character);
+
+        if (!string.IsNullOrEmpty(result.Error)) { StatusMessage = $"✗ {result.Error}"; return; }
+        if (result.Locations.Count == 0)
+        {
+            StatusMessage = $"No declaration found for '{symbol}'";
+            return;
+        }
+
+        string engine = result.Engine == NavigationEngine.LanguageServer ? "language server" : "workspace index";
+
+        if (result.Locations.Count == 1)
+        {
+            var only = result.Locations[0];
+            await OpenPathAsync(only.FullPath);
+            SelectRangeRequested?.Invoke(only.Line, 0, 0);
+            StatusMessage = $"→ {only.FileName}:{only.Line} · {engine}";
+            return;
+        }
+
+        // Several candidates — show them all rather than guessing.
+        ShowLocations(result.Locations, WorkbenchSearchMode.Definitions,
+            $"{result.Locations.Count} declarations of '{symbol}' · {engine}");
+        StatusMessage = $"{result.Locations.Count} declarations of '{symbol}'";
+    }
+
+    /// <summary>Every whole-word use of a symbol, listed in the search panel.</summary>
+    public async Task FindReferencesAsync(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            StatusMessage = "Put the caret on a symbol first";
+            return;
+        }
+
+        IsSearchPanelActive = true;
+        SetSearchMode(WorkbenchSearchMode.References);
+        IsSearching = true;
+        SearchError = "";
+        SearchContextLabel = $"References to '{symbol}'";
+
+        _searchCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
+        try
+        {
+            var outcome = await _intel.FindReferencesAsync(symbol, cts.Token);
+            if (!ReferenceEquals(_searchCts, cts)) return;
+
+            // Keep the box in sync so the user can tweak the query from here.
+            _searchText = symbol;
+            OnPropertyChanged(nameof(SearchText));
+            _searchWholeWord = true; OnPropertyChanged(nameof(SearchWholeWord));
+            _searchMatchCase = true; OnPropertyChanged(nameof(SearchMatchCase));
+            _searchIsRegex = false; OnPropertyChanged(nameof(SearchIsRegex));
+
+            ApplyOutcome(outcome);
+            StatusMessage = $"{outcome.TotalMatches} reference(s) to '{symbol}' in {outcome.Files.Count} file(s)";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (ReferenceEquals(_searchCts, cts)) SearchError = ex.Message; }
+        finally { if (ReferenceEquals(_searchCts, cts)) IsSearching = false; }
+    }
+
+    private void ShowLocations(List<CodeLocation> locations, WorkbenchSearchMode mode, string context)
+    {
+        IsSearchPanelActive = true;
+        SetSearchMode(mode);
+        SearchContextLabel = context;
+        SearchError = "";
+        ResetResults();
+        HasSearched = true;
+
+        foreach (var byFile in locations.GroupBy(l => l.FullPath, StringComparer.OrdinalIgnoreCase))
+        {
+            var first = byFile.First();
+            var group = new SearchFileGroup { RelPath = first.RelPath, FullPath = first.FullPath };
+            foreach (var loc in byFile)
+                group.Matches.Add(new SearchMatch
+                {
+                    RelPath = loc.RelPath,
+                    FullPath = loc.FullPath,
+                    Line = loc.Line,
+                    Column = 0,
+                    Length = 0,
+                    LineText = loc.Snippet,
+                    PreviewColumn = -1,   // no highlight span for a declaration line
+                });
+            SearchResults.Add(new SearchResultGroup(group));
+        }
+
+        SearchSummary = $"{locations.Count} location{(locations.Count == 1 ? "" : "s")}";
+        OnPropertyChanged(nameof(HasNoResults));
+    }
+
+    // ── Rename symbol (preview → confirm → apply) ──
+
+    private string _renameOldName = "";
+    public string RenameOldName { get => _renameOldName; set => SetProperty(ref _renameOldName, value); }
+
+    private string _renameNewName = "";
+    public string RenameNewName { get => _renameNewName; set => SetProperty(ref _renameNewName, value); }
+
+    private RenamePlan? _renamePlan;
+
+    private bool _canApplyRename;
+    public bool CanApplyRename { get => _canApplyRename; set => SetProperty(ref _canApplyRename, value); }
+
+    private string _renameApplyLabel = "";
+    public string RenameApplyLabel { get => _renameApplyLabel; set => SetProperty(ref _renameApplyLabel, value); }
+
+    /// <summary>Enter rename mode from the editor (F2) with the symbol under the caret.</summary>
+    public void BeginRename(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            StatusMessage = "Put the caret on a symbol first";
+            return;
+        }
+
+        IsSearchPanelActive = true;
+        SetSearchMode(WorkbenchSearchMode.Rename);
+        RenameOldName = symbol;
+        RenameNewName = symbol;
+        _renamePlan = null;
+        CanApplyRename = false;
+        RenameApplyLabel = "";
+        SearchContextLabel = $"Rename '{symbol}'";
+        SearchError = "";
+        ResetResults();
+        HasSearched = false;
+        SearchSummary = "";
+        RenameFocusRequested?.Invoke();
+    }
+
+    /// <summary>Raised when the rename input should take focus.</summary>
+    public event Action? RenameFocusRequested;
+
+    public ICommand CancelRenameCommand => _cancelRenameCommand ??= new RelayCommand(() =>
+    {
+        _renamePlan = null;
+        CanApplyRename = false;
+        RenameApplyLabel = "";
+        SetSearchMode(WorkbenchSearchMode.Text);
+        SearchContextLabel = "";
+        ResetResults();
+        HasSearched = false;
+        SearchSummary = "";
+        SearchError = "";
+    });
+    private ICommand? _cancelRenameCommand;
+
+    public ICommand PreviewRenameCommand => _previewRenameCommand ??= new AsyncRelayCommand(PreviewRenameAsync);
+    private ICommand? _previewRenameCommand;
+
+    private async Task PreviewRenameAsync()
+    {
+        _renamePlan = null;
+        CanApplyRename = false;
+        RenameApplyLabel = "";
+        SearchError = "";
+        IsSearching = true;
+
+        try
+        {
+            var plan = await _intel.PrepareRenameAsync(RenameOldName, RenameNewName);
+            if (!string.IsNullOrEmpty(plan.Error))
+            {
+                SearchError = plan.Error!;
+                ResetResults();
+                HasSearched = true;
+                SearchSummary = "";
+                OnPropertyChanged(nameof(HasNoResults));
+                return;
+            }
+
+            _renamePlan = plan;
+            ResetResults();
+            HasSearched = true;
+            foreach (var g in plan.Files) SearchResults.Add(new SearchResultGroup(g));
+
+            SearchSummary = plan.TotalEdits == 0
+                ? $"'{plan.OldName}' not found — nothing to rename"
+                : $"{plan.TotalEdits:N0} occurrence{(plan.TotalEdits == 1 ? "" : "s")} in "
+                  + $"{plan.Files.Count:N0} file{(plan.Files.Count == 1 ? "" : "s")}"
+                  + (plan.Truncated ? " · ⚠ capped (preview incomplete — do not apply)" : "");
+
+            // Refuse to apply a truncated plan: a partial rename leaves the repo half-renamed,
+            // which is worse than not renaming at all.
+            CanApplyRename = plan.TotalEdits > 0 && !plan.Truncated;
+            RenameApplyLabel = CanApplyRename
+                ? $"Apply to {plan.Files.Count} file{(plan.Files.Count == 1 ? "" : "s")}"
+                : "";
+            OnPropertyChanged(nameof(HasNoResults));
+        }
+        finally { IsSearching = false; }
+    }
+
+    public ICommand ApplyRenameCommand => _applyRenameCommand ??= new AsyncRelayCommand(ApplyRenameAsync);
+    private ICommand? _applyRenameCommand;
+
+    private async Task ApplyRenameAsync()
+    {
+        var plan = _renamePlan;
+        if (plan == null || !CanApplyRename) { StatusMessage = "Preview the rename first"; return; }
+
+        // Never write over a tab the user has unsaved edits in — the same rule the agent
+        // live-follow obeys. Their typing is not ours to discard.
+        var dirty = Tabs.Where(t => t.IsDirty
+                        && plan.Files.Any(f => string.Equals(f.FullPath, t.FullPath, StringComparison.OrdinalIgnoreCase)))
+                        .Select(t => t.FileName).ToList();
+        if (dirty.Count > 0)
+        {
+            StatusMessage = $"⚠ Save first — unsaved changes in {string.Join(", ", dirty)}";
+            System.Windows.MessageBox.Show(
+                $"These open files have unsaved changes and are part of the rename:\n\n{string.Join("\n", dirty)}\n\n"
+                + "Save them (or close them) first so the rename doesn't discard your edits.",
+                "Rename blocked", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            return;
+        }
+
+        var confirm = System.Windows.MessageBox.Show(
+            $"Rename '{plan.OldName}' → '{plan.NewName}'\n\n"
+            + $"{plan.TotalEdits} occurrence(s) across {plan.Files.Count} file(s) will be rewritten on disk.\n\n"
+            + (_intel.IsLspConnected
+                ? "A language server is connected, but this rename is whole-word textual.\n\n"
+                : "This is a whole-word, case-sensitive TEXT rename — it does not understand scope, so "
+                  + "unrelated members with the same name are also renamed. Review the list first.\n\n")
+            + "This cannot be undone from inside CluadeX (use git to revert).\n\nContinue?",
+            "Confirm rename", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+        IsSearching = true;
+        try
+        {
+            var result = await _intel.ApplyRenameAsync(plan);
+            if (!string.IsNullOrEmpty(result.Error))
+            {
+                StatusMessage = $"✗ Rename failed: {result.Error}";
+                return;
+            }
+
+            // Reload any open tab we just rewrote so the editor isn't showing stale text.
+            foreach (var path in result.ChangedPaths)
+            {
+                var tab = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, path, StringComparison.OrdinalIgnoreCase));
+                if (tab == null) continue;
+                var reloaded = await _workspace.OpenFileAsync(path);
+                if (reloaded != null) tab.MarkOpened(reloaded.Content);
+            }
+
+            string skipped = result.Skipped.Count > 0 ? $" · {result.Skipped.Count} skipped" : "";
+            StatusMessage = $"✓ Renamed {result.EditsApplied} occurrence(s) in {result.FilesChanged} file(s){skipped}";
+
+            _renamePlan = null;
+            CanApplyRename = false;
+            RenameApplyLabel = "";
+            // Both caches now advertise the OLD name — the agent's repo map and the completion index.
+            _repoMapInvalidate?.Invoke();
+            _intel.InvalidateSymbolIndex();
+
+            await RefreshGitAsync();
+            _ = _workspace.EnrichGitStatusAsync(Tree);
+        }
+        finally { IsSearching = false; }
+    }
+
+    /// <summary>Set by the constructor — drops the cached repo map after a rename so the agent's
+    /// symbol outline doesn't keep advertising the old name.</summary>
+    private Action? _repoMapInvalidate;
+
+    // ── Autocomplete ──
+
+    /// <summary>Completion candidates for the caret. The View owns the popup; the VM owns the source
+    /// so the editor never talks to a service directly.</summary>
+    public Task<List<CompletionItem>> GetCompletionsAsync(string? filePath, string documentText, int caretOffset)
+        => _intel.GetCompletionsAsync(filePath, documentText, caretOffset);
+}
+
+/// <summary>Which question the current result list is answering.</summary>
+public enum WorkbenchSearchMode
+{
+    Text,
+    Definitions,
+    References,
+    Rename,
+}
+
+/// <summary>
+/// One file's worth of results in the search panel. Wraps the service's pure
+/// <see cref="SearchFileGroup"/> and adds the collapse state the list binds to.
+/// </summary>
+public sealed class SearchResultGroup : ViewModelBase
+{
+    public SearchResultGroup(SearchFileGroup source)
+    {
+        Source = source;
+        Matches = new ObservableCollection<SearchMatch>(source.Matches);
+    }
+
+    public SearchFileGroup Source { get; }
+    public ObservableCollection<SearchMatch> Matches { get; }
+
+    public string FileName => Source.FileName;
+    public string Directory => Source.Directory;
+    public string RelPath => Source.RelPath;
+    public string FullPath => Source.FullPath;
+    public int MatchCount => Source.Matches.Count;
+
+    private bool _isExpanded = true;
+    public bool IsExpanded { get => _isExpanded; set => SetProperty(ref _isExpanded, value); }
 }
 
 /// <summary>One changed file in the source-control panel (from `git status --short`).</summary>

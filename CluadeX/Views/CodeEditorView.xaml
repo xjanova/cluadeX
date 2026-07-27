@@ -13,7 +13,8 @@
              d:DataContext="{d:DesignInstance Type=vm:CodeEditorViewModel}"
              Background="{StaticResource NeonBg0Brush}"
              FontFamily="{StaticResource NeonUiFont}"
-             Loaded="OnLoaded">
+             Loaded="OnLoaded"
+             KeyDown="OnPageKeyDown">
     <UserControl.Resources>
         <!-- File tree row template (recursive via HierarchicalDataTemplate) -->
         <HierarchicalDataTemplate x:Key="TreeNodeTemplate" DataType="{x:Type m:FileTreeNode}"
@@ -223,6 +224,122 @@
         <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{StaticResource NeonLineBrush}"
                 Background="#8C0A0C22">
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>  <!-- Activity switcher: Explorer | Search -->
+                    <RowDefinition Height="*"/>     <!-- The active panel -->
+                </Grid.RowDefinitions>
+
+                <!-- Activity switcher — the left panel answers two different questions
+                     (what files exist / where is this text), so it gets two modes. -->
+                <Border Grid.Row="0" Padding="10,10,10,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Command="{Binding ShowExplorerCommand}" Cursor="Hand"
+                                Background="Transparent" BorderThickness="0" Padding="0,6"
+                                ToolTip="{services:Loc editor.explorer}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="5,0,0,5"
+                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1,1,0,1"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                        </DataTrigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Margin="0,0,6,0" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{services:Loc editor.explorer}" FontSize="10" FontWeight="Bold"
+                                           FontFamily="{StaticResource NeonMonoFont}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="1" Command="{Binding ShowSearchCommand}" Cursor="Hand"
+                                Background="Transparent" BorderThickness="0" Padding="0,6"
+                                ToolTip="{services:Loc editor.searchTip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="0,5,5,0"
+                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                        </DataTrigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Margin="0,0,6,0" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{services:Loc editor.search}" FontSize="10" FontWeight="Bold"
+                                           FontFamily="{StaticResource NeonMonoFont}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Border>
+
+            <!-- ══════════ EXPLORER panel ══════════ -->
+            <Grid Grid.Row="1" Visibility="{Binding IsExplorerPanelActive, Converter={StaticResource BoolVis}}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>  <!-- EXPLORER header -->
                     <RowDefinition Height="Auto"/>  <!-- Project card -->
@@ -570,6 +687,360 @@
                         </StackPanel>
                     </StackPanel>
                 </Border>
+            </Grid>
+
+            <!-- ══════════ SEARCH panel ══════════
+                 Also hosts go-to-definition candidates, find-references results and the rename
+                 preview, so there is one results list instead of three. -->
+            <Grid Grid.Row="1" Visibility="{Binding IsSearchPanelActive, Converter={StaticResource BoolVis}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>  <!-- Query box -->
+                    <RowDefinition Height="Auto"/>  <!-- Option toggles -->
+                    <RowDefinition Height="Auto"/>  <!-- Include / exclude filters -->
+                    <RowDefinition Height="Auto"/>  <!-- Rename bar -->
+                    <RowDefinition Height="Auto"/>  <!-- Context + summary + errors -->
+                    <RowDefinition Height="*"/>     <!-- Results -->
+                </Grid.RowDefinitions>
+
+                <!-- Query -->
+                <Grid Grid.Row="0" Margin="10,10,10,0">
+                    <Border Background="#3311132E" CornerRadius="5"
+                            BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonInk3Brush}"
+                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            <TextBox x:Name="SearchBox" Grid.Column="1"
+                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0" Padding="7,6"
+                                     Foreground="{StaticResource NeonInk0Brush}"
+                                     CaretBrush="{StaticResource NeonCyanBrush}"
+                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
+                                     KeyDown="OnSearchBoxKeyDown"/>
+                            <Button Grid.Column="2" Width="20" Height="20" Margin="0,0,6,0" Cursor="Hand"
+                                    Background="Transparent" BorderThickness="0"
+                                    Command="{Binding ClearSearchCommand}"
+                                    ToolTip="{services:Loc editor.clearSearch}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Background="Transparent" CornerRadius="10">
+                                            <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- Option toggles: Aa / whole word / regex, plus the filter disclosure -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="10,6,10,0">
+                    <StackPanel.Resources>
+                        <Style TargetType="ToggleButton">
+                            <Setter Property="Width" Value="26"/>
+                            <Setter Property="Height" Value="22"/>
+                            <Setter Property="Margin" Value="0,0,4,0"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="bd" Background="Transparent" CornerRadius="4"
+                                                BorderBrush="Transparent" BorderThickness="1">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            </Trigger>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </StackPanel.Resources>
+
+                    <ToggleButton IsChecked="{Binding SearchMatchCase, Mode=TwoWay}"
+                                  ToolTip="{services:Loc editor.matchCase}">
+                        <TextBlock Text="Aa" FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                    </ToggleButton>
+                    <ToggleButton IsChecked="{Binding SearchWholeWord, Mode=TwoWay}"
+                                  ToolTip="{services:Loc editor.wholeWord}">
+                        <TextBlock Text="ab" FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                   TextDecorations="Underline"
+                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                    </ToggleButton>
+                    <ToggleButton IsChecked="{Binding SearchIsRegex, Mode=TwoWay}"
+                                  ToolTip="{services:Loc editor.useRegex}">
+                        <TextBlock Text=".*" FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
+                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                    </ToggleButton>
+                    <ToggleButton IsChecked="{Binding SearchFiltersExpanded, Mode=TwoWay}"
+                                  ToolTip="{services:Loc editor.toggleFilters}">
+                        <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                    </ToggleButton>
+
+                    <TextBlock Text="{services:Loc editor.searching}" FontSize="10" Margin="8,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource NeonCyanBrush}"
+                               Visibility="{Binding IsSearching, Converter={StaticResource BoolVis}}"/>
+                </StackPanel>
+
+                <!-- Include / exclude globs -->
+                <StackPanel Grid.Row="2" Margin="10,6,10,0"
+                            Visibility="{Binding SearchFiltersExpanded, Converter={StaticResource BoolVis}}">
+                    <TextBlock Text="{services:Loc editor.filesToInclude}" FontSize="9"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="2,0,0,2"/>
+                    <Border Background="#3311132E" CornerRadius="4" Margin="0,0,0,6"
+                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
+                        <TextBox Text="{Binding SearchInclude, UpdateSourceTrigger=PropertyChanged, Delay=300}"
+                                 Background="Transparent" BorderThickness="0" Padding="7,4"
+                                 Foreground="{StaticResource NeonInk1Brush}"
+                                 CaretBrush="{StaticResource NeonCyanBrush}"
+                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="11"/>
+                    </Border>
+                    <TextBlock Text="{services:Loc editor.filesToExclude}" FontSize="9"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="2,0,0,2"/>
+                    <Border Background="#3311132E" CornerRadius="4"
+                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
+                        <TextBox Text="{Binding SearchExclude, UpdateSourceTrigger=PropertyChanged, Delay=300}"
+                                 Background="Transparent" BorderThickness="0" Padding="7,4"
+                                 Foreground="{StaticResource NeonInk1Brush}"
+                                 CaretBrush="{StaticResource NeonCyanBrush}"
+                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="11"/>
+                    </Border>
+                </StackPanel>
+
+                <!-- Rename bar (F2) — preview is mandatory before anything is written to disk -->
+                <Border Grid.Row="3" Margin="10,8,10,0" Padding="10,8" CornerRadius="6"
+                        Background="#70241436" BorderBrush="{StaticResource NeonMagentaBrush}" BorderThickness="1"
+                        Visibility="{Binding IsRenameMode, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="&#xE8AC;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonMagentaBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="{services:Loc editor.renameSymbol}" FontSize="10" FontWeight="Bold"
+                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding RenameOldName}" FontSize="11" Margin="8,0,0,0"
+                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" MaxWidth="120"/>
+                        </StackPanel>
+                        <Border Background="#3311132E" CornerRadius="4" Margin="0,0,0,6"
+                                BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                            <TextBox x:Name="RenameBox" Text="{Binding RenameNewName, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0" Padding="7,5"
+                                     Foreground="{StaticResource NeonInk0Brush}"
+                                     CaretBrush="{StaticResource NeonMagentaBrush}"
+                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
+                                     KeyDown="OnRenameBoxKeyDown"/>
+                        </Border>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Command="{Binding PreviewRenameCommand}" Cursor="Hand" Padding="9,4" Margin="0,0,6,0"
+                                    Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
+                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{services:Loc editor.previewRename}"/>
+                            </Button>
+                            <Button Command="{Binding ApplyRenameCommand}" Cursor="Hand" Padding="9,4" Margin="0,0,6,0"
+                                    IsEnabled="{Binding CanApplyRename}"
+                                    Background="#66C2185B" BorderBrush="{StaticResource NeonMagentaBrush}" BorderThickness="1"
+                                    Foreground="White" FontSize="10"
+                                    ToolTip="{services:Loc editor.applyRenameTip}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{Binding RenameApplyLabel}"/>
+                            </Button>
+                            <Button Command="{Binding CancelRenameCommand}" Cursor="Hand" Padding="9,4"
+                                    Background="Transparent" BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
+                                    Foreground="{StaticResource NeonInk2Brush}" FontSize="10">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="{services:Loc editor.cancel}"/>
+                            </Button>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Context (what this list is) + summary + error -->
+                <StackPanel Grid.Row="4" Margin="12,8,10,4">
+                    <TextBlock Text="{Binding SearchContextLabel}" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{StaticResource NeonCyanBrush}" TextWrapping="Wrap"
+                               Visibility="{Binding HasSearchContext, Converter={StaticResource BoolVis}}"/>
+                    <TextBlock Text="{Binding SearchSummary}" FontSize="10"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonInk3Brush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    <TextBlock Text="{Binding SearchError}" FontSize="10" TextWrapping="Wrap" Margin="0,2,0,0"
+                               Foreground="{StaticResource NeonMagentaBrush}"
+                               Visibility="{Binding HasSearchError, Converter={StaticResource BoolVis}}"/>
+                    <TextBlock Text="{services:Loc editor.noResults}" FontSize="10" Margin="0,2,0,0"
+                               Foreground="{StaticResource NeonInk3Brush}"
+                               Visibility="{Binding HasNoResults, Converter={StaticResource BoolVis}}"/>
+                </StackPanel>
+
+                <!-- Results: file groups → matching lines -->
+                <ScrollViewer Grid.Row="5" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Padding="4,0,4,10">
+                    <ItemsControl ItemsSource="{Binding SearchResults}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="0,0,0,2">
+                                    <!-- File header (click to collapse) -->
+                                    <Button Cursor="Hand" Background="Transparent" BorderThickness="0"
+                                            HorizontalContentAlignment="Stretch" Padding="6,3"
+                                            Command="{Binding DataContext.ToggleResultGroupCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}"
+                                            ToolTip="{Binding RelPath}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bd" Background="Transparent" CornerRadius="4"
+                                                        Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="#1AFFFFFF"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                                       VerticalAlignment="Center" Margin="0,0,5,0"
+                                                       Foreground="{StaticResource NeonInk3Brush}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="&#xE70D;"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                                <Setter Property="Text" Value="&#xE70E;"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Grid.Column="1" Text="{Binding FileName}" FontSize="11"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource NeonInk0Brush}"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding Directory}" FontSize="9"
+                                                       Margin="6,0,0,0" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{StaticResource NeonInk3Brush}"/>
+                                            <Border Grid.Column="3" Background="#22FFFFFF" CornerRadius="3"
+                                                    Padding="4,0" MinWidth="16" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding MatchCount}" FontSize="9"
+                                                           HorizontalAlignment="Center"
+                                                           FontFamily="{StaticResource NeonMonoFont}"
+                                                           Foreground="{StaticResource NeonInk2Brush}"/>
+                                            </Border>
+                                        </Grid>
+                                    </Button>
+
+                                    <!-- Matching lines -->
+                                    <ItemsControl ItemsSource="{Binding Matches}" Margin="14,0,0,0"
+                                                  Visibility="{Binding IsExpanded, Converter={StaticResource BoolVis}}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Cursor="Hand" Background="Transparent" BorderThickness="0"
+                                                        HorizontalContentAlignment="Stretch" Padding="6,2"
+                                                        Command="{Binding DataContext.OpenMatchCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ScrollViewer}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Template>
+                                                        <ControlTemplate TargetType="Button">
+                                                            <Border x:Name="bd" Background="Transparent" CornerRadius="3"
+                                                                    Padding="{TemplateBinding Padding}">
+                                                                <ContentPresenter/>
+                                                            </Border>
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter TargetName="bd" Property="Background" Value="#2628326E"/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Button.Template>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="34"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding LineLabel}" FontSize="9"
+                                                                   HorizontalAlignment="Right" Margin="0,0,8,0"
+                                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                                        <TextBlock Grid.Column="1" FontSize="11"
+                                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                                   Foreground="{StaticResource NeonInk1Brush}"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   editor:MatchHighlight.Start="{Binding PreviewColumn}"
+                                                                   editor:MatchHighlight.Length="{Binding Length}"
+                                                                   editor:MatchHighlight.Text="{Binding LineText}"/>
+                                                    </Grid>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
             </Grid>
         </Border>
 

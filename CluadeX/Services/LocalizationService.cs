@@ -423,6 +423,25 @@ public class LocalizationService
         ["editor.askAiHint"] = new() { ["en"] = "Or ask the AI on the right to write code for you →", ["th"] = "หรือสั่ง AI ทางขวาให้เขียนโค้ดให้ →" },
         ["editor.terminal"] = new() { ["en"] = "Terminal", ["th"] = "เทอร์มินัล" },
 
+        // ── search across files + code navigation ──
+        ["editor.search"] = new() { ["en"] = "SEARCH", ["th"] = "ค้นหา" },
+        ["editor.searchTip"] = new() { ["en"] = "Search across every file in the project (Ctrl+Shift+F)", ["th"] = "ค้นหาทุกไฟล์ในโปรเจค (Ctrl+Shift+F)" },
+        ["editor.clearSearch"] = new() { ["en"] = "Clear search (Esc)", ["th"] = "ล้างการค้นหา (Esc)" },
+        ["editor.matchCase"] = new() { ["en"] = "Match case", ["th"] = "ตรงตามตัวพิมพ์ใหญ่-เล็ก" },
+        ["editor.wholeWord"] = new() { ["en"] = "Match whole word", ["th"] = "ตรงทั้งคำ" },
+        ["editor.useRegex"] = new() { ["en"] = "Use regular expression", ["th"] = "ใช้ regular expression" },
+        ["editor.toggleFilters"] = new() { ["en"] = "Files to include / exclude", ["th"] = "ไฟล์ที่รวม / ยกเว้น" },
+        ["editor.filesToInclude"] = new() { ["en"] = "Files to include  e.g.  *.cs, Views/**", ["th"] = "ไฟล์ที่ต้องการค้นหา เช่น  *.cs, Views/**" },
+        ["editor.filesToExclude"] = new() { ["en"] = "Files to exclude  e.g.  *.min.js, obj/**", ["th"] = "ไฟล์ที่ไม่ต้องค้นหา เช่น  *.min.js, obj/**" },
+        ["editor.searching"] = new() { ["en"] = "Searching…", ["th"] = "กำลังค้นหา…" },
+        ["editor.noResults"] = new() { ["en"] = "No results.", ["th"] = "ไม่พบผลลัพธ์" },
+        ["editor.goToDefinition"] = new() { ["en"] = "Go to definition (F12)", ["th"] = "ไปยังจุดประกาศ (F12)" },
+        ["editor.findReferences"] = new() { ["en"] = "Find references (Shift+F12)", ["th"] = "ค้นหาการใช้งาน (Shift+F12)" },
+        ["editor.renameSymbol"] = new() { ["en"] = "RENAME", ["th"] = "เปลี่ยนชื่อ" },
+        ["editor.previewRename"] = new() { ["en"] = "Preview", ["th"] = "ดูก่อน" },
+        ["editor.applyRenameTip"] = new() { ["en"] = "Rewrite every previewed occurrence on disk — preview first, this cannot be undone from CluadeX", ["th"] = "เขียนทับทุกจุดที่ดูตัวอย่างไว้ลงดิสก์ — ต้องดูก่อน และย้อนกลับใน CluadeX ไม่ได้" },
+        ["editor.cancel"] = new() { ["en"] = "Cancel", ["th"] = "ยกเลิก" },
+
         // ── auto-wired page strings ──
         ["instincts.title"] = new() { ["en"] = "Instincts", ["th"] = "สัญชาตญาณที่เรียนรู้" },
         ["instincts.syncAllTip"] = new() { ["en"] = "Push every STRONG instinct as a coding-lesson note in your ObsidianX vault", ["th"] = "ส่งสัญชาตญาณระดับ STRONG ทุกข้อไปเป็นโน้ตบทเรียนใน ObsidianX" },

@@ -637,6 +637,11 @@ public partial class App : Application
         // CodeWorkspaceService — backs the Code Editor page (file tree,
         // open/save tabs, git status enrichment for tree badges).
         services.AddSingleton<CodeWorkspaceService>();
+        // CodeIntelligenceService — search across files + go-to-definition /
+        // find-references / rename for the workbench. Works with nothing
+        // installed (bounded workspace scan) and upgrades to real semantic
+        // results whenever LspClientService has a language server connected.
+        services.AddSingleton<CodeIntelligenceService>();
         // SubAgentService — Sprint 1 #1: registry of specialised subagents
         // (code-reviewer, security-reviewer, architect, ...). Built-in 10
         // plus discovery of ~/.cluadex/agents/*.md and project agents.
