@@ -65,6 +65,7 @@ public partial class CodeEditorView : UserControl
         if (_boundTab != null) _boundTab.PropertyChanged -= OnTabContentChanged;
         _boundTab = tab;
         _glow.Clear();
+        Minimap.ClearChangeMarkers();   // markers belong to the file we're leaving
 
         _suppressSync = true;
         try
@@ -172,6 +173,15 @@ public partial class CodeEditorView : UserControl
                 if (charStart < 0 || charLength <= 0) return;
                 _glow.ShowFlash(charStart, charLength);
                 EnsureGlowTimer();
+
+                // Flag the changed range on the minimap rail so the edit stays findable
+                // after the glow fades.
+                int docLen = Editor.Document.TextLength;
+                int s = Math.Clamp(charStart, 0, docLen);
+                int en = Math.Clamp(charStart + charLength, 0, docLen);
+                Minimap.AddChangeMarker(
+                    Editor.Document.GetLineByOffset(s).LineNumber,
+                    Editor.Document.GetLineByOffset(en).LineNumber);
             }
             catch { /* cosmetic */ }
         }, System.Windows.Threading.DispatcherPriority.Background);
