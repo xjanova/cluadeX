@@ -77,7 +77,7 @@ Things a CLI tool fundamentally cannot do:
 | **Catppuccin Mocha Theme** | Beautiful dark theme with metallic gradients, drop shadows, glowing menu, and rounded corners. | ธีมมืดสวยงามพร้อมเมนูเรืองแสง กราเดียนท์เมทัลลิก เงาตกกระทบ ขอบมน |
 | **HuggingFace Model Hub** | Browse, search, and download GGUF models directly from HuggingFace Hub. Search is filtered to GGUF text-generation LLMs only (no embeddings/image/audio). Every result card has a "Read more" link to the HF model page. | ค้นหาและดาวน์โหลด GGUF กรองเฉพาะ LLM text-generation ทุกผลมีลิงก์ Read more ไปดู model card |
 | **Rich Model Catalog** | Curated catalog with fit indicator on every card: 🟢 Fast (fits GPU) · 🟦 Good · 🟡 Partial (CPU offload) · 🟠 Slow · 🔴 Too large. 17 Gemma variants (4, 3N, 3, 3 QAT, 2, CodeGemma) plus Qwen 2.5, DeepSeek, Llama 3, Phi 3.5, StarCoder 2, CodeLlama. List/Grid view toggle. | แคตตาล็อกโมเดลพร้อมตัวบอกความเหมาะสมกับ VRAM ของคุณ มี 17 Gemma + รุ่นอื่นอีก toggle ระหว่าง list/grid |
-| **Thai/English Localization** | Hot-swappable Thai/English with `{services:Loc key}` XAML markup extension — bound labels refresh live on language change. 238 translation entries (every one has both EN and TH). Currently wired into: Settings, Features, sidebar/chat history, and the chat input bar. Other pages are still English-only — see Known Limitations. | สลับภาษาแบบ hot-reload ผ่าน MarkupExtension 200+ คำแปล |
+| **Thai/English Localization** | Hot-swappable Thai/English with `{services:Loc key}` XAML markup extension — bound labels refresh live on language change. 622 translation entries, every one with both EN and TH, wired into every page. Technical identifiers (data-type names, sampling parameters, shortcut labels) intentionally stay English. | สลับภาษาแบบ hot-reload ผ่าน MarkupExtension 200+ คำแปล |
 | **Feature Toggles** | Enable or disable optional features from the Features page. | เปิด/ปิดฟีเจอร์เสริมได้จากหน้า Features |
 | **Activation Key System** | Advanced features gated behind activation key. Free tier includes local inference, chat, Ollama, buddy, and more. | ฟีเจอร์ขั้นสูงต้องใส่ activation key ฟรีเทียร์มีครบเรื่องพื้นฐาน |
 | **Portable Mode** | Place a `portable` or `portable.txt` file next to the exe to store all data locally. | วางไฟล์ `portable` ข้างไฟล์ exe เพื่อเก็บข้อมูลทั้งหมดในโฟลเดอร์เดียวกัน |
@@ -88,6 +88,7 @@ Things a CLI tool fundamentally cannot do:
 
 | Feature | Description | คำอธิบาย |
 |---------|-------------|----------|
+| **Command Palette (Ctrl+K)** | One box over pages, skills and project files. Subsequence matching (`ce` finds Code Editor), ↑↓ to move, Enter to run, Esc to dismiss. Running a skill drops its slash command into chat; running a file opens it in the editor. | แถบคำสั่ง Ctrl+K ค้นหน้า skill และไฟล์ในที่เดียว |
 | **Collapsible Menu** | System menu (Chat/Models/Settings/Plugins/…) collapses to a gradient "MENU" strip so chat history dominates. Default collapsed; state persisted. | เมนูระบบพับได้ — default พับเพื่อเน้นประวัติแชท |
 | **Per-Project Session Filter** | Sidebar shows sessions from the current project folder only. Toggle switch exposes "all projects" view. Legacy sessions (no project tag) always visible. | sidebar แสดง session เฉพาะโปรเจคที่เปิด มี toggle ให้ดูทุกโปรเจค |
 | **Project Header** | Current project name + icon shown prominently above chat history. Tooltip shows full path. | หัวโปรเจคแสดงชื่อโฟลเดอร์ปัจจุบัน |
@@ -571,7 +572,7 @@ Stated plainly so nothing above reads as a promise it can't keep.
 | Area | Where it stands / สถานะจริง |
 |------|------------------------------|
 | **Sprint 4 features** | Multi-Execute Worktree Arena, Eval Harness, Marketplace 2.0 and Session Handoff Exporter are **planned, not shipped**. They appear only in the roadmap table above. / ยังไม่ได้ทำ อยู่ในแผนเท่านั้น |
-| **Localization** | All 238 entries have EN + TH, but only Settings, Features, the sidebar/chat-history panel and the chat input bar are wired to them. The remaining pages are English-only. / หน้าอื่นยังเป็นอังกฤษ |
+| **Localization** | Every page is wired to the translation table (622 entries, all EN + TH). What deliberately stays English: type/encoding names in the Hex Editor (int8, float32, UTF-8), sampling parameter names (Top-P, Top-K, Min-P), keyboard shortcut labels and the CluadeX brand name. / แปลครบทุกหน้าแล้ว ที่เหลือเป็นอังกฤษคือศัพท์เทคนิคที่ไม่ควรแปล |
 | **Platform** | Windows only. There is no macOS or Linux build. / รองรับ Windows เท่านั้น |
 | **Weak local models** | The harness (constrained decoding, tool-call salvage, auto-verify, false-finish guard) makes small GGUF models finish real edits, but it cannot add reasoning the weights lack — a 7B model still hallucinates when summarising unfamiliar code. Connect an API provider for hard tasks. / โมเดลเล็กยังมโนได้ในงานที่ต้องคิดเยอะ |
 | **Embedded terminal** | A real persistent PowerShell for running commands — not a full PTY. Cursor-driven TUIs (vim, htop) will not render. / ไม่ใช่ PTY เต็มรูปแบบ |
