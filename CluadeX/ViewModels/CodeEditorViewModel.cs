@@ -334,8 +334,13 @@ public class CodeEditorViewModel : ViewModelBase
                 StatusMessage = $"Can't open {Path.GetFileName(fullPath)} (binary or too large)";
                 return;
             }
-            Tabs.Add(loaded);
-            ActiveTab = loaded;
+            // After an await — and this is reached from search results, go-to-definition and the
+            // debugger's frame selection, so it must not assume it is still on the dispatcher.
+            OnUi(() =>
+            {
+                Tabs.Add(loaded);
+                ActiveTab = loaded;
+            });
         }
         catch (Exception ex) { StatusMessage = $"Open failed: {ex.Message}"; }
     }
@@ -1414,7 +1419,9 @@ public class CodeEditorViewModel : ViewModelBase
             _renamePlan = plan;
             ResetResults();
             HasSearched = true;
-            foreach (var g in plan.Files) SearchResults.Add(new SearchResultGroup(g));
+            // Same rule as ApplyOutcome: this runs after an await, so it is only on the dispatcher
+            // when the caller had a SynchronizationContext.
+            OnUi(() => { foreach (var g in plan.Files) SearchResults.Add(new SearchResultGroup(g)); });
 
             SearchSummary = plan.TotalEdits == 0
                 ? $"'{plan.OldName}' not found — nothing to rename"
@@ -1641,9 +1648,12 @@ public class CodeEditorViewModel : ViewModelBase
         DebugStatus = string.IsNullOrEmpty(DebugStatus) ? "Checking for debug adapters…" : DebugStatus;
         var adapters = await Task.Run(DebugAdapterService.DetectAdapters);
 
-        DebugAdapters.Clear();
-        foreach (var a in adapters) DebugAdapters.Add(a);
-        UpdateDebugTarget(adapters);
+        OnUi(() =>
+        {
+            DebugAdapters.Clear();
+            foreach (var a in adapters) DebugAdapters.Add(a);
+            UpdateDebugTarget(adapters);
+        });
 
         if (DebugStatus == "Checking for debug adapters…")
             DebugStatus = adapters.Any(a => a.IsAvailable) ? "" : "No debug adapter installed yet.";
@@ -1827,8 +1837,12 @@ public class CodeEditorViewModel : ViewModelBase
     {
         try
         {
-            DebugVariables.Clear();
-            foreach (var v in await _debug.GetVariablesAsync(frame.Id)) DebugVariables.Add(v);
+            var variables = await _debug.GetVariablesAsync(frame.Id);
+            OnUi(() =>
+            {
+                DebugVariables.Clear();
+                foreach (var v in variables) DebugVariables.Add(v);
+            });
 
             if (!string.IsNullOrEmpty(frame.FilePath) && File.Exists(frame.FilePath))
             {
