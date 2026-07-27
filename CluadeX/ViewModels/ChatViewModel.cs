@@ -1123,6 +1123,11 @@ public class ChatViewModel : ViewModelBase
         // Invalidate system prompt cache (project context changed)
         _agentService.InvalidateSystemPromptCache();
 
+        // Project-scoped skills live under the PROJECT folder, but the skill list is cached on
+        // first use — without this, opening or switching a project never picked them up (and a
+        // previous project's skills stayed advertised).
+        _skillService.ReloadSkills();
+
         // Auto-enable agentic mode when a project is open
         AgenticMode = true;
 

@@ -34,11 +34,31 @@ public class AgentToolService : IDisposable
         try
         {
             return _skillService.GetAllSkills()
-                .Where(s => s.UserInvocable)
+                .Where(s => s.UserInvocable && SkillToolsAreUsable(s))
                 .Select(s => (s.Name, s.Description))
                 .ToList();
         }
         catch { return []; }
+    }
+
+    /// <summary>
+    /// A skill is only worth advertising if at least one of its whitelisted tools can actually
+    /// run right now. /market-research, for instance, whitelists only web_search + web_fetch —
+    /// which are activation-gated — so on the free tier it was offered everywhere and then
+    /// refused every single tool call. A skill with no whitelist is unrestricted, so it is fine.
+    /// </summary>
+    private bool SkillToolsAreUsable(SkillDefinition s)
+    {
+        if (s.AllowedTools is not { Count: > 0 }) return true;
+        bool anyResolvable = false;
+        foreach (var name in s.AllowedTools)
+        {
+            var t = ResolveToolType(name);
+            if (t == null) continue;      // unknown/MCP name — can't judge, don't penalise
+            anyResolvable = true;
+            if (IsToolAllowed(t.Value)) return true;
+        }
+        return !anyResolvable;            // nothing resolvable => leave it visible
     }
 
     // ─── TODO List State ───
@@ -53,9 +73,12 @@ public class AgentToolService : IDisposable
     /// <summary>Raised when agent requests a sub-task spawn. Returns sub-agent result.</summary>
     public event Func<string, string, CancellationToken, Task<string>>? OnAgentSpawnRequested;
 
-    // Regex to match [ACTION: tool_name]...[/ACTION] blocks
+    // Regex to match [ACTION: tool_name]...[/ACTION] blocks.
+    // The name class must cover MCP qualified names (mcp__server__tool), which routinely contain
+    // '-' and '.' from the server key — \w+ alone silently failed to match them, so those blocks
+    // were neither executed NOR stripped from the reply (raw markup leaked to the user).
     private static readonly Regex ActionRegex = new(
-        @"\[ACTION:\s*(\w+)\](.*?)\[/ACTION\]",
+        @"\[ACTION:\s*([\w.\-]+)\](.*?)\[/ACTION\]",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     /// <summary>Raised when a tool requires user confirmation (PermAction.Ask).</summary>
@@ -129,10 +152,13 @@ public class AgentToolService : IDisposable
 
         foreach (Match match in ActionRegex.Matches(modelOutput))
         {
-            string toolName = match.Groups[1].Value.Trim().ToLowerInvariant();
+            // Keep the RAW name: MCP qualified names are case-sensitive-ish and user-visible.
+            // Lowercasing is only needed for the built-in alias switch.
+            string rawName = match.Groups[1].Value.Trim();
+            string toolName = rawName.ToLowerInvariant();
             string body = match.Groups[2].Value.Trim();
 
-            var toolType = ResolveToolType(toolName);
+            var toolType = ResolveToolType(rawName) ?? ResolveToolType(toolName);
             if (toolType == null) continue;
 
             var args = ParseArguments(body, toolType.Value);
@@ -140,7 +166,9 @@ public class AgentToolService : IDisposable
             var call = new ToolCall
             {
                 Type = toolType.Value,
-                ToolName = toolName,
+                // Built-ins keep their canonical lowercase name; MCP keeps the real one so the
+                // UI and the result text show what the user configured.
+                ToolName = toolType == ToolType.McpTool ? rawName : toolName,
                 Arguments = args,
                 RawText = match.Value,
             };
@@ -148,7 +176,8 @@ public class AgentToolService : IDisposable
             // Set MCP metadata if it's an MCP tool
             if (toolType == ToolType.McpTool)
             {
-                var mcpTool = _mcpManager.ToolRegistry.ResolveTool(toolName);
+                var mcpTool = _mcpManager.ToolRegistry.ResolveTool(rawName)
+                              ?? _mcpManager.ToolRegistry.ResolveTool(toolName);
                 if (mcpTool != null)
                 {
                     call.McpServerName = mcpTool.ServerName;
@@ -229,10 +258,16 @@ public class AgentToolService : IDisposable
         try
         {
             // ── Skill AllowedTools enforcement ──
+            // Compare by RESOLVED ToolType, not raw strings: skills are authored with human names
+            // ("grep") while the registry name is "grep_search", and a raw-string gate silently
+            // killed search inside 14 built-in skills. Falls back to string equality for names
+            // that don't resolve (MCP qualified names).
             if (ActiveSkillAllowedTools is { Count: > 0 })
             {
+                var callType = ResolveToolType(call.ToolName);
                 bool toolAllowedBySkill = ActiveSkillAllowedTools.Any(t =>
-                    t.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase));
+                    t.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)
+                    || (callType != null && ResolveToolType(t) == callType));
                 if (!toolAllowedBySkill)
                     return Fail(call, $"Tool '{call.ToolName}' is not allowed by the current skill. Allowed: {string.Join(", ", ActiveSkillAllowedTools)}");
             }
@@ -534,14 +569,17 @@ public class AgentToolService : IDisposable
             schemas.Add(new() { Name = "git_status", Description = "Show git working tree status", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "git_add", Description = "Stage files for commit", InputSchema = MakeSchema(("paths", "string", "Files to stage (space-separated)", true)) });
             schemas.Add(new() { Name = "git_commit", Description = "Create a git commit. Pass stage_all=true to stage every change first (like 'git add -A' then commit) so you don't need a separate git_add.", InputSchema = MakeSchema(("message", "string", "Commit message", true), ("stage_all", "string", "true to stage all changes before committing", false)) });
-            schemas.Add(new() { Name = "git_diff", Description = "Show changes", InputSchema = MakeSchema(("args", "string", "Diff arguments", false)) });
-            schemas.Add(new() { Name = "git_log", Description = "Show commit history", InputSchema = MakeSchema(("args", "string", "Log arguments", false)) });
-            schemas.Add(new() { Name = "git_branch", Description = "List or create branches", InputSchema = MakeSchema(("args", "string", "Branch arguments", false)) });
-            schemas.Add(new() { Name = "git_pull", Description = "Pull from remote", InputSchema = MakeSchema(("args", "string", "Pull arguments", false)) });
-            schemas.Add(new() { Name = "git_checkout", Description = "Switch branches or restore files", InputSchema = MakeSchema(("target", "string", "Branch or file", true)) });
+            // NOTE: every advertised property below must be a key an executor actually reads.
+            // A generic "args" bag looked convenient but no executor parsed it, so the model's
+            // arguments were silently dropped and the tool "succeeded" doing something else.
+            schemas.Add(new() { Name = "git_diff", Description = "Show changes (working tree, or staged with staged=true)", InputSchema = MakeSchema(("path", "string", "Limit the diff to this file/dir", false), ("staged", "string", "true to diff the staged changes", false)) });
+            schemas.Add(new() { Name = "git_log", Description = "Show commit history", InputSchema = MakeSchema(("count", "string", "How many commits (default 10)", false), ("file", "string", "Only commits touching this file", false)) });
+            schemas.Add(new() { Name = "git_branch", Description = "List, create or delete branches", InputSchema = MakeSchema(("action", "string", "list|create|delete (default list)", false), ("name", "string", "Branch name for create/delete", false)) });
+            schemas.Add(new() { Name = "git_pull", Description = "Pull from remote", InputSchema = MakeSchema(("remote", "string", "Remote name (default origin)", false), ("branch", "string", "Branch name", false)) });
+            schemas.Add(new() { Name = "git_checkout", Description = "Switch to an existing branch", InputSchema = MakeSchema(("branch", "string", "Branch name to switch to", true)) });
             schemas.Add(new() { Name = "git_merge", Description = "Merge a branch into the current branch", InputSchema = MakeSchema(("branch", "string", "Branch to merge into the current one", true)) });
             schemas.Add(new() { Name = "git_stash", Description = "Stash changes", InputSchema = MakeSchema(("action", "string", "push|pop|list|drop", false)) });
-            schemas.Add(new() { Name = "git_clone", Description = "Clone a repository", InputSchema = MakeSchema(("url", "string", "Repository URL", true), ("path", "string", "Target directory", false)) });
+            schemas.Add(new() { Name = "git_clone", Description = "Clone a repository", InputSchema = MakeSchema(("url", "string", "Repository URL", true), ("directory", "string", "Target directory name", false)) });
             schemas.Add(new() { Name = "git_init", Description = "Initialize a git repository", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "git_worktree_create", Description = "Create an isolated git worktree", InputSchema = MakeSchema(("branch", "string", "Branch name", true), ("path", "string", "Worktree path", true)) });
             schemas.Add(new() { Name = "git_worktree_remove", Description = "Remove a git worktree", InputSchema = MakeSchema(("path", "string", "Worktree path", true)) });
@@ -569,8 +607,10 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "repl", Description = "Run code in a persistent REPL session (Python/Node.js)",
             InputSchema = MakeSchema(("language", "string", "python or node", true), ("code", "string", "Code to execute", true), ("action", "string", "exec or close", false)) });
 
-        // Task management
-        if (features.TaskManager)
+        // Task management — the schema gate MUST match IsToolAllowed exactly (which also requires
+        // activation), otherwise every free-tier model is handed task_* tools and told they are
+        // disabled the moment it uses one.
+        if (features.TaskManager && _activationService.IsFeatureUnlocked("feature.taskManager"))
         {
             schemas.Add(new() { Name = "task_create", Description = "Start a background command", InputSchema = MakeSchema(("command", "string", "Shell command", true)) });
             schemas.Add(new() { Name = "task_list", Description = "List background tasks", InputSchema = MakeSchema() });
@@ -579,7 +619,9 @@ public class AgentToolService : IDisposable
         }
 
         // Meta tools
-        schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("content", "string", "Todo item", true), ("status", "string", "pending|in_progress|completed", false)) });
+        // 'action' was missing from the schema, so completing/listing/clearing todos was
+        // unreachable and "mark done" silently appended a duplicate instead.
+        schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("action", "string", "add|complete|list|clear (default add)", false), ("content", "string", "Todo item text (required for add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
         schemas.Add(new() { Name = "powershell", Description = "Execute a PowerShell command", InputSchema = MakeSchema(("command", "string", "PowerShell command", true)) });
@@ -642,7 +684,18 @@ public class AgentToolService : IDisposable
                     }
                     catch { /* skip malformed schemas */ }
                 }
-                schemas.Add(new() { Name = mcpTool.QualifiedName, Description = mcpTool.Description ?? mcpTool.Name, InputSchema = MakeSchema(paramsList.ToArray()) });
+                // The Anthropic API rejects a tool name that isn't ^[a-zA-Z0-9_-]{1,128}$ — and it
+                // rejects the WHOLE request, so one server named with a space or a dot used to
+                // 400 every agentic turn. Skip such tools instead of poisoning the catalogue.
+                string mcpName = mcpTool.QualifiedName;
+                if (!System.Text.RegularExpressions.Regex.IsMatch(mcpName, @"^[a-zA-Z0-9_-]{1,128}$"))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[MCP] Skipping tool '{mcpName}' — name is not API-safe (letters, digits, '_' and '-' only, max 128). "
+                        + "Rename the server key in mcp_servers.json.");
+                    continue;
+                }
+                schemas.Add(new() { Name = mcpName, Description = mcpTool.Description ?? mcpTool.Name, InputSchema = MakeSchema(paramsList.ToArray()) });
             }
         }
 
@@ -736,10 +789,6 @@ public class AgentToolService : IDisposable
                 message: your commit message here
                 [/ACTION]
 
-            12. git_push - Push commits to remote
-                [ACTION: git_push]
-                [/ACTION]
-
             13. git_pull - Pull changes from remote
                 [ACTION: git_pull]
                 [/ACTION]
@@ -792,7 +841,11 @@ public class AgentToolService : IDisposable
         {
             sb.AppendLine("""
 
-            GITHUB TOOLS (requires gh CLI):
+            GITHUB / PUBLISH TOOLS (requires gh CLI):
+
+            20b. git_push - Push commits to a remote
+                [ACTION: git_push]
+                [/ACTION]
 
             21. gh_pr_create - Create a Pull Request
                 [ACTION: gh_pr_create]
@@ -1021,6 +1074,75 @@ public class AgentToolService : IDisposable
 
             49. subagent_list - List every available subagent with description and tier
                 [ACTION: subagent_list][/ACTION]
+
+            CODE INTELLIGENCE & VERIFICATION:
+            (These have working executors but used to be missing from this catalogue, which made
+             them invisible to every provider on the [ACTION:] protocol.)
+
+            50. multi_edit - Apply several find/replace edits to ONE file atomically
+                [ACTION: multi_edit]
+                path: src/Foo.cs
+                edits: [{"find": "old code", "replace": "new code"}, {"find": "a", "replace": "b"}]
+                [/ACTION]
+
+            51. run_build - Build the project and return compiler errors
+                [ACTION: run_build][/ACTION]
+
+            52. run_tests - Run the test suite and return failures
+                [ACTION: run_tests][/ACTION]
+
+            53. codebase_search - Semantic search over the indexed codebase
+                [ACTION: codebase_search]
+                query: where is the retry policy configured
+                [/ACTION]
+
+            54. find_symbol - Find where a symbol is defined
+                [ACTION: find_symbol]
+                name: CodeAgentService
+                [/ACTION]
+
+            55. list_symbols - List the symbols declared in a file
+                [ACTION: list_symbols]
+                path: src/Foo.cs
+                [/ACTION]
+
+            56. lsp_diagnostics - Current compiler/linter diagnostics for a file
+                [ACTION: lsp_diagnostics]
+                path: src/Foo.cs
+                [/ACTION]
+
+            57. brain_recall - Recall relevant notes from the connected BrainX knowledge base
+                [ACTION: brain_recall]
+                query: previous decisions about the agent loop
+                [/ACTION]
+
+            58. hex_open - Open a binary file in the hex editor (do this first)
+                [ACTION: hex_open]
+                path: build/app.bin
+                [/ACTION]
+
+            58a. hex_read - Read bytes from the open binary
+                [ACTION: hex_read]
+                offset: 0
+                length: 256
+                [/ACTION]
+
+            58b. hex_search - Find a byte/string pattern in the open binary
+                [ACTION: hex_search]
+                pattern: MZ
+                [/ACTION]
+
+            58c. hex_patch - Overwrite bytes at an offset
+                [ACTION: hex_patch]
+                offset: 128
+                bytes: 90 90 90
+                [/ACTION]
+
+            58d. hex_info - Size / type summary of the open binary
+                [ACTION: hex_info][/ACTION]
+
+            59. instinct_evolve - Housekeeping: merge near-duplicate learned instincts
+                [ACTION: instinct_evolve][/ACTION]
         """);
 
         // MCP server tools (dynamically discovered)
@@ -1851,9 +1973,13 @@ public class AgentToolService : IDisposable
 
     private async Task<ToolResult> ExecuteGitCheckoutAsync(ToolCall call)
     {
-        string branch = call.GetArg("branch");
+        // Accept the historical "target"/"name" spellings too — the native schema used to
+        // advertise "target", so in-flight transcripts and weak models still send it.
+        string branch = call.GetArg("branch", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("target", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("name", "");
         if (string.IsNullOrEmpty(branch))
-            return Fail(call, "Missing 'branch' argument");
+            return Fail(call, "Missing 'branch' argument (the branch to switch to)");
         var r = await _gitService.CheckoutAsync(branch);
         return GitToToolResult(call, r, $"Switched to: {branch}");
     }
@@ -1886,7 +2012,10 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult> ExecuteGitCloneAsync(ToolCall call, CancellationToken ct)
     {
         string url = call.GetArg("url");
+        // "path" was the advertised name for a long time — honour both so the requested
+        // target directory is never silently ignored.
         string dir = call.GetArg("directory", "");
+        if (string.IsNullOrEmpty(dir)) dir = call.GetArg("path", "");
         if (string.IsNullOrEmpty(url))
             return Fail(call, "Missing 'url' argument");
 
@@ -1967,8 +2096,10 @@ public class AgentToolService : IDisposable
 
     private async Task<ToolResult> ExecuteGhRepoViewAsync(ToolCall call)
     {
-        var r = await _gitHubService.ViewRepoAsync();
-        return GitToToolResult(call, r, "Repo info");
+        // 'repo' is advertised in the schema, so it must actually be honoured (empty = current repo).
+        string repo = call.GetArg("repo", "");
+        var r = await _gitHubService.ViewRepoAsync(repo);
+        return GitToToolResult(call, r, string.IsNullOrEmpty(repo) ? "Repo info" : $"Repo info: {repo}");
     }
 
     /// <summary>Convert a GitResult to a ToolResult.</summary>
@@ -2383,8 +2514,34 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(task))
             return Fail(call, "Missing 'task' argument");
 
+        // No external host is subscribed in the desktop app (the event exists for embedders),
+        // so agent_spawn used to fail 100% of the time despite being advertised in both tool
+        // protocols. Fall back to the same in-loop mechanism subagent_invoke uses: hand the
+        // main agent a focused sub-task brief it executes before returning to the parent task.
         if (OnAgentSpawnRequested == null)
-            return Fail(call, "Agent spawning not available — no handler registered");
+        {
+            var brief = new StringBuilder();
+            brief.AppendLine("# 🧩 Sub-task");
+            brief.AppendLine("Run this as a self-contained sub-task NOW, then return to the parent task:");
+            brief.AppendLine();
+            brief.AppendLine($"**Task:** {task}");
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                brief.AppendLine();
+                brief.AppendLine($"**Context:** {context}");
+            }
+            brief.AppendLine();
+            brief.AppendLine("Work it end to end with your normal tools, verify the result, then summarise "
+                + "the outcome in 2-3 lines and continue what you were doing before.");
+            brief.AppendLine("(For a specialist persona with a scoped tool set, use subagent_invoke instead — "
+                + "run subagent_list to see the available specialists.)");
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = brief.ToString(),
+                Summary = $"Sub-task queued: {task[..Math.Min(50, task.Length)]}",
+            };
+        }
 
         try
         {
@@ -3148,7 +3305,13 @@ public class AgentToolService : IDisposable
         // prompt and the restricted tool set.
         if (agent.AllowedTools is { Count: > 0 })
         {
-            ActiveSkillAllowedTools = agent.AllowedTools;
+            // Always keep the subagent controls reachable, otherwise this is a one-way latch:
+            // once scoped, the model can neither switch specialist nor list them, and nothing
+            // releases the scope until the turn ends.
+            var scoped = new List<string>(agent.AllowedTools);
+            if (!scoped.Contains("subagent_invoke", StringComparer.OrdinalIgnoreCase)) scoped.Add("subagent_invoke");
+            if (!scoped.Contains("subagent_list", StringComparer.OrdinalIgnoreCase)) scoped.Add("subagent_list");
+            ActiveSkillAllowedTools = scoped;
         }
 
         var sb = new StringBuilder();

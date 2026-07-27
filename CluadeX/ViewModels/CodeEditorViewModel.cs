@@ -31,8 +31,14 @@ public class CodeEditorViewModel : ViewModelBase
         get => _activeTab;
         set
         {
+            var previous = _activeTab;
             if (SetProperty(ref _activeTab, value))
             {
+                // Drive the tab-strip highlight (the XAML used to bind a property that
+                // didn't exist, so no tab ever looked selected).
+                if (previous != null) previous.IsActive = false;
+                if (value != null) value.IsActive = true;
+
                 OnPropertyChanged(nameof(HasActiveTab));
                 OnPropertyChanged(nameof(ActiveFileName));
                 OnPropertyChanged(nameof(ActiveLanguageLabel));

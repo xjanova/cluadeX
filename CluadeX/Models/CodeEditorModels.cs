@@ -14,6 +14,16 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
     public string FileName => Path.GetFileName(FullPath);
     public string Extension => Path.GetExtension(FullPath).TrimStart('.').ToLowerInvariant();
 
+    /// <summary>True when this tab is the one shown in the editor. The tab strip binds its
+    /// highlight to this; it used to bind to a non-existent Border.IsSelected, so the active
+    /// tab was never highlighted.</summary>
+    private bool _isActive;
+    public bool IsActive
+    {
+        get => _isActive;
+        set { if (_isActive != value) { _isActive = value; Raise(nameof(IsActive)); } }
+    }
+
     private string _content = "";
     public string Content
     {

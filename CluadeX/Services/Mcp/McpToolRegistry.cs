@@ -12,7 +12,10 @@ namespace CluadeX.Services.Mcp;
 public class McpToolRegistry
 {
     private readonly Dictionary<string, List<McpTool>> _serverTools = new();
-    private readonly Dictionary<string, McpTool> _qualifiedNameMap = new();
+    // Case-insensitive: the legacy [ACTION:] path lowercases tool names before lookup, so a
+    // server key with any capital letter (e.g. "Desktop_Commander") made every one of its tools
+    // silently unresolvable on that path. The native path passes names verbatim and is unaffected.
+    private readonly Dictionary<string, McpTool> _qualifiedNameMap = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
 
     /// <summary>Total number of MCP tools across all servers.</summary>

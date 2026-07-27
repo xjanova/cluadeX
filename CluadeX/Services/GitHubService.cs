@@ -113,9 +113,15 @@ public class GitHubService
     }
 
     /// <summary>View repo info.</summary>
-    public async Task<GitResult> ViewRepoAsync()
+    /// <summary>View a repo. Empty <paramref name="repo"/> = the repo in the working directory;
+    /// otherwise "owner/name" (validated, since it is interpolated into the gh command line).</summary>
+    public async Task<GitResult> ViewRepoAsync(string repo = "")
     {
-        return await RunGhAsync("repo view");
+        repo = (repo ?? "").Trim();
+        if (repo.Length == 0) return await RunGhAsync("repo view");
+        if (!System.Text.RegularExpressions.Regex.IsMatch(repo, @"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$"))
+            return new GitResult { Success = false, Error = "Invalid repo — expected owner/name." };
+        return await RunGhAsync($"repo view {repo}");
     }
 
     /// <summary>List releases.</summary>

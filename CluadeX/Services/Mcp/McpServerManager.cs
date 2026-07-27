@@ -235,23 +235,62 @@ public sealed class McpServerManager : IDisposable
     /// <summary>Call a tool on a specific server.</summary>
     public async Task<McpToolResult> CallToolAsync(string serverName, string toolName, Dictionary<string, string> arguments, CancellationToken ct = default)
     {
-        // Convert string args to typed args (int / double / bool / string).
-        // Callers that need to pass arrays or nested objects MUST use the
-        // object-overload below to avoid the brain receiving a quoted JSON
-        // string instead of a real array.
+        // Convert string args back to typed args (int / double / bool / array / object / string).
+        // The agent dispatch path flattens every tool argument to a string (ToolCall.Arguments is
+        // Dictionary<string,string>), so an array/object argument arrived here as its JSON TEXT.
+        // Without the array/object branch below the server received a quoted string like
+        // "[\"a\",\"b\"]" where it expected a real array, and rejected the call — which made every
+        // MCP tool with a non-scalar parameter unusable from the agent.
         var argsDict = new Dictionary<string, object>();
         foreach (var (key, value) in arguments)
         {
-            if (int.TryParse(value, out int intVal))
+            string v = value ?? "";
+            string t = v.TrimStart();
+            if (t.Length > 0 && (t[0] == '[' || t[0] == '{'))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(v);
+                    argsDict[key] = JsonElementToObject(doc.RootElement) ?? v;
+                    continue;
+                }
+                catch { /* not valid JSON — fall through and send it as a plain string */ }
+            }
+            if (int.TryParse(v, out int intVal))
                 argsDict[key] = intVal;
-            else if (double.TryParse(value, out double dblVal))
+            else if (double.TryParse(v, System.Globalization.NumberStyles.Float,
+                         System.Globalization.CultureInfo.InvariantCulture, out double dblVal))
                 argsDict[key] = dblVal;
-            else if (bool.TryParse(value, out bool boolVal))
+            else if (bool.TryParse(v, out bool boolVal))
                 argsDict[key] = boolVal;
             else
-                argsDict[key] = value;
+                argsDict[key] = v;
         }
         return await CallToolWithObjectArgsAsync(serverName, toolName, argsDict, ct);
+    }
+
+    /// <summary>Materialize a JsonElement into plain CLR objects so it re-serializes
+    /// as real JSON (array/object/number/bool/null) rather than as a quoted string.</summary>
+    private static object? JsonElementToObject(System.Text.Json.JsonElement el)
+    {
+        switch (el.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Array:
+                var list = new List<object?>();
+                foreach (var item in el.EnumerateArray()) list.Add(JsonElementToObject(item));
+                return list;
+            case System.Text.Json.JsonValueKind.Object:
+                var map = new Dictionary<string, object?>();
+                foreach (var p in el.EnumerateObject()) map[p.Name] = JsonElementToObject(p.Value);
+                return map;
+            case System.Text.Json.JsonValueKind.String:
+                return el.GetString();
+            case System.Text.Json.JsonValueKind.Number:
+                return el.TryGetInt64(out long l) ? l : el.GetDouble();
+            case System.Text.Json.JsonValueKind.True: return true;
+            case System.Text.Json.JsonValueKind.False: return false;
+            default: return null;
+        }
     }
 
     /// <summary>

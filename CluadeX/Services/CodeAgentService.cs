@@ -46,6 +46,10 @@ public class CodeAgentService
         // and stripping the tool here while keeping the instruction made small-ctx local models the ONLY
         // tier that couldn't reach the brain (CluadeX ↔ BrainX are meant to be used together, always).
         "brain_recall",
+        // Same contradiction as brain_recall: section 10 of the system prompt lists the available
+        // skills and tells the model to run them with skill_invoke, so the tool has to survive the
+        // subset filter or "/commit" style requests dead-end on a tool the model was told to use.
+        "skill_invoke",
     };
 
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
@@ -152,15 +156,17 @@ public class CodeAgentService
 
         if (features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"))
         {
+            // Local git only — push lives behind feature.github, so listing it here would
+            // promise a capability the runtime gate denies.
             sb.AppendLine(isThai
-                ? "- จัดการ Git เต็มรูปแบบ: status, add, commit, push, pull, branch, merge, diff, log, stash"
-                : "- Full Git version control: status, add, commit, push, pull, branch, merge, diff, log, stash");
+                ? "- จัดการ Git ในเครื่อง: status, add, commit, pull, branch, checkout, merge, diff, log, stash"
+                : "- Local Git version control: status, add, commit, pull, branch, checkout, merge, diff, log, stash");
         }
         if (features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"))
         {
             sb.AppendLine(isThai
-                ? "- เชื่อมต่อ GitHub: สร้าง PR, ดู issues, จัดการ repo (ต้องติดตั้ง gh CLI)"
-                : "- GitHub integration: create PRs, list issues, view repos (requires gh CLI)");
+                ? "- เชื่อมต่อ GitHub: push ขึ้น remote, สร้าง PR, ดู issues, จัดการ repo (ต้องติดตั้ง gh CLI)"
+                : "- GitHub integration: push to a remote, create PRs, list issues, view repos (requires gh CLI)");
         }
         if (features.SmartEditing)
         {
@@ -762,14 +768,21 @@ public class CodeAgentService
                 // Small/medium ctx + native tool use: we send a CORE tool subset (see CoreLocalToolNames), so
                 // the prompt must AGREE — telling the model tools are "disabled" while handing it schemas is
                 // the contradiction that wrecks weak-model tool selection.
+                // The git names are only in the CORE subset when the Git feature actually emitted
+                // their schemas — listing them unconditionally advertised tools IsToolAllowed denies.
+                bool gitInCore = _settingsService.Settings.Features.GitIntegration
+                    && _activationService.IsFeatureUnlocked("feature.git");
                 sb.AppendLine("NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, "
                     + "search_content, search_files, codebase_search, find_symbol, list_symbols, edit_file, "
-                    + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall, "
-                    + "git_status, git_add, git_commit, git_merge. ALWAYS read_file before editing; "
-                    + "after an edit, run_build (and run_tests) to verify. "
-                    + "For git, PREFER the dedicated tools over run_command 'git ...': use git_commit "
-                    + "(pass stage_all=true to stage everything first) and git_merge — shell quoting for git is "
-                    + "unreliable on Windows. Increase Context Size to ≥ 16384 for the full toolset.");
+                    + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall, skill_invoke"
+                    + (gitInCore ? ", git_status, git_add, git_commit, git_merge" : "")
+                    + ". ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify. "
+                    + (gitInCore
+                        ? "For git, PREFER the dedicated tools over run_command 'git ...': use git_commit "
+                          + "(pass stage_all=true to stage everything first) and git_merge — shell quoting for git is "
+                          + "unreliable on Windows. "
+                        : "")
+                    + "Increase Context Size to ≥ 16384 for the full toolset.");
             }
             else
             {

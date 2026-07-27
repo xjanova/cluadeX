@@ -67,10 +67,12 @@ public class HookLibraryViewModel : ViewModelBase
         ToggleCommand = new RelayCommand<HookBundle>(b =>
         {
             if (b == null) return;
-            _service.SetEnabled(b.Id, !b.IsEnabled);
-            StatusMessage = b.IsEnabled
-                ? $"Disabled {b.Name}"
-                : $"Enabled {b.Name}";
+            // Capture the INTENDED state first: SetEnabled fires Changed -> Refresh synchronously,
+            // so reading b.IsEnabled afterwards reported the opposite of what just happened.
+            bool willEnable = !b.IsEnabled;
+            string name = b.Name;
+            _service.SetEnabled(b.Id, willEnable);
+            StatusMessage = willEnable ? $"Enabled {name}" : $"Disabled {name}";
         });
         OpenBundleFolderCommand = new RelayCommand(() =>
         {

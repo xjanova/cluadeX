@@ -16,6 +16,10 @@ public class InstinctsViewModel : ViewModelBase
 {
     private readonly InstinctService _service;
     private readonly BrainSyncService _brainSync;
+    private readonly SkillService _skillService;
+    private readonly System.Windows.Threading.DispatcherTimer _brainPoll;
+    private bool _lastBrainAvailable;
+    private string _lastBrainText = "";
 
     public ObservableCollection<Instinct> Instincts { get; } = new();
 
@@ -75,10 +79,31 @@ public class InstinctsViewModel : ViewModelBase
     public bool BrainAvailable => _brainSync.IsBrainAvailable;
     public string BrainStatusText => _brainSync.StatusText;
 
-    public InstinctsViewModel(InstinctService service, BrainSyncService brainSync)
+    public InstinctsViewModel(InstinctService service, BrainSyncService brainSync, SkillService skillService)
     {
         _service = service;
         _brainSync = brainSync;
+        _skillService = skillService;
+
+        // The BRAIN/OFFLINE chip and the brain-sync buttons read expression-bodied pass-throughs
+        // (no backing field), so they latched to whatever was true when the page was first built —
+        // starting the brain server afterwards left the UI saying OFFLINE forever. BrainSyncService
+        // exposes no change event and its check is a cheap in-memory lookup, so poll it.
+        _brainPoll = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(3),
+        };
+        _brainPoll.Tick += (_, _) =>
+        {
+            bool nowAvailable = _brainSync.IsBrainAvailable;
+            string nowText = _brainSync.StatusText;
+            if (nowAvailable == _lastBrainAvailable && nowText == _lastBrainText) return;
+            _lastBrainAvailable = nowAvailable;
+            _lastBrainText = nowText;
+            OnPropertyChanged(nameof(BrainAvailable));
+            OnPropertyChanged(nameof(BrainStatusText));
+        };
+        _brainPoll.Start();
         RefreshCommand = new RelayCommand(() => Refresh());
         SelectCommand = new RelayCommand<Instinct>(i => { if (i != null) Selected = i; });
         AcceptCommand = new RelayCommand(() =>
@@ -110,7 +135,10 @@ public class InstinctsViewModel : ViewModelBase
             var path = _service.PromoteToSkill(_selected.Id);
             if (path != null)
             {
-                StatusMessage = $"Promoted → {Path.GetFileName(path)}";
+                // The skill file is on disk, but SkillService caches its list forever — without
+                // this the new skill stayed invisible to the agent and to /-completion until restart.
+                _skillService.ReloadSkills();
+                StatusMessage = $"Promoted → {Path.GetFileName(path)} (available now)";
                 Refresh(preserveSelection: _selected.Id);
             }
             else
