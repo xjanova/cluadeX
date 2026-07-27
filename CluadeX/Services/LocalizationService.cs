@@ -442,6 +442,19 @@ public class LocalizationService
         ["editor.applyRenameTip"] = new() { ["en"] = "Rewrite every previewed occurrence on disk — preview first, this cannot be undone from CluadeX", ["th"] = "เขียนทับทุกจุดที่ดูตัวอย่างไว้ลงดิสก์ — ต้องดูก่อน และย้อนกลับใน CluadeX ไม่ได้" },
         ["editor.cancel"] = new() { ["en"] = "Cancel", ["th"] = "ยกเลิก" },
 
+        // ── diff editor + merge-conflict resolution ──
+        ["editor.diffHead"] = new() { ["en"] = "HEAD (committed)", ["th"] = "HEAD (ที่คอมมิตไว้)" },
+        ["editor.diffWorking"] = new() { ["en"] = "Working tree (your changes)", ["th"] = "ไฟล์ปัจจุบัน (ที่คุณแก้)" },
+        ["editor.closeDiff"] = new() { ["en"] = "Close diff", ["th"] = "ปิด diff" },
+        ["editor.acceptCurrent"] = new() { ["en"] = "Keep current", ["th"] = "เอาของเดิม" },
+        ["editor.acceptIncoming"] = new() { ["en"] = "Keep incoming", ["th"] = "เอาของใหม่" },
+        ["editor.acceptBoth"] = new() { ["en"] = "Keep both", ["th"] = "เอาทั้งสอง" },
+        ["editor.acceptAllCurrent"] = new() { ["en"] = "Keep all current", ["th"] = "เอาของเดิมทั้งหมด" },
+        ["editor.acceptAllIncoming"] = new() { ["en"] = "Keep all incoming", ["th"] = "เอาของใหม่ทั้งหมด" },
+        ["editor.acceptAllCurrentTip"] = new() { ["en"] = "Resolve every conflict in this file by keeping your side (edits the tab — undoable, not saved until you save)", ["th"] = "แก้ conflict ทุกจุดในไฟล์นี้โดยเก็บฝั่งของคุณ (แก้ในแท็บ — ย้อนกลับได้ และยังไม่บันทึกจนกว่าคุณจะกดบันทึก)" },
+        ["editor.acceptAllIncomingTip"] = new() { ["en"] = "Resolve every conflict in this file by keeping the incoming side (edits the tab — undoable, not saved until you save)", ["th"] = "แก้ conflict ทุกจุดในไฟล์นี้โดยเก็บฝั่งที่เข้ามา (แก้ในแท็บ — ย้อนกลับได้ และยังไม่บันทึกจนกว่าคุณจะกดบันทึก)" },
+        ["editor.jumpToConflict"] = new() { ["en"] = "Jump to this conflict in the editor", ["th"] = "ไปยัง conflict นี้ในตัวแก้ไข" },
+
         // ── auto-wired page strings ──
         ["instincts.title"] = new() { ["en"] = "Instincts", ["th"] = "สัญชาตญาณที่เรียนรู้" },
         ["instincts.syncAllTip"] = new() { ["en"] = "Push every STRONG instinct as a coding-lesson note in your ObsidianX vault", ["th"] = "ส่งสัญชาตญาณระดับ STRONG ทุกข้อไปเป็นโน้ตบทเรียนใน ObsidianX" },

@@ -40,6 +40,14 @@ public class CodeEditorViewModel : ViewModelBase
                 if (previous != null) previous.IsActive = false;
                 if (value != null) value.IsActive = true;
 
+                // Merge-conflict banner follows the active buffer.
+                if (previous != null) previous.PropertyChanged -= OnActiveTabContentChanged;
+                if (value != null) value.PropertyChanged += OnActiveTabContentChanged;
+                ScanConflictsNow();
+
+                // Switching files means you want the file, not the diff you were reading.
+                if (IsDiffViewActive) CloseDiffCommand.Execute(null);
+
                 OnPropertyChanged(nameof(HasActiveTab));
                 OnPropertyChanged(nameof(ActiveFileName));
                 OnPropertyChanged(nameof(ActiveLanguageLabel));
@@ -344,45 +352,224 @@ public class CodeEditorViewModel : ViewModelBase
         catch { /* best-effort */ }
     }
 
-    /// <summary>Show a changed file's diff (git diff; untracked = whole file as additions) in a
-    /// read-only-ish tab with Patch highlighting — the review step before committing.</summary>
+    /// <summary>
+    /// Open a changed file in the side-by-side diff editor: HEAD on the left, working tree on the
+    /// right, aligned row by row. Replaces the old approach of writing a unified-diff text file to
+    /// temp and opening it as a tab — that was a patch you had to read, not a diff you could review.
+    /// </summary>
     private async Task ShowDiffAsync(GitChangeItem? item)
     {
         if (item == null || !_workspace.HasWorkingDirectory) return;
         try
         {
-            string diffText;
-            if (item.Status.StartsWith("?"))
+            string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, item.Path));
+            string working = File.Exists(full) ? await File.ReadAllTextAsync(full) : "";
+
+            // Untracked files have no HEAD version — everything is an addition.
+            string baseline = "";
+            if (!item.Status.StartsWith("?"))
             {
-                // Untracked — git diff shows nothing; present the whole file as an addition.
-                string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, item.Path));
-                string body = File.Exists(full) ? await File.ReadAllTextAsync(full) : "";
-                var lines = body.Replace("\r\n", "\n").Split('\n');
-                diffText = $"--- /dev/null\n+++ b/{item.Path}\n@@ -0,0 +1,{lines.Length} @@\n"
-                         + string.Join("\n", lines.Select(l => "+" + l));
-            }
-            else
-            {
-                var r = await _git.DiffAsync(item.Path);
-                diffText = r.Success && !string.IsNullOrWhiteSpace(r.Output)
-                    ? r.Output
-                    : $"(no unstaged diff for {item.Path} — the change may already be staged)";
+                var head = await _git.ShowFileAsync("HEAD", item.Path);
+                // Failure here is normal for a newly added file; treat it as "no baseline".
+                baseline = head.Success ? (head.Output ?? "") : "";
             }
 
-            // Materialize as a real .diff file so the normal tab pipeline (and Patch highlighting) applies.
-            string tmpDir = Path.Combine(Path.GetTempPath(), "cluadex-diffs");
-            Directory.CreateDirectory(tmpDir);
-            string tmp = Path.Combine(tmpDir, item.FileName + ".diff");
-            await File.WriteAllTextAsync(tmp, diffText);
+            var diff = await Task.Run(() => DiffService.BuildSideBySide(baseline, working));
 
-            var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, tmp, StringComparison.OrdinalIgnoreCase));
-            if (existing != null) { existing.MarkOpened(diffText); ActiveTab = existing; return; }
-            var loaded = await _workspace.OpenFileAsync(tmp);
-            if (loaded == null) return;
-            Tabs.Add(loaded);
-            ActiveTab = loaded;
+            DiffRows = diff.Rows;
+            DiffTitle = item.Path;
+            DiffSummary = diff.HasChanges
+                ? $"+{diff.Added:N0} −{diff.Removed:N0}"
+                  + (item.Status.StartsWith("?") ? " · untracked (no HEAD version)" : " · vs HEAD")
+                  + (diff.Truncated ? $" · ⚠ {diff.Note}" : "")
+                : diff.Note ?? "No differences against HEAD.";
+            IsDiffViewActive = true;
         }
-        catch { /* diff view is best-effort */ }
+        catch (Exception ex)
+        {
+            StatusMessage = $"✗ Diff failed: {ex.Message}";
+        }
+    }
+
+    // ═══════════════ Side-by-side diff view ═══════════════
+
+    private bool _isDiffViewActive;
+    public bool IsDiffViewActive
+    {
+        get => _isDiffViewActive;
+        set => SetProperty(ref _isDiffViewActive, value);
+    }
+
+    private List<DiffRow> _diffRows = new();
+    public List<DiffRow> DiffRows { get => _diffRows; set => SetProperty(ref _diffRows, value); }
+
+    private string _diffTitle = "";
+    public string DiffTitle { get => _diffTitle; set => SetProperty(ref _diffTitle, value); }
+
+    private string _diffSummary = "";
+    public string DiffSummary { get => _diffSummary; set => SetProperty(ref _diffSummary, value); }
+
+    public ICommand CloseDiffCommand => _closeDiffCommand ??= new RelayCommand(() =>
+    {
+        IsDiffViewActive = false;
+        DiffRows = new List<DiffRow>();   // thousands of rows shouldn't sit in memory once dismissed
+        DiffTitle = "";
+        DiffSummary = "";
+    });
+    private ICommand? _closeDiffCommand;
+
+    // ═══════════════ Merge conflicts ═══════════════
+
+    public ObservableCollection<ConflictBlock> Conflicts { get; } = new();
+
+    private bool _hasConflicts;
+    public bool HasConflicts { get => _hasConflicts; set => SetProperty(ref _hasConflicts, value); }
+
+    private string _conflictSummary = "";
+    public string ConflictSummary { get => _conflictSummary; set => SetProperty(ref _conflictSummary, value); }
+
+    private bool _conflictsMalformed;
+    /// <summary>A conflict marker has no closing marker — auto-resolution is refused (guessing where
+    /// a block ends is how a resolver silently eats code).</summary>
+    public bool ConflictsMalformed { get => _conflictsMalformed; set => SetProperty(ref _conflictsMalformed, value); }
+
+    private System.Windows.Threading.DispatcherTimer? _conflictDebounce;
+
+    private void OnActiveTabContentChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(OpenFileTab.Content)) ScheduleConflictScan();
+    }
+
+    /// <summary>Re-scan the active buffer for conflict markers, coalescing keystrokes.</summary>
+    private void ScheduleConflictScan()
+    {
+        _conflictDebounce ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300),
+        };
+        _conflictDebounce.Tick -= OnConflictDebounceTick;
+        _conflictDebounce.Tick += OnConflictDebounceTick;
+        _conflictDebounce.Stop();
+        _conflictDebounce.Start();
+    }
+
+    private void OnConflictDebounceTick(object? sender, EventArgs e)
+    {
+        _conflictDebounce?.Stop();
+        ScanConflictsNow();
+    }
+
+    private void ScanConflictsNow()
+    {
+        var tab = _activeTab;
+        Conflicts.Clear();
+
+        if (tab == null)
+        {
+            HasConflicts = false;
+            ConflictsMalformed = false;
+            ConflictSummary = "";
+            return;
+        }
+
+        var scan = DiffService.ScanConflicts(tab.Content);
+        foreach (var c in scan.Conflicts) Conflicts.Add(c);
+
+        HasConflicts = scan.HasConflicts || scan.Malformed;
+        ConflictsMalformed = scan.Malformed;
+        ConflictSummary = scan.Malformed
+            ? "⚠ A conflict marker has no closing '>>>>>>>' — fix it by hand; auto-resolve is disabled."
+            : scan.Conflicts.Count == 0
+                ? ""
+                : $"{scan.Conflicts.Count} merge conflict{(scan.Conflicts.Count == 1 ? "" : "s")} in {tab.FileName}";
+    }
+
+    public ICommand AcceptOursCommand => _acceptOursCommand ??=
+        new RelayCommand<ConflictBlock>(b => ResolveConflict(b, ConflictChoice.Ours));
+    private ICommand? _acceptOursCommand;
+
+    public ICommand AcceptTheirsCommand => _acceptTheirsCommand ??=
+        new RelayCommand<ConflictBlock>(b => ResolveConflict(b, ConflictChoice.Theirs));
+    private ICommand? _acceptTheirsCommand;
+
+    public ICommand AcceptBothCommand => _acceptBothCommand ??=
+        new RelayCommand<ConflictBlock>(b => ResolveConflict(b, ConflictChoice.Both));
+    private ICommand? _acceptBothCommand;
+
+    public ICommand GoToConflictCommand => _goToConflictCommand ??=
+        new RelayCommand<ConflictBlock>(b => { if (b != null) ScrollToLineRequested?.Invoke(b.StartLine); });
+    private ICommand? _goToConflictCommand;
+
+    public ICommand AcceptAllOursCommand => _acceptAllOursCommand ??=
+        new RelayCommand(() => ResolveAllConflicts(ConflictChoice.Ours));
+    private ICommand? _acceptAllOursCommand;
+
+    public ICommand AcceptAllTheirsCommand => _acceptAllTheirsCommand ??=
+        new RelayCommand(() => ResolveAllConflicts(ConflictChoice.Theirs));
+    private ICommand? _acceptAllTheirsCommand;
+
+    /// <summary>
+    /// Resolve one block in the open buffer. Writes to the TAB, not to disk — the change becomes an
+    /// ordinary unsaved edit the user can undo (Ctrl+Z) and must save deliberately, instead of a
+    /// silent write behind their back.
+    /// </summary>
+    private void ResolveConflict(ConflictBlock? block, ConflictChoice choice)
+    {
+        var tab = _activeTab;
+        if (block == null || tab == null) return;
+        if (ConflictsMalformed)
+        {
+            StatusMessage = "⚠ Fix the unterminated conflict marker by hand first";
+            return;
+        }
+
+        try
+        {
+            // Resolve by INDEX against a fresh scan of the current buffer — the block we were handed
+            // may have been captured before another conflict was resolved or the file hand-edited.
+            string updated = DiffService.ResolveConflict(tab.Content, block.Index, choice);
+            if (string.Equals(updated, tab.Content, StringComparison.Ordinal))
+            {
+                StatusMessage = "Nothing changed — the conflict may already be resolved";
+                ScanConflictsNow();
+                return;
+            }
+
+            tab.Content = updated;   // marks the tab dirty; the editor picks it up incrementally
+            ScanConflictsNow();
+            StatusMessage = Conflicts.Count == 0
+                ? $"✓ All conflicts resolved in {tab.FileName} — review and save"
+                : $"✓ Conflict resolved · {Conflicts.Count} left";
+        }
+        catch (Exception ex) { StatusMessage = $"✗ Resolve failed: {ex.Message}"; }
+    }
+
+    private void ResolveAllConflicts(ConflictChoice choice)
+    {
+        var tab = _activeTab;
+        if (tab == null || Conflicts.Count == 0) return;
+        if (ConflictsMalformed)
+        {
+            StatusMessage = "⚠ Fix the unterminated conflict marker by hand first";
+            return;
+        }
+
+        int count = Conflicts.Count;
+        string side = choice == ConflictChoice.Ours ? Conflicts[0].OursLabel : Conflicts[0].TheirsLabel;
+        var confirm = System.Windows.MessageBox.Show(
+            $"Resolve all {count} conflict(s) in {tab.FileName} by keeping '{side}'?\n\n"
+            + "The other side will be discarded. This edits the open tab — you can undo it (Ctrl+Z) "
+            + "and nothing is written until you save.",
+            "Resolve all conflicts", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+        try
+        {
+            tab.Content = DiffService.ResolveAll(tab.Content, choice);
+            ScanConflictsNow();
+            StatusMessage = $"✓ Resolved {count} conflict(s) keeping '{side}' — review and save";
+        }
+        catch (Exception ex) { StatusMessage = $"✗ Resolve failed: {ex.Message}"; }
     }
 
     // ── Branch switcher ──

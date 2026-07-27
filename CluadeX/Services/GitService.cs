@@ -241,6 +241,24 @@ public class GitService
         return await RunGitAsync($"log --oneline -n {count} -- \"{filePath}\"");
     }
 
+    /// <summary>
+    /// Contents of one file as of a revision (<c>git show HEAD:path</c>) — the left-hand baseline
+    /// for the side-by-side diff editor. Fails cleanly for a file that does not exist at that
+    /// revision (newly added), which the caller renders as "everything is an addition".
+    /// </summary>
+    public async Task<GitResult> ShowFileAsync(string revision, string relativePath)
+    {
+        if (!IsValidGitArg(revision))
+            return new GitResult { Success = false, Error = "Invalid revision." };
+        if (!IsValidGitArg(relativePath))
+            return new GitResult { Success = false, Error = "Invalid file path characters." };
+
+        // git wants forward slashes in a rev:path spec even on Windows, and the ':' separator means
+        // the path cannot be quoted as a whole — quote the combined spec instead.
+        string spec = $"{revision}:{relativePath.Replace('\\', '/')}";
+        return await RunGitAsync($"show \"{spec}\"");
+    }
+
     /// <summary>git show for a specific commit.</summary>
     public async Task<GitResult> ShowAsync(string commitHash)
     {
