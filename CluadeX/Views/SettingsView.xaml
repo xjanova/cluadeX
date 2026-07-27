@@ -339,6 +339,12 @@
                         Command="{Binding BrowseTempDirCommand}" Margin="4,0"/>
             </Grid>
 
+            <TextBlock Text="Session folder" Style="{StaticResource SettingLabel}"/>
+            <TextBlock Text="Where chat sessions are stored. Empty = the default under your user profile."
+                       Style="{StaticResource SettingDesc}"/>
+            <TextBox Text="{Binding SessionDirectory, UpdateSourceTrigger=PropertyChanged}"
+                     Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
+
             <!-- ═══════ INFERENCE ═══════ -->
             <TextBlock Text="{services:Loc settings.inference}" Style="{StaticResource SectionTitle}"/>
 
@@ -436,6 +442,122 @@
                               Margin="0,0,0,4"/>
                     <TextBlock Text="{services:Loc settings.sessionMemoryDesc}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,12" TextWrapping="Wrap"/>
+
+                    <!-- ═══ Agent behaviour ═══
+                         These drive real code paths but previously had no UI at all — the only way
+                         to change them was hand-editing settings.json. -->
+                    <TextBlock Text="Agent Behaviour" FontWeight="SemiBold"
+                               Foreground="{StaticResource Subtext0Brush}" Margin="0,10,0,4"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Max agent steps per turn:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding MaxAgentIterations, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="56" VerticalContentAlignment="Center"
+                                 ToolTip="How many tool-use steps the agent may take before it must answer. Higher = can finish longer tasks, but costs more."/>
+                        <TextBlock Text="Idle timeout (seconds, 0 = none):" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="20,0,8,0"/>
+                        <TextBox Text="{Binding InteractiveRequestTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="56" VerticalContentAlignment="Center"
+                                 ToolTip="Abort a request that produces NO output for this long. Resets on every streamed token."/>
+                    </StackPanel>
+
+                    <CheckBox Content="Require reading a file before editing it"
+                              IsChecked="{Binding EnforceReadBeforeEdit}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Blocks blind edits and edits to files that changed on disk since the last read (Claude Code behaviour)."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <CheckBox Content="Build automatically after an edit and feed errors back"
+                              IsChecked="{Binding AutoVerifyAfterEditEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Turns the compiler into the agent's oracle — it sees its own mistakes instead of claiming success."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <CheckBox Content="Plan first, then force a tool call"
+                              IsChecked="{Binding PlanFirstForceToolEnabled}" Margin="0,0,0,4"/>
+                    <CheckBox Content="Remind the agent of the goal mid-loop"
+                              IsChecked="{Binding MidLoopReminderEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="Remind every N steps:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding MidLoopReminderEvery, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="48" VerticalContentAlignment="Center"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Escalate to a stronger provider when the local model stalls"
+                              IsChecked="{Binding EscalationEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="Escalate to provider:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding EscalationProviderName, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="150" VerticalContentAlignment="Center"
+                                 ToolTip="Provider id to hand off to, e.g. Anthropic. Empty = the first configured API provider."/>
+                    </StackPanel>
+
+                    <CheckBox Content="Learn instincts from finished sessions"
+                              IsChecked="{Binding InstinctLearningEnabled}" Margin="0,0,0,4"/>
+                    <CheckBox Content="Auto-recall from BrainX before answering"
+                              IsChecked="{Binding BrainAutoRecallEnabled}" Margin="0,0,0,4"/>
+                    <CheckBox Content="Semantic (embedding) codebase search"
+                              IsChecked="{Binding SemanticSearchEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,12">
+                        <TextBlock Text="Embedding model:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding EmbeddingModel, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="220" VerticalContentAlignment="Center"
+                                 ToolTip="Ollama embedding model used for semantic search, e.g. nomic-embed-text."/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,12">
+                        <TextBlock Text="Microcompact — keep last N turns:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding MicrocompactKeepRecentTurns, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="48" VerticalContentAlignment="Center"/>
+                        <TextBlock Text="Truncate older tool results to (chars):" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,8,0"/>
+                        <TextBox Text="{Binding MicrocompactMaxOldResultChars, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="64" VerticalContentAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- ═══ Local model: tool calling + sampling ═══ -->
+                    <TextBlock Text="Local Model — Tool Calling &amp; Sampling" FontWeight="SemiBold"
+                               Foreground="{StaticResource Subtext0Brush}" Margin="0,4,0,4"/>
+
+                    <CheckBox Content="Native tool calling for local models (llama-server / Ollama)"
+                              IsChecked="{Binding LocalNativeToolUseEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Uses structured function-calling instead of the [ACTION:] text protocol. Much more reliable — turn OFF only if your model has no tool template."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <CheckBox Content="Repair tool calls a weak model wrote as prose"
+                              IsChecked="{Binding LocalToolCallRepairEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="Recovers a call the model typed into its reply instead of emitting properly. Rescues most weak-model dead-ends."
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBlock Text="Top-K:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding TopK, UpdateSourceTrigger=PropertyChanged}" Width="48"
+                                 VerticalContentAlignment="Center" ToolTip="0 = disabled"/>
+                        <TextBlock Text="Min-P:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,6,0"/>
+                        <TextBox Text="{Binding MinP, UpdateSourceTrigger=PropertyChanged}" Width="48"
+                                 VerticalContentAlignment="Center" ToolTip="0 = disabled"/>
+                        <TextBlock Text="Repeat window:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,6,0"/>
+                        <TextBox Text="{Binding RepeatPenaltyTokens, UpdateSourceTrigger=PropertyChanged}" Width="56"
+                                 VerticalContentAlignment="Center" ToolTip="How many recent tokens the repeat penalty considers."/>
+                        <TextBlock Text="Tool-call temp:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,6,0"/>
+                        <TextBox Text="{Binding ToolCallTemperature, UpdateSourceTrigger=PropertyChanged}" Width="48"
+                                 VerticalContentAlignment="Center" ToolTip="Lower temperature used specifically for tool-calling steps (more deterministic arguments)."/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBlock Text="Custom llama.cpp backend folder:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding CustomLlamaCppBackendPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="300" VerticalContentAlignment="Center"
+                                 ToolTip="Folder containing your own llama-server build. Empty = use the bundled backend."/>
+                    </StackPanel>
 
                     <!-- ═══ Autonomous build-test-fix-review loop ═══ -->
                     <TextBlock Text="Autonomous Loop (drive to green)" FontWeight="SemiBold"

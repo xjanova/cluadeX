@@ -69,6 +69,57 @@ public class SettingsViewModel : ViewModelBase
     public int ThinkingBudgetTokens { get => _thinkingBudgetTokens; set => SetProperty(ref _thinkingBudgetTokens, value); }
     public bool PromptCachingEnabled { get => _promptCachingEnabled; set => SetProperty(ref _promptCachingEnabled, value); }
 
+    // ── Agent behaviour + local-model knobs ──
+    // These all drive real code paths but had NO UI, so the only way to change them was to
+    // hand-edit settings.json. Everything below is read in LoadFromSettings and written in Save.
+    private int _maxAgentIterations = 15;
+    private int _interactiveTimeoutSeconds = 120;
+    private bool _enforceReadBeforeEdit = true;
+    private bool _autoVerifyAfterEdit = true;
+    private bool _localNativeToolUse = true;
+    private bool _localToolCallRepair = true;
+    private bool _planFirstForceTool = true;
+    private bool _midLoopReminder = true;
+    private int _midLoopReminderEvery = 4;
+    private bool _escalationEnabled;
+    private bool _instinctLearningEnabled = true;
+    private bool _brainAutoRecallEnabled = true;
+    private bool _semanticSearchEnabled;
+    private int _topK;
+    private float _minP;
+    private int _repeatPenaltyTokens = 64;
+    private float _toolCallTemperature = 0.2f;
+    private string _embeddingModel = "";
+    private string _escalationProviderName = "";
+    private int _microcompactKeepRecentTurns = 6;
+    private int _microcompactMaxOldResultChars = 400;
+    private string _customLlamaCppBackendPath = "";
+    private string _sessionDirectory = "";
+
+    public int MaxAgentIterations { get => _maxAgentIterations; set => SetProperty(ref _maxAgentIterations, value); }
+    public int InteractiveRequestTimeoutSeconds { get => _interactiveTimeoutSeconds; set => SetProperty(ref _interactiveTimeoutSeconds, value); }
+    public bool EnforceReadBeforeEdit { get => _enforceReadBeforeEdit; set => SetProperty(ref _enforceReadBeforeEdit, value); }
+    public bool AutoVerifyAfterEditEnabled { get => _autoVerifyAfterEdit; set => SetProperty(ref _autoVerifyAfterEdit, value); }
+    public bool LocalNativeToolUseEnabled { get => _localNativeToolUse; set => SetProperty(ref _localNativeToolUse, value); }
+    public bool LocalToolCallRepairEnabled { get => _localToolCallRepair; set => SetProperty(ref _localToolCallRepair, value); }
+    public bool PlanFirstForceToolEnabled { get => _planFirstForceTool; set => SetProperty(ref _planFirstForceTool, value); }
+    public bool MidLoopReminderEnabled { get => _midLoopReminder; set => SetProperty(ref _midLoopReminder, value); }
+    public int MidLoopReminderEvery { get => _midLoopReminderEvery; set => SetProperty(ref _midLoopReminderEvery, value); }
+    public bool EscalationEnabled { get => _escalationEnabled; set => SetProperty(ref _escalationEnabled, value); }
+    public bool InstinctLearningEnabled { get => _instinctLearningEnabled; set => SetProperty(ref _instinctLearningEnabled, value); }
+    public bool BrainAutoRecallEnabled { get => _brainAutoRecallEnabled; set => SetProperty(ref _brainAutoRecallEnabled, value); }
+    public bool SemanticSearchEnabled { get => _semanticSearchEnabled; set => SetProperty(ref _semanticSearchEnabled, value); }
+    public int TopK { get => _topK; set => SetProperty(ref _topK, value); }
+    public float MinP { get => _minP; set => SetProperty(ref _minP, value); }
+    public int RepeatPenaltyTokens { get => _repeatPenaltyTokens; set => SetProperty(ref _repeatPenaltyTokens, value); }
+    public float ToolCallTemperature { get => _toolCallTemperature; set => SetProperty(ref _toolCallTemperature, value); }
+    public string EmbeddingModel { get => _embeddingModel; set => SetProperty(ref _embeddingModel, value); }
+    public string EscalationProviderName { get => _escalationProviderName; set => SetProperty(ref _escalationProviderName, value); }
+    public int MicrocompactKeepRecentTurns { get => _microcompactKeepRecentTurns; set => SetProperty(ref _microcompactKeepRecentTurns, value); }
+    public int MicrocompactMaxOldResultChars { get => _microcompactMaxOldResultChars; set => SetProperty(ref _microcompactMaxOldResultChars, value); }
+    public string CustomLlamaCppBackendPath { get => _customLlamaCppBackendPath; set => SetProperty(ref _customLlamaCppBackendPath, value); }
+    public string SessionDirectory { get => _sessionDirectory; set => SetProperty(ref _sessionDirectory, value); }
+
     private bool _microcompactEnabled = true;
     private bool _sessionMemoryEnabled;
     public bool MicrocompactEnabled { get => _microcompactEnabled; set => SetProperty(ref _microcompactEnabled, value); }
@@ -525,6 +576,30 @@ public class SettingsViewModel : ViewModelBase
         ExtendedThinkingEnabled = s.ExtendedThinkingEnabled;
         ThinkingBudgetTokens = s.ThinkingBudgetTokens;
         PromptCachingEnabled = s.PromptCachingEnabled;
+
+        MaxAgentIterations = s.MaxAgentIterations;
+        InteractiveRequestTimeoutSeconds = s.InteractiveRequestTimeoutSeconds;
+        EnforceReadBeforeEdit = s.EnforceReadBeforeEdit;
+        AutoVerifyAfterEditEnabled = s.AutoVerifyAfterEditEnabled;
+        LocalNativeToolUseEnabled = s.LocalNativeToolUseEnabled;
+        LocalToolCallRepairEnabled = s.LocalToolCallRepairEnabled;
+        PlanFirstForceToolEnabled = s.PlanFirstForceToolEnabled;
+        MidLoopReminderEnabled = s.MidLoopReminderEnabled;
+        MidLoopReminderEvery = s.MidLoopReminderEvery;
+        EscalationEnabled = s.EscalationEnabled;
+        InstinctLearningEnabled = s.InstinctLearningEnabled;
+        BrainAutoRecallEnabled = s.BrainAutoRecallEnabled;
+        SemanticSearchEnabled = s.SemanticSearchEnabled;
+        TopK = s.TopK;
+        MinP = s.MinP;
+        RepeatPenaltyTokens = s.RepeatPenaltyTokens;
+        ToolCallTemperature = s.ToolCallTemperature;
+        EmbeddingModel = s.EmbeddingModel;
+        EscalationProviderName = s.EscalationProviderName;
+        MicrocompactKeepRecentTurns = s.MicrocompactKeepRecentTurns;
+        MicrocompactMaxOldResultChars = s.MicrocompactMaxOldResultChars;
+        CustomLlamaCppBackendPath = s.CustomLlamaCppBackendPath ?? "";
+        SessionDirectory = s.SessionDirectory ?? "";
         MicrocompactEnabled = s.MicrocompactEnabled;
         SessionMemoryEnabled = s.SessionMemoryEnabled;
         AutonomousLoopEnabled = s.AutonomousLoopEnabled;
@@ -600,6 +675,31 @@ public class SettingsViewModel : ViewModelBase
             s.ExtendedThinkingEnabled = ExtendedThinkingEnabled;
             s.ThinkingBudgetTokens = ThinkingBudgetTokens;
             s.PromptCachingEnabled = PromptCachingEnabled;
+
+            // Clamp the numeric knobs so a typo can't wedge the agent (0 iterations = it never acts).
+            s.MaxAgentIterations = Math.Clamp(MaxAgentIterations, 1, 200);
+            s.InteractiveRequestTimeoutSeconds = Math.Clamp(InteractiveRequestTimeoutSeconds, 0, 3600);
+            s.EnforceReadBeforeEdit = EnforceReadBeforeEdit;
+            s.AutoVerifyAfterEditEnabled = AutoVerifyAfterEditEnabled;
+            s.LocalNativeToolUseEnabled = LocalNativeToolUseEnabled;
+            s.LocalToolCallRepairEnabled = LocalToolCallRepairEnabled;
+            s.PlanFirstForceToolEnabled = PlanFirstForceToolEnabled;
+            s.MidLoopReminderEnabled = MidLoopReminderEnabled;
+            s.MidLoopReminderEvery = Math.Clamp(MidLoopReminderEvery, 1, 50);
+            s.EscalationEnabled = EscalationEnabled;
+            s.InstinctLearningEnabled = InstinctLearningEnabled;
+            s.BrainAutoRecallEnabled = BrainAutoRecallEnabled;
+            s.SemanticSearchEnabled = SemanticSearchEnabled;
+            s.TopK = Math.Clamp(TopK, 0, 200);
+            s.MinP = Math.Clamp(MinP, 0f, 1f);
+            s.RepeatPenaltyTokens = Math.Clamp(RepeatPenaltyTokens, 0, 2048);
+            s.ToolCallTemperature = Math.Clamp(ToolCallTemperature, 0f, 2f);
+            s.EmbeddingModel = EmbeddingModel ?? "";
+            s.EscalationProviderName = EscalationProviderName ?? "";
+            s.MicrocompactKeepRecentTurns = Math.Clamp(MicrocompactKeepRecentTurns, 1, 100);
+            s.MicrocompactMaxOldResultChars = Math.Clamp(MicrocompactMaxOldResultChars, 50, 20000);
+            s.CustomLlamaCppBackendPath = CustomLlamaCppBackendPath ?? "";
+            s.SessionDirectory = SessionDirectory ?? "";
             s.MicrocompactEnabled = MicrocompactEnabled;
             s.SessionMemoryEnabled = SessionMemoryEnabled;
             s.AutonomousLoopEnabled = AutonomousLoopEnabled;

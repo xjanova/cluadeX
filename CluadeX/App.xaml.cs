@@ -50,6 +50,16 @@ public partial class App : Application
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
 
+        // Async commands catch their own exceptions so async-void can't kill the process — but that
+        // made a throwing command look like a dead button with nothing in any log. Route those
+        // failures to the same debug log + crash log the sync path already uses.
+        CluadeX.ViewModels.CommandErrorSink.Handler = (source, ex) =>
+        {
+            WriteCrashLog("command", ex);
+            TryLogToDebugService(CluadeX.Models.LogLevel.Error, "Command",
+                $"{source} failed: {ex.Message}", ex);
+        };
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
 

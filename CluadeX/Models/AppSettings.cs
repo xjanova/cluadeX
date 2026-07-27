@@ -253,6 +253,9 @@ public class FeatureToggles
     // Security
     public bool PermissionSystem { get; set; } = true;
     public bool DangerousCommandBlocking { get; set; } = true;
-    public bool PathTraversalProtection { get; set; } = true;
-    public bool DpapiEncryption { get; set; } = true;
+    // NOTE: there are deliberately no PathTraversalProtection / DpapiEncryption toggles here.
+    // Both protections are unconditional — FileSystemService.ResolveSafePath always enforces
+    // containment and SettingsService always encrypts with DPAPI. Fields for them used to exist,
+    // were read by nothing, and only served to make settings.json look like security could be
+    // switched off. The Features page shows them as always-on badges (IsToggleable = false).
 }
