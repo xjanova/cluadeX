@@ -21,6 +21,8 @@ public partial class CodeEditorView : UserControl
     private bool _hooked;
     private CompletionWindow? _completionWindow;
     private int _completionRequest;
+    private readonly BreakpointMargin _breakpointMargin = new();
+    private readonly ExecutionLineRenderer _executionLine = new();
 
     public CodeEditorView()
     {
@@ -53,6 +55,25 @@ public partial class CodeEditorView : UserControl
                 Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x59, 0xA6, 0x72, 0xFF));
                 Editor.TextArea.SelectionBorder = null;
                 Editor.TextArea.TextView.BackgroundRenderers.Add(_glow);
+                Editor.TextArea.TextView.BackgroundRenderers.Add(_executionLine);
+
+                // Breakpoint gutter. State lives in the VM (keyed by path) so breakpoints survive
+                // closing and reopening a file — the margin only asks and reports.
+                _breakpointMargin.IsBreakpoint = line =>
+                    _boundTab != null && _vm != null && _vm.BreakpointsFor(_boundTab.FullPath).Contains(line);
+                _breakpointMargin.ToggleRequested = line =>
+                {
+                    if (_boundTab != null) _vm?.ToggleBreakpoint(_boundTab.FullPath, line);
+                };
+                Editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
+
+                vm.BreakpointsChanged += path =>
+                {
+                    if (_boundTab != null
+                        && string.Equals(path, _boundTab.FullPath, StringComparison.OrdinalIgnoreCase))
+                        _breakpointMargin.Refresh();
+                };
+                vm.ExecutionPointerMoved += OnExecutionPointerMoved;
                 Editor.Options.EnableHyperlinks = false;
                 Editor.Options.EnableEmailHyperlinks = false;
                 Editor.TextChanged += OnEditorTextChanged;
@@ -78,6 +99,13 @@ public partial class CodeEditorView : UserControl
         _boundTab = tab;
         _glow.Clear();
         Minimap.ClearChangeMarkers();   // markers belong to the file we're leaving
+
+        // Breakpoints and the execution pointer are per-file — repaint for the new one.
+        _breakpointMargin.Refresh();
+        bool stoppedHere = tab != null && _vm != null
+            && string.Equals(_executionFile, tab.FullPath, StringComparison.OrdinalIgnoreCase);
+        _executionLine.Line = stoppedHere ? _vm!.ExecutionLine : 0;
+        _breakpointMargin.ExecutionLine = _executionLine.Line;
 
         _suppressSync = true;
         try
@@ -257,6 +285,17 @@ public partial class CodeEditorView : UserControl
         TerminalOut.ScrollToEnd();
     }
 
+    // ── Debug console ──
+
+    private void OnDebugOutputChanged(object sender, TextChangedEventArgs e) => DebugOut.ScrollToEnd();
+
+    private void OnDebugEvalKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || DataContext is not CodeEditorViewModel vm) return;
+        vm.EvaluateDebugCommand.Execute(null);
+        e.Handled = true;
+    }
+
     private void OnTerminalInputKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && DataContext is CodeEditorViewModel vm)
@@ -264,6 +303,32 @@ public partial class CodeEditorView : UserControl
             vm.RunTerminalCommand.Execute(null);
             e.Handled = true;
         }
+    }
+
+    // ── Debugger: execution pointer ──
+
+    /// <summary>File the debugger is currently stopped in ("" = not stopped).</summary>
+    private string _executionFile = "";
+
+    private void OnExecutionPointerMoved(string file, int line)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                _executionFile = file ?? "";
+                bool here = _boundTab != null && line > 0
+                    && string.Equals(_executionFile, _boundTab.FullPath, StringComparison.OrdinalIgnoreCase);
+
+                _executionLine.Line = here ? line : 0;
+                _breakpointMargin.ExecutionLine = _executionLine.Line;
+                _breakpointMargin.Refresh();
+                Editor.TextArea.TextView.InvalidateLayer(KnownLayer.Background);
+
+                if (here) Editor.ScrollToLine(Math.Clamp(line, 1, Math.Max(1, Editor.Document.LineCount)));
+            }
+            catch { /* the pointer is a hint, never a crash */ }
+        }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     // ── Search panel + code navigation ──

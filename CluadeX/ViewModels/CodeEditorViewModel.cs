@@ -20,6 +20,7 @@ public class CodeEditorViewModel : ViewModelBase
     private readonly SettingsService _settings;
     private readonly GitService _git;
     private readonly CodeIntelligenceService _intel;
+    private readonly DebugAdapterService _debug;
 
     public ChatViewModel ChatVM { get; }
 
@@ -44,6 +45,7 @@ public class CodeEditorViewModel : ViewModelBase
                 if (previous != null) previous.PropertyChanged -= OnActiveTabContentChanged;
                 if (value != null) value.PropertyChanged += OnActiveTabContentChanged;
                 ScanConflictsNow();
+                UpdateDebugTarget();
 
                 // Switching files means you want the file, not the diff you were reading.
                 if (IsDiffViewActive) CloseDiffCommand.Execute(null);
@@ -173,15 +175,18 @@ public class CodeEditorViewModel : ViewModelBase
     }
 
     public CodeEditorViewModel(CodeWorkspaceService workspace, FileSystemService fs, ChatViewModel chatVm,
-        SettingsService settings, GitService git, CodeIntelligenceService intel, RepoMapService repoMap)
+        SettingsService settings, GitService git, CodeIntelligenceService intel, RepoMapService repoMap,
+        DebugAdapterService debug)
     {
         _workspace = workspace;
         _fs = fs;
         _settings = settings;
         _git = git;
         _intel = intel;
+        _debug = debug;
         _repoMapInvalidate = repoMap.Invalidate;
         ChatVM = chatVm;
+        HookDebugEvents();
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
         OpenNodeCommand = new AsyncRelayCommand<FileTreeNode>(OpenNodeAsync);
@@ -914,27 +919,48 @@ public class CodeEditorViewModel : ViewModelBase
     // side is also where go-to-definition (multiple candidates), find-references and rename preview
     // land, so there is one results list to learn instead of three.
 
-    private bool _isSearchPanelActive;
-    public bool IsSearchPanelActive
+    private WorkbenchPanel _activePanel = WorkbenchPanel.Explorer;
+
+    /// <summary>Which of the three left-panel modes is showing (VS Code's activity-bar model).</summary>
+    public WorkbenchPanel ActivePanel
     {
-        get => _isSearchPanelActive;
+        get => _activePanel;
         set
         {
-            if (!SetProperty(ref _isSearchPanelActive, value)) return;
+            if (!SetProperty(ref _activePanel, value)) return;
             OnPropertyChanged(nameof(IsExplorerPanelActive));
+            OnPropertyChanged(nameof(IsSearchPanelActive));
+            OnPropertyChanged(nameof(IsDebugPanelActive));
         }
     }
-    public bool IsExplorerPanelActive => !_isSearchPanelActive;
 
-    public ICommand ShowExplorerCommand => _showExplorerCommand ??= new RelayCommand(() => IsSearchPanelActive = false);
+    public bool IsExplorerPanelActive => _activePanel == WorkbenchPanel.Explorer;
+    public bool IsDebugPanelActive => _activePanel == WorkbenchPanel.Debug;
+
+    public bool IsSearchPanelActive
+    {
+        get => _activePanel == WorkbenchPanel.Search;
+        // Kept as a settable bool so the navigation commands can just say "show me the results".
+        set { if (value) ActivePanel = WorkbenchPanel.Search; else if (IsSearchPanelActive) ActivePanel = WorkbenchPanel.Explorer; }
+    }
+
+    public ICommand ShowExplorerCommand => _showExplorerCommand ??=
+        new RelayCommand(() => ActivePanel = WorkbenchPanel.Explorer);
     private ICommand? _showExplorerCommand;
 
     public ICommand ShowSearchCommand => _showSearchCommand ??= new RelayCommand(() =>
     {
-        IsSearchPanelActive = true;
+        ActivePanel = WorkbenchPanel.Search;
         SearchFocusRequested?.Invoke();
     });
     private ICommand? _showSearchCommand;
+
+    public ICommand ShowDebugCommand => _showDebugCommand ??= new AsyncRelayCommand(async () =>
+    {
+        ActivePanel = WorkbenchPanel.Debug;
+        await RefreshDebugAdaptersAsync();
+    });
+    private ICommand? _showDebugCommand;
 
     /// <summary>Raised when the search box should take keyboard focus (Ctrl+Shift+F, panel switch).</summary>
     public event Action? SearchFocusRequested;
@@ -1476,6 +1502,358 @@ public class CodeEditorViewModel : ViewModelBase
     /// so the editor never talks to a service directly.</summary>
     public Task<List<CompletionItem>> GetCompletionsAsync(string? filePath, string documentText, int caretOffset)
         => _intel.GetCompletionsAsync(filePath, documentText, caretOffset);
+
+    // ═══════════════ Debugger ═══════════════
+
+    public ObservableCollection<DebugAdapterInfo> DebugAdapters { get; } = new();
+
+    private string _debugStatus = "";
+    public string DebugStatus { get => _debugStatus; set => SetProperty(ref _debugStatus, value); }
+
+    private bool _isDebugging;
+    public bool IsDebugging
+    {
+        get => _isDebugging;
+        set { if (SetProperty(ref _isDebugging, value)) OnPropertyChanged(nameof(IsNotDebugging)); }
+    }
+    public bool IsNotDebugging => !_isDebugging;
+
+    private bool _isPausedAtBreakpoint;
+    public bool IsPausedAtBreakpoint { get => _isPausedAtBreakpoint; set => SetProperty(ref _isPausedAtBreakpoint, value); }
+
+    /// <summary>Whether the ACTIVE file has an installed adapter — drives whether Start is offered
+    /// at all, instead of offering it and failing.</summary>
+    private bool _canDebugActiveFile;
+    public bool CanDebugActiveFile { get => _canDebugActiveFile; set => SetProperty(ref _canDebugActiveFile, value); }
+
+    private string _debugTargetLabel = "";
+    public string DebugTargetLabel { get => _debugTargetLabel; set => SetProperty(ref _debugTargetLabel, value); }
+
+    public ObservableCollection<DapStackFrame> CallStack { get; } = new();
+    public ObservableCollection<DapVariable> DebugVariables { get; } = new();
+    public ObservableCollection<BreakpointItem> Breakpoints { get; } = new();
+
+    private DapStackFrame? _selectedFrame;
+    public DapStackFrame? SelectedFrame
+    {
+        get => _selectedFrame;
+        set
+        {
+            if (!SetProperty(ref _selectedFrame, value) || value == null) return;
+            _ = LoadFrameAsync(value);
+        }
+    }
+
+    private string _debugConsole = "";
+    public string DebugConsole { get => _debugConsole; private set => SetProperty(ref _debugConsole, value); }
+
+    private string _debugEvalInput = "";
+    public string DebugEvalInput { get => _debugEvalInput; set => SetProperty(ref _debugEvalInput, value); }
+
+    /// <summary>1-based line the debugger is stopped on in the active file (0 = not stopped here) —
+    /// the editor paints its execution-pointer highlight from this.</summary>
+    private int _executionLine;
+    public int ExecutionLine { get => _executionLine; set => SetProperty(ref _executionLine, value); }
+
+    /// <summary>Raised when the execution pointer moves, so the view repaints and scrolls to it.</summary>
+    public event Action<string, int>? ExecutionPointerMoved;   // (file, 1-based line)
+
+    // Breakpoints are keyed by absolute path; a set per file so toggling is O(1) and duplicates
+    // are impossible.
+    private readonly Dictionary<string, HashSet<int>> _breakpoints = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Breakpoint lines for a file — the editor margin renders from this.</summary>
+    public IReadOnlyCollection<int> BreakpointsFor(string filePath)
+        => _breakpoints.TryGetValue(filePath, out var set) ? set : Array.Empty<int>();
+
+    /// <summary>Raised when a file's breakpoints change so the margin repaints.</summary>
+    public event Action<string>? BreakpointsChanged;
+
+    public void ToggleBreakpoint(string filePath, int line)
+    {
+        if (string.IsNullOrEmpty(filePath) || line < 1) return;
+
+        if (!_breakpoints.TryGetValue(filePath, out var set))
+            _breakpoints[filePath] = set = new HashSet<int>();
+
+        if (!set.Add(line)) set.Remove(line);
+        if (set.Count == 0) _breakpoints.Remove(filePath);
+
+        RebuildBreakpointList();
+        BreakpointsChanged?.Invoke(filePath);
+
+        // A live session accepts breakpoint changes without restarting.
+        if (_debug.IsRunning)
+            _ = _debug.SetBreakpointsAsync(filePath, set.OrderBy(l => l).ToList());
+    }
+
+    public ICommand RemoveBreakpointCommand => _removeBreakpointCommand ??=
+        new RelayCommand<BreakpointItem>(b => { if (b != null) ToggleBreakpoint(b.FilePath, b.Line); });
+    private ICommand? _removeBreakpointCommand;
+
+    public ICommand GoToBreakpointCommand => _goToBreakpointCommand ??=
+        new AsyncRelayCommand<BreakpointItem>(async b =>
+        {
+            if (b == null) return;
+            await OpenPathAsync(b.FilePath);
+            SelectRangeRequested?.Invoke(b.Line, 0, 0);
+        });
+    private ICommand? _goToBreakpointCommand;
+
+    public ICommand ClearBreakpointsCommand => _clearBreakpointsCommand ??= new RelayCommand(() =>
+    {
+        var files = _breakpoints.Keys.ToList();
+        _breakpoints.Clear();
+        RebuildBreakpointList();
+        foreach (var f in files)
+        {
+            BreakpointsChanged?.Invoke(f);
+            if (_debug.IsRunning) _ = _debug.SetBreakpointsAsync(f, new List<int>());
+        }
+    });
+    private ICommand? _clearBreakpointsCommand;
+
+    private void RebuildBreakpointList()
+    {
+        Breakpoints.Clear();
+        foreach (var (file, lines) in _breakpoints.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (var line in lines.OrderBy(l => l))
+                Breakpoints.Add(new BreakpointItem { FilePath = file, Line = line });
+    }
+
+    /// <summary>
+    /// Re-probe what can debug on this machine and whether it covers the open file. Runs off the UI
+    /// thread: detection SPAWNS PROCESSES (`python -c "import debugpy"`), which is ~a second on a
+    /// cold start — long enough to visibly freeze the window if done inline.
+    /// </summary>
+    public async Task RefreshDebugAdaptersAsync()
+    {
+        DebugStatus = string.IsNullOrEmpty(DebugStatus) ? "Checking for debug adapters…" : DebugStatus;
+        var adapters = await Task.Run(DebugAdapterService.DetectAdapters);
+
+        DebugAdapters.Clear();
+        foreach (var a in adapters) DebugAdapters.Add(a);
+        UpdateDebugTarget(adapters);
+
+        if (DebugStatus == "Checking for debug adapters…")
+            DebugStatus = adapters.Any(a => a.IsAvailable) ? "" : "No debug adapter installed yet.";
+    }
+
+    private void UpdateDebugTarget(List<DebugAdapterInfo>? adapters = null)
+    {
+        adapters ??= DebugAdapters.ToList();
+        var tab = _activeTab;
+        if (tab == null)
+        {
+            CanDebugActiveFile = false;
+            DebugTargetLabel = "Open a file to debug it.";
+            return;
+        }
+
+        var adapter = DebugAdapterService.AdapterForFile(tab.FullPath, adapters);
+        CanDebugActiveFile = adapter != null;
+        DebugTargetLabel = adapter != null
+            ? $"{tab.FileName} · {adapter.Language}"
+            // Say WHY it can't run, not just that the button is greyed out.
+            : $"{tab.FileName} — no installed debug adapter for this file type.";
+    }
+
+    public ICommand StartDebugCommand => _startDebugCommand ??= new AsyncRelayCommand(StartDebugAsync);
+    private ICommand? _startDebugCommand;
+
+    private async Task StartDebugAsync()
+    {
+        if (_debug.IsRunning) { DebugStatus = "Already running"; return; }
+        var tab = _activeTab;
+        if (tab == null) { DebugStatus = "Open the file you want to debug first"; return; }
+
+        var adapters = await Task.Run(DebugAdapterService.DetectAdapters);
+        var adapter = DebugAdapterService.AdapterForFile(tab.FullPath, adapters);
+        if (adapter == null)
+        {
+            var known = adapters.FirstOrDefault(a => !a.IsAvailable);
+            DebugStatus = known != null
+                ? $"No adapter for {tab.Extension}. {known.InstallHint}"
+                : $"No debug adapter available for {tab.Extension}.";
+            return;
+        }
+
+        if (tab.IsDirty)
+        {
+            // Debugging a stale file on disk while the editor shows something else is the single
+            // most confusing thing a debugger can do — breakpoints land on the wrong lines.
+            var save = System.Windows.MessageBox.Show(
+                $"{tab.FileName} has unsaved changes.\n\nThe debugger runs the file ON DISK, so your "
+                + "edits would not be included and breakpoints could land on the wrong lines.\n\nSave first?",
+                "Unsaved changes", System.Windows.MessageBoxButton.YesNoCancel,
+                System.Windows.MessageBoxImage.Warning);
+            if (save == System.Windows.MessageBoxResult.Cancel) return;
+            if (save == System.Windows.MessageBoxResult.Yes) await _workspace.SaveTabAsync(tab);
+        }
+
+        AppendDebugConsole($"— starting {adapter.Language} debugger ({adapter.Id}) —");
+        DebugStatus = "Starting…";
+        IsDebugging = true;
+
+        var byFile = _breakpoints.ToDictionary(k => k.Key, v => v.Value.OrderBy(l => l).ToList());
+        if (!byFile.ContainsKey(tab.FullPath)) byFile[tab.FullPath] = new List<int>();
+
+        var result = await _debug.StartAsync(adapter, tab.FullPath, byFile);
+        if (!result.Started)
+        {
+            IsDebugging = false;
+            DebugStatus = $"✗ {result.Error}";
+            AppendDebugConsole($"[failed] {result.Error}");
+            return;
+        }
+
+        foreach (var (file, bps) in result.Breakpoints)
+        {
+            foreach (var bp in bps.Where(b => !b.Verified))
+                AppendDebugConsole($"[breakpoint not bound] {Path.GetFileName(file)}:{bp.RequestedLine}"
+                                   + (string.IsNullOrEmpty(bp.Message) ? "" : $" — {bp.Message}"));
+            foreach (var bp in bps.Where(b => b.Moved))
+                AppendDebugConsole($"[breakpoint moved] {Path.GetFileName(file)}:{bp.RequestedLine} → line {bp.Line}");
+        }
+
+        DebugStatus = "Running";
+    }
+
+    public ICommand StopDebugCommand => _stopDebugCommand ??= new AsyncRelayCommand(async () =>
+    {
+        await _debug.StopAsync();
+        OnDebugSessionEnded("stopped by user");
+    });
+    private ICommand? _stopDebugCommand;
+
+    public ICommand ContinueDebugCommand => _continueCommand ??= new AsyncRelayCommand(() => _debug.ContinueAsync());
+    private ICommand? _continueCommand;
+
+    public ICommand StepOverCommand => _stepOverCommand ??= new AsyncRelayCommand(() => _debug.StepOverAsync());
+    private ICommand? _stepOverCommand;
+
+    public ICommand StepIntoCommand => _stepIntoCommand ??= new AsyncRelayCommand(() => _debug.StepIntoAsync());
+    private ICommand? _stepIntoCommand;
+
+    public ICommand StepOutCommand => _stepOutCommand ??= new AsyncRelayCommand(() => _debug.StepOutAsync());
+    private ICommand? _stepOutCommand;
+
+    public ICommand PauseDebugCommand => _pauseCommand ??= new AsyncRelayCommand(() => _debug.PauseAsync());
+    private ICommand? _pauseCommand;
+
+    public ICommand EvaluateDebugCommand => _evaluateCommand ??= new AsyncRelayCommand(async () =>
+    {
+        string expr = DebugEvalInput?.Trim() ?? "";
+        if (expr.Length == 0) return;
+        if (!_debug.IsPaused) { AppendDebugConsole("> (pause at a breakpoint first)"); return; }
+
+        AppendDebugConsole($"> {expr}");
+        DebugEvalInput = "";
+        string value = await _debug.EvaluateAsync(expr, _selectedFrame?.Id ?? 0);
+        AppendDebugConsole(value);
+    });
+    private ICommand? _evaluateCommand;
+
+    private const int DebugConsoleMaxChars = 120_000;
+
+    private void AppendDebugConsole(string text)
+    {
+        void Apply()
+        {
+            string next = _debugConsole.Length == 0 ? text : _debugConsole + "\n" + text;
+            if (next.Length > DebugConsoleMaxChars) next = next[^DebugConsoleMaxChars..];
+            DebugConsole = next;
+        }
+        if (App.Current?.Dispatcher.CheckAccess() == true) Apply();
+        else App.Current?.Dispatcher.BeginInvoke(Apply);
+    }
+
+    /// <summary>Wire the adapter's events onto the UI thread. Called once from the constructor.</summary>
+    private void HookDebugEvents()
+    {
+        _debug.Output += line => AppendDebugConsole(line);
+
+        _debug.Stopped += (reason, _) => OnUi(async () =>
+        {
+            IsPausedAtBreakpoint = true;
+            DebugStatus = $"Paused · {reason}";
+
+            CallStack.Clear();
+            DebugVariables.Clear();
+            var frames = await _debug.GetStackTraceAsync();
+            foreach (var f in frames) CallStack.Add(f);
+
+            // Selecting the top frame loads its variables and moves the execution pointer.
+            if (frames.Count > 0) SelectedFrame = frames[0];
+        });
+
+        _debug.Continued += () => OnUi(() =>
+        {
+            IsPausedAtBreakpoint = false;
+            DebugStatus = "Running";
+            ExecutionLine = 0;
+            CallStack.Clear();
+            DebugVariables.Clear();
+            ExecutionPointerMoved?.Invoke("", 0);
+        });
+
+        _debug.Terminated += why => OnUi(() => OnDebugSessionEnded(why));
+    }
+
+    private void OnDebugSessionEnded(string why)
+    {
+        IsDebugging = false;
+        IsPausedAtBreakpoint = false;
+        DebugStatus = $"Session ended — {why}";
+        ExecutionLine = 0;
+        CallStack.Clear();
+        DebugVariables.Clear();
+        SelectedFrame = null;
+        ExecutionPointerMoved?.Invoke("", 0);
+        AppendDebugConsole($"— {why} —");
+    }
+
+    private async Task LoadFrameAsync(DapStackFrame frame)
+    {
+        try
+        {
+            DebugVariables.Clear();
+            foreach (var v in await _debug.GetVariablesAsync(frame.Id)) DebugVariables.Add(v);
+
+            if (!string.IsNullOrEmpty(frame.FilePath) && File.Exists(frame.FilePath))
+            {
+                await OpenPathAsync(frame.FilePath);
+                ExecutionLine = frame.Line;
+                ExecutionPointerMoved?.Invoke(frame.FilePath, frame.Line);
+                ScrollToLineRequested?.Invoke(frame.Line);
+            }
+        }
+        catch (Exception ex) { AppendDebugConsole($"[frame load failed] {ex.Message}"); }
+    }
+
+    private static void OnUi(Action action)
+    {
+        if (App.Current?.Dispatcher.CheckAccess() == true) action();
+        else App.Current?.Dispatcher.BeginInvoke(action);
+    }
+
+    private static void OnUi(Func<Task> action)
+    {
+        if (App.Current?.Dispatcher.CheckAccess() == true) _ = action();
+        else App.Current?.Dispatcher.BeginInvoke(new Action(() => _ = action()));
+    }
+}
+
+/// <summary>The three left-panel modes (VS Code's activity bar).</summary>
+public enum WorkbenchPanel { Explorer, Search, Debug }
+
+/// <summary>One breakpoint in the flat list the debug panel shows.</summary>
+public sealed class BreakpointItem
+{
+    public string FilePath { get; set; } = "";
+    public int Line { get; set; }
+    public string FileName => System.IO.Path.GetFileName(FilePath);
+    public string Label => $"{FileName}:{Line}";
 }
 
 /// <summary>Which question the current result list is answering.</summary>

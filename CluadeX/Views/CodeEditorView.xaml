@@ -236,6 +236,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Button Grid.Column="0" Command="{Binding ShowExplorerCommand}" Cursor="Hand"
                                 Background="Transparent" BorderThickness="0" Padding="0,6"
@@ -291,8 +292,8 @@
                                 ToolTip="{services:Loc editor.searchTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
-                                    <Border x:Name="bd" Background="Transparent" CornerRadius="0,5,5,0"
-                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="0"
+                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1,1,0,1"
                                             Padding="{TemplateBinding Padding}">
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
@@ -327,6 +328,55 @@
                                             <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="2" Command="{Binding ShowDebugCommand}" Cursor="Hand"
+                                Background="Transparent" BorderThickness="0" Padding="0,6"
+                                ToolTip="{services:Loc editor.debugTip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="0,5,5,0"
+                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsDebugPanelActive}" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                        </DataTrigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Margin="0,0,6,0" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDebugPanelActive}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{services:Loc editor.debug}" FontSize="10" FontWeight="Bold"
+                                           FontFamily="{StaticResource NeonMonoFont}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDebugPanelActive}" Value="True">
                                                     <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -1041,6 +1091,286 @@
                     </ItemsControl>
                 </ScrollViewer>
             </Grid>
+
+            <!-- ══════════ DEBUG panel ══════════
+                 Adapters are not bundled and none ships installed, so this leads with WHAT IS
+                 ACTUALLY AVAILABLE and the exact install command — never a Start button that
+                 silently does nothing. -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="10,10,10,10"
+                          Visibility="{Binding IsDebugPanelActive, Converter={StaticResource BoolVis}}">
+                <StackPanel>
+                    <!-- Target + transport controls -->
+                    <TextBlock Text="{Binding DebugTargetLabel}" FontSize="10" TextWrapping="Wrap"
+                               Foreground="{StaticResource NeonInk2Brush}" Margin="0,0,0,6"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <StackPanel.Resources>
+                            <Style TargetType="Button">
+                                <Setter Property="Width" Value="26"/>
+                                <Setter Property="Height" Value="24"/>
+                                <Setter Property="Margin" Value="0,0,3,0"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="bd" Background="#3328326E" CornerRadius="4"
+                                                    BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="bd" Property="Background" Value="#5528326E"/>
+                                                </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="bd" Property="Opacity" Value="0.3"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </StackPanel.Resources>
+
+                        <Button Command="{Binding StartDebugCommand}" IsEnabled="{Binding CanDebugActiveFile}"
+                                Visibility="{Binding IsNotDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc editor.startDebug}">
+                            <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonMintBrush}"/>
+                        </Button>
+                        <Button Command="{Binding ContinueDebugCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc editor.continueDebug}">
+                            <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonMintBrush}"/>
+                        </Button>
+                        <Button Command="{Binding StepOverCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc editor.stepOver}">
+                            <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                        </Button>
+                        <Button Command="{Binding StepIntoCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc editor.stepInto}">
+                            <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                        </Button>
+                        <Button Command="{Binding StepOutCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc editor.stepOut}">
+                            <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                        </Button>
+                        <Button Command="{Binding StopDebugCommand}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc editor.stopDebug}">
+                            <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonMagentaBrush}"/>
+                        </Button>
+                        <Button Command="{Binding ShowDebugCommand}" ToolTip="{services:Loc editor.refreshAdapters}">
+                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                       Foreground="{StaticResource NeonInk2Brush}"/>
+                        </Button>
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding DebugStatus}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,8"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonAmberBrush}"/>
+
+                    <!-- Installed adapters -->
+                    <TextBlock Text="{services:Loc editor.adapters}" FontSize="9" FontWeight="Bold"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"/>
+                    <ItemsControl ItemsSource="{Binding DebugAdapters}" Margin="0,0,0,10">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,4" Padding="7,5" CornerRadius="4"
+                                        Background="#4011132E" BorderBrush="{StaticResource NeonLineBrush}"
+                                        BorderThickness="1">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Language}" FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource NeonInk0Brush}"/>
+                                            <TextBlock Text="{Binding StatusLabel}" FontSize="9" Margin="6,0,0,0"
+                                                       VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsAvailable}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding InstallHint}" FontSize="9" TextWrapping="Wrap"
+                                                   Margin="0,3,0,0"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   Visibility="{Binding IsAvailable, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Call stack -->
+                    <TextBlock Text="{services:Loc editor.callStack}" FontSize="9" FontWeight="Bold"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"
+                               Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"/>
+                    <ListBox ItemsSource="{Binding CallStack}" SelectedItem="{Binding SelectedFrame, Mode=TwoWay}"
+                             Background="Transparent" BorderThickness="0" MaxHeight="130" Margin="0,0,0,10"
+                             Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Name}" FontSize="10"
+                                               Foreground="{StaticResource NeonInk0Brush}"
+                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding Location}" FontSize="9"
+                                               FontFamily="{StaticResource NeonMonoFont}"
+                                               Foreground="{StaticResource NeonInk3Brush}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Variables -->
+                    <TextBlock Text="{services:Loc editor.variables}" FontSize="9" FontWeight="Bold"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"
+                               Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"/>
+                    <ItemsControl ItemsSource="{Binding DebugVariables}" Margin="0,0,0,10"
+                                  Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="10"
+                                               FontFamily="{StaticResource NeonMonoFont}"
+                                               Foreground="{StaticResource NeonCyanBrush}" Margin="0,0,6,0"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10"
+                                               FontFamily="{StaticResource NeonMonoFont}"
+                                               Foreground="{StaticResource NeonInk1Brush}"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Type}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Breakpoints -->
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{services:Loc editor.breakpoints}" FontSize="9" FontWeight="Bold"
+                                   FontFamily="{StaticResource NeonMonoFont}"
+                                   Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Command="{Binding ClearBreakpointsCommand}" Cursor="Hand"
+                                Background="Transparent" BorderThickness="0" Padding="0"
+                                ToolTip="{services:Loc editor.clearBreakpoints}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
+                            </Button.Template>
+                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                       Foreground="{StaticResource NeonInk3Brush}"/>
+                        </Button>
+                    </Grid>
+                    <TextBlock Text="{services:Loc editor.noBreakpoints}" FontSize="9" TextWrapping="Wrap"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,10">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Breakpoints.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ItemsControl ItemsSource="{Binding Breakpoints}" Margin="0,0,0,10">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Ellipse Grid.Column="0" Width="8" Height="8" Fill="#FF5370"
+                                             VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Button Grid.Column="1" Cursor="Hand" HorizontalContentAlignment="Left"
+                                            Background="Transparent" BorderThickness="0" Padding="0"
+                                            Command="{Binding DataContext.GoToBreakpointCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}" ToolTip="{Binding FilePath}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
+                                        </Button.Template>
+                                        <TextBlock Text="{Binding Label}" FontSize="10"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonInk1Brush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </Button>
+                                    <Button Grid.Column="2" Cursor="Hand" Background="Transparent"
+                                            BorderThickness="0" Padding="4,0"
+                                            Command="{Binding DataContext.RemoveBreakpointCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
+                                        </Button.Template>
+                                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
+                                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                    </Button>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Debug console -->
+                    <TextBlock Text="{services:Loc editor.debugConsole}" FontSize="9" FontWeight="Bold"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"/>
+                    <Border Background="#0A06071A" CornerRadius="4" BorderThickness="1"
+                            BorderBrush="{StaticResource NeonLineBrush}" Height="140">
+                        <TextBox x:Name="DebugOut" Text="{Binding DebugConsole, Mode=OneWay}"
+                                 IsReadOnly="True" TextWrapping="NoWrap"
+                                 Background="Transparent" BorderThickness="0" Padding="7,4"
+                                 Foreground="{StaticResource NeonInk1Brush}"
+                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 TextChanged="OnDebugOutputChanged"/>
+                    </Border>
+                    <Border Background="#3311132E" CornerRadius="4" Margin="0,4,0,0"
+                            BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&gt;" FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                       Foreground="{StaticResource NeonAmberBrush}"
+                                       VerticalAlignment="Center" Margin="7,0,4,0"/>
+                            <TextBox Grid.Column="1" Text="{Binding DebugEvalInput, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0" Padding="0,5,7,5"
+                                     Foreground="{StaticResource NeonInk0Brush}"
+                                     CaretBrush="{StaticResource NeonAmberBrush}"
+                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                     ToolTip="{services:Loc editor.evaluateTip}"
+                                     KeyDown="OnDebugEvalKeyDown"/>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
             </Grid>
         </Border>
 

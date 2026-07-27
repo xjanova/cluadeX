@@ -455,6 +455,25 @@ public class LocalizationService
         ["editor.acceptAllIncomingTip"] = new() { ["en"] = "Resolve every conflict in this file by keeping the incoming side (edits the tab — undoable, not saved until you save)", ["th"] = "แก้ conflict ทุกจุดในไฟล์นี้โดยเก็บฝั่งที่เข้ามา (แก้ในแท็บ — ย้อนกลับได้ และยังไม่บันทึกจนกว่าคุณจะกดบันทึก)" },
         ["editor.jumpToConflict"] = new() { ["en"] = "Jump to this conflict in the editor", ["th"] = "ไปยัง conflict นี้ในตัวแก้ไข" },
 
+        // ── debugger ──
+        ["editor.debug"] = new() { ["en"] = "DEBUG", ["th"] = "ดีบัก" },
+        ["editor.debugTip"] = new() { ["en"] = "Run and debug the open file — click the gutter to set breakpoints", ["th"] = "รันและดีบักไฟล์ที่เปิดอยู่ — คลิกแถบด้านซ้ายเพื่อตั้ง breakpoint" },
+        ["editor.startDebug"] = new() { ["en"] = "Start debugging (runs the file on disk)", ["th"] = "เริ่มดีบัก (รันไฟล์บนดิสก์)" },
+        ["editor.continueDebug"] = new() { ["en"] = "Continue", ["th"] = "ทำงานต่อ" },
+        ["editor.stepOver"] = new() { ["en"] = "Step over", ["th"] = "ข้ามบรรทัด" },
+        ["editor.stepInto"] = new() { ["en"] = "Step into", ["th"] = "เข้าไปในฟังก์ชัน" },
+        ["editor.stepOut"] = new() { ["en"] = "Step out", ["th"] = "ออกจากฟังก์ชัน" },
+        ["editor.stopDebug"] = new() { ["en"] = "Stop debugging", ["th"] = "หยุดดีบัก" },
+        ["editor.refreshAdapters"] = new() { ["en"] = "Re-check which debug adapters are installed", ["th"] = "ตรวจสอบอีกครั้งว่าติดตั้ง debug adapter ตัวไหนไว้บ้าง" },
+        ["editor.adapters"] = new() { ["en"] = "ADAPTERS", ["th"] = "ตัวเชื่อมดีบัก" },
+        ["editor.callStack"] = new() { ["en"] = "CALL STACK", ["th"] = "ลำดับการเรียก" },
+        ["editor.variables"] = new() { ["en"] = "VARIABLES", ["th"] = "ตัวแปร" },
+        ["editor.breakpoints"] = new() { ["en"] = "BREAKPOINTS", ["th"] = "จุดหยุด" },
+        ["editor.noBreakpoints"] = new() { ["en"] = "None yet — click the gutter left of a line number to add one.", ["th"] = "ยังไม่มี — คลิกแถบซ้ายของเลขบรรทัดเพื่อเพิ่ม" },
+        ["editor.clearBreakpoints"] = new() { ["en"] = "Remove all breakpoints", ["th"] = "ลบ breakpoint ทั้งหมด" },
+        ["editor.debugConsole"] = new() { ["en"] = "DEBUG CONSOLE", ["th"] = "คอนโซลดีบัก" },
+        ["editor.evaluateTip"] = new() { ["en"] = "Evaluate an expression in the selected frame (Enter) — only while paused", ["th"] = "ประเมินนิพจน์ในเฟรมที่เลือก (Enter) — ใช้ได้ตอนหยุดอยู่เท่านั้น" },
+
         // ── auto-wired page strings ──
         ["instincts.title"] = new() { ["en"] = "Instincts", ["th"] = "สัญชาตญาณที่เรียนรู้" },
         ["instincts.syncAllTip"] = new() { ["en"] = "Push every STRONG instinct as a coding-lesson note in your ObsidianX vault", ["th"] = "ส่งสัญชาตญาณระดับ STRONG ทุกข้อไปเป็นโน้ตบทเรียนใน ObsidianX" },

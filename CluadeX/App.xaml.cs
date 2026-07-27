@@ -642,6 +642,10 @@ public partial class App : Application
         // installed (bounded workspace scan) and upgrades to real semantic
         // results whenever LspClientService has a language server connected.
         services.AddSingleton<CodeIntelligenceService>();
+        // DebugAdapterService — DAP client (same stdio framing as LSP) driving the workbench
+        // debugger. Adapters are not bundled: it probes for netcoredbg / debugpy and reports
+        // exactly what is installed rather than offering a Start button that does nothing.
+        services.AddSingleton<DebugAdapterService>();
         // SubAgentService — Sprint 1 #1: registry of specialised subagents
         // (code-reviewer, security-reviewer, architect, ...). Built-in 10
         // plus discovery of ~/.cluadex/agents/*.md and project agents.
