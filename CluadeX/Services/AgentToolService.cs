@@ -1414,9 +1414,39 @@ public class AgentToolService : IDisposable
             if (cur == null)
                 return Fail(call, $"File not found: {path} — to create a new file use write_file.");
 
-            string glue = cur.Length > 0 && !cur.EndsWith("\n") && !replace.StartsWith("\n") && !replace.StartsWith("\r")
-                ? "\n" : "";
-            string appendedContent = cur + glue + replace;
+            // WHERE to append matters. A plain EOF append is right for a script or a text file,
+            // but in a brace language the file ends with the class's closing brace — appending a
+            // method there puts it OUTSIDE the class and the build breaks. Observed for real:
+            // Qwen "added" a method, the build failed, and the model never recovered.
+            // So: if the file ends with '}' and the insert looks like a member declaration,
+            // splice it in BEFORE that final brace, which is what the model actually meant.
+            string trimmedEnd = cur.TrimEnd();
+            bool endsWithBrace = trimmedEnd.EndsWith("}");
+            bool looksLikeMember = System.Text.RegularExpressions.Regex.IsMatch(
+                replace, @"\b(public|private|protected|internal|static|func|def|function|const|let|var)\b");
+
+            string appendedContent;
+            string howDescription;
+            if (endsWithBrace && looksLikeMember)
+            {
+                int brace = cur.LastIndexOf('}');
+                string head = cur[..brace].TrimEnd('\r', '\n', ' ', '\t');
+                string tail = cur[brace..];
+                // Indent the inserted block one level so it reads like the rest of the body.
+                string body = string.Join("\n", replace.Replace("\r\n", "\n").Split('\n')
+                    .Select(l => l.Length == 0 ? l : (l.StartsWith("    ") ? l : "    " + l)));
+                appendedContent = head + "\n\n" + body.TrimEnd() + "\n" + tail;
+                howDescription = $"Inserted into {path} before the final closing brace "
+                               + "(empty 'find' = insert; appending after the brace would have broken the build)";
+            }
+            else
+            {
+                string glue = cur.Length > 0 && !cur.EndsWith("\n") && !replace.StartsWith("\n") && !replace.StartsWith("\r")
+                    ? "\n" : "";
+                appendedContent = cur + glue + replace;
+                howDescription = $"Appended to {path} (empty 'find' = append)";
+            }
+
             _fileSystem.WriteFile(path, appendedContent);
             _fileSystem.MarkKnown(path);
             var appendDiff = CluadeX.Helpers.DiffUtil.Compute(cur, appendedContent);
@@ -1425,7 +1455,7 @@ public class AgentToolService : IDisposable
                 Type = call.Type,
                 ToolName = call.ToolName,
                 Success = true,
-                Output = $"Appended to {path} (empty 'find' = append)",
+                Output = howDescription,
                 Summary = $"Appended to {path}",
                 Diff = appendDiff,
                 FilePath = path,

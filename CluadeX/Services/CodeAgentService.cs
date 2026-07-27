@@ -1538,6 +1538,58 @@ public class CodeAgentService
     }
 
     /// <summary>
+    /// <summary>
+    /// File names the model's answer talks about that really exist in the project. Used to catch
+    /// "here is the updated Program.cs: ```…```" when Program.cs was never written. Only names that
+    /// resolve to an actual file are returned, so prose mentioning a made-up path is ignored.
+    /// </summary>
+    internal static HashSet<string> ExtractMentionedProjectFiles(string text, string workingDir)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(workingDir) || !System.IO.Directory.Exists(workingDir)) return found;
+
+        // Only bother when the answer actually contains code — a plain sentence naming a file is
+        // discussion, not a claim to have edited it.
+        if (!text.Contains("```")) return found;
+
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                     text, @"[\w\-.]+\.(cs|csx|ts|tsx|js|jsx|py|java|kt|go|rb|php|cpp|c|h|hpp|xaml|json|md|html|css|sql)\b"))
+        {
+            string name = m.Value;
+            try
+            {
+                if (System.IO.Directory.EnumerateFiles(workingDir, name, System.IO.SearchOption.AllDirectories).Any())
+                    found.Add(name);
+            }
+            catch { /* unreadable tree — skip */ }
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Squeeze a build log down to the lines that actually name the problem (error/warning lines),
+    /// so a guard message stays small enough for an 8k local context.
+    /// </summary>
+    internal static string CondenseBuildErrors(string raw, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var lines = raw.Replace("\r\n", "\n").Split('\n');
+        var keep = lines
+            .Where(l => l.Contains("error", StringComparison.OrdinalIgnoreCase)
+                     || l.Contains("): warning", StringComparison.OrdinalIgnoreCase))
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .Distinct()
+            .Take(6)
+            .ToList();
+        // Nothing matched (a test runner, say) — fall back to the tail, which is where failures land.
+        string text = keep.Count > 0
+            ? string.Join("\n", keep)
+            : string.Join("\n", lines.Reverse().Take(6).Reverse());
+        if (text.Length > maxChars) text = text[..maxChars] + " …";
+        return text;
+    }
+
     /// Force-compact the working history for reactive compaction on 413.
     /// Keeps the last 10 messages (or fewer if history is small) and prepends a summary note.
     /// Technique from Claude Code: keep enough context for the agent to understand
@@ -1597,6 +1649,16 @@ public class CodeAgentService
         bool wrapUpForced = false;
         int failedEditAttempts = 0;              // edits/writes the model TRIED that all failed
         string? lastEditFailPath = null;         // file of the last failed edit — lets recovery name the exact call
+        int ctxCompactAttempts = 0;              // context-overflow compactions used this turn (max 3)
+        var unresolvedEditPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files whose edit failed and was never redone
+        int unresolvedGuards = 0;                // how many times we've blocked a finish on an unresolved file
+        var writtenPathsThisTurn = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files actually written this turn
+        int describedNotDoneGuards = 0;          // blocks on "showed the code but never wrote it"
+        bool lastBuildFailed = false;            // the build/tests are currently RED
+        string lastBuildError = "";              // …and this is what they said
+        string lastBuildPath = "build";          // "build" or "tests" — for the message wording
+        int repeatedBuildNoEdit = 0;             // consecutive failing builds with no edit in between
+        int redBuildGuards = 0;                  // how many times we've blocked a finish on a red build
         int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
         bool lastEditFailNeededRead = false;     // last edit failed the read-before-edit guard (recoverable)
         string? forceToolNextStep = null;        // constrained-decoding override for the next turn (A3)
@@ -1843,14 +1905,20 @@ public class CodeAgentService
                 // StopReason=error), which bypassed the HttpRequestException compaction catch above —
                 // a long turn died at the exact step compaction exists to save. Route it there.
                 string errText = response.TextContent ?? "";
-                if (!hasAttemptedReactiveCompact
+                // Compaction is retried, NOT one-shot. A single attempt meant that once anything else
+                // in the turn had already compacted, the next overflow — even by 3 tokens — killed the
+                // run outright. Each attempt keeps fewer messages than the last.
+                if (ctxCompactAttempts < 3
                     && (errText.Contains("Context window too small", StringComparison.OrdinalIgnoreCase)
                         || errText.Contains("context size", StringComparison.OrdinalIgnoreCase)))
                 {
+                    ctxCompactAttempts++;
                     hasAttemptedReactiveCompact = true;
-                    _debugLog?.Warn("Agent", $"context overflow at step {iteration + 1} — compacting and retrying");
+                    _debugLog?.Warn("Agent", $"context overflow at step {iteration + 1} — compacting and retrying "
+                        + $"(attempt {ctxCompactAttempts}/3)");
                     OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
-                    int keepCount = Math.Min(10, nativeMessages.Count);
+                    int[] ladder = { 10, 6, 3 };
+                    int keepCount = Math.Min(ladder[Math.Min(ctxCompactAttempts - 1, ladder.Length - 1)], nativeMessages.Count);
                     nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
                     StripOrphanedToolBlocks(nativeMessages);
                     nativeMessages.Insert(0, new Services.Providers.NativeMessage
@@ -1938,6 +2006,135 @@ public class CodeAgentService
             // No tool calls = final response
             if (response.ToolCalls.Count == 0)
             {
+                // ─── Red-build guard ───
+                // The single most important honesty rule: never let the turn end while the build the
+                // model itself ran is still failing. Without this the model watched run_build fail four
+                // times, changed nothing, and then wrote a confident "I added the method" summary while
+                // the project did not compile. A red build outranks the model's opinion that it is done.
+                if (redBuildGuards < 3 && lastBuildFailed && iteration < MaxAgentIterations - 1)
+                {
+                    redBuildGuards++;
+                    _debugLog?.Warn("Agent", $"red-build guard at step {iteration + 1}: "
+                        + $"{lastBuildPath} still failing, refusing to finish (guard {redBuildGuards}/3)");
+                    OnAgentStatus?.Invoke(isThai
+                        ? "build ยังไม่ผ่าน — ให้แก้ต่อ..."
+                        : "The build is still failing — fixing...");
+                    result.Steps.Add(step);
+
+                    var redAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    redAssistant.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent,
+                    });
+                    nativeMessages.Add(redAssistant);
+
+                    // Keep this SHORT. On an 8k local context a verbose guard is itself what pushes the
+                    // next request over the limit — keep only the compiler lines that name the problem.
+                    string errTail = CondenseBuildErrors(lastBuildError, 500);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = $"STOP — the {lastBuildPath} is STILL FAILING. Do not summarise.\n{errTail}\n"
+                                 + "Fix it: read_file the file in the error, then write_file with the COMPLETE "
+                                 + "corrected content. Do not re-run the build before editing.",
+                        } },
+                    });
+                    // Force a tool call so it cannot answer in prose again.
+                    forceToolNextStep = "required";
+                    // A red build also cancels any pending wrap-up: finishing is exactly what we're blocking.
+                    wrapUpForced = false;
+                    stepsSinceMutation = 0;
+                    continue;
+                }
+
+                // ─── Described-but-not-done guard ───
+                // The weak-model failure that no build check can catch: it does step 1, then WRITES OUT
+                // steps 2-4 as prose ("Now let's add the call in Program.cs: ```csharp …```") and stops.
+                // The build is green, no edit failed — but the task is half done. If the final answer
+                // names a project file it never actually wrote this turn, send it back to do it.
+                if (describedNotDoneGuards < 2 && iteration < MaxAgentIterations - 1
+                    && !string.IsNullOrWhiteSpace(response.TextContent))
+                {
+                    var named = ExtractMentionedProjectFiles(response.TextContent!, _fileSystemService.WorkingDirectory);
+                    named.ExceptWith(writtenPathsThisTurn);
+                    if (named.Count > 0)
+                    {
+                        describedNotDoneGuards++;
+                        string todo = named.First();
+                        _debugLog?.Warn("Agent", $"described-not-done guard at step {iteration + 1}: "
+                            + $"answer describes changes to {todo} but it was never written");
+                        OnAgentStatus?.Invoke(isThai
+                            ? $"ยังไม่ได้เขียน {todo} จริง — ให้ทำต่อ..."
+                            : $"{todo} was described but never written — continuing...");
+                        result.Steps.Add(step);
+
+                        var descAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                        descAssistant.Content.Add(new Services.Providers.ContentBlock
+                        { Type = "text", Text = response.TextContent! });
+                        nativeMessages.Add(descAssistant);
+                        nativeMessages.Add(new Services.Providers.NativeMessage
+                        {
+                            Role = "user",
+                            Content = { new Services.Providers.ContentBlock
+                            {
+                                Type = "text",
+                                Text = $"You DESCRIBED the change to '{todo}' but never wrote it — showing code in a "
+                                     + "reply does not modify the file. Do it for real now: "
+                                     + $"write_file('{todo}', <the COMPLETE file content including your change>). "
+                                     + "One tool call. No explanation.",
+                            } },
+                        });
+                        forceToolNextStep = "required";
+                        wrapUpForced = false;
+                        stepsSinceMutation = 0;
+                        continue;
+                    }
+                }
+
+                // ─── Unresolved-file guard ───
+                // Some file the model tried to change is STILL not changed. A green build does not
+                // prove the task is done — a call that was never added simply doesn't compile into
+                // anything. Name the exact file and make it finish the job.
+                if (unresolvedGuards < 2 && unresolvedEditPaths.Count > 0 && iteration < MaxAgentIterations - 1)
+                {
+                    unresolvedGuards++;
+                    string stuck = unresolvedEditPaths.First();
+                    _debugLog?.Warn("Agent", $"unresolved-file guard at step {iteration + 1}: "
+                        + $"{unresolvedEditPaths.Count} file(s) still unchanged ({stuck}) — refusing to finish");
+                    OnAgentStatus?.Invoke(isThai
+                        ? $"ยังไม่ได้แก้ {stuck} — ให้ทำต่อ..."
+                        : $"{stuck} was not actually changed — continuing...");
+                    result.Steps.Add(step);
+
+                    var unresolvedAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    unresolvedAssistant.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent,
+                    });
+                    nativeMessages.Add(unresolvedAssistant);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = $"STOP — '{stuck}' was NOT changed. Your edit to it failed and you never retried, "
+                                 + "so do not claim it is done.\nDo this now, in one step: "
+                                 + $"write_file('{stuck}', <the COMPLETE file content including your change>). "
+                                 + "If you need to see it first, read_file it — but do not summarise until it is written.",
+                        } },
+                    });
+                    forceToolNextStep = "required";
+                    wrapUpForced = false;
+                    stepsSinceMutation = 0;
+                    continue;
+                }
+
                 // ─── False-finish guard ───
                 // The model is concluding, but it TRIED to change files and every attempt failed while
                 // NOTHING was ever successfully written (the observed "edit failed x2 → build/test the
@@ -2212,6 +2409,58 @@ public class CodeAgentService
                 lastEditFailPath = failedEdits[^1].FilePath ?? lastEditFailPath;
             }
 
+            // Per-file edit outcome. A turn that touches two files can succeed on one and fail on the
+            // other; the old whole-turn "did anything get written?" flag then reported success and the
+            // model confidently claimed BOTH were done. Observed exactly that: StringUtils.cs edited,
+            // Program.cs edit failed, build still green (a missing call doesn't break compilation),
+            // and the summary claimed both. Track which paths are still unresolved.
+            foreach (var f in failedEdits)
+                if (!string.IsNullOrEmpty(f.FilePath)) unresolvedEditPaths.Add(f.FilePath!);
+            foreach (var w in toolResults.Where(r => r.Success
+                         && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit))
+                if (!string.IsNullOrEmpty(w.FilePath))
+                {
+                    unresolvedEditPaths.Remove(w.FilePath!);
+                    writtenPathsThisTurn.Add(System.IO.Path.GetFileName(w.FilePath!));
+                }
+
+            // ─── Build-state bookkeeping ───
+            // A red build is the strongest signal we have that the work is NOT done. Track it so the
+            // turn cannot end while it is red, and so re-running the build without editing anything
+            // gets called out. (Observed: the model watched run_build fail four times in a row, never
+            // touched the file, and the wandering breaker then let it finish claiming success.)
+            var buildResults = toolResults.Where(r => r.Type is ToolType.RunBuild or ToolType.RunTests).ToList();
+            if (buildResults.Count > 0)
+            {
+                var last = buildResults[^1];
+                bool nowFailing = !last.Success;
+                if (nowFailing && lastBuildFailed && !mutatedThisStep) repeatedBuildNoEdit++;
+                else if (!nowFailing || mutatedThisStep) repeatedBuildNoEdit = 0;
+                lastBuildFailed = nowFailing;
+                lastBuildError = nowFailing
+                    ? ((last.Error ?? "") + "\n" + (last.Output ?? "")).Trim()
+                    : "";
+                lastBuildPath = last.Type == ToolType.RunBuild ? "build" : "tests";
+            }
+            else if (mutatedThisStep)
+            {
+                // The file changed, so whatever the previous build said is now stale.
+                lastBuildFailed = false;
+                repeatedBuildNoEdit = 0;
+            }
+
+            // Re-running a build that can't have changed wastes the whole step budget. Say so.
+            if (repeatedBuildNoEdit >= 1 && !mutatedThisStep)
+            {
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = $"[stop] You ran the {lastBuildPath} again without changing any file, so the result is "
+                         + "identical. The build will keep failing until you EDIT the source. Fix the code now: "
+                         + "read_file the failing file, then write_file with the COMPLETE corrected content.",
+                });
+            }
+
             // After a successful write in a project with NO build system (html/docs/scripts), there is
             // no compiler oracle — teach the same review loop a strong assistant uses: read the file
             // back once, then CONCLUDE. Without this the weak model kept "verifying" a txt project
@@ -2233,7 +2482,10 @@ public class CodeAgentService
 
             // Wandering breaker: files were written, and several consecutive steps changed nothing —
             // next step forces a final prose answer (see iterToolChoice above).
-            if (anyWriteSucceeded && !wrapUpForced && stepsSinceMutation >= 4 && loopIsLocal)
+            // NOT while the build is red: wrapping up a failing build is the exact false finish the
+            // red-build guard exists to prevent, and this breaker used to hand it the exit.
+            if (anyWriteSucceeded && !wrapUpForced && stepsSinceMutation >= 4 && loopIsLocal
+                && !lastBuildFailed)
             {
                 wrapUpForced = true;
                 _debugLog?.Info("Agent", $"wrap-up forced at step {iteration + 1} (no file changes for {stepsSinceMutation} steps after a successful write)");

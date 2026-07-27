@@ -123,7 +123,11 @@ public class SettingsService
                     // schemas are ~4.4k tokens, so a 4096 window overflows on the first agentic message. 4096
                     // was the OLD default, so an exact 4096 means "never deliberately changed" — bump it; a
                     // user who set 2048/6000/etc on purpose is left alone.
-                    if (_settings.ContextSize == 4096) _settings.ContextSize = 8192;
+                    // Same reasoning applies again at 8192: measured on a real agentic turn, the
+                    // prompt+schemas+one file floor is ~8.2k, so 8192 overflows by a few tokens and
+                    // compaction can't rescue it (that floor isn't history). Exact old defaults are
+                    // treated as "never deliberately changed"; a hand-picked value is left alone.
+                    if (_settings.ContextSize is 4096 or 8192) _settings.ContextSize = 12288;
                 }
             }
             catch (Exception ex)

@@ -25,7 +25,11 @@ public class AppSettings
     // 4096 window overflowed on the VERY FIRST agentic message ("request exceeds the available context size").
     // 8192 fits the agent loop with room for a real conversation and costs only ~tens of MB extra KV cache on
     // an 8B model — well within the GPUs that run local mode. Raise further for big-repo work.
-    public uint ContextSize { get; set; } = 8192;
+    // 12288, not 8192. Measured on a real agentic turn: system prompt (~2.7k) + the CORE tool
+    // schemas + one source file + a couple of tool results lands at ~8.2k — i.e. 8192 overflows by
+    // a few tokens and compaction can't help, because that floor is not history. 12k leaves room to
+    // actually finish a task; the extra KV cache is ~0.3 GB on a 7B Q4 model.
+    public uint ContextSize { get; set; } = 12288;
     public int GpuLayerCount { get; set; } = -1; // -1 = auto (all layers)
     public float Temperature { get; set; } = 0.6f;
     public float TopP { get; set; } = 0.9f;
