@@ -830,6 +830,20 @@
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
+
+                <!-- Search-result pagination. The VM has paged the results all along
+                     (SearchPage / SearchTotalPages / SearchPageInfo) but there were no
+                     buttons, so only the first page was ever reachable. -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,4"
+                            Visibility="{Binding HasSearchResults, Converter={StaticResource BoolVis}}">
+                    <Button Content="◀ Prev" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding PrevSearchPageCommand}" Padding="12,4" FontSize="11"/>
+                    <TextBlock Text="{Binding SearchPageInfo}" Foreground="{StaticResource TextBrush}"
+                               FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Margin="16,0" FontFamily="{StaticResource MonoFont}"/>
+                    <Button Content="Next ▶" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding NextSearchPageCommand}" Padding="12,4" FontSize="11"/>
+                </StackPanel>
             </StackPanel>
 
             <!-- ═══════════════════════════════════════════════════════ -->

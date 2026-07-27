@@ -308,7 +308,7 @@
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding ChatVM.OpenFolderCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
-                                ToolTip="Open Folder">
+                                ToolTip="{services:Loc sidebar.openFolder}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
@@ -590,7 +590,7 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                                    Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                        <TextBlock Text="CHAT HISTORY" FontSize="10" FontWeight="Bold"
+                                        <TextBlock Text="{services:Loc sidebar.chatHistory}" FontSize="10" FontWeight="Bold"
                                                    FontFamily="{StaticResource NeonMonoFont}"
                                                    Foreground="{StaticResource NeonInk3Brush}"
                                                    VerticalAlignment="Center"/>
@@ -644,7 +644,7 @@
                                             Background="Transparent" BorderThickness="0" Cursor="Hand"
                                             Command="{Binding ChatVM.ClearSearchCommand}"
                                             Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
-                                            ToolTip="Clear search">
+                                            ToolTip="{services:Loc sidebar.clearSearch}">
                                         <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
                                                    Foreground="{StaticResource NeonInk3Brush}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -707,7 +707,7 @@
                                                         <Button Grid.Column="1" Width="20" Height="20"
                                                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                                                 Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                CommandParameter="{Binding Id}" ToolTip="Delete session">
+                                                                CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
                                                             <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
                                                                        Foreground="{StaticResource NeonInk3Brush}"
                                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -719,7 +719,7 @@
                                     </ItemsControl>
 
                                     <!-- Empty state -->
-                                    <TextBlock Text="No conversations yet.&#x0a;Click + (top) to start!"
+                                    <TextBlock Text="{services:Loc sidebar.noConversations}"
                                                FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
                                                HorizontalAlignment="Center" Margin="20,30"
                                                Foreground="{StaticResource NeonInk3Brush}">

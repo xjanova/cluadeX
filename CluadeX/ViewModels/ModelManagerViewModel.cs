@@ -72,6 +72,8 @@ public class ModelManagerViewModel : ViewModelBase
     }
     public int SearchTotalPages { get => _searchTotalPages; set => SetProperty(ref _searchTotalPages, value); }
     public string SearchPageInfo => $"{_searchPage} / {_searchTotalPages}";
+    /// <summary>Drives the visibility of the search pagination bar.</summary>
+    public bool HasSearchResults => _allSearchResults.Count > 0;
     public ICommand NextSearchPageCommand => new RelayCommand(() => { if (_searchPage < SearchTotalPages) SearchPage++; }, () => _searchPage < SearchTotalPages);
     public ICommand PrevSearchPageCommand => new RelayCommand(() => { if (_searchPage > 1) SearchPage--; }, () => _searchPage > 1);
 
@@ -538,6 +540,7 @@ public class ModelManagerViewModel : ViewModelBase
 
         SearchTotalPages = Math.Max(1, (int)Math.Ceiling(_allSearchResults.Count / (double)_searchItemsPerPage));
         OnPropertyChanged(nameof(SearchPageInfo));
+        OnPropertyChanged(nameof(HasSearchResults));
     }
 
     private static string ExtractQuantFromFile(string filename)
