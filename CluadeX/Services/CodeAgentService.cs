@@ -29,8 +29,10 @@ public class CodeAgentService
     // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
     private int MaxAgentIterations => Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
 
-    // High-value core tools offered to a SMALL-context local model (the full ~46-schema catalogue eats
-    // 40-70% of a 4k window). Kept in sync with the small-ctx NOTE in GetSystemPrompt so prompt + schemas agree.
+    // High-value BUILT-IN tools offered to a SMALL-context local model (the full ~46-schema catalogue eats
+    // 40-70% of a 4k window). This list is BUILT-INS ONLY — MCP tools are selected by budget, not by name
+    // (see FitLocalToolSchemas). The small-ctx NOTE in GetSystemPrompt is derived from the same fit, so
+    // prompt + schemas cannot drift.
     private static readonly HashSet<string> CoreLocalToolNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "read_file", "list_files", "search_content", "search_files", "codebase_search",
@@ -51,6 +53,97 @@ public class CodeAgentService
         // subset filter or "/commit" style requests dead-end on a tool the model was told to use.
         "skill_invoke",
     };
+
+    // ─── Local tool-catalogue fit ───────────────────────────────────────────────────────────────
+    private static bool IsMcpToolName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
+
+    /// <summary>Server key out of a qualified MCP name (mcp__{server}__{tool}).</summary>
+    private static string McpServerOf(string qualifiedName)
+    {
+        int start = "mcp__".Length;
+        int end = qualifiedName.IndexOf("__", start, StringComparison.Ordinal);
+        return end > start ? qualifiedName[start..end] : qualifiedName;
+    }
+
+    /// <summary>
+    /// Token cost of one schema once --jinja renders the OpenAI "tools" field into the prompt. Uses the
+    /// shared <see cref="CluadeX.Helpers.TokenBudget.EstimateTokens"/> (biased high, and counts non-ASCII
+    /// at 1 token/char) — a flat chars/4 under-counted the real prompt by ~25% and let the fit overflow
+    /// the window it exists to protect. The constant covers the per-tool JSON envelope
+    /// ({"type":"function","function":{"name":…,"description":…,"parameters":…}}).
+    /// </summary>
+    private static int EstimateSchemaTokens(Services.Providers.ToolSchema t)
+    {
+        string raw = "";
+        try
+        {
+            if (t.InputSchema.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                raw = t.InputSchema.GetRawText();
+        }
+        catch { raw = new string('x', 256); }
+        return CluadeX.Helpers.TokenBudget.EstimateTokens(t.Name + t.Description + raw) + 16;
+    }
+
+    /// <summary>
+    /// Choose the tool schemas a LOCAL model gets, fitted to its context window.
+    ///
+    /// Built-ins trim to <see cref="CoreLocalToolNames"/> below 16k ctx — the full catalogue costs
+    /// 6-8k tokens once the server's chat template renders it and overflows a small window.
+    ///
+    /// MCP tools are NOT name-trimmed. A whitelist of built-in names can never match a qualified
+    /// "mcp__server__tool", so filtering by that list dropped EVERY MCP tool at small ctx — silently,
+    /// and while the prompt told the model it had a core set that never mentioned them. The user
+    /// configured those servers deliberately and nothing built-in substitutes for them, so they are
+    /// bounded only by a token budget, which bites solely when a large fleet of servers would eat the
+    /// window. That budget applies at EVERY local ctx: the old ≥16k path sent the whole MCP catalogue
+    /// unmetered, which is its own overflow (30 BrainX schemas alone measure ~5.6k tokens).
+    ///
+    /// Admission order is core built-ins → MCP → the remaining built-ins. The long tail of built-ins
+    /// yielding to MCP is deliberate: everything in the tail has a run_command fallback, an MCP server
+    /// has none.
+    /// </summary>
+    /// <param name="reservedTokens">
+    /// Everything the request needs that ISN'T schemas — system prompt, history, and generation. Measured
+    /// by the caller, never guessed: a hardcoded fraction under-reserved a Thai system prompt and the
+    /// request overflowed at n_prompt_tokens=12729 against a 12288 window.
+    /// </param>
+    private static List<Services.Providers.ToolSchema> FitLocalToolSchemas(
+        List<Services.Providers.ToolSchema> all, int ctxTokens, int reservedTokens,
+        out int mcpKept, out int mcpDropped)
+    {
+        var builtIns = all.Where(t => !IsMcpToolName(t.Name)).ToList();
+        var mcp = all.Where(t => IsMcpToolName(t.Name)).ToList();
+
+        var core = builtIns.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
+        if (core.Count == 0) core = builtIns; // guard: never nuke all tools on a name mismatch
+        var tail = ctxTokens < 16000
+            ? new List<Services.Providers.ToolSchema>()          // small ctx: core built-ins only
+            : builtIns.Except(core).ToList();
+
+        int budget = Math.Max(600, ctxTokens - reservedTokens);
+        var kept = new List<Services.Providers.ToolSchema>();
+        int keptMcp = 0, droppedMcp = 0;
+
+        void Admit(List<Services.Providers.ToolSchema> group, bool countMcp)
+        {
+            foreach (var t in group)
+            {
+                int cost = EstimateSchemaTokens(t);
+                if (cost > budget) { if (countMcp) droppedMcp++; continue; }
+                budget -= cost;
+                kept.Add(t);
+                if (countMcp) keptMcp++;
+            }
+        }
+
+        Admit(core, false);
+        Admit(mcp, true); // registration order — the server's own idea of what matters first
+        Admit(tail, false);
+
+        mcpKept = keptMcp;
+        mcpDropped = droppedMcp;
+        return kept;
+    }
 
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
     private string? _cachedSystemPrompt;
@@ -756,33 +849,60 @@ public class CodeAgentService
             {
                 sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
             }
-            else if (localNativeTools && contextTokens >= 16000)
+            else if (localNativeTools)
             {
-                // Big-ctx native: the FULL schema catalogue rides the API "tools" field — the prompt only
-                // needs the discipline line, not a token-expensive text copy of every tool.
-                sb.AppendLine("NOTE: You have the full tool catalogue (provided as structured tool schemas). "
-                    + "ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify before you say you're done.");
-            }
-            else if (_settingsService.Settings.LocalNativeToolUseEnabled)
-            {
-                // Small/medium ctx + native tool use: we send a CORE tool subset (see CoreLocalToolNames), so
-                // the prompt must AGREE — telling the model tools are "disabled" while handing it schemas is
-                // the contradiction that wrecks weak-model tool selection.
-                // The git names are only in the CORE subset when the Git feature actually emitted
-                // their schemas — listing them unconditionally advertised tools IsToolAllowed denies.
-                bool gitInCore = _settingsService.Settings.Features.GitIntegration
-                    && _activationService.IsFeatureUnlocked("feature.git");
-                sb.AppendLine("NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, "
-                    + "search_content, search_files, codebase_search, find_symbol, list_symbols, edit_file, "
-                    + "multi_edit, write_file, run_command, run_build, run_tests, brain_recall, skill_invoke"
-                    + (gitInCore ? ", git_status, git_add, git_commit, git_merge" : "")
-                    + ". ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify. "
-                    + (gitInCore
-                        ? "For git, PREFER the dedicated tools over run_command 'git ...': use git_commit "
-                          + "(pass stage_all=true to stage everything first) and git_merge — shell quoting for git is "
-                          + "unreliable on Windows. "
-                        : "")
-                    + "Increase Context Size to ≥ 16384 for the full toolset.");
+                // Native tool use: schemas ride the API "tools" field, so the prompt only needs the
+                // discipline line — not a token-expensive text copy of every tool. It MUST describe the
+                // set we actually send, though: telling the model tools are "disabled", or naming a core
+                // set that omits the MCP tools we handed it, is the contradiction that wrecks weak-model
+                // tool selection. Derive the names from the real catalogue rather than a hardcoded list
+                // that has to be kept in sync by hand.
+                //
+                // Deliberately NOT the budget fit: that needs a measured system prompt, which is what we
+                // are building right now. Only the token BUDGET is unknown here — which built-ins qualify,
+                // and which servers exist, is not — so the NOTE stays truthful without the circularity.
+                var catalogue = _agentToolService.BuildNativeToolSchemas();
+                var builtInNames = catalogue.Where(t => !IsMcpToolName(t.Name))
+                    .Select(t => t.Name)
+                    .Where(n => contextTokens >= 16000 || CoreLocalToolNames.Contains(n))
+                    .ToList();
+                // git_* names reach the set only when the Git feature actually emitted their schemas —
+                // advertising them unconditionally offered tools IsToolAllowed denies.
+                bool gitInSet = builtInNames.Contains("git_commit", StringComparer.OrdinalIgnoreCase);
+
+                if (contextTokens >= 16000)
+                {
+                    sb.AppendLine("NOTE: You have the full built-in tool catalogue (provided as structured tool schemas). "
+                        + "ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify before you say you're done.");
+                }
+                else
+                {
+                    sb.AppendLine("NOTE: Context is limited, so you have a CORE built-in tool set: "
+                        + string.Join(", ", builtInNames)
+                        + ". ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify. "
+                        + (gitInSet
+                            ? "For git, PREFER the dedicated tools over run_command 'git ...': use git_commit "
+                              + "(pass stage_all=true to stage everything first) and git_merge — shell quoting for git is "
+                              + "unreliable on Windows. "
+                            : "")
+                        + "Increase Context Size to ≥ 16384 for the full built-in toolset.");
+                }
+
+                // MCP tools are the user's own configured servers. Say they exist, because a weak model
+                // that isn't told tends to NARRATE the call instead of making it. No counts: a tight
+                // window can drop some, and the tool list itself is the authority on what is callable.
+                var mcpServers = catalogue.Where(t => IsMcpToolName(t.Name))
+                    .Select(t => McpServerOf(t.Name))
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(s => s, StringComparer.Ordinal)
+                    .ToList();
+                if (mcpServers.Count > 0)
+                {
+                    sb.AppendLine("You ALSO have MCP tools from " + string.Join(", ", mcpServers.Select(s => $"'{s}'"))
+                        + ". They are REAL callable tools, named mcp__<server>__<tool> — call them by that full "
+                        + "qualified name, and only the ones actually present in your tool list. Never answer that "
+                        + "you 'will use' one or ask the user to go ahead: call it now, then answer from its result.");
+                }
             }
             else
             {
@@ -1695,21 +1815,32 @@ public class CodeAgentService
         var toolSchemas = _agentToolService.BuildNativeToolSchemas();
 
         // ─── Ctx-aware tool subset (weak local models) ───
-        // The full ~46-schema catalogue costs ~6-8k tokens once the server's chat template renders it —
-        // it only fits comfortably from 16k ctx upward (at 8192 it blew the request up to ~13.7k and
-        // overflowed). Below that, trim to a high-value core so the menu fits + the choice is clearer.
-        // The prompt's small-ctx NOTE lists exactly this set, so the two paths agree.
-        bool localSmallCtx = (_providerManager.ActiveProviderType
-                is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
-            && (int)_settingsService.Settings.ContextSize < 16000;
-        if (localSmallCtx)
+        // The full catalogue costs ~6-8k tokens once the server's chat template renders it — it only fits
+        // comfortably from 16k ctx upward (at 8192 it blew the request up to ~13.7k and overflowed). Fit it
+        // to the window instead: built-ins trim to the core below 16k, MCP tools are budgeted (never
+        // name-filtered — a built-in whitelist can't match "mcp__server__tool", so filtering by it stripped
+        // every MCP tool the user had configured). The prompt's NOTE is derived from the same fit.
+        bool isLocal = _providerManager.ActiveProviderType
+            is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        int localCtxTokens = Math.Max(2048, (int)_settingsService.Settings.ContextSize);
+        int mcpKept = 0, mcpDropped = 0, reservedTokens = 0;
+        if (isLocal)
         {
-            var trimmed = toolSchemas.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
-            if (trimmed.Count > 0) toolSchemas = trimmed; // guard: never nuke all tools on a name mismatch
+            // Measure the non-schema footprint instead of assuming a fraction of the window: system
+            // prompt + the history that will be sent + real room to answer. The generation share is
+            // capped at a sixth of the window so a large MaxTokens can't starve the prompt.
+            reservedTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)
+                + CluadeX.Helpers.TokenBudget.EstimateTokens(userMessage)
+                + history.TakeLast(20).Sum(m => CluadeX.Helpers.TokenBudget.EstimateTokens(m.Content))
+                + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
+            toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped);
         }
 
         _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
-            + $"schemas={toolSchemas.Count}{(localSmallCtx ? " (core subset)" : " (full)")} sysPrompt~{systemPrompt.Length / 4}tok");
+            + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
+            + $"sysPrompt~{CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)}tok");
+        if (mcpDropped > 0)
+            _debugLog?.Warn("Agent", $"{mcpDropped} MCP tool schema(s) did not fit ctx={localCtxTokens} — raise Context Size to offer the full set");
 
         // Build initial messages (with history compaction)
         var nativeMessages = new List<Services.Providers.NativeMessage>();
