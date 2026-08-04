@@ -33,10 +33,24 @@ public enum McpServerState
 /// respawned with backoff. INotifyPropertyChanged so the status bar can bind to
 /// the truth instead of the user having to open a page and press Refresh.
 /// </summary>
-public sealed class McpServerManager : INotifyPropertyChanged, IDisposable
+public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposable
 {
     /// <summary>How many times to respawn a server that died on its own before giving up.</summary>
     private const int MaxReconnectAttempts = 5;
+
+    /// <summary>
+    /// Crash-loop brake. <see cref="MaxReconnectAttempts"/> bounds consecutive
+    /// FAILED STARTS and nothing else, so a server that handshakes cleanly and
+    /// then dies a second later resets that counter every cycle and respawns
+    /// forever — a process pair per second, indefinitely.
+    ///
+    /// That is not hypothetical: it is the exact shape of the 2026-08-04 failure
+    /// this supervisor was written for (Ready at 10:19:16, gone by 10:19:46).
+    /// A server that dies this soon after reaching Ready this many times is
+    /// broken, and the honest answer is a red chip, not a spawn loop.
+    /// </summary>
+    private const int MaxRapidCrashes = 4;
+    private static readonly TimeSpan RapidCrashWindow = TimeSpan.FromSeconds(60);
 
     private readonly SettingsService _settingsService;
     private readonly DebugLogService? _log;
@@ -50,6 +64,10 @@ public sealed class McpServerManager : INotifyPropertyChanged, IDisposable
     // that fails mid-handshake is handled by StartServerAsync's own catch — letting
     // the exit event ALSO fire a reconnect there would double-spawn.
     private readonly ConcurrentDictionary<string, byte> _supervised = new();
+    // When each server last reached Ready, and how many times it has died inside
+    // RapidCrashWindow of doing so. Feeds the crash-loop brake above.
+    private readonly ConcurrentDictionary<string, DateTime> _readySinceUtc = new();
+    private readonly ConcurrentDictionary<string, int> _rapidCrashes = new();
     // One start at a time per server, or a user-pressed Restart racing the
     // supervisor leaks an orphan process pair.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates = new();
@@ -165,9 +183,38 @@ public sealed class McpServerManager : INotifyPropertyChanged, IDisposable
 
     private void LogStderr(string name, string message)
     {
-        _log?.Debug("MCP", $"[{name}] {message}");
+        _log?.Debug("MCP", $"[{name}] {RedactSecrets(message)}");
         try { OnServerLog?.Invoke(name, $"[stderr] {message}"); } catch { }
     }
+
+    /// <summary>
+    /// Scrub obvious credentials out of a line before it reaches the on-disk log.
+    ///
+    /// Mirroring MCP stderr to `~/.cluadex/logs/` is what finally made a dead
+    /// server explain itself — but stderr belongs to servers this app does not
+    /// control, configured with API keys in `mcp_servers.json`, and a crashing
+    /// one that dumps its environment would write those keys to a plaintext file
+    /// the user is then asked to paste into a bug report.
+    ///
+    /// Deliberately narrow: known token prefixes and KEY=value shapes only. No
+    /// generic "long hex" rule — brainx-mcp logs note shas, and a redactor that
+    /// eats the diagnostics is a redactor nobody keeps switched on.
+    /// </summary>
+    internal static string RedactSecrets(string line)
+    {
+        if (string.IsNullOrEmpty(line)) return line;
+        line = SecretAssignment().Replace(line, "$1=«redacted»");
+        line = SecretToken().Replace(line, "«redacted»");
+        return line;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)\s*[=:]\s*\S+")]
+    private static partial System.Text.RegularExpressions.Regex SecretAssignment();
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"(?i)\b(?:Bearer\s+[\w\-.~+/]{12,}|sk-[A-Za-z0-9\-_]{16,}|gh[posur]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{10,}|AIza[A-Za-z0-9\-_]{30,})")]
+    private static partial System.Text.RegularExpressions.Regex SecretToken();
 
     /// <summary>Path to the MCP config file.</summary>
     private string ConfigPath => Path.Combine(_settingsService.DataRoot, "mcp_servers.json");
@@ -339,6 +386,7 @@ public sealed class McpServerManager : INotifyPropertyChanged, IDisposable
             // Arm supervision only now: everything above is covered by the catch
             // blocks, and a half-started transport must not trigger a respawn race.
             _supervised[name] = 1;
+            _readySinceUtc[name] = DateTime.UtcNow;
             _reconnectAttempt = 0;
             SetState(name, McpServerState.Ready);
             Log(name, $"Ready ({toolCount} tools)");
@@ -381,6 +429,11 @@ public sealed class McpServerManager : INotifyPropertyChanged, IDisposable
     public async Task StopServerAsync(string name)
     {
         _supervised.TryRemove(name, out _);
+        // An explicit stop clears the crash-loop brake: the next start is the
+        // user's decision, and a server they deliberately restarted deserves the
+        // full budget again rather than inheriting a verdict from before the fix.
+        _rapidCrashes.TryRemove(name, out _);
+        _readySinceUtc.TryRemove(name, out _);
         if (_transports.TryGetValue(name, out var transport))
         {
             await transport.StopAsync();
@@ -418,9 +471,30 @@ public sealed class McpServerManager : INotifyPropertyChanged, IDisposable
             ? "Server process exited unexpectedly."
             : $"Server process exited unexpectedly. Last stderr:\n{stderr}";
         _log?.Warn("MCP", $"[{name}] {detail}");
+        try { dead.Dispose(); } catch { }
+
+        // Crash-loop brake. A server that dies soon after every successful
+        // handshake would otherwise reset the reconnect counter on each cycle and
+        // respawn forever — see MaxRapidCrashes.
+        var upFor = _readySinceUtc.TryGetValue(name, out var since)
+            ? DateTime.UtcNow - since
+            : TimeSpan.MaxValue;
+        int rapid = upFor < RapidCrashWindow
+            ? _rapidCrashes.AddOrUpdate(name, 1, (_, v) => v + 1)
+            : _rapidCrashes[name] = 0;
+
+        if (rapid >= MaxRapidCrashes)
+        {
+            string give = $"Died {rapid}× within {RapidCrashWindow.TotalSeconds:F0}s of starting — "
+                        + "not restarting it again. Fix the server, then Restart it from MCP Servers (Ctrl+5).";
+            _log?.Error("MCP", $"[{name}] {give}");
+            SetState(name, McpServerState.Failed, $"{detail}\n\n{give}");
+            try { OnServerLog?.Invoke(name, give); } catch { }
+            return;
+        }
+
         SetState(name, McpServerState.Reconnecting, detail);
         try { OnServerLog?.Invoke(name, detail); } catch { }
-        try { dead.Dispose(); } catch { }
 
         _ = Task.Run(() => ReconnectLoopAsync(name));
     }
