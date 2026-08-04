@@ -87,7 +87,39 @@ public class InstinctService
             File.WriteAllText(_storePath, json);
             _cache = store;
         }
-        Changed?.Invoke();
+        RaiseChangedDetached();
+    }
+
+    /// <summary>
+    /// Fire <see cref="Changed"/> on a pool thread instead of the caller's.
+    ///
+    /// DEADLOCK FIX. Save() is deliberately called from INSIDE a mutator's
+    /// lock (the Load → mutate → Save round-trip is one critical section), so
+    /// raising the event inline ran subscribers while _lock was still held.
+    /// InstinctsViewModel's subscriber does Dispatcher.Invoke(Refresh) —
+    /// blocking — and Refresh calls GetAll(), which wants that same _lock.
+    /// Result: the background thread waited on the UI thread while the UI
+    /// thread waited on the background thread's lock. Captured live with
+    /// dotnet-stack on 2026-07-29: three threads, one in Save/RecordObservation
+    /// (from SessionMemoryService.ExtractInstinctsAsync), two parked in
+    /// GetAll() — one of them the UI thread, one building the system prompt.
+    ///
+    /// The app froze for 11 minutes, WPF then failed to allocate render
+    /// resources ("Not enough quota is available"), queued MCP work never
+    /// started, and the window would not close.
+    ///
+    /// Detaching means subscribers always run with no lock held by us. The
+    /// notification is inherently async anyway — nobody may assume it has
+    /// been delivered by the time Save() returns.
+    /// </summary>
+    private void RaiseChangedDetached()
+    {
+        var handler = Changed;
+        if (handler == null) return;
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try { handler(); } catch { /* a UI refresh must never kill a save */ }
+        });
     }
 
     public List<Instinct> GetAll()

@@ -143,6 +143,11 @@
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
                               ToolTip="{services:Loc chat.thinkingTip}"/>
+                    <CheckBox Content="Steps" Margin="4,0"
+                              IsChecked="{Binding ShowAgentInternals}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="10" VerticalAlignment="Center"
+                              ToolTip="แสดงขั้นตอนการทำงานของ agent (tool calls / สถานะ) ในแชท&#10;ปิดไว้ = เห็นเฉพาะคำถามกับคำตอบ · ข้อผิดพลาด diff และคำขออนุญาตยังแสดงเสมอ"/>
                 </StackPanel>
 
                 <Button Grid.Column="4" Content="&#xE711;"
@@ -231,6 +236,41 @@
                                     </ControlTemplate>
                                 </Setter.Value>
                             </Setter>
+                            <Style.Triggers>
+                                <!-- ═══ "Steps" off: the transcript is the conversation, not the log ═══
+                                     Collapsing the CONTAINER (not the content) is what makes the row take
+                                     zero height — a hidden bubble inside a live ListBoxItem still leaves
+                                     its margin behind and the chat reads as full of blank gaps.
+
+                                     Three deliberate exemptions, checked as extra Conditions below: a
+                                     FAILED tool, a tool carrying a file DIFF, and permission requests.
+                                     Those are decisions the user has to make or verify; hiding them would
+                                     be the UI concealing its own state, which is the bug this whole
+                                     session has been about. -->
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                        <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                        <Condition Binding="{Binding HasError}" Value="False"/>
+                                        <Condition Binding="{Binding HasDiff}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}"/>
+                                        <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.Thinking}"/>
+                                        <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
+                            </Style.Triggers>
                         </Style>
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
@@ -1354,6 +1394,13 @@
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center"
                               ToolTip="{services:Loc chat.autoRunTip}"/>
+                    <!-- Lives on the BOTTOM bar, not the project bar: the project bar is
+                         hidden whenever no folder is open, and a plain chat with only the
+                         brain connected is exactly where the step spam is worst. -->
+                    <CheckBox Content="Steps" IsChecked="{Binding ShowAgentInternals}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
+                              ToolTip="แสดงขั้นตอนการทำงานของ agent (tool calls / สถานะ) ในแชท&#10;ปิดไว้ = เห็นเฉพาะคำถามกับคำตอบ · ข้อผิดพลาด diff และคำขออนุญาตยังแสดงเสมอ"/>
                     <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
                               Foreground="{StaticResource MauveBrush}"
                               FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"

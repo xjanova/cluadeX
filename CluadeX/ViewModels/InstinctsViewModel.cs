@@ -273,8 +273,14 @@ public class InstinctsViewModel : ViewModelBase
         });
 
         Refresh();
+        // BeginInvoke, not Invoke: a blocking hop from whatever thread saved an
+        // instinct is half of the deadlock documented in
+        // InstinctService.RaiseChangedDetached — the writer would wait on the UI
+        // thread while the UI thread waited on the writer's lock. The service
+        // now detaches the event too, so this is belt-and-braces: no future
+        // subscriber can re-create the cycle from this side.
         _service.Changed += () =>
-            App.Current?.Dispatcher.Invoke(() => Refresh(preserveSelection: _selected?.Id));
+            App.Current?.Dispatcher.BeginInvoke(() => Refresh(preserveSelection: _selected?.Id));
     }
 
     public void Refresh(string? preserveSelection = null)

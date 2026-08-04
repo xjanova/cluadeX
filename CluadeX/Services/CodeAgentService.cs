@@ -57,6 +57,26 @@ public class CodeAgentService
     // ─── Local tool-catalogue fit ───────────────────────────────────────────────────────────────
     private static bool IsMcpToolName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
 
+    /// <summary>
+    /// MCP tools that must survive <see cref="FitLocalToolSchemas"/> at ANY context
+    /// size. Recall only — the brain's write/admin surface stays in the general
+    /// queue, because a rule that says "look before you act" only needs the readers.
+    /// Matched on the leaf of mcp__{server}__{tool} so it works whatever the user
+    /// named the server.
+    /// </summary>
+    private static readonly HashSet<string> PinnedMcpToolNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brain_search", "brain_semantic_search", "brain_get_note",
+    };
+
+    private static bool IsPinnedMcpTool(string qualifiedName)
+    {
+        if (!IsMcpToolName(qualifiedName)) return false;
+        int last = qualifiedName.LastIndexOf("__", StringComparison.Ordinal);
+        string leaf = last >= 0 ? qualifiedName[(last + 2)..] : qualifiedName;
+        return PinnedMcpToolNames.Contains(leaf);
+    }
+
     /// <summary>Server key out of a qualified MCP name (mcp__{server}__{tool}).</summary>
     private static string McpServerOf(string qualifiedName)
     {
@@ -113,6 +133,14 @@ public class CodeAgentService
     {
         var builtIns = all.Where(t => !IsMcpToolName(t.Name)).ToList();
         var mcp = all.Where(t => IsMcpToolName(t.Name)).ToList();
+        // Brain recall goes to the front of the whole queue. The brain-first rule in
+        // the system prompt tells the model to search BrainX before starting work,
+        // and at ctx=12288 the fit was dropping 63 of the brain's 83 schemas in
+        // registration order — so on a given turn brain_search might simply not be on
+        // the menu, and a mandatory rule the model cannot obey is worse than no rule.
+        // Three schemas, ~550 tokens; everything else keeps its old ordering.
+        var pinned = mcp.Where(t => IsPinnedMcpTool(t.Name)).ToList();
+        mcp = mcp.Where(t => !IsPinnedMcpTool(t.Name)).ToList();
 
         var core = builtIns.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
         if (core.Count == 0) core = builtIns; // guard: never nuke all tools on a name mismatch
@@ -136,6 +164,7 @@ public class CodeAgentService
             }
         }
 
+        Admit(pinned, true); // brain recall — the one group the system prompt makes mandatory
         Admit(core, false);
         Admit(mcp, true); // registration order — the server's own idea of what matters first
         Admit(tail, false);
@@ -762,6 +791,39 @@ public class CodeAgentService
     {
         var sb = new StringBuilder(BuildBaseSystemPrompt());
 
+        // ─── BRAIN-FIRST ───
+        // Same standing rule Claude Code and Codex already run under: consult the
+        // brain BEFORE doing the work, not after. Appended right at the head because
+        // the local fit-guard below trims the TAIL of this prompt — a rule that can
+        // be trimmed away is not a rule.
+        //
+        // Gated on the brain actually being reachable. Telling a model to call
+        // brain_search when no brain server is running produces the worst outcome of
+        // all: it tries, fails, and burns the turn apologising. The pinned schemas in
+        // FitLocalToolSchemas are the other half — the rule is only enforceable if
+        // brain_search survives the context fit.
+        if (_brainSync?.IsBrainAvailable == true)
+        {
+            sb.AppendLine();
+            sb.AppendLine("# BrainX — brain-first protocol");
+            sb.AppendLine("You are connected to the owner's BrainX brain: past decisions, bug fixes and");
+            sb.AppendLine("gotchas already paid for on this machine.");
+            sb.AppendLine("- Search FIRST, answer SECOND. Before a non-trivial answer or any file edit, call");
+            sb.AppendLine("  `brain_search` with 2-4 keywords. If it returns nothing, retry once with");
+            sb.AppendLine("  `brain_semantic_search` (it handles Thai and paraphrases).");
+            sb.AppendLine("- Searching is a STEP, never the answer. When results come back you must still do");
+            sb.AppendLine("  the work the user asked for, in the same turn. NEVER end a turn with only a");
+            sb.AppendLine("  remark about what you searched or fetched — that is a failed turn.");
+            sb.AppendLine("- Use `brain_get_note` only when one title is clearly decisive and its preview is");
+            sb.AppendLine("  not enough. One note at most, then get on with the task.");
+            sb.AppendLine("- Name the notes you relied on. Where the brain contradicts your instinct, the");
+            sb.AppendLine("  brain wins — it was written from something that really happened here.");
+            sb.AppendLine("- Skip the search for trivial questions, generic language facts, or a request that");
+            sb.AppendLine("  already names the exact file to change.");
+            sb.AppendLine("- A `<brainx_recall>` block in the user's message means the search already ran;");
+            sb.AppendLine("  read it and answer — only search again for a genuinely different angle.");
+        }
+
         // ─── Context-window awareness (fixes the local-model "hang / no response") ───
         // Local providers run with a SMALL context (default 4096 tokens). The full Anthropic-grade context
         // dump — tool definitions + project tree + codebase map + key files — is many thousands of tokens
@@ -845,6 +907,12 @@ public class CodeAgentService
             // Dynamic Section: Tool Definitions
             // ═══════════════════════════════════════════
             sb.AppendLine();
+
+            // False only in the MCP-only case (no project open): the few-shot below
+            // demonstrates read_file → multi_edit → run_build, which would be a
+            // worked example of tools the model does not have this turn.
+            bool builtInToolsAvailable = true;
+
             if (includeToolDefs)
             {
                 sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
@@ -870,7 +938,20 @@ public class CodeAgentService
                 // advertising them unconditionally offered tools IsToolAllowed denies.
                 bool gitInSet = builtInNames.Contains("git_commit", StringComparer.OrdinalIgnoreCase);
 
-                if (contextTokens >= 16000)
+                builtInToolsAvailable = builtInNames.Count > 0;
+
+                if (!builtInToolsAvailable)
+                {
+                    // No project open, so BuildNativeToolSchemas emitted MCP tools ONLY.
+                    // Say that plainly rather than describe a built-in set the model was
+                    // never handed: the MCP paragraph below is its whole arsenal this
+                    // turn, and the one thing it must not conclude is that it has no
+                    // tools and should therefore just talk.
+                    sb.AppendLine("NOTE: No project folder is open, so the file/build tools are unavailable this turn. "
+                        + "This does NOT leave you without tools — see the next line, and use them. "
+                        + "If the user asks for something that needs files, ask them to open a project folder first.");
+                }
+                else if (contextTokens >= 16000)
                 {
                     sb.AppendLine("NOTE: You have the full built-in tool catalogue (provided as structured tool schemas). "
                         + "ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify before you say you're done.");
@@ -917,7 +998,7 @@ public class CodeAgentService
             // ─── Few-shot trace (weak local models) ───
             // Showing the read→edit→verify shape once teaches the call FORMAT + discipline far better than
             // prose rules. Local-only + whenever tools are actually available (text catalogue OR native schemas).
-            if (isLocalProvider && (includeToolDefs || localNativeTools))
+            if (isLocalProvider && (includeToolDefs || localNativeTools) && builtInToolsAvailable)
             {
                 sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
                 sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
@@ -1224,7 +1305,17 @@ public class CodeAgentService
     private async Task<string> MaybePrependBrainContextAsync(string userMessage, IProgress<string>? progress, CancellationToken ct)
     {
         if (_brainSync == null || !_settingsService.Settings.BrainAutoRecallEnabled) return userMessage;
-        if (string.IsNullOrWhiteSpace(userMessage) || !_brainSync.IsBrainAvailable) return userMessage;
+        if (string.IsNullOrWhiteSpace(userMessage)) return userMessage;
+        if (!_brainSync.IsBrainAvailable)
+        {
+            // Say it out loud. This gate returning false silently is exactly how
+            // auto-recall stayed dead for months behind an empty mcp_servers.json,
+            // and again on 2026-08-04 behind a crashed brainx-mcp: the user asks a
+            // question, gets a memoryless answer, and nothing anywhere says why.
+            _debugLog?.Warn("Agent", "Brain auto-recall skipped — no brain MCP server is running "
+                + "(check the 🧠 chip in the status bar / MCP Servers, Ctrl+5)");
+            return userMessage;
+        }
         // Skip the brain round-trip for very short / conversational asks ("hi", "โมเดลอะไร", "thanks").
         // Auto-recall targets non-trivial coding tasks; on a quick question the extra latency is exactly
         // what makes the app feel sluggish — which is the whole complaint we're fixing here.
@@ -1249,12 +1340,34 @@ public class CodeAgentService
             if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith("(", StringComparison.Ordinal))
                 return userMessage;
 
+            // Raw tool JSON → readable list. A 7B pattern-matches text; handed
+            // {"id":…,"score":74.4,"tags":[…],"appliesTo":…} it spends the tokens
+            // and learns nothing.
+            lessons = BrainSyncService.FormatSearchResultsForModel(lessons);
+            _debugLog?.Info("Agent", $"brain auto-recall injected · {lessons.Length} chars "
+                + $"(~{CluadeX.Helpers.TokenBudget.EstimateTokens(lessons)}tok)");
+
+            // Wording is MANDATORY, not advisory — the original said "Consult it if
+            // helpful; ignore if not relevant", which a small model reads as
+            // permission to skip.
+            //
+            // But mandatory is not enough on its own: the first version of this
+            // block ended "say so in one line and continue", and the 7B took the
+            // exit — it searched the brain, cited nothing, and replied in 93
+            // characters. A weak model treats the LAST instruction as the task, so
+            // the last instruction has to be "now answer the question", never
+            // anything that sounds like permission to be brief.
             return
                 "<brainx_recall>\n" +
-                "Relevant prior knowledge from your BrainX knowledge base (past decisions, bug fixes, lessons). " +
-                "Consult it if helpful; ignore if not relevant to this task:\n\n" +
+                "Prior knowledge from your BrainX brain — past decisions, bug fixes and gotchas already " +
+                "paid for on this machine. Read it first and follow it where it applies; where it " +
+                "contradicts your instinct, the brain wins.\n\n" +
                 lessons +
-                "\n</brainx_recall>\n\n" +
+                "\n\nThis block is BACKGROUND, not the task. Now answer the user's message below in full, " +
+                "using the tools you need. Mention by title any note you actually relied on. If none of " +
+                "them apply, ignore them completely and answer the question anyway — never reply with " +
+                "only a remark about the search.\n" +
+                "</brainx_recall>\n\n" +
                 userMessage;
         }
         catch
@@ -1824,6 +1937,11 @@ public class CodeAgentService
             is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
         int localCtxTokens = Math.Max(2048, (int)_settingsService.Settings.ContextSize);
         int mcpKept = 0, mcpDropped = 0, reservedTokens = 0;
+        // Count the brain recall tools BEFORE the fit, so the log can prove the
+        // pin held. Without this the brain-first rule is unfalsifiable from the
+        // log: "67 dropped" never said WHICH 67, and the one turn that mattered
+        // was the one where brain_search was among them.
+        int recallOffered = toolSchemas.Count(t => IsPinnedMcpTool(t.Name));
         if (isLocal)
         {
             // Measure the non-schema footprint instead of assuming a fraction of the window: system
@@ -1837,7 +1955,7 @@ public class CodeAgentService
         }
 
         _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
-            + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
+            + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · recall {toolSchemas.Count(t => IsPinnedMcpTool(t.Name))}/{recallOffered} pinned · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
             + $"sysPrompt~{CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)}tok");
         if (mcpDropped > 0)
             _debugLog?.Warn("Agent", $"{mcpDropped} MCP tool schema(s) did not fit ctx={localCtxTokens} — raise Context Size to offer the full set");

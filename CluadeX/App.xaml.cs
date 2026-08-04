@@ -97,8 +97,19 @@ public partial class App : Application
             {
                 // Initialize MCP servers
                 var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
+
+                // Surface the manager on MainViewModel BEFORE starting anything, so the
+                // status chip shows "connecting…" and then whatever really happens —
+                // including a start that fails outright. Binding it afterwards would
+                // hide exactly the case the chip exists for.
+                Dispatcher.Invoke(() =>
+                {
+                    var mainVm = _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>();
+                    mainVm.McpServers = mcpManager;
+                });
+
                 await mcpManager.InitializeAsync();
-                dbg?.Info("MCP", "McpServerManager initialised");
+                dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
             }
             catch (Exception ex)
             {
@@ -293,14 +304,31 @@ public partial class App : Application
             sb.AppendLine("## Caller arguments");
             sb.AppendLine(skillArgs);
         }
-        string finalText = await chatVm.RunMcpTaskAsync(
-            taskId: $"{taskId}-skill-{skillName}",
-            spec: sb.ToString(),
-            lessons: null,
-            contextFiles: null,
-            workingDirectory: cwd,
-            ct: ct);
-        return TextResult(finalText);
+        // Carry the skill's tool whitelist across. Flattening the skill into a
+        // plain spec dropped it silently, so a skill invoked over the pipe ran
+        // UNRESTRICTED — /brainx-tester, whose entire point is that it cannot
+        // write files, happily called write_file (observed 2026-07-31). The
+        // in-app path sets this from SendMessage; the pipe path had no equivalent.
+        var toolService = _serviceProvider.GetRequiredService<Services.AgentToolService>();
+        if (skill.AllowedTools is { Count: > 0 })
+            toolService.ActiveSkillAllowedTools = skill.AllowedTools;
+
+        try
+        {
+            string finalText = await chatVm.RunMcpTaskAsync(
+                taskId: $"{taskId}-skill-{skillName}",
+                spec: sb.ToString(),
+                lessons: null,
+                contextFiles: null,
+                workingDirectory: cwd,
+                ct: ct);
+            return TextResult(finalText);
+        }
+        finally
+        {
+            // Never leak a restriction into the next chat the owner types by hand.
+            toolService.ActiveSkillAllowedTools = null;
+        }
     }
 
     /// <summary>

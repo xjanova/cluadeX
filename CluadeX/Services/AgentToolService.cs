@@ -28,6 +28,31 @@ public class AgentToolService : IDisposable
     /// <summary>When set, only these tools can be called. Set by skill execution context. Null = all allowed.</summary>
     public List<string>? ActiveSkillAllowedTools { get; set; }
 
+    /// <summary>
+    /// Does the active skill's whitelist permit <paramref name="toolName"/>?
+    /// True when no skill is active.
+    ///
+    /// Built-ins are compared by RESOLVED ToolType, because skills are authored
+    /// with human names ("grep") while the registry name is "grep_search".
+    ///
+    /// MCP names are compared as EXACT STRINGS, and that distinction is the whole
+    /// point: every `mcp__server__tool` resolves to the same ToolType.McpTool, so
+    /// type-comparison alone meant whitelisting ONE MCP tool admitted EVERY MCP
+    /// tool. Measured 2026-07-31 — /brainx-tester allows two MCP tools and was
+    /// offered fifteen.
+    /// </summary>
+    private bool IsAllowedByActiveSkill(string toolName)
+    {
+        var allowed = ActiveSkillAllowedTools;
+        if (allowed is not { Count: > 0 }) return true;
+
+        if (allowed.Any(t => t.Equals(toolName, StringComparison.OrdinalIgnoreCase))) return true;
+        if (toolName.StartsWith("mcp__", StringComparison.Ordinal)) return false;
+
+        var type = ResolveToolType(toolName);
+        return type != null && allowed.Any(t => ResolveToolType(t) == type);
+    }
+
     /// <summary>Returns list of available skill names + descriptions for system prompt injection.</summary>
     public List<(string Name, string Description)> GetAvailableSkillNames()
     {
@@ -262,15 +287,8 @@ public class AgentToolService : IDisposable
             // ("grep") while the registry name is "grep_search", and a raw-string gate silently
             // killed search inside 14 built-in skills. Falls back to string equality for names
             // that don't resolve (MCP qualified names).
-            if (ActiveSkillAllowedTools is { Count: > 0 })
-            {
-                var callType = ResolveToolType(call.ToolName);
-                bool toolAllowedBySkill = ActiveSkillAllowedTools.Any(t =>
-                    t.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)
-                    || (callType != null && ResolveToolType(t) == callType));
-                if (!toolAllowedBySkill)
-                    return Fail(call, $"Tool '{call.ToolName}' is not allowed by the current skill. Allowed: {string.Join(", ", ActiveSkillAllowedTools)}");
-            }
+            if (!IsAllowedByActiveSkill(call.ToolName))
+                return Fail(call, $"Tool '{call.ToolName}' is not allowed by the current skill. Allowed: {string.Join(", ", ActiveSkillAllowedTools!)}");
 
             // ── Feature toggle check ──
             if (!IsToolAllowed(call.Type))
@@ -699,8 +717,49 @@ public class AgentToolService : IDisposable
             }
         }
 
+        // ── Skill AllowedTools: narrow the OFFER, not just the execution ──
+        //
+        // The gate at ExecuteToolAsync refuses a disallowed call, but until here
+        // the model was still handed every schema — so a restricted skill paid
+        // full context price for tools it would be refused, and spent its turns
+        // reaching for them. Observed 2026-07-31: a "tester" session told in prose
+        // not to edit files went straight to write_file anyway, then overflowed a
+        // 12,288-token window at ~14,885 tokens. A model does what its tool list
+        // permits, not what the prose asks; the list is the real instruction.
+        //
+        // Same resolution rule as the execution gate (resolved ToolType first,
+        // raw string for MCP-qualified names) so the two can't disagree about
+        // what a skill allows.
+        if (ActiveSkillAllowedTools is { Count: > 0 })
+            schemas = schemas.Where(s => IsAllowedByActiveSkill(s.Name)).ToList();
+
+        // No project open? Then only the project-independent tools are real.
+        // Every built-in above resolves paths against the working directory (or
+        // falls back to the app's own directory), so advertising them in a plain
+        // chat hands the model weapons that cannot fire — and a weak model that
+        // picks one, fails, and gets a confusing error tends to stop reaching for
+        // tools at all. MCP servers carry no such dependency: the brain, and
+        // anything else the owner wired up, works fine with no folder open.
+        if (!_fileSystem.HasWorkingDirectory)
+            schemas = schemas.Where(s => IsMcpSchemaName(s.Name)).ToList();
+
         return schemas;
     }
+
+    private static bool IsMcpSchemaName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Are any tools usable with NO project open? Today that means MCP servers.
+    ///
+    /// ChatViewModel routes on this: a plain chat used to go to the tool-less
+    /// streaming path, so a model that had been told "you have brainx-brain
+    /// tools" was handed no tool schemas at all. That mismatch is what produces
+    /// "I will use the agent_inbox tool — please go ahead" instead of a call,
+    /// and it is why the agent bus recorded calls: 0 for CluadeX indefinitely.
+    /// </summary>
+    public bool HasProjectIndependentTools =>
+        _settingsService.Settings.Features.McpServers
+        && _mcpManager.ToolRegistry.GetAllTools().Any();
 
     // ─── Get Tool Definitions Prompt (feature-aware) ───
     public string GetToolDefinitionsPrompt()

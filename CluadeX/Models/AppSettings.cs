@@ -179,6 +179,18 @@ public class AppSettings
     public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
     public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 
+    /// <summary>
+    /// Show the agent's working-out in the chat transcript — the per-tool rows and
+    /// status lines. OFF by default (owner, 2026-08-04: *"ในช่องแชทให้เหลือแต่สิ่งที่ผู้ใช้
+    /// ต้องการเห็นพอ"*): a run that reads six files and searches the brain twice buries
+    /// the actual answer under nine rows of machinery the user never asked to see.
+    ///
+    /// Hiding is never total. A failed tool, a file diff and a permission request stay
+    /// visible at all times — those are things the user must judge, not progress
+    /// chatter, and a UI that hides a failure is back to lying about its own state.
+    /// </summary>
+    public bool ShowAgentInternals { get; set; } = false;
+
     // Microcompact — shrink old tool results before resending to the API.
     // Keeps the most recent KeepRecentTurns tool_result blocks verbatim; older ones
     // get summarized. Without this, long agentic loops balloon the prompt because

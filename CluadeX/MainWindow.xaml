@@ -878,7 +878,7 @@
                             <ColumnDefinition Width="Auto"/>  <!-- GPU -->
                             <ColumnDefinition Width="Auto"/>  <!-- Model -->
                             <ColumnDefinition Width="Auto"/>  <!-- Tok/s + cost -->
-                            <ColumnDefinition Width="Auto"/>  <!-- ObsidianX bridge chip -->
+                            <ColumnDefinition Width="Auto"/>  <!-- BrainX link + ObsidianX bridge chips -->
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>  <!-- LED context -->
                             <ColumnDefinition Width="Auto"/>  <!-- Time Machine -->
@@ -999,8 +999,66 @@
                                        Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center"/>
                         </StackPanel>
 
+                        <!-- Two MCP chips, opposite directions:
+                             🧠 = we can reach the BrainX brain (outbound client)
+                             🌉 = orchestrators can reach us (inbound named-pipe host) -->
+                        <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+
+                        <!-- BrainX link chip -->
+                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
+                                Background="#1AA672FF" BorderBrush="#55A672FF" BorderThickness="1"
+                                Visibility="{Binding McpServers, Converter={StaticResource NullToCollapsed}}">
+                            <Border.ToolTip>
+                                <StackPanel Margin="4" MaxWidth="420">
+                                    <TextBlock Text="BrainX" FontWeight="Bold"
+                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                        <Run Text="Server: "/><Run Text="{Binding McpServers.BrainServerName, Mode=OneWay, FallbackValue='(not configured)'}"/>
+                                    </TextBlock>
+                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                        <Run Text="State: "/><Run Text="{Binding McpServers.BrainState, Mode=OneWay}"/>
+                                        <Run Text=" · Tools: "/><Run Text="{Binding McpServers.BrainToolCount, Mode=OneWay}"/>
+                                    </TextBlock>
+                                    <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"
+                                               Foreground="{StaticResource NeonRedBrush}"
+                                               Text="{Binding McpServers.BrainLastError, Mode=OneWay}"
+                                               Visibility="{Binding McpServers.BrainLastError, Converter={StaticResource NullToCollapsed}}"/>
+                                </StackPanel>
+                            </Border.ToolTip>
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <!-- Default red: anything that is not provably Ready is a
+                                                 brain the agent cannot call. -->
+                                            <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding McpServers.BrainState}" Value="Starting">
+                                                    <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding McpServers.BrainState}" Value="Reconnecting">
+                                                    <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
+                                                </DataTrigger>
+                                                <!-- Last, so it wins: bound to the BOOL, not the enum, because a
+                                                     bool trigger is the pattern already proven in this file. If the
+                                                     enum triggers above ever failed to match, the dot degrades to
+                                                     red — still honest, never a false green. -->
+                                                <DataTrigger Binding="{Binding McpServers.IsBrainConnected}" Value="True">
+                                                    <Setter Property="Fill" Value="#A672FF"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Text="🧠" FontSize="10" Margin="0,0,4,0"/>
+                                <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
+                                           Foreground="{StaticResource NeonInk1Brush}"
+                                           Text="{Binding McpServers.BrainStatusText, Mode=OneWay, FallbackValue='brain · —'}"/>
+                            </StackPanel>
+                        </Border>
+
                         <!-- ObsidianX bridge chip -->
-                        <Border Grid.Column="4" Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
+                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
                                 Background="#1A4FFFE2" BorderBrush="#554FFFE2" BorderThickness="1"
                                 Visibility="{Binding McpHost, Converter={StaticResource NullToCollapsed}}">
                             <Border.ToolTip>
@@ -1036,6 +1094,8 @@
                                 </TextBlock>
                             </StackPanel>
                         </Border>
+
+                        </StackPanel>
 
                         <!-- LED context bar (5 segments) -->
                         <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">

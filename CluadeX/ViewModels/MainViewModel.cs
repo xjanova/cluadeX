@@ -154,6 +154,19 @@ public class MainViewModel : ViewModelBase
         set => SetProperty(ref _mcpHost, value);
     }
 
+    // ─── BrainX link (outbound MCP client) ───
+    // The mirror image of McpHost: that chip says "orchestrators can reach us",
+    // this one says "we can reach the brain". Missing until 2026-08-04, which is
+    // why a brainx-mcp that died 30s after startup was invisible for four minutes
+    // while the agent kept calling brain_search into the corpse. Binds to
+    // McpServerManager's observable BrainState/BrainStatusText.
+    private McpServerManager? _mcpServers;
+    public McpServerManager? McpServers
+    {
+        get => _mcpServers;
+        set => SetProperty(ref _mcpServers, value);
+    }
+
     // ─── Auto-Update ───
     private bool _showUpdateBar;
     private string _updateMessage = "";
@@ -331,12 +344,19 @@ public class MainViewModel : ViewModelBase
         // Opening/cloning a project lands the user in the workbench (Code page) — the IDE moment.
         chatVM.NavigateToEditorRequested += () => NavigateTo("Code");
 
-        // Cowork follow: the agent just mutated a file while the user is on the Chat page —
-        // bring the Code page forward so the live edit is visible (the editor embeds the same
-        // chat docked right, so the conversation stays on screen). Raised on the UI thread.
+        // Cowork follow: the agent just mutated a file — bring the Code page forward so the
+        // live edit is visible (the editor embeds the same chat docked right, so the
+        // conversation stays on screen). Raised on the UI thread.
+        //
+        // This used to also require ReferenceEquals(CurrentView, ChatVM), i.e. it only
+        // followed when the user happened to be sitting on the Chat page. Anywhere else —
+        // Home, Models, Tasks, Settings, or a session driven from BrainX over the MCP host
+        // pipe, where the user never opened Chat at all — the agent wrote files and the UI
+        // just sat there. AutoOpenEditorOnAgentEdit is already the user's switch for this
+        // behaviour; gating it a second time on the current page made the setting a lie.
         chatVM.FileMutatedByAgent += (_, _) =>
         {
-            if (_settingsService.Settings.AutoOpenEditorOnAgentEdit && ReferenceEquals(CurrentView, ChatVM))
+            if (_settingsService.Settings.AutoOpenEditorOnAgentEdit)
                 NavigateTo("Code");
         };
 

@@ -48,16 +48,17 @@ public class BrainSyncService
     /// brain. We don't enforce a specific tool list here because querying
     /// every server's tool list is wasteful — the call will surface "tool
     /// not found" if the server is misconfigured.
+    ///
+    /// The name rule lives in <see cref="McpServerManager.LooksLikeBrain"/> so
+    /// this service, the auto-recall gate and the status chip can never disagree
+    /// about which server is "the brain".
     /// </summary>
     private string? FindBrainServer()
     {
         foreach (var name in _mcp.GetRunningServers())
         {
-            if (name.Contains("obsidianx", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("brain", StringComparison.OrdinalIgnoreCase))
-            {
+            if (McpServerManager.LooksLikeBrain(name))
                 return name;
-            }
         }
         return null;
     }
@@ -229,6 +230,80 @@ public class BrainSyncService
         {
             _log.Warn("BrainSync", $"SearchAsync threw: {ex.Message}");
             return $"(brain search error: {ex.Message})";
+        }
+    }
+
+    /// <summary>
+    /// Turn the brain's raw search JSON into something a 7B can actually read.
+    ///
+    /// <see cref="SearchAsync"/> returns the tool's JSON verbatim — ids, scores,
+    /// tag arrays, `kind`, `appliesTo`, escaped Thai. Pasting that into a local
+    /// model's context spends ~2-3× the tokens of the same facts in prose and
+    /// reads as noise: the owner's report was that CluadeX searched the brain,
+    /// then answered in one confused line ("งง อะไรก็ไม่รู้"). A weak model does
+    /// not parse JSON for meaning; it pattern-matches text.
+    ///
+    /// Keeps the id, because that is the handle for a follow-up brain_get_note.
+    /// Falls back to the raw string on any shape it doesn't recognise — a
+    /// formatter is not worth losing the content over.
+    /// </summary>
+    public static string FormatSearchResultsForModel(string rawJson, int maxCharsPerHit = 260)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson)) return rawJson;
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return rawJson;
+            if (!doc.RootElement.TryGetProperty("results", out var results)
+                || results.ValueKind != JsonValueKind.Array) return rawJson;
+
+            var sb = new StringBuilder();
+            int n = 0;
+            foreach (var r in results.EnumerateArray())
+            {
+                string title = Str(r, "title");
+                if (string.IsNullOrWhiteSpace(title)) continue;
+                n++;
+
+                // matchContext says WHY this note came back; preview is the note's
+                // opening. Prefer the former — "why you are reading this" beats
+                // "here is the top of a file you did not ask for".
+                string why = Str(r, "matchContext");
+                if (string.IsNullOrWhiteSpace(why)) why = Str(r, "preview");
+                why = Collapse(why);
+                if (why.Length > maxCharsPerHit) why = why[..maxCharsPerHit].TrimEnd() + "…";
+
+                sb.Append(n).Append(". \"").Append(title).Append('"');
+                string id = Str(r, "id");
+                if (!string.IsNullOrEmpty(id)) sb.Append("  (id: ").Append(id).Append(')');
+                sb.AppendLine();
+                if (why.Length > 0) sb.Append("   ").AppendLine(why);
+            }
+            return n == 0 ? rawJson : sb.ToString().TrimEnd();
+        }
+        catch
+        {
+            return rawJson;
+        }
+
+        static string Str(JsonElement e, string prop)
+            => e.ValueKind == JsonValueKind.Object
+               && e.TryGetProperty(prop, out var v)
+               && v.ValueKind == JsonValueKind.String
+                ? v.GetString() ?? "" : "";
+
+        static string Collapse(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new StringBuilder(s.Length);
+            bool space = false;
+            foreach (var c in s)
+            {
+                bool ws = char.IsWhiteSpace(c);
+                if (ws) { if (!space && sb.Length > 0) sb.Append(' '); space = true; }
+                else { sb.Append(c); space = false; }
+            }
+            return sb.ToString().Trim();
         }
     }
 

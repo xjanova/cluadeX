@@ -225,6 +225,20 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
+    // ─── Agent internals in the transcript ───
+    // Bound from the ListBox's ItemContainerStyle, so flipping it re-evaluates
+    // every row's visibility with no list rebuild.
+    private bool _showAgentInternals;
+    public bool ShowAgentInternals
+    {
+        get => _showAgentInternals;
+        set
+        {
+            if (SetProperty(ref _showAgentInternals, value))
+                _settingsService.UpdateSettings(s => s.ShowAgentInternals = value);
+        }
+    }
+
     // ─── TODO List ───
     private string _todoListText = "";
     public string TodoListText { get => _todoListText; set => SetProperty(ref _todoListText, value); }
@@ -379,6 +393,7 @@ public class ChatViewModel : ViewModelBase
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
         _showThinking = settingsService.Settings.ShowThinkingSteps;
+        _showAgentInternals = settingsService.Settings.ShowAgentInternals;
 
         RefreshModelsCommand = new RelayCommand(RefreshLocalModelsList);
         SendMessageCommand = new AsyncRelayCommand(SendMessage);
@@ -1645,12 +1660,25 @@ public class ChatViewModel : ViewModelBase
             if (activeSkill?.AllowedTools is { Count: > 0 })
                 _agentToolService.ActiveSkillAllowedTools = activeSkill.AllowedTools;
 
+            // Tools are worth running the agentic loop for in TWO cases: a project
+            // is open (file/build tools, gated by the user's AgenticMode switch),
+            // or an MCP server is connected — those need no project at all.
+            //
+            // Only the first case used to route here, so a plain chat with the
+            // brain connected got ZERO tools while the system prompt still told
+            // the model it had them. That contradiction is what makes a weak model
+            // narrate ("I will use agent_inbox — go ahead") instead of calling, and
+            // it is why the agent bus sat at calls: 0. There is also no switch to
+            // flip in this case: AgenticMode is auto-enabled by opening a project,
+            // so with no project it is always false.
+            bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
+
             // Skills always run in agentic mode
             if (!string.IsNullOrEmpty(skillPromptOverride) && HasProject)
                 await RunAgentic(input, _cts.Token);
             else if (AutonomousMode && HasProject && _autonomousService != null)
                 await RunAutonomous(input, _cts.Token);
-            else if (AgenticMode && HasProject)
+            else if ((AgenticMode && HasProject) || mcpOnlyTools)
                 await RunAgentic(input, _cts.Token);
             else if (AutoExecute)
                 await RunWithAutoExecution(input, _cts.Token);

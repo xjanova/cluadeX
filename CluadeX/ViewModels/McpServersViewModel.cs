@@ -87,6 +87,11 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
         _mcpManager.OnServerLog += OnServerLog;
         _mcpManager.OnToolsChanged += OnToolsChanged;
+        // A server that crashes and reconnects on its own must move this page's
+        // status text without the user pressing Refresh — the page showing "running"
+        // for a corpse is the same lie the status bar was fixed to stop telling.
+        _mcpManager.OnServerStateChanged += (_, _) =>
+            Application.Current?.Dispatcher.Invoke(Refresh);
         _loc.LanguageChanged += () =>
         {
             OnPropertyChanged(nameof(PageTitle));
