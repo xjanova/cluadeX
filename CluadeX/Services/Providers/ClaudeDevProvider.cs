@@ -214,8 +214,14 @@ public class ClaudeDevProvider : IAiProvider
             var stderrTask = proc.StandardError.ReadToEndAsync(timeout.Token);
             string? line;
             bool any = false;
+            string? lastLine = null;
             while ((line = await ReadLineOrNullAsync(proc.StandardOutput, timeout.Token)) != null)
             {
+                // The CLI reports auth/billing refusals on STDOUT with a non-zero exit,
+                // not on stderr — so a one-line refusal looks like a successful reply
+                // unless the exit code is consulted. Hold the first line back until we
+                // know; a real answer is many lines and streams normally after it.
+                if (!any && LooksLikeAuthRefusal(line)) { lastLine = line; any = false; continue; }
                 any = true;
                 yield return line + "\n";
             }
@@ -226,9 +232,17 @@ public class ClaudeDevProvider : IAiProvider
                 string err = (await SafeAwait(stderrTask)).Trim();
                 if (err.Length > 400) err = err[..400];
                 if (!any)
-                    yield return string.IsNullOrWhiteSpace(err)
-                        ? "(claude-dev returned no output)"
-                        : $"claude-dev error: {err}";
+                {
+                    // "Credit balance is too low" is an ANSWER FROM ANTHROPIC — the
+                    // prompt got there and came back — so it is never a plumbing
+                    // problem, and printing it raw sends the user hunting in the
+                    // wrong place. The CLI can say exactly what is wrong; ask it.
+                    string? explained = await ExplainAuthFailureAsync(lastLine ?? err, ct);
+                    yield return explained
+                        ?? (string.IsNullOrWhiteSpace(err) && string.IsNullOrWhiteSpace(lastLine)
+                            ? "(claude-dev returned no output)"
+                            : $"claude-dev error: {(string.IsNullOrWhiteSpace(err) ? lastLine : err)}");
+                }
                 else if (proc.ExitCode != 0 && !string.IsNullOrWhiteSpace(err))
                     OnError?.Invoke($"claude-dev exit {proc.ExitCode}: {err}");
             }
@@ -264,6 +278,66 @@ public class ClaudeDevProvider : IAiProvider
             sb.Append('[').Append(who).Append("] ").AppendLine(m.Content.Trim());
         }
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Refusals the CLI prints on stdout instead of stderr.</summary>
+    private static bool LooksLikeAuthRefusal(string line) =>
+        line.Contains("Credit balance", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("Invalid API key", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("authentication", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("not logged in", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Turn an auth/billing refusal into the sentence that actually fixes it, by
+    /// asking `claude auth status` instead of guessing.
+    ///
+    /// Measured on this machine 2026-08-05: `-p` returned "Credit balance is too low"
+    /// while `auth status` reported `loggedIn: true`, `authMethod: "claude.ai"` and
+    /// **`subscriptionType: null`** — signed in, but on a token with no subscription
+    /// attached, so every request billed to Console credits that are at zero. The raw
+    /// message sends you looking for a billing page; the real fix is one re-login.
+    /// </summary>
+    private async Task<string?> ExplainAuthFailureAsync(string? refusal, CancellationToken ct)
+    {
+        if (_cliPath == null || string.IsNullOrWhiteSpace(refusal)) return null;
+        if (!LooksLikeAuthRefusal(refusal)) return null;
+        try
+        {
+            var psi = new ProcessStartInfo(_cliPath, "auth status")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            using var p = Process.Start(psi);
+            if (p == null) return null;
+            string json = await p.StandardOutput.ReadToEndAsync(ct);
+            await p.WaitForExitAsync(ct);
+
+            bool loggedIn = json.Contains("\"loggedIn\": true", StringComparison.OrdinalIgnoreCase);
+            bool noSubscription = json.Contains("\"subscriptionType\": null", StringComparison.OrdinalIgnoreCase);
+
+            if (loggedIn && noSubscription)
+                return "claude-dev เข้าถึง Anthropic ได้แล้ว แต่ถูกปฏิเสธเรื่องการเรียกเก็บเงิน:\n"
+                     + $"  {refusal.Trim()}\n\n"
+                     + "`claude auth status` บอกว่า **loggedIn: true แต่ subscriptionType: null** — "
+                     + "แปลว่า login ค้างอยู่บน token ที่ไม่มี subscription ผูกไว้ ทุก request จึงไปเรียกเก็บที่ "
+                     + "Anthropic Console credits ซึ่งเป็นศูนย์ ไม่ใช่ที่ Claude subscription ของคุณ\n\n"
+                     + "แก้ครั้งเดียวจบ (ต้องทำในเทอร์มินัลเพราะเป็นการ login):\n"
+                     + "  claude auth logout\n"
+                     + "  claude auth login --claudeai\n\n"
+                     + "เสร็จแล้ว claude-dev ใช้ได้ทันทีโดยไม่ต้องใช้ API key.";
+
+            if (!loggedIn)
+                return "claude-dev ยังไม่ได้ login เข้า Anthropic\n\n"
+                     + "รันในเทอร์มินัล:  claude auth login --claudeai";
+
+            return $"claude-dev ถูกปฏิเสธ: {refusal.Trim()}\n\n`claude auth status`:\n{json.Trim()}";
+        }
+        catch { return null; }
     }
 
     private static async Task<string?> ReadLineOrNullAsync(StreamReader reader, CancellationToken ct)
