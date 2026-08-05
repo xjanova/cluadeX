@@ -30,7 +30,8 @@ public class AiProviderManager : IDisposable
         SettingsService settingsService,
         LocalGgufProvider localProvider,
         LlamaServerProvider serverProvider,
-        CostTrackingService costTracker)
+        CostTrackingService costTracker,
+        FileSystemService fileSystemService)
     {
         _settingsService = settingsService;
         _statusHandler = s => OnStatusChanged?.Invoke(s);
@@ -47,6 +48,9 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService, costTracker);
         _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService);
         _providers[AiProviderType.Ollama] = new OllamaProvider(settingsService);
+        // The installed Claude Code CLI as a model — needs the working directory so
+        // the CLI runs in (and reads) the user's actual project.
+        _providers[AiProviderType.ClaudeDev] = new ClaudeDevProvider(settingsService, fileSystemService);
 
         // Set initial active provider
         var activeType = settingsService.Settings.ActiveProvider;

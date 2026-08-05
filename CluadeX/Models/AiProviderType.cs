@@ -8,4 +8,5 @@ public enum AiProviderType
     Anthropic,    // Anthropic API (Claude Sonnet, Opus, Haiku)
     Gemini,       // Google Gemini API
     Ollama,       // Local Ollama server
+    ClaudeDev,    // The installed Claude Code CLI as a model — no API key, uses the user's existing login
 }

@@ -677,9 +677,17 @@ public class ChatViewModel : ViewModelBase
         {
             LoadedModelName = $"Ready: {_llamaService.LoadedModelName}";
         }
-        else if (!string.IsNullOrEmpty(_settingsService.Settings.SelectedModelPath)
+        else if (_settingsService.Settings.ActiveProvider == AiProviderType.Local
+                 && !string.IsNullOrEmpty(_settingsService.Settings.SelectedModelPath)
                  && File.Exists(_settingsService.Settings.SelectedModelPath))
         {
+            // Gated on the PERSISTED provider being Local. This auto-load used to run
+            // whenever a GGUF path existed and then force-switched the active provider
+            // to Local (below) — silently stomping whatever provider the user had
+            // actually selected. On this machine a .gguf path always exists, so a
+            // persisted ClaudeDev/Ollama/Anthropic choice never survived a restart.
+            // If the user picked a non-local provider, we also should NOT spend 5 GB
+            // of VRAM loading weights nobody asked for.
             LoadedModelName = $"Loading: {_settingsService.Settings.SelectedModelName}...";
             string autoLoadPath = _settingsService.Settings.SelectedModelPath!;
 
