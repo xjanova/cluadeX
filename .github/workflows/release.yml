@@ -59,10 +59,6 @@ jobs:
       - name: Publish (win-x64, self-contained)
         run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo -p:ErrorOnDuplicatePublishOutputFiles=false
 
-      - name: Create portable zip
-        shell: pwsh
-        run: Compress-Archive -Path publish/* -DestinationPath CluadeX-win-x64.zip
-
       - name: Velopack pack (self-update assets)
         # Produces Releases/ — *-full.nupkg, *-delta.nupkg, CluadeX-win-Setup.exe
         # and RELEASES. AutoUpdateService's UpdateManager(GithubSource) reads
@@ -87,9 +83,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CluadeX-${{ steps.version.outputs.VERSION }}-x64
-          path: |
-            CluadeX-win-x64.zip
-            Releases/*
+          path: Releases/*
           retention-days: 30
 
       - name: Create Release
@@ -111,15 +105,13 @@ jobs:
             - **First time / switching from portable:** download **`CluadeX-win-Setup.exe`** and run it.
               Installed builds update themselves from then on — new versions download in the
               background as deltas and apply on restart.
-            - **Portable:** download `CluadeX-win-x64.zip`, extract, run `CluadeX.exe`.
+            - **Portable:** download `CluadeX-win-Portable.zip`, extract, run `CluadeX.exe`.
               Portable builds detect new releases but cannot self-update.
 
             ### Requirements
             - Windows 10 1809+ (x64)
             - Local mode: a GGUF model, or [Ollama](https://ollama.com)
-          files: |
-            CluadeX-win-x64.zip
-            Releases/*
+          files: Releases/*
           draft: false
           prerelease: false
           make_latest: true
