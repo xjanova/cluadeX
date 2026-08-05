@@ -58,9 +58,12 @@ public class AutoUpdateService
 
     private Velopack.UpdateManager? _vpk;
     private Velopack.UpdateInfo? _vpkPending;
+    // ~/.cluadex, not the Velopack install root — a failure counter stored inside the
+    // directory the installer empties would be wiped by the very event it exists to
+    // survive. See SettingsService.MigrateLegacyDataRoot.
     private readonly UpdateAttemptLog _attempts =
         UpdateAttemptLog.Load(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX"));
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex"));
 
     private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(
         new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false));

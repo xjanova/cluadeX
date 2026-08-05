@@ -97,14 +97,81 @@ public class SettingsService
         }
         else
         {
+            // ~/.cluadex, NOT %LOCALAPPDATA%\CluadeX.
+            //
+            // The old location is Velopack's install root. Measured on 2026-08-05:
+            // running CluadeX-win-Setup.exe **emptied that directory** — settings.json,
+            // codex.db, mcp_servers.json, permissions.json and the whole Sessions\
+            // folder were gone, replaced by current\ + packages\ + Update.exe. Every
+            // install would have silently taken the user's settings and chat history
+            // with it. Storing app data inside the installer's own directory is the
+            // bug; moving it out is the fix, not a workaround.
+            //
+            // ~/.cluadex is where this app already keeps logs, the MCP host token,
+            // skills and bundled hooks — so this makes ONE data home instead of two.
             _dataRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX");
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
             _settingsPath = Path.Combine(_dataRoot, "settings.json");
+            MigrateLegacyDataRoot();
         }
 
         Load();
         ApplyDefaultDirectories();
         EnsureDirectoriesExist();
+    }
+
+    /// <summary>
+    /// One-time move of everything from the pre-3.0.54 data root
+    /// (<c>%LOCALAPPDATA%\CluadeX</c>) into <see cref="_dataRoot"/>.
+    ///
+    /// COPIES, never deletes: the legacy folder is Velopack's install root, so it
+    /// also holds current\, packages\ and Update.exe, and deleting anything there
+    /// would be deleting the installed app. Skips those three by name.
+    ///
+    /// Runs only when the new root has no settings.json yet, so it happens once and
+    /// can never overwrite newer data with older.
+    /// </summary>
+    private void MigrateLegacyDataRoot()
+    {
+        try
+        {
+            if (File.Exists(_settingsPath)) return;   // already migrated (or a fresh install)
+
+            string legacy = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX");
+            if (!Directory.Exists(legacy)) return;
+            if (!File.Exists(Path.Combine(legacy, "settings.json"))) return;  // nothing worth moving
+
+            Directory.CreateDirectory(_dataRoot);
+            var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "current", "packages", "Update.exe", "CluadeX.exe" };
+
+            foreach (var file in Directory.GetFiles(legacy))
+            {
+                string name = Path.GetFileName(file);
+                if (skip.Contains(name)) continue;
+                string target = Path.Combine(_dataRoot, name);
+                if (!File.Exists(target)) File.Copy(file, target);
+            }
+            foreach (var dir in Directory.GetDirectories(legacy))
+            {
+                string name = Path.GetFileName(dir);
+                if (skip.Contains(name)) continue;
+                string target = Path.Combine(_dataRoot, name);
+                if (Directory.Exists(target)) continue;
+                CopyDirectory(dir, target);
+            }
+        }
+        catch { /* a failed migration must never stop the app starting */ }
+    }
+
+    private static void CopyDirectory(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+        foreach (var f in Directory.GetFiles(source))
+            File.Copy(f, Path.Combine(target, Path.GetFileName(f)), overwrite: false);
+        foreach (var d in Directory.GetDirectories(source))
+            CopyDirectory(d, Path.Combine(target, Path.GetFileName(d)));
     }
 
     public void Load()
