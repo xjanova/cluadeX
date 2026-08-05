@@ -97,14 +97,81 @@ public class SettingsService
         }
         else
         {
+            // ~/.cluadex, NOT %LOCALAPPDATA%\CluadeX.
+            //
+            // The old location is Velopack's install root. Measured on 2026-08-05:
+            // running CluadeX-win-Setup.exe **emptied that directory** — settings.json,
+            // codex.db, mcp_servers.json, permissions.json and the whole Sessions\
+            // folder were gone, replaced by current\ + packages\ + Update.exe. Every
+            // install would have silently taken the user's settings and chat history
+            // with it. Storing app data inside the installer's own directory is the
+            // bug; moving it out is the fix, not a workaround.
+            //
+            // ~/.cluadex is where this app already keeps logs, the MCP host token,
+            // skills and bundled hooks — so this makes ONE data home instead of two.
             _dataRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX");
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
             _settingsPath = Path.Combine(_dataRoot, "settings.json");
+            MigrateLegacyDataRoot();
         }
 
         Load();
         ApplyDefaultDirectories();
         EnsureDirectoriesExist();
+    }
+
+    /// <summary>
+    /// One-time move of everything from the pre-3.0.54 data root
+    /// (<c>%LOCALAPPDATA%\CluadeX</c>) into <see cref="_dataRoot"/>.
+    ///
+    /// COPIES, never deletes: the legacy folder is Velopack's install root, so it
+    /// also holds current\, packages\ and Update.exe, and deleting anything there
+    /// would be deleting the installed app. Skips those three by name.
+    ///
+    /// Runs only when the new root has no settings.json yet, so it happens once and
+    /// can never overwrite newer data with older.
+    /// </summary>
+    private void MigrateLegacyDataRoot()
+    {
+        try
+        {
+            if (File.Exists(_settingsPath)) return;   // already migrated (or a fresh install)
+
+            string legacy = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX");
+            if (!Directory.Exists(legacy)) return;
+            if (!File.Exists(Path.Combine(legacy, "settings.json"))) return;  // nothing worth moving
+
+            Directory.CreateDirectory(_dataRoot);
+            var skip = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "current", "packages", "Update.exe", "CluadeX.exe" };
+
+            foreach (var file in Directory.GetFiles(legacy))
+            {
+                string name = Path.GetFileName(file);
+                if (skip.Contains(name)) continue;
+                string target = Path.Combine(_dataRoot, name);
+                if (!File.Exists(target)) File.Copy(file, target);
+            }
+            foreach (var dir in Directory.GetDirectories(legacy))
+            {
+                string name = Path.GetFileName(dir);
+                if (skip.Contains(name)) continue;
+                string target = Path.Combine(_dataRoot, name);
+                if (Directory.Exists(target)) continue;
+                CopyDirectory(dir, target);
+            }
+        }
+        catch { /* a failed migration must never stop the app starting */ }
+    }
+
+    private static void CopyDirectory(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+        foreach (var f in Directory.GetFiles(source))
+            File.Copy(f, Path.Combine(target, Path.GetFileName(f)), overwrite: false);
+        foreach (var d in Directory.GetDirectories(source))
+            CopyDirectory(d, Path.Combine(target, Path.GetFileName(d)));
     }
 
     public void Load()
@@ -118,10 +185,30 @@ public class SettingsService
                     string json = File.ReadAllText(_settingsPath);
                     _settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
                     DecryptSecrets(_settings);
+
+                    // Migration: lift the stale 4096 default to 8192. The agentic system prompt + core tool
+                    // schemas are ~4.4k tokens, so a 4096 window overflows on the first agentic message. 4096
+                    // was the OLD default, so an exact 4096 means "never deliberately changed" — bump it; a
+                    // user who set 2048/6000/etc on purpose is left alone.
+                    // Same reasoning applies again at 8192: measured on a real agentic turn, the
+                    // prompt+schemas+one file floor is ~8.2k, so 8192 overflows by a few tokens and
+                    // compaction can't rescue it (that floor isn't history). Exact old defaults are
+                    // treated as "never deliberately changed"; a hand-picked value is left alone.
+                    if (_settings.ContextSize is 4096 or 8192) _settings.ContextSize = 12288;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                // Don't silently reset to defaults over a recoverable file — a single bad parse would
+                // otherwise be overwritten by the next Save(), PERMANENTLY losing the user's config +
+                // API keys. Preserve the bad file for recovery first, then fall back to defaults.
+                try
+                {
+                    if (File.Exists(_settingsPath))
+                        File.Copy(_settingsPath, _settingsPath + $".corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: true);
+                }
+                catch { /* best-effort backup */ }
+                System.Diagnostics.Debug.WriteLine($"Settings load failed (backed up, using defaults): {ex.Message}");
                 _settings = new AppSettings();
             }
         }
@@ -150,7 +237,17 @@ public class SettingsService
                 // A crash mid-write previously left a zero-byte or partial settings.json
                 // and users would lose every preference on next launch.
                 string tempPath = _settingsPath + ".tmp";
-                File.WriteAllText(tempPath, json);
+                // fsync the temp file BEFORE swapping it in. File.Replace can commit the directory entry
+                // while the new file's data pages are still in the OS cache, so a power-loss in between
+                // would leave settings.json pointing at a zero/partial file — losing every preference and
+                // the (encrypted) API keys, the exact corruption this temp-write was meant to prevent.
+                using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                using (var sw = new StreamWriter(fs, new System.Text.UTF8Encoding(false)))
+                {
+                    sw.Write(json);
+                    sw.Flush();
+                    fs.Flush(flushToDisk: true);
+                }
                 if (File.Exists(_settingsPath))
                     File.Replace(tempPath, _settingsPath, destinationBackupFileName: null);
                 else

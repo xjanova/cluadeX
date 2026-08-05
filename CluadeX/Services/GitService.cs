@@ -189,11 +189,13 @@ public class GitService
 
     private static bool IsValidBranchName(string name)
         => !string.IsNullOrWhiteSpace(name) && name.Length < 256
-           && BranchNameRegex.IsMatch(name) && !name.Contains("..");
+           && BranchNameRegex.IsMatch(name) && !name.Contains("..")
+           && !name.StartsWith('-'); // a leading '-' makes git parse the ref as an option
 
     private static bool IsValidGitArg(string arg)
         => !string.IsNullOrWhiteSpace(arg) && !arg.Contains(';') && !arg.Contains('|')
-           && !arg.Contains('&') && !arg.Contains('`') && !arg.Contains('$');
+           && !arg.Contains('&') && !arg.Contains('`') && !arg.Contains('$')
+           && !arg.StartsWith('-'); // reject option-injection (e.g. "-D", "--upload-pack=...")
 
     // ═══════════════════════════════════════════
     // Diff & Log
@@ -202,7 +204,7 @@ public class GitService
     /// <summary>git diff (unstaged changes).</summary>
     public async Task<GitResult> DiffAsync(string path = "")
     {
-        string args = string.IsNullOrEmpty(path) ? "diff" : $"diff -- {path}";
+        string args = string.IsNullOrEmpty(path) ? "diff" : $"diff -- \"{path}\"";
         return await RunGitAsync(args);
     }
 
@@ -237,6 +239,24 @@ public class GitService
         if (!IsValidGitArg(filePath))
             return new GitResult { Success = false, Error = "Invalid file path characters." };
         return await RunGitAsync($"log --oneline -n {count} -- \"{filePath}\"");
+    }
+
+    /// <summary>
+    /// Contents of one file as of a revision (<c>git show HEAD:path</c>) — the left-hand baseline
+    /// for the side-by-side diff editor. Fails cleanly for a file that does not exist at that
+    /// revision (newly added), which the caller renders as "everything is an addition".
+    /// </summary>
+    public async Task<GitResult> ShowFileAsync(string revision, string relativePath)
+    {
+        if (!IsValidGitArg(revision))
+            return new GitResult { Success = false, Error = "Invalid revision." };
+        if (!IsValidGitArg(relativePath))
+            return new GitResult { Success = false, Error = "Invalid file path characters." };
+
+        // git wants forward slashes in a rev:path spec even on Windows, and the ':' separator means
+        // the path cannot be quoted as a whole — quote the combined spec instead.
+        string spec = $"{revision}:{relativePath.Replace('\\', '/')}";
+        return await RunGitAsync($"show \"{spec}\"");
     }
 
     /// <summary>git show for a specific commit.</summary>
@@ -308,7 +328,10 @@ public class GitService
 
         Directory.CreateDirectory(parentDir);
 
-        return await RunGitCommandAsync($"clone {repoUrl} \"{folderName}\"", parentDir, ct, 120000);
+        // `--` stops git option parsing so a URL starting with '-' (e.g. an "ext::" /
+        // "--upload-pack=" arg-injection payload) can't smuggle extra flags into git.
+        // Quote the URL too so an embedded space can't split it into a second positional arg.
+        return await RunGitCommandAsync($"clone -- \"{repoUrl}\" \"{folderName}\"", parentDir, ct, 120000);
     }
 
     /// <summary>Initialize a new git repository in the working directory.</summary>

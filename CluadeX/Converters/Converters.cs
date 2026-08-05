@@ -272,3 +272,125 @@ public class NavItemConverter : IValueConverter
         return Binding.DoNothing;
     }
 }
+
+// ─── Time Machine converters ──────────────────────────────────────────
+// Frozen brushes so they don't recreate per cell during diff/timeline render.
+public class DiffKindToBrushConverter : IValueConverter
+{
+    private static readonly SolidColorBrush AddBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x5C, 0xFF, 0xB0)));
+    private static readonly SolidColorBrush DelBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x6E, 0x6E)));
+    private static readonly SolidColorBrush HunkBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0x72, 0xFF)));
+    private static readonly SolidColorBrush NeutralBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xC0, 0xC6, 0xEE)));
+    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is char c)
+        {
+            return c switch
+            {
+                '+' => AddBrush,
+                '-' => DelBrush,
+                '@' => HunkBrush,
+                _ => NeutralBrush,
+            };
+        }
+        return NeutralBrush;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+public class DiffKindToBackgroundConverter : IValueConverter
+{
+    private static readonly SolidColorBrush AddBg = Freeze(new SolidColorBrush(Color.FromArgb(0x24, 0x5C, 0xFF, 0xB0)));
+    private static readonly SolidColorBrush DelBg = Freeze(new SolidColorBrush(Color.FromArgb(0x24, 0xFF, 0x6E, 0x6E)));
+    private static readonly SolidColorBrush HunkBg = Freeze(new SolidColorBrush(Color.FromArgb(0x20, 0xA6, 0x72, 0xFF)));
+    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is char c)
+        {
+            return c switch
+            {
+                '+' => AddBg,
+                '-' => DelBg,
+                '@' => HunkBg,
+                _ => Brushes.Transparent,
+            };
+        }
+        return Brushes.Transparent;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+/// <summary>True → violet (AI), False → cyan (human). Used for commit dot + avatar accents.</summary>
+public class AiBoolToBrushConverter : IValueConverter
+{
+    private static readonly SolidColorBrush AiBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0x72, 0xFF)));
+    private static readonly SolidColorBrush HumanBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x4C, 0xDF, 0xFF)));
+    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is bool b && b ? AiBrush : HumanBrush;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+/// <summary>True → violet→cyan avatar gradient (AI); False → cyan→mint (human).</summary>
+public class AiBoolToAvatarConverter : IValueConverter
+{
+    private static readonly LinearGradientBrush AiGradient = Freeze(BuildGradient(
+        Color.FromRgb(0xA6, 0x72, 0xFF), Color.FromRgb(0x4C, 0xDF, 0xFF)));
+    private static readonly LinearGradientBrush HumanGradient = Freeze(BuildGradient(
+        Color.FromRgb(0x4C, 0xDF, 0xFF), Color.FromRgb(0x5C, 0xFF, 0xB0)));
+
+    private static LinearGradientBrush BuildGradient(Color from, Color to)
+    {
+        var b = new LinearGradientBrush(from, to, new Point(0, 0), new Point(1, 1));
+        return b;
+    }
+    private static LinearGradientBrush Freeze(LinearGradientBrush b) { b.Freeze(); return b; }
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is bool b && b ? AiGradient : HumanGradient;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+/// <summary>Returns "M" if Status='M', "A" if added, etc. — for file change badges.</summary>
+public class FileStatusToTextConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is char c ? c.ToString() : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+/// <summary>Parse a "#RRGGBB" hex string into a Color (for binding gradients to per-item hex strings).</summary>
+public class HexToColorConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        try
+        {
+            if (value is string hex && !string.IsNullOrWhiteSpace(hex))
+            {
+                return (Color)ColorConverter.ConvertFromString(hex);
+            }
+        }
+        catch { }
+        return Color.FromRgb(0x83, 0x88, 0xBD);
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+

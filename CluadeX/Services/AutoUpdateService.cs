@@ -22,11 +22,14 @@ public class AutoUpdateService
     public event Action<double, string>? OnDownloadProgress; // percent, status
     public event Action<string>? OnUpdateStatus;
 
-    public AutoUpdateService(SettingsService settingsService)
+    private readonly DebugLogService? _log;
+
+    public AutoUpdateService(SettingsService settingsService, DebugLogService? log = null)
     {
         _settingsService = settingsService;
+        _log = log;
         _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CluadeX/2.0");
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CluadeX/3.0");
         _httpClient.Timeout = TimeSpan.FromSeconds(30);
     }
 
@@ -39,15 +42,133 @@ public class AutoUpdateService
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  Velopack — the real self-update path
+    //
+    //  The zip-download-and-swap path below it is what this app had before, and
+    //  it can only ever ask the user to restart into a batch script that
+    //  overwrites files under a running process. Velopack does the same job the
+    //  way BrainX does it: staged package, atomic directory swap, rollback, and
+    //  delta downloads instead of the whole 300 MB payload every time.
+    //
+    //  Velopack only works on a build INSTALLED via its Setup.exe. A dev or
+    //  portable run reports IsInstalled=false, and the zip path stays as the
+    //  fallback so those builds still learn a new version exists.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private Velopack.UpdateManager? _vpk;
+    private Velopack.UpdateInfo? _vpkPending;
+    // ~/.cluadex, not the Velopack install root — a failure counter stored inside the
+    // directory the installer empties would be wiped by the very event it exists to
+    // survive. See SettingsService.MigrateLegacyDataRoot.
+    private readonly UpdateAttemptLog _attempts =
+        UpdateAttemptLog.Load(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex"));
+
+    private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(
+        new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false));
+
+    /// <summary>True when this build can actually self-update (installed via Setup.exe).</summary>
+    public bool CanSelfUpdate
+    {
+        get { try { return Vpk.IsInstalled; } catch { return false; } }
+    }
+
+    /// <summary>A staged update is downloaded and waiting for a restart.</summary>
+    public bool HasStagedUpdate => _vpkPending != null;
+
+    /// <summary>Version of the staged update, or null.</summary>
+    public string? StagedVersion => _vpkPending?.TargetFullRelease?.Version?.ToString();
+
+    /// <summary>Why automatic updating is paused, or null when it isn't.</summary>
+    public string? PausedReason => _attempts.Describe();
+
+    /// <summary>
+    /// Call once at startup, before any check. Whatever version we are running now
+    /// is the verdict on the last attempt: if it is the one we were trying to reach
+    /// the update landed and the failure history is wiped; if not, the count stands.
+    /// </summary>
+    public void NoteRunningVersion() => _attempts.NoteRunningVersion(CurrentVersion);
+
+    /// <summary>
+    /// Check GitHub for a Velopack release and download it in the background.
+    /// Returns the staged version, or null when there is nothing to stage.
+    /// </summary>
+    public async Task<string?> VelopackCheckAndStageAsync(CancellationToken ct = default)
+    {
+        if (!CanSelfUpdate) { _log?.Info("Update", "Velopack: not an installed build — self-update unavailable (portable/dev)"); return null; }
+        try
+        {
+            var info = await Vpk.CheckForUpdatesAsync().ConfigureAwait(false);
+            if (info == null) { _log?.Info("Update", "Velopack: no newer release"); return null; }
+
+            string target = info.TargetFullRelease.Version.ToString();
+            // The circuit breaker. Without it a package that cannot be applied gets
+            // retried on every launch forever — which is exactly how BrainX ended up
+            // relaunching itself every 18 seconds.
+            if (_attempts.ShouldStopTrying(target))
+            {
+                _log?.Warn("Update", $"Velopack: v{target} already failed {UpdateAttemptLog.MaxConsecutiveFailures}× — automatic apply paused, waiting for a manual restart");
+                return null;
+            }
+
+            _log?.Info("Update", $"Velopack: downloading v{target}…");
+            await Vpk.DownloadUpdatesAsync(info, p => OnDownloadProgress?.Invoke(p, $"Downloading v{target}… {p}%")).ConfigureAwait(false);
+            _vpkPending = info;
+            _log?.Info("Update", $"Velopack: v{target} staged — ready to apply on restart");
+            OnUpdateStatus?.Invoke($"Update v{target} downloaded — restart to apply.");
+            return target;
+        }
+        catch (Exception ex) { _log?.Warn("Update", $"Velopack check/stage failed: {ex.Message}"); return null; }
+    }
+
+    /// <summary>
+    /// Apply the staged update and restart. Records the attempt FIRST — this call
+    /// does not return, so anything written afterwards would never be written.
+    /// </summary>
+    public bool VelopackApplyAndRestart()
+    {
+        if (_vpkPending == null) return false;
+        string target = _vpkPending.TargetFullRelease.Version.ToString();
+        try
+        {
+            _attempts.RecordAttempt(target);          // must be flushed BEFORE we hand over
+            _log?.Info("Update", $"Velopack: applying v{target} and restarting");
+            Vpk.ApplyUpdatesAndRestart(_vpkPending);
+            return true;                               // unreachable in practice
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Update", $"Velopack apply failed: {ex.Message}");
+            OnUpdateStatus?.Invoke($"Could not apply the update: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>Check xman API first, fallback to GitHub releases.</summary>
     public async Task<UpdateInfo?> CheckForUpdateAsync(CancellationToken ct = default)
     {
-        // Try xman API
-        var info = await CheckXmanAsync(ct);
-        if (info != null) return info;
+        // Both checks below swallow every exception on purpose — an update probe must
+        // never break a launch. But swallowing the REASON is how this feature spent
+        // months looking like "there is no auto-update": xman returns 404 for this
+        // product and the newest GitHub release is 80+ versions behind the running
+        // build, so a healthy check and a completely dead pipeline are indistinguishable
+        // from the outside. One log line per attempt makes the difference visible.
+        _log?.Info("Update", $"check start · current=v{CurrentVersion}");
 
-        // Fallback: GitHub releases
-        return await CheckGitHubAsync(ct);
+        var info = await CheckXmanAsync(ct);
+        if (info != null)
+        {
+            _log?.Info("Update", $"xman API: update available v{info.NewVersion}");
+            return info;
+        }
+
+        info = await CheckGitHubAsync(ct);
+        if (info != null)
+            _log?.Info("Update", $"GitHub releases: update available v{info.NewVersion}");
+        else
+            _log?.Info("Update", $"no update offered — running v{CurrentVersion} is at or ahead of every published release");
+        return info;
     }
 
     private async Task<UpdateInfo?> CheckXmanAsync(CancellationToken ct)
@@ -77,12 +198,14 @@ public class AutoUpdateService
                     Changelog = root.TryGetProperty("changelog", out var cl) ? cl.GetString() ?? "" : "",
                     FileSize = root.TryGetProperty("file_size", out var fs) ? fs.GetInt64() : 0,
                     FileName = root.TryGetProperty("download_filename", out var fn) ? fn.GetString() ?? "" : "",
+                    Sha256 = root.TryGetProperty("sha256", out var sh) ? sh.GetString() ?? "" : "",
                 };
                 OnUpdateAvailable?.Invoke(info);
                 return info;
             }
+            _log?.Info("Update", $"xman API: no update (HTTP {(int)response.StatusCode})");
         }
-        catch { /* silently fail */ }
+        catch (Exception ex) { _log?.Warn("Update", $"xman API check failed: {ex.Message}"); }
         return null;
     }
 
@@ -104,6 +227,7 @@ public class AutoUpdateService
                 string downloadUrl = "";
                 string fileName = "";
                 long fileSize = 0;
+                string sha256 = "";
 
                 if (root.TryGetProperty("assets", out var assets))
                 {
@@ -115,6 +239,10 @@ public class AutoUpdateService
                             downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
                             fileName = name;
                             fileSize = asset.GetProperty("size").GetInt64();
+                            // GitHub asset digest is "sha256:HEX" (newer API) — use it for integrity.
+                            string digest = asset.TryGetProperty("digest", out var dg) ? dg.GetString() ?? "" : "";
+                            if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                                sha256 = digest["sha256:".Length..];
                             break;
                         }
                     }
@@ -137,12 +265,14 @@ public class AutoUpdateService
                     Changelog = changelog,
                     FileSize = fileSize,
                     FileName = fileName,
+                    Sha256 = sha256,
                 };
                 OnUpdateAvailable?.Invoke(info);
                 return info;
             }
+            _log?.Info("Update", $"GitHub: newest published release is v{version} — not newer than v{CurrentVersion}");
         }
-        catch { /* silently fail */ }
+        catch (Exception ex) { _log?.Warn("Update", $"GitHub release check failed: {ex.Message}"); }
         return null;
     }
 
@@ -198,7 +328,25 @@ public class AutoUpdateService
             }
 
             OnDownloadProgress?.Invoke(100, "Download complete!");
-            OnUpdateStatus?.Invoke("Download complete. Ready to install.");
+
+            // Integrity gate: verify the downloaded file's SHA-256 against the manifest hash when the
+            // server provided one — closes the "tampered/MITM download → arbitrary exe overwrite → RCE"
+            // vector. (A fully-compromised manifest server still needs code-signing; tracked separately.)
+            if (!string.IsNullOrWhiteSpace(info.Sha256))
+            {
+                string actual = await ComputeSha256Async(zipPath, ct);
+                if (!string.Equals(actual, info.Sha256.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(zipPath); } catch { }
+                    OnUpdateStatus?.Invoke("Update REJECTED: integrity check failed (SHA-256 mismatch). The download may be corrupt or tampered.");
+                    return null;
+                }
+                OnUpdateStatus?.Invoke("Integrity verified ✓ — ready to install.");
+            }
+            else
+            {
+                OnUpdateStatus?.Invoke("Download complete (no checksum provided — integrity NOT verified). Ready to install.");
+            }
             return zipPath;
         }
         catch (Exception ex)
@@ -206,6 +354,14 @@ public class AutoUpdateService
             OnUpdateStatus?.Invoke($"Download failed: {ex.Message}");
             return null;
         }
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)
+    {
+        await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, useAsync: true);
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var hash = await sha.ComputeHashAsync(fs, ct);
+        return Convert.ToHexString(hash);
     }
 
     /// <summary>Extract update and create a batch script to replace files and restart.</summary>
@@ -302,6 +458,8 @@ public class UpdateInfo
     public string Changelog { get; set; } = "";
     public long FileSize { get; set; }
     public string FileName { get; set; } = "";
+    /// <summary>Expected SHA-256 (hex) of the download from the manifest. Verified before install.</summary>
+    public string Sha256 { get; set; } = "";
 
     public bool IsNewer => !string.IsNullOrEmpty(NewVersion) && NewVersion != CurrentVersion;
     public string FileSizeDisplay => FileSize switch

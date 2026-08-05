@@ -1,0 +1,44 @@
+{
+  "model": "local",
+  "messages": [
+    {"role": "system", "content": "You are CluadeX, an agentic coding assistant. You have tools. ALWAYS use write_file to create files. Working directory: D:\\Code\\test1\\test1"},
+    {"role": "user", "content": "สร้างไฟล์เดโมแนะนำโมเดลคุณเป็น html ชื่อ demo.html"}
+  ],
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "top_k": 40,
+  "min_p": 0.05,
+  "repeat_penalty": 1.1,
+  "stream": false,
+  "max_tokens": 1024,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Create or overwrite a file with the given content",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {"type": "string", "description": "Relative file path"},
+            "content": {"type": "string", "description": "Full file content"}
+          },
+          "required": ["path", "content"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read a file",
+        "parameters": {
+          "type": "object",
+          "properties": {"path": {"type": "string"}},
+          "required": ["path"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "required"
+}

@@ -17,6 +17,7 @@ public class ChatViewModel : ViewModelBase
     private readonly CodeAgentService _agentService;
     private readonly CodeExecutionService _codeExecutionService;
     private readonly AgentToolService _agentToolService;
+    private readonly AutonomousCodingService? _autonomousService;
     private readonly FileSystemService _fileSystemService;
     private readonly GitService _gitService;
     private readonly GitHubService _gitHubService;
@@ -38,6 +39,7 @@ public class ChatViewModel : ViewModelBase
     private bool _isGenerating;
     private bool _autoExecute;
     private bool _agenticMode;
+    private bool _autonomousMode;
     private string _statusText = "Ready";
     private ChatSession? _currentSession;
     private bool _canSend = true;
@@ -61,6 +63,7 @@ public class ChatViewModel : ViewModelBase
     private DispatcherTimer? _elapsedTimer;
     private string _lastStatusBase = "";  // status without elapsed time suffix
     private ChatMessage? _activeAgentStatusMsg;  // tracks the inline agent status for OnToolExecuted cleanup
+    private ChatMessage? _todoListMsg;           // the live plan-checklist bubble (updated in place)
     private int _streamingTokenCount;
     private int _retryCount;
     private string _chatSearchQuery = "";
@@ -90,6 +93,12 @@ public class ChatViewModel : ViewModelBase
     {
         get => _agenticMode;
         set => SetProperty(ref _agenticMode, value);
+    }
+    /// <summary>Autonomous "drive to green": implement → run tests → fix → loop, then review-iterate for hidden bugs.</summary>
+    public bool AutonomousMode
+    {
+        get => _autonomousMode;
+        set => SetProperty(ref _autonomousMode, value);
     }
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
     public ChatSession? CurrentSession { get => _currentSession; set => SetProperty(ref _currentSession, value); }
@@ -216,6 +225,20 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
+    // ─── Agent internals in the transcript ───
+    // Bound from the ListBox's ItemContainerStyle, so flipping it re-evaluates
+    // every row's visibility with no list rebuild.
+    private bool _showAgentInternals;
+    public bool ShowAgentInternals
+    {
+        get => _showAgentInternals;
+        set
+        {
+            if (SetProperty(ref _showAgentInternals, value))
+                _settingsService.UpdateSettings(s => s.ShowAgentInternals = value);
+        }
+    }
+
     // ─── TODO List ───
     private string _todoListText = "";
     public string TodoListText { get => _todoListText; set => SetProperty(ref _todoListText, value); }
@@ -252,6 +275,31 @@ public class ChatViewModel : ViewModelBase
     public bool IsLoadingModel { get => _isLoadingModel; set => SetProperty(ref _isLoadingModel, value); }
     public bool ShowContextWarning { get => _showContextWarning; set => SetProperty(ref _showContextWarning, value); }
     public string ContextWarningText { get => _contextWarningText; set => SetProperty(ref _contextWarningText, value); }
+
+    // ─── Strategic Compaction Toast (Sprint 2 #2) ─────────────────────
+    // Nudges the user to /compact at logical breakpoints — BEFORE the
+    // context-full alarm fires. Three triggers:
+    //   1. 50+ tool calls accumulated since last compaction
+    //   2. Context crosses 60% (proactive)
+    //   3. Context crosses 75% (urgent — overlaps with ContextWarning)
+    private bool _showCompactionToast;
+    private string _compactionToastTitle = "";
+    private string _compactionToastReason = "";
+    private string _compactionToastSeverity = "info"; // info | warn | critical
+    private int _toolActionsAtLastCompact;
+    private int _toastSnoozeUntilTurn = -1;
+    private string _lastFiredTrigger = ""; // dedupe so the same trigger doesn't re-fire each turn
+
+    public bool ShowCompactionToast { get => _showCompactionToast; set => SetProperty(ref _showCompactionToast, value); }
+    public string CompactionToastTitle { get => _compactionToastTitle; set => SetProperty(ref _compactionToastTitle, value); }
+    public string CompactionToastReason { get => _compactionToastReason; set => SetProperty(ref _compactionToastReason, value); }
+
+    /// <summary>"info" → cyan, "warn" → amber, "critical" → red. Used by XAML data triggers.</summary>
+    public string CompactionToastSeverity { get => _compactionToastSeverity; set => SetProperty(ref _compactionToastSeverity, value); }
+
+    public ICommand AcceptCompactionToastCommand { get; private set; } = null!;
+    public ICommand SnoozeCompactionToastCommand { get; private set; } = null!;
+    public ICommand DismissCompactionToastCommand { get; private set; } = null!;
 
     // ─── In-chat search (Ctrl+F) ───
     public string ChatSearchQuery
@@ -292,6 +340,9 @@ public class ChatViewModel : ViewModelBase
     public event Action? ScrollToBottom;
     /// <summary>Raised when ChatVM needs to be the active view (e.g. user clicked chat history from another page).</summary>
     public event Action? NavigateToChatRequested;
+    /// <summary>Raised when the workbench (Code Editor page) should come forward — after a project is
+    /// opened/cloned, so the user lands in the IDE view with the file tree loaded.</summary>
+    public event Action? NavigateToEditorRequested;
 
     public ChatViewModel(
         AiProviderManager providerManager,
@@ -310,7 +361,8 @@ public class ChatViewModel : ViewModelBase
         SkillService skillService,
         CostTrackingService costTracker,
         SessionMemoryService? sessionMemoryService = null,
-        Services.Providers.LocalGgufProvider? localGgufProvider = null)
+        Services.Providers.LocalGgufProvider? localGgufProvider = null,
+        AutonomousCodingService? autonomousService = null)
     {
         _providerManager = providerManager;
         _agentService = agentService;
@@ -329,10 +381,19 @@ public class ChatViewModel : ViewModelBase
         _skillService = skillService;
         _costTracker = costTracker;
         _sessionMemoryService = sessionMemoryService;
+        _autonomousService = autonomousService;
+        _autonomousMode = settingsService.Settings.AutonomousLoopEnabled;
+        if (_autonomousService != null)
+            _autonomousService.OnPhase += msg => App.Current?.Dispatcher.Invoke(() =>
+            {
+                Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = msg });
+                ScrollToBottom?.Invoke();
+            });
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
         _showThinking = settingsService.Settings.ShowThinkingSteps;
+        _showAgentInternals = settingsService.Settings.ShowAgentInternals;
 
         RefreshModelsCommand = new RelayCommand(RefreshLocalModelsList);
         SendMessageCommand = new AsyncRelayCommand(SendMessage);
@@ -340,6 +401,17 @@ public class ChatViewModel : ViewModelBase
         ClearChatCommand = new RelayCommand(ClearChat);
         NewSessionCommand = new RelayCommand(NewSession);
         CompactCommand = new RelayCommand(CompactConversation);
+        AcceptCompactionToastCommand = new RelayCommand(() =>
+        {
+            CompactConversation();
+            HideCompactionToast();
+        });
+        SnoozeCompactionToastCommand = new RelayCommand(() =>
+        {
+            _toastSnoozeUntilTurn = SessionTurnCount + 10;
+            HideCompactionToast();
+        });
+        DismissCompactionToastCommand = new RelayCommand(HideCompactionToast);
         ToggleChatSearchCommand = new RelayCommand(() => { IsChatSearchVisible = !IsChatSearchVisible; if (!IsChatSearchVisible) ChatSearchQuery = ""; });
         CloseChatSearchCommand = new RelayCommand(() => { IsChatSearchVisible = false; ChatSearchQuery = ""; });
         CopyCodeCommand = new RelayCommand<string>(CopyCode);
@@ -356,6 +428,117 @@ public class ChatViewModel : ViewModelBase
         // Listen for tool execution events
         _agentService.OnToolExecuted += OnToolExecuted;
         _agentService.OnToolStarting += OnToolStarting;
+
+        // Surface provider errors that are raised mid-stream (Ollama down, llama-server not running,
+        // API auth/rate errors). These used to be raised into the void — NOTHING subscribed — so the
+        // user just saw "no response" with no clue why. Show a clean, sanitized message and clear any
+        // dangling thinking indicator.
+        _providerManager.OnError += msg =>
+        {
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                string safe = SanitizeErrorMessage(msg ?? "Unknown error");
+                if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+                // De-dupe: don't stack the identical error twice in a row.
+                if (Messages.LastOrDefault() is { HasError: true } last && last.Content?.Contains(safe) == true)
+                {
+                    StatusText = safe;
+                    return;
+                }
+                Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = $"**⚠ {safe}**", HasError = true });
+                StatusText = safe;
+                ScrollToBottom?.Invoke();
+            });
+        };
+
+        // Live plan checklist (Claude Code-style TodoWrite pills). TodoChanged had ZERO subscribers —
+        // the agent maintained a real plan in memory that no one could see. Render it as a single
+        // checklist bubble that updates in place as items are added/completed.
+        _agentToolService.TodoChanged += () =>
+        {
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                var items = _agentToolService.TodoItems;
+                if (items.Count == 0)
+                {
+                    if (_todoListMsg != null) { Messages.Remove(_todoListMsg); _todoListMsg = null; }
+                    return;
+                }
+                var sb = new System.Text.StringBuilder("📋 **Plan**\n");
+                foreach (var t in items)
+                {
+                    string mark = t.Status?.ToLowerInvariant() switch
+                    {
+                        "completed" or "done" => "✅",
+                        "in_progress" or "active" => "🔄",
+                        _ => "⬜",
+                    };
+                    sb.Append(mark).Append(' ').Append(t.Content).Append('\n');
+                }
+                if (_todoListMsg == null || !Messages.Contains(_todoListMsg))
+                {
+                    _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd() };
+                    Messages.Add(_todoListMsg);
+                }
+                else
+                {
+                    _todoListMsg.Content = sb.ToString().TrimEnd();
+                    // Keep the plan near the action: if newer messages buried it, move it to the bottom.
+                    if (Messages.IndexOf(_todoListMsg) < Messages.Count - 3)
+                    {
+                        Messages.Remove(_todoListMsg);
+                        Messages.Add(_todoListMsg);
+                    }
+                }
+                ScrollToBottom?.Invoke();
+            });
+        };
+
+        // Wire the human-in-the-loop permission prompt. Without this, PermAction.Ask resolved against a
+        // null handler → silently DENIED → users were funneled into blanket-allowing "*" (which then
+        // never prompts for rm -rf / force-push / overwrite). Now an Ask shows a real confirmation.
+        _agentToolService.OnPermissionRequired += info =>
+        {
+            var dispatcher = App.Current?.Dispatcher;
+            if (dispatcher == null) return Task.FromResult(false); // headless / no UI → fail safe (deny)
+
+            // Inline, non-blocking prompt: render the request (with a preview diff for file edits) right in
+            // the conversation, and resolve when the user clicks Allow/Deny. Replaces the old modal MessageBox
+            // so the user can SEE exactly what's about to change before approving.
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var token = _cts?.Token ?? CancellationToken.None;
+            CancellationTokenRegistration reg = default;
+
+            var prompt = new ChatMessage
+            {
+                Role = MessageRole.PermissionRequest,
+                Content = $"Allow {info.ToolName} to {info.Detail}?",
+                DiffLines = info.Diff?.Lines,
+                DiffStat = info.Diff?.Stat,
+                PermissionCallback = allow => { tcs.TrySetResult(allow); reg.Dispose(); },
+            };
+
+            // If the user hits Stop (cancels the turn) while this prompt is still open, resolve it as DENIED so
+            // the agent loop unwinds immediately — otherwise it parks forever on an unanswered prompt, leaving
+            // IsGenerating stuck on (and a late "Allow" could even apply an edit after the turn was cancelled).
+            reg = token.Register(() =>
+            {
+                if (tcs.TrySetResult(false))
+                    dispatcher.InvokeAsync(() =>
+                    {
+                        prompt.PermissionAnswered = true;
+                        if (!prompt.Content.Contains("(cancelled)")) prompt.Content += "  — (cancelled)";
+                    });
+                reg.Dispose();
+            });
+
+            dispatcher.InvokeAsync(() =>
+            {
+                Messages.Add(prompt);
+                ScrollToBottom?.Invoke();
+            });
+            return tcs.Task;
+        };
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;
@@ -494,9 +677,17 @@ public class ChatViewModel : ViewModelBase
         {
             LoadedModelName = $"Ready: {_llamaService.LoadedModelName}";
         }
-        else if (!string.IsNullOrEmpty(_settingsService.Settings.SelectedModelPath)
+        else if (_settingsService.Settings.ActiveProvider == AiProviderType.Local
+                 && !string.IsNullOrEmpty(_settingsService.Settings.SelectedModelPath)
                  && File.Exists(_settingsService.Settings.SelectedModelPath))
         {
+            // Gated on the PERSISTED provider being Local. This auto-load used to run
+            // whenever a GGUF path existed and then force-switched the active provider
+            // to Local (below) — silently stomping whatever provider the user had
+            // actually selected. On this machine a .gguf path always exists, so a
+            // persisted ClaudeDev/Ollama/Anthropic choice never survived a restart.
+            // If the user picked a non-local provider, we also should NOT spend 5 GB
+            // of VRAM loading weights nobody asked for.
             LoadedModelName = $"Loading: {_settingsService.Settings.SelectedModelName}...";
             string autoLoadPath = _settingsService.Settings.SelectedModelPath!;
 
@@ -543,7 +734,7 @@ public class ChatViewModel : ViewModelBase
                 {
                     App.Current?.Dispatcher.Invoke(() =>
                     {
-                        LoadedModelName = $"Failed to auto-load: {ex.Message}";
+                        LoadedModelName = $"Failed to auto-load: {SanitizeErrorMessage(ex.Message)}";
                         StatusText = "Model failed to load — go to Models tab";
                     });
                 }
@@ -699,6 +890,7 @@ public class ChatViewModel : ViewModelBase
 
         // Temporarily stop dirty tracking during load
         Messages.CollectionChanged -= OnMessagesChanged;
+        ResolvePendingPermissionPrompts();
         Messages.Clear();
         foreach (var msg in session.Messages)
             Messages.Add(msg);
@@ -758,6 +950,7 @@ public class ChatViewModel : ViewModelBase
             if (CurrentSession?.Id == sessionId)
             {
                 CurrentSession = null;
+                ResolvePendingPermissionPrompts();
                 Messages.Clear();
                 NewSession();
             }
@@ -824,8 +1017,86 @@ public class ChatViewModel : ViewModelBase
                 ShowContextWarning = true;
                 ContextWarningText = "🔴 Context almost full! Start a New Chat NOW for best results. The AI is losing earlier context.";
             }
+
+            // Sprint 2 #2 — Strategic Compaction Toast trigger check.
+            // Runs AFTER ContextUsagePercent + SessionTurnCount are fresh.
+            EvaluateCompactionTrigger(messages);
         }
         catch { /* ignore during initialization */ }
+    }
+
+    // ─── Strategic Compaction Toast logic ─────────────────────────────
+
+    /// <summary>
+    /// Decide whether to fire the strategic-compaction nudge. Three triggers,
+    /// each fires AT MOST ONCE per crossing — once dismissed/snoozed, the
+    /// same trigger won't re-spam every turn.
+    /// </summary>
+    private void EvaluateCompactionTrigger(List<ChatMessage> messages)
+    {
+        // Honor snooze
+        if (SessionTurnCount < _toastSnoozeUntilTurn) return;
+        // Honor user setting (default true)
+        if (!_settingsService.Settings.EnableStrategicCompactionToast) return;
+        // Don't fire while a toast is already showing
+        if (_showCompactionToast) return;
+
+        int toolActionsTotal = messages.Count(m => m.Role == MessageRole.ToolAction);
+        int toolActionsSince = Math.Max(0, toolActionsTotal - _toolActionsAtLastCompact);
+
+        // Trigger priority (highest fires first):
+        //   1. Context ≥ 75% (urgent)
+        //   2. Context ≥ 60% (proactive)
+        //   3. 50+ tool calls since last compact
+        string trigger = "";
+        if (ContextUsagePercent >= 75 && _lastFiredTrigger != "ctx75")
+        {
+            trigger = "ctx75";
+            ShowToast("critical",
+                "Context is getting hot",
+                $"{ContextUsagePercent:F0}% used. Compact now to keep the next response sharp.");
+        }
+        else if (ContextUsagePercent >= 60 && _lastFiredTrigger != "ctx60" && _lastFiredTrigger != "ctx75")
+        {
+            trigger = "ctx60";
+            ShowToast("warn",
+                "Good moment to compact",
+                $"You've crossed {ContextUsagePercent:F0}% — quick compact will reset the headroom.");
+        }
+        else if (toolActionsSince >= 50 && _lastFiredTrigger != "tools50")
+        {
+            trigger = "tools50";
+            ShowToast("info",
+                "Lots of tool calls this session",
+                $"{toolActionsSince} tool calls since last compact. A compact will trim the noise.");
+        }
+
+        if (!string.IsNullOrEmpty(trigger))
+        {
+            _lastFiredTrigger = trigger;
+        }
+        else if (ContextUsagePercent < 55)
+        {
+            // Reset the trigger memory once the user dropped well below 60%,
+            // so the next crossing fires the toast again.
+            _lastFiredTrigger = "";
+        }
+    }
+
+    private void ShowToast(string severity, string title, string reason)
+    {
+        CompactionToastSeverity = severity;
+        CompactionToastTitle = title;
+        CompactionToastReason = reason;
+        ShowCompactionToast = true;
+    }
+
+    private void HideCompactionToast()
+    {
+        ShowCompactionToast = false;
+        // Reset baseline so the next 50-tool-call cycle starts fresh
+        // (whether the user accepted, snoozed, or dismissed)
+        _toolActionsAtLastCompact = Messages.Count(m => m.Role == MessageRole.ToolAction);
     }
 
     // ─── GPU Live Stats ───
@@ -857,15 +1128,13 @@ public class ChatViewModel : ViewModelBase
     // ─── Open / Close Project Folder ───
     private void OpenFolder()
     {
-        var dialog = new Microsoft.Win32.OpenFolderDialog
-        {
-            Title = "Open Project Folder",
-        };
-
-        if (dialog.ShowDialog() == true && !string.IsNullOrEmpty(dialog.FolderName))
-        {
-            SetWorkingDirectory(dialog.FolderName);
-        }
+        // Use the owner-aware COM picker (it passes the MainWindow hwnd). A plain
+        // Microsoft.Win32.OpenFolderDialog with NO owner opened its modal BEHIND our borderless
+        // (WindowStyle=None) main window — the dialog was invisible and the app looked frozen, so
+        // "Open Folder did nothing". FolderPicker is already what ModelManager/PluginManager use.
+        string? folder = CluadeX.Services.Helpers.FolderPicker.ShowDialog("Open Project Folder", WorkingDirectory);
+        if (!string.IsNullOrEmpty(folder))
+            SetWorkingDirectory(folder);
     }
 
     public void SetWorkingDirectory(string path)
@@ -876,6 +1145,11 @@ public class ChatViewModel : ViewModelBase
 
         // Invalidate system prompt cache (project context changed)
         _agentService.InvalidateSystemPromptCache();
+
+        // Project-scoped skills live under the PROJECT folder, but the skill list is cached on
+        // first use — without this, opening or switching a project never picked them up (and a
+        // previous project's skills stayed advertised).
+        _skillService.ReloadSkills();
 
         // Auto-enable agentic mode when a project is open
         AgenticMode = true;
@@ -892,6 +1166,9 @@ public class ChatViewModel : ViewModelBase
             Content = $"\U0001F4C1 Opened project: {path}\nAgent mode enabled \u2014 I can now read, edit, create files and use Git in this project.",
         });
         ScrollToBottom?.Invoke();
+
+        // Land the user in the workbench: opening a project in an IDE should show the project.
+        NavigateToEditorRequested?.Invoke();
     }
 
     private async Task DetectGitInfoAsync()
@@ -917,10 +1194,113 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
-    private Task CloneRepo()
+    private async Task CloneRepo()
     {
-        StatusText = "Type the GitHub URL in chat: e.g. 'clone https://github.com/owner/repo'";
-        return Task.CompletedTask;
+        // 1) Ask for the repo URL.
+        string? url = CluadeX.Services.Helpers.InputDialog.Show(
+            "Connect GitHub repo",
+            "Paste a repository URL (https://github.com/owner/repo, or a git@ / .git URL). It will be cloned and opened as your project.",
+            placeholder: "https://github.com/owner/repo");
+        if (string.IsNullOrWhiteSpace(url)) return;
+        url = url.Trim();
+
+        // Reject anything that isn't a plain repo URL — a quote/newline could break the
+        // quoting in `git clone -- "<url>"`, and a leading '-' is an arg-injection smell.
+        if (url.Contains('"') || url.Contains('\n') || url.Contains('\r') || url.StartsWith("-"))
+        {
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = $"⚠ That doesn't look like a valid repository URL: \"{url}\"",
+            });
+            ScrollToBottom?.Invoke();
+            return;
+        }
+
+        string repoName = DeriveRepoFolderName(url);
+        if (string.IsNullOrWhiteSpace(repoName))
+        {
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = $"⚠ Couldn't read a repository name from \"{url}\". Expected something like https://github.com/owner/repo.",
+            });
+            ScrollToBottom?.Invoke();
+            return;
+        }
+
+        // 2) Choose where to put it (default to the last working dir's parent, else Documents).
+        string? initial = !string.IsNullOrEmpty(WorkingDirectory)
+            ? (Path.GetDirectoryName(WorkingDirectory) ?? WorkingDirectory)
+            : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        string? parent = CluadeX.Services.Helpers.FolderPicker.ShowDialog(
+            $"Choose where to clone \"{repoName}\"", initial);
+        if (string.IsNullOrWhiteSpace(parent)) return;
+
+        string targetDir = Path.Combine(parent, repoName);
+        if (Directory.Exists(targetDir) && Directory.EnumerateFileSystemEntries(targetDir).Any())
+        {
+            var res = MessageBox.Show(
+                $"\"{targetDir}\" already exists and isn't empty.\n\nOpen it as the project instead of cloning?",
+                "Folder exists", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (res == MessageBoxResult.Yes) SetWorkingDirectory(targetDir);
+            return;
+        }
+
+        // 3) Clone with a live status line.
+        Messages.Add(new ChatMessage
+        {
+            Role = MessageRole.System,
+            Content = $"⬇ Cloning {url}\n→ {targetDir}",
+        });
+        ScrollToBottom?.Invoke();
+        StatusText = $"Cloning {repoName}…";
+
+        GitResult result;
+        try
+        {
+            result = await _gitService.CloneAsync(url, targetDir);
+        }
+        catch (Exception ex)
+        {
+            result = new GitResult { Success = false, Error = ex.Message };
+        }
+
+        if (result.Success)
+        {
+            StatusText = $"Cloned {repoName}";
+            // Opening the folder emits its own "Opened project" system message + enables agent mode.
+            SetWorkingDirectory(targetDir);
+        }
+        else
+        {
+            string err = (result.Error ?? result.Output ?? "unknown error").Trim();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = $"❌ Clone failed: {err}",
+            });
+            ScrollToBottom?.Invoke();
+            StatusText = "Clone failed";
+        }
+    }
+
+    /// <summary>
+    /// Pull the repo folder name out of a git URL. Handles https://host/owner/repo(.git),
+    /// git@host:owner/repo.git, and bare owner/repo forms.
+    /// </summary>
+    private static string DeriveRepoFolderName(string url)
+    {
+        string s = url.Trim().TrimEnd('/');
+        // git@github.com:owner/repo.git → take the part after the last '/' or ':'
+        int slash = s.LastIndexOfAny(new[] { '/', ':' });
+        string last = slash >= 0 ? s[(slash + 1)..] : s;
+        if (last.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            last = last[..^4];
+        // Strip anything unsafe for a folder name.
+        foreach (char c in Path.GetInvalidFileNameChars())
+            last = last.Replace(c, '-');
+        return last.Trim();
     }
 
     private void CloseFolder()
@@ -957,6 +1337,7 @@ public class ChatViewModel : ViewModelBase
             ProjectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "",
         };
         CurrentSession = session;
+        ResolvePendingPermissionPrompts();
         Messages.Clear();
         Sessions.Insert(0, session);
         _isDirty = false;
@@ -1051,8 +1432,15 @@ public class ChatViewModel : ViewModelBase
         //    IsGenerating is set up-front and ALWAYS reset in finally so the
         //    Send button never gets stuck disabled if a downstream dispatcher
         //    InvokeAsync fails (e.g. window closing mid-call).
-        IsGenerating = true;
-        var historySnapshot = Messages.ToList();
+        List<ChatMessage> historySnapshot = new();
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            IsGenerating = true;
+            // SkipLast(1): the spec was just added as the last user message above; passing it again as
+            // `prompt` would duplicate the turn (mirrors RunAgentic). Marshaled to the UI thread — this
+            // method runs on the named-pipe background thread, and Messages is UI-bound.
+            historySnapshot = Messages.SkipLast(1).ToList();
+        });
         try
         {
             AgentLoopResult agentResult;
@@ -1062,7 +1450,7 @@ public class ChatViewModel : ViewModelBase
             }
             catch (Exception ex)
             {
-                string err = $"❌ Agent loop failed: {ex.Message}";
+                string err = $"❌ Agent loop failed: {SanitizeErrorMessage(ex.Message)}";
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     var errMsg = new ChatMessage { Role = MessageRole.Assistant, Content = err, HasError = true };
@@ -1124,6 +1512,13 @@ public class ChatViewModel : ViewModelBase
         }
 
         StatusText = "Conversation compacted";
+
+        // Reset Sprint 2 #2 trigger state so the strategic toast can fire
+        // again the next time the conversation grows past a threshold.
+        _toolActionsAtLastCompact = Messages.Count(m => m.Role == MessageRole.ToolAction);
+        _lastFiredTrigger = "";
+        ShowCompactionToast = false;
+
         UpdateContextInfo();
     }
 
@@ -1273,10 +1668,25 @@ public class ChatViewModel : ViewModelBase
             if (activeSkill?.AllowedTools is { Count: > 0 })
                 _agentToolService.ActiveSkillAllowedTools = activeSkill.AllowedTools;
 
+            // Tools are worth running the agentic loop for in TWO cases: a project
+            // is open (file/build tools, gated by the user's AgenticMode switch),
+            // or an MCP server is connected — those need no project at all.
+            //
+            // Only the first case used to route here, so a plain chat with the
+            // brain connected got ZERO tools while the system prompt still told
+            // the model it had them. That contradiction is what makes a weak model
+            // narrate ("I will use agent_inbox — go ahead") instead of calling, and
+            // it is why the agent bus sat at calls: 0. There is also no switch to
+            // flip in this case: AgenticMode is auto-enabled by opening a project,
+            // so with no project it is always false.
+            bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
+
             // Skills always run in agentic mode
             if (!string.IsNullOrEmpty(skillPromptOverride) && HasProject)
                 await RunAgentic(input, _cts.Token);
-            else if (AgenticMode && HasProject)
+            else if (AutonomousMode && HasProject && _autonomousService != null)
+                await RunAutonomous(input, _cts.Token);
+            else if ((AgenticMode && HasProject) || mcpOnlyTools)
                 await RunAgentic(input, _cts.Token);
             else if (AutoExecute)
                 await RunWithAutoExecution(input, _cts.Token);
@@ -1380,6 +1790,36 @@ public class ChatViewModel : ViewModelBase
     }
 
     // ─── Agentic Mode (tool use loop) ───
+    /// <summary>
+    /// Autonomous "drive to green": run the build-test-fix loop then the hidden-bug review loop via
+    /// AutonomousCodingService. Tool activity streams to the chat through the existing agent events;
+    /// phase banners arrive via OnPhase (wired in the ctor); the final response is posted + saved here.
+    /// </summary>
+    private async Task RunAutonomous(string input, CancellationToken ct)
+    {
+        if (_autonomousService == null) { await RunAgentic(input, ct); return; }
+
+        // Clear the generic "thinking" placeholder — the autonomous loop posts its own phase banners.
+        if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+
+        // Working history = the session so far, minus the user message we just added (passed as the goal).
+        var source = (IEnumerable<ChatMessage>?)CurrentSession?.Messages ?? Messages;
+        var history = source.SkipLast(1).ToList();
+
+        var result = await _autonomousService.RunAsync(history, input, ct);
+
+        var final = new ChatMessage
+        {
+            Role = MessageRole.Assistant,
+            Content = string.IsNullOrWhiteSpace(result.FinalResponse) ? result.Summary : result.FinalResponse,
+        };
+        Messages.Add(final);
+        CurrentSession?.Messages.Add(final);
+        _isDirty = true;
+        ScrollToBottom?.Invoke();
+        SaveNow();
+    }
+
     private async Task RunAgentic(string input, CancellationToken ct)
     {
         // Stopwatch & timer already started in SendMessage
@@ -1484,20 +1924,38 @@ public class ChatViewModel : ViewModelBase
 
             App.Current?.Dispatcher.Invoke(() =>
             {
-                // Finalize streaming message before adding thinking
+                // Stop the streaming cursor on the current text bubble, but KEEP the reference so the
+                // end-of-turn finalizer updates it in place instead of adding a duplicate. (The old code
+                // nulled streamingMsg here, which double-posted the final answer whenever extended
+                // thinking fired an OnThinkingUpdate after the text had already streamed.)
                 if (streamingMsg != null)
-                {
                     streamingMsg.IsStreaming = false;
-                    streamingMsg = null;
-                }
             });
         }
 
+        // Surface the harness's own notices (auto-verify, escalation, tool-call salvage, compaction)
+        // inline in chat. These fire only via OnAgentStatus — with no subscriber they were invisible,
+        // so a 60s auto-verify build or a silent provider escalation looked exactly like a hang.
+        // Tool statuses are excluded: OnToolStarting already renders those (avoids double bubbles).
+        void OnAgentStatusNotice(string status)
+        {
+            bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
+                || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
+                || status.Contains("compacting") || status.Contains("บีบอัด")
+                || status.Contains("truncated") || status.Contains("ถูกตัด");
+            if (notable) OnToolStarting("agent", status);
+        }
         _agentService.OnThinkingUpdate += OnThinking;
         _agentService.OnAgenticStreamingToken += OnStreamToken;
+        _agentService.OnAgentStatus += OnAgentStatusNotice;
         try
         {
-            var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);
+            // Task.Run: the agentic loop interleaves async I/O with plenty of SYNCHRONOUS work (tool
+            // implementations, repo scans, JSON/token math, in-proc inference). Awaited directly from
+            // this UI-thread context, every one of those chunks ran ON the dispatcher thread — the
+            // window froze for their combined duration. All UI updates inside the loop's event
+            // handlers already marshal via Dispatcher, so running the loop on the pool is safe.
+            var result = await Task.Run(() => _agentService.ExecuteAgenticAsync(history, input, progress, ct), CancellationToken.None);
 
         // Finalize any remaining inline status
         App.Current?.Dispatcher.Invoke(() =>
@@ -1509,7 +1967,9 @@ public class ChatViewModel : ViewModelBase
             }
         });
 
-        // Finalize streaming message — update in-place to avoid flash
+        // Finalize streaming message — update in-place to avoid flash, and GUARANTEE the turn leaves
+        // something visible. The old code could finish with no open bubble AND an empty final response
+        // and add nothing at all → the "ไม่ตอบไปเลย" (no response) report. The else branch closes that hole.
         App.Current?.Dispatcher.Invoke(() =>
         {
             string? finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
@@ -1518,16 +1978,17 @@ public class ChatViewModel : ViewModelBase
 
             if (streamingMsg != null)
             {
-                // Flush any remaining buffered tokens
+                // A streamed text bubble is open — it already holds the reply. Finalize it in place:
+                // prefer the clean final text; otherwise keep whatever streamed.
                 string buffered = streamSb.ToString();
-                if (!string.IsNullOrEmpty(buffered) && streamingMsg.Content != buffered)
-                    streamingMsg.Content = buffered;
-
-                // If we have a final response, update the existing message in-place
                 if (!string.IsNullOrWhiteSpace(finalText))
                 {
                     streamingMsg.Content = finalText;
                     streamingMsg.CodeBlocks = _codeExecutionService.ExtractCodeBlocks(finalText);
+                }
+                else if (!string.IsNullOrEmpty(buffered) && streamingMsg.Content != buffered)
+                {
+                    streamingMsg.Content = buffered;
                 }
                 streamingMsg.IsStreaming = false;
                 if (!CurrentSession?.Messages.Contains(streamingMsg) ?? false)
@@ -1536,12 +1997,37 @@ public class ChatViewModel : ViewModelBase
             }
             else if (!string.IsNullOrWhiteSpace(finalText))
             {
-                // No streaming message existed — add a new one
+                // No open bubble (answer arrived whole / wasn't streamed) — add it once.
                 var assistantMsg = new ChatMessage
                 {
                     Role = MessageRole.Assistant,
                     Content = finalText,
                     CodeBlocks = _codeExecutionService.ExtractCodeBlocks(finalText),
+                };
+                Messages.Add(assistantMsg);
+                CurrentSession?.Messages.Add(assistantMsg);
+            }
+            else
+            {
+                // ─── Safety net: the loop produced NO visible assistant text at all ───
+                // (model ended after a tool with nothing to say, returned only thinking, or hit the
+                // iteration cap). Never leave the user staring at a vanished spinner — surface an honest,
+                // actionable note. Also clear any lingering "⏳ thinking" placeholder that never got
+                // replaced by streamed text.
+                var placeholder = Messages.LastOrDefault(m =>
+                    m.Role == MessageRole.Assistant && (m.Content?.StartsWith("⏳") ?? false));
+                if (placeholder != null) Messages.Remove(placeholder);
+
+                int toolsRun = result.Steps?.Sum(s => s.ToolResults?.Count ?? 0) ?? 0;
+                string note = toolsRun > 0
+                    ? $"*(ทำงานเสร็จ {toolsRun} ขั้นแล้ว แต่โมเดลไม่ได้ส่งข้อความสรุป — พิมพ์ “สรุปให้หน่อย” หรือถามต่อได้เลยครับ)*"
+                    : "*(โมเดลไม่ได้ส่งข้อความตอบกลับ — ลองส่งใหม่อีกครั้ง หรือปรับคำถามดูครับ)*";
+
+                var assistantMsg = new ChatMessage
+                {
+                    Role = MessageRole.Assistant,
+                    Content = note,
+                    HasError = toolsRun == 0,
                 };
                 Messages.Add(assistantMsg);
                 CurrentSession?.Messages.Add(assistantMsg);
@@ -1565,6 +2051,7 @@ public class ChatViewModel : ViewModelBase
         {
             _agentService.OnThinkingUpdate -= OnThinking;
             _agentService.OnAgenticStreamingToken -= OnStreamToken;
+            _agentService.OnAgentStatus -= OnAgentStatusNotice;
             StopElapsedTimer();
             // Ensure inline status is finalized on cancel/error
             App.Current?.Dispatcher.Invoke(() =>
@@ -1626,6 +2113,10 @@ public class ChatViewModel : ViewModelBase
         return toolName; // unique category = no grouping
     }
 
+    /// <summary>Raised (on the UI thread) when the agent mutates a file: (relativePath, firstChangedLine).
+    /// The Code Editor subscribes to open/refresh that file live and scroll to the change.</summary>
+    public event Action<string, int>? FileMutatedByAgent;
+
     private void OnToolExecuted(ToolResult toolResult)
     {
         App.Current?.Dispatcher.BeginInvoke(() =>
@@ -1634,6 +2125,14 @@ public class ChatViewModel : ViewModelBase
             {
                 _activeAgentStatusMsg.IsStreaming = false;
                 _activeAgentStatusMsg = null;
+            }
+
+            // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit.
+            if (toolResult.Success
+                && _settingsService.Settings.LiveEditFollow
+                && !string.IsNullOrEmpty(toolResult.FilePath))
+            {
+                FileMutatedByAgent?.Invoke(toolResult.FilePath!, toolResult.Diff?.FirstChangedLine ?? 1);
             }
 
             // Format arguments for display
@@ -1718,6 +2217,8 @@ public class ChatViewModel : ViewModelBase
                 ToolInputSummary = inputSummary,
                 ToolOutputLines = outputLines,
                 CollapsedToolNames = new List<string> { toolResult.ToolName },
+                DiffLines = toolResult.Diff?.Lines,
+                DiffStat = toolResult.Diff?.Stat,
             };
             Messages.Add(msg);
             CurrentSession?.Messages.Add(msg);
@@ -1748,6 +2249,7 @@ public class ChatViewModel : ViewModelBase
         ["git_clone"] = "Cloned",
         ["git_init"] = "Initialized",
         ["git_checkout"] = "Checked out",
+        ["git_merge"] = "Merged",
         ["git_branch"] = "Branched",
         ["git_add"] = "Staged",
         ["git_stash"] = "Stashed",
@@ -1808,14 +2310,17 @@ public class ChatViewModel : ViewModelBase
             double elapsed = _generationStopwatch.Elapsed.TotalSeconds;
             string elapsedText = elapsed < 10 ? $"{elapsed:F1}s" : $"{(int)elapsed}s";
 
-            // Stage-based status so user knows what's happening
+            // Stage-based status so user knows what's happening. The long-wait stage must explain
+            // WHY (local prompt processing) — a bare "taking longer than usual" reads as a hang, and
+            // users killed the app during a perfectly healthy 1-2 minute first prefill.
             string stage = elapsed switch
             {
                 < 1.0 => "Building context",
                 < 3.0 => "Sending request",
                 < 8.0 => "Waiting for response",
                 < 15.0 => "Still waiting",
-                _ => "Taking longer than usual",
+                < 45.0 => "Taking longer than usual",
+                _ => "Model is reading the prompt — the first local turn can take 1-2 minutes",
             };
 
             // If we already got tokens, show token count instead of stages
@@ -2064,7 +2569,7 @@ public class ChatViewModel : ViewModelBase
             CurrentSession?.Messages.Add(Messages.Last());
             ScrollToBottom?.Invoke();
         }
-        catch (Exception ex) { StatusText = $"Execution error: {ex.Message}"; }
+        catch (Exception ex) { StatusText = $"Execution error: {SanitizeErrorMessage(ex.Message)}"; }
         finally { IsGenerating = false; StatusText = "Ready"; }
     }
 
@@ -2147,7 +2652,7 @@ public class ChatViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            StatusText = $"Failed to load: {ex.Message}";
+            StatusText = $"Failed to load: {SanitizeErrorMessage(ex.Message)}";
         }
         finally
         {
@@ -2227,10 +2732,28 @@ public class ChatViewModel : ViewModelBase
             if (result != System.Windows.MessageBoxResult.Yes) return;
         }
 
+        ResolvePendingPermissionPrompts();
         Messages.Clear();
         CurrentSession?.Messages.Clear();
         _isDirty = true;
         StatusText = "Chat cleared.";
+    }
+
+    /// <summary>Auto-deny any still-unanswered permission prompts before the message list is cleared
+    /// or swapped (session switch / new chat / delete / clear). The agent loop awaits the prompt's
+    /// TaskCompletionSource — destroying the bubble without resolving it parked the loop forever and
+    /// left IsGenerating stuck on, which the user experienced as a hard hang.</summary>
+    private void ResolvePendingPermissionPrompts()
+    {
+        foreach (var m in Messages)
+        {
+            if (m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered && m.PermissionCallback != null)
+            {
+                m.PermissionAnswered = true;
+                if (!m.Content.Contains("(dismissed)")) m.Content += "  — (dismissed)";
+                try { m.PermissionCallback(false); } catch { /* resolving twice is a no-op */ }
+            }
+        }
     }
 
     // ─── Code Review ───

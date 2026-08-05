@@ -11,7 +11,7 @@ namespace CluadeX.Services;
 /// Parses tool calls from model output and executes them via FileSystemService / CodeExecutionService.
 /// Tool format: [ACTION: tool_name]\nkey: value\n[/ACTION]
 /// </summary>
-public class AgentToolService
+public class AgentToolService : IDisposable
 {
     private readonly FileSystemService _fileSystem;
     private readonly CodeExecutionService _codeExecution;
@@ -28,17 +28,62 @@ public class AgentToolService
     /// <summary>When set, only these tools can be called. Set by skill execution context. Null = all allowed.</summary>
     public List<string>? ActiveSkillAllowedTools { get; set; }
 
+    /// <summary>
+    /// Does the active skill's whitelist permit <paramref name="toolName"/>?
+    /// True when no skill is active.
+    ///
+    /// Built-ins are compared by RESOLVED ToolType, because skills are authored
+    /// with human names ("grep") while the registry name is "grep_search".
+    ///
+    /// MCP names are compared as EXACT STRINGS, and that distinction is the whole
+    /// point: every `mcp__server__tool` resolves to the same ToolType.McpTool, so
+    /// type-comparison alone meant whitelisting ONE MCP tool admitted EVERY MCP
+    /// tool. Measured 2026-07-31 — /brainx-tester allows two MCP tools and was
+    /// offered fifteen.
+    /// </summary>
+    private bool IsAllowedByActiveSkill(string toolName)
+    {
+        var allowed = ActiveSkillAllowedTools;
+        if (allowed is not { Count: > 0 }) return true;
+
+        if (allowed.Any(t => t.Equals(toolName, StringComparison.OrdinalIgnoreCase))) return true;
+        if (toolName.StartsWith("mcp__", StringComparison.Ordinal)) return false;
+
+        var type = ResolveToolType(toolName);
+        return type != null && allowed.Any(t => ResolveToolType(t) == type);
+    }
+
     /// <summary>Returns list of available skill names + descriptions for system prompt injection.</summary>
     public List<(string Name, string Description)> GetAvailableSkillNames()
     {
         try
         {
             return _skillService.GetAllSkills()
-                .Where(s => s.UserInvocable)
+                .Where(s => s.UserInvocable && SkillToolsAreUsable(s))
                 .Select(s => (s.Name, s.Description))
                 .ToList();
         }
         catch { return []; }
+    }
+
+    /// <summary>
+    /// A skill is only worth advertising if at least one of its whitelisted tools can actually
+    /// run right now. /market-research, for instance, whitelists only web_search + web_fetch —
+    /// which are activation-gated — so on the free tier it was offered everywhere and then
+    /// refused every single tool call. A skill with no whitelist is unrestricted, so it is fine.
+    /// </summary>
+    private bool SkillToolsAreUsable(SkillDefinition s)
+    {
+        if (s.AllowedTools is not { Count: > 0 }) return true;
+        bool anyResolvable = false;
+        foreach (var name in s.AllowedTools)
+        {
+            var t = ResolveToolType(name);
+            if (t == null) continue;      // unknown/MCP name — can't judge, don't penalise
+            anyResolvable = true;
+            if (IsToolAllowed(t.Value)) return true;
+        }
+        return !anyResolvable;            // nothing resolvable => leave it visible
     }
 
     // ─── TODO List State ───
@@ -53,24 +98,40 @@ public class AgentToolService
     /// <summary>Raised when agent requests a sub-task spawn. Returns sub-agent result.</summary>
     public event Func<string, string, CancellationToken, Task<string>>? OnAgentSpawnRequested;
 
-    // Regex to match [ACTION: tool_name]...[/ACTION] blocks
+    // Regex to match [ACTION: tool_name]...[/ACTION] blocks.
+    // The name class must cover MCP qualified names (mcp__server__tool), which routinely contain
+    // '-' and '.' from the server key — \w+ alone silently failed to match them, so those blocks
+    // were neither executed NOR stripped from the reply (raw markup leaked to the user).
     private static readonly Regex ActionRegex = new(
-        @"\[ACTION:\s*(\w+)\](.*?)\[/ACTION\]",
+        @"\[ACTION:\s*([\w.\-]+)\](.*?)\[/ACTION\]",
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     /// <summary>Raised when a tool requires user confirmation (PermAction.Ask).</summary>
-    public event Func<string, string, Task<bool>>? OnPermissionRequired;
+    public event Func<PermissionRequestInfo, Task<bool>>? OnPermissionRequired;
 
     private readonly HookService _hookService;
     private readonly MemoryService _memoryService;
     private readonly SkillService _skillService;
+    private readonly HexEditorService _hexEditor;
+    private readonly SubAgentService _subAgentService;
+    private readonly BrainSyncService? _brainSync;
+    private readonly LspClientService? _lspClient;
+    private readonly RepoMapService? _repoMap;
+    private readonly EmbeddingService? _embeddingService;
+    private readonly InstinctService? _instinctService;
 
     public AgentToolService(FileSystemService fileSystem, CodeExecutionService codeExecution,
         GitService gitService, GitHubService gitHubService, PermissionService permissionService,
         SettingsService settingsService, ActivationService activationService,
         WebFetchService webFetchService, TaskManagerService taskManager,
         McpServerManager mcpManager, HookService hookService, MemoryService memoryService,
-        SkillService skillService)
+        SkillService skillService, HexEditorService hexEditor,
+        SubAgentService subAgentService,
+        BrainSyncService? brainSync = null,
+        LspClientService? lspClient = null,
+        RepoMapService? repoMap = null,
+        EmbeddingService? embeddingService = null,
+        InstinctService? instinctService = null)
     {
         _fileSystem = fileSystem;
         _codeExecution = codeExecution;
@@ -85,6 +146,28 @@ public class AgentToolService
         _hookService = hookService;
         _memoryService = memoryService;
         _skillService = skillService;
+        _hexEditor = hexEditor;
+        _subAgentService = subAgentService;
+        _brainSync = brainSync;
+        _lspClient = lspClient;
+        _repoMap = repoMap;
+        _embeddingService = embeddingService;
+        _instinctService = instinctService;
+    }
+
+    /// <summary>Tear down long-lived child processes (python/node REPL sessions) on app shutdown.
+    /// AgentToolService is a DI singleton, so the container calls this on exit — without it the REPL
+    /// child processes are orphaned.</summary>
+    public void Dispose()
+    {
+        lock (_replSessions)
+        {
+            foreach (var session in _replSessions.Values)
+            {
+                try { session.Dispose(); } catch { /* best-effort cleanup */ }
+            }
+            _replSessions.Clear();
+        }
     }
 
     // ─── Parse Tool Calls from Model Output ───
@@ -94,10 +177,13 @@ public class AgentToolService
 
         foreach (Match match in ActionRegex.Matches(modelOutput))
         {
-            string toolName = match.Groups[1].Value.Trim().ToLowerInvariant();
+            // Keep the RAW name: MCP qualified names are case-sensitive-ish and user-visible.
+            // Lowercasing is only needed for the built-in alias switch.
+            string rawName = match.Groups[1].Value.Trim();
+            string toolName = rawName.ToLowerInvariant();
             string body = match.Groups[2].Value.Trim();
 
-            var toolType = ResolveToolType(toolName);
+            var toolType = ResolveToolType(rawName) ?? ResolveToolType(toolName);
             if (toolType == null) continue;
 
             var args = ParseArguments(body, toolType.Value);
@@ -105,7 +191,9 @@ public class AgentToolService
             var call = new ToolCall
             {
                 Type = toolType.Value,
-                ToolName = toolName,
+                // Built-ins keep their canonical lowercase name; MCP keeps the real one so the
+                // UI and the result text show what the user configured.
+                ToolName = toolType == ToolType.McpTool ? rawName : toolName,
                 Arguments = args,
                 RawText = match.Value,
             };
@@ -113,7 +201,8 @@ public class AgentToolService
             // Set MCP metadata if it's an MCP tool
             if (toolType == ToolType.McpTool)
             {
-                var mcpTool = _mcpManager.ToolRegistry.ResolveTool(toolName);
+                var mcpTool = _mcpManager.ToolRegistry.ResolveTool(rawName)
+                              ?? _mcpManager.ToolRegistry.ResolveTool(toolName);
                 if (mcpTool != null)
                 {
                     call.McpServerName = mcpTool.ServerName;
@@ -125,6 +214,55 @@ public class AgentToolService
         }
 
         return calls;
+    }
+
+    /// <summary>
+    /// Names that appeared in an [ACTION:name] block but DON'T resolve to a registered tool. The legacy
+    /// loop uses this to give a weak model a corrective "unknown tool — did you mean X?" nudge instead of
+    /// silently dropping the call (which leaves the model with no signal about what went wrong).
+    /// </summary>
+    public List<string> GetUnknownActionNames(string modelOutput)
+    {
+        var unknown = new List<string>();
+        foreach (Match match in ActionRegex.Matches(modelOutput))
+        {
+            string toolName = match.Groups[1].Value.Trim();
+            if (string.IsNullOrWhiteSpace(toolName)) continue;
+            if (ResolveToolType(toolName.ToLowerInvariant()) == null
+                && !unknown.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+                unknown.Add(toolName);
+        }
+        return unknown;
+    }
+
+    /// <summary>All canonical tool names currently offered to the model (for "did you mean" suggestions).</summary>
+    public IEnumerable<string> GetRegisteredToolNames() => BuildNativeToolSchemas().Select(t => t.Name);
+
+    /// <summary>
+    /// Top high-confidence learned instincts formatted as a "- pattern → action" block for injection into the
+    /// system prompt, or null if none qualify. Closes the instinct READ-BACK loop — the model finally benefits
+    /// from what was extracted across sessions (extraction was write-only before). EMERGING+ confidence only.
+    /// </summary>
+    public string? GetTopInstinctsBlock(int max = 5)
+    {
+        if (_instinctService == null) return null;
+        try
+        {
+            var top = _instinctService.GetAll()
+                .Where(i => i.Confidence >= 0.45 && !string.IsNullOrWhiteSpace(i.Pattern))
+                .Take(max)
+                .ToList();
+            if (top.Count == 0) return null;
+            var sb = new StringBuilder();
+            foreach (var i in top)
+            {
+                string line = i.Pattern.Trim();
+                if (!string.IsNullOrWhiteSpace(i.Action)) line += $" → {i.Action.Trim()}";
+                sb.AppendLine($"- {line}");
+            }
+            return sb.ToString().TrimEnd();
+        }
+        catch { return null; }
     }
 
     // ─── Check if output contains any tool calls ───
@@ -145,13 +283,12 @@ public class AgentToolService
         try
         {
             // ── Skill AllowedTools enforcement ──
-            if (ActiveSkillAllowedTools is { Count: > 0 })
-            {
-                bool toolAllowedBySkill = ActiveSkillAllowedTools.Any(t =>
-                    t.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase));
-                if (!toolAllowedBySkill)
-                    return Fail(call, $"Tool '{call.ToolName}' is not allowed by the current skill. Allowed: {string.Join(", ", ActiveSkillAllowedTools)}");
-            }
+            // Compare by RESOLVED ToolType, not raw strings: skills are authored with human names
+            // ("grep") while the registry name is "grep_search", and a raw-string gate silently
+            // killed search inside 14 built-in skills. Falls back to string equality for names
+            // that don't resolve (MCP qualified names).
+            if (!IsAllowedByActiveSkill(call.ToolName))
+                return Fail(call, $"Tool '{call.ToolName}' is not allowed by the current skill. Allowed: {string.Join(", ", ActiveSkillAllowedTools!)}");
 
             // ── Feature toggle check ──
             if (!IsToolAllowed(call.Type))
@@ -160,7 +297,7 @@ public class AgentToolService
                 {
                     ToolType.GitStatus or ToolType.GitAdd or ToolType.GitCommit or
                     ToolType.GitPush or ToolType.GitPull or ToolType.GitBranch or
-                    ToolType.GitCheckout or ToolType.GitDiff or ToolType.GitLog or
+                    ToolType.GitCheckout or ToolType.GitMerge or ToolType.GitDiff or ToolType.GitLog or
                     ToolType.GitClone or ToolType.GitInit or ToolType.GitStash => "Git",
                     ToolType.GhPrCreate or ToolType.GhPrList or
                     ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView => "GitHub",
@@ -172,23 +309,46 @@ public class AgentToolService
             // ── Permission check (respects PermissionSystem toggle) ──
             if (_settingsService.Settings.Features.PermissionSystem)
             {
-                string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
-                string scope = call.Type switch
-                {
-                    ToolType.WriteFile or ToolType.EditFile or ToolType.CreateDirectory => "write",
-                    ToolType.RunCommand => "execute",
-                    ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
-                    _ => "execute",
-                };
-                var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
-                if (perm == PermAction.Deny)
-                    return Fail(call, $"Permission denied for {scope}: {resource}");
-                if (perm == PermAction.Ask)
+                // Hex tools touching an ABSOLUTE path outside the project get a dedicated, always-on
+                // prompt (user policy 2026-06-04) — hex_patch writes raw bytes to disk. Relative hex
+                // paths are sandboxed under the project by ResolveHexPath and fall through to the normal
+                // rule check. Asking here (and skipping the generic check) avoids a double prompt.
+                if (IsHexTool(call.Type) && TryGetAbsoluteOutsidePath(call, out var hexPath))
                 {
                     bool allowed = OnPermissionRequired != null
-                        && await OnPermissionRequired.Invoke(call.ToolName, $"{scope}: {resource}");
+                        && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+                        {
+                            ToolName = call.ToolName,
+                            Detail = $"access a file OUTSIDE the project: {hexPath}",
+                        });
                     if (!allowed)
-                        return Fail(call, $"User denied permission for {scope}: {resource}");
+                        return Fail(call, $"User denied hex access to a path outside the project: {hexPath}");
+                }
+                else
+                {
+                    string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
+                    string scope = call.Type switch
+                    {
+                        ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory => "write",
+                        ToolType.RunCommand => "execute",
+                        ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent => "read",
+                        _ => "execute",
+                    };
+                    var perm = _permissionService.CheckPermission(resource, scope, call.ToolName);
+                    if (perm == PermAction.Deny)
+                        return Fail(call, $"Permission denied for {scope}: {resource}");
+                    if (perm == PermAction.Ask)
+                    {
+                        bool allowed = OnPermissionRequired != null
+                            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+                            {
+                                ToolName = call.ToolName,
+                                Detail = $"{scope}: {resource}",
+                                Diff = TryComputePreviewDiff(call),
+                            });
+                        if (!allowed)
+                            return Fail(call, $"User denied permission for {scope}: {resource}");
+                    }
                 }
             }
 
@@ -203,10 +363,15 @@ public class AgentToolService
                 ToolType.ReadFile => ExecuteReadFile(call),
                 ToolType.WriteFile => ExecuteWriteFile(call),
                 ToolType.EditFile => ExecuteEditFile(call),
+                ToolType.MultiEdit => ExecuteMultiEdit(call),
+                ToolType.ListSymbols => ExecuteListSymbols(call),
+                ToolType.FindSymbol => ExecuteFindSymbol(call),
                 ToolType.ListFiles => ExecuteListFiles(call),
                 ToolType.SearchFiles => ExecuteSearchFiles(call),
                 ToolType.SearchContent => ExecuteSearchContent(call),
                 ToolType.RunCommand => await ExecuteRunCommandAsync(call, ct),
+                ToolType.RunBuild => await ExecuteRunBuildAsync(call, ct),
+                ToolType.RunTests => await ExecuteRunTestsAsync(call, ct),
                 ToolType.CreateDirectory => ExecuteCreateDirectory(call),
 
                 // Git tools
@@ -217,6 +382,7 @@ public class AgentToolService
                 ToolType.GitPull => await ExecuteGitPullAsync(call),
                 ToolType.GitBranch => await ExecuteGitBranchAsync(call),
                 ToolType.GitCheckout => await ExecuteGitCheckoutAsync(call),
+                ToolType.GitMerge => await ExecuteGitMergeAsync(call),
                 ToolType.GitDiff => await ExecuteGitDiffAsync(call),
                 ToolType.GitLog => await ExecuteGitLogAsync(call),
                 ToolType.GitClone => await ExecuteGitCloneAsync(call, ct),
@@ -271,7 +437,22 @@ public class AgentToolService
                 // Memory tools
                 ToolType.MemorySave => ExecuteMemorySave(call),
                 ToolType.MemoryList => ExecuteMemoryList(call),
+                ToolType.BrainRecall => await ExecuteBrainRecallAsync(call, ct),
+                ToolType.LspDiagnostics => await ExecuteLspDiagnosticsAsync(call, ct),
+                ToolType.CodebaseSearch => await ExecuteCodebaseSearchAsync(call, ct),
+                ToolType.InstinctEvolve => await ExecuteInstinctEvolveAsync(call, ct),
                 ToolType.MemoryDelete => ExecuteMemoryDelete(call),
+
+                // Hex editor tools (binary file inspection + AI-driven patching)
+                ToolType.HexOpen => await ExecuteHexOpenAsync(call, ct),
+                ToolType.HexRead => await ExecuteHexReadAsync(call, ct),
+                ToolType.HexSearch => await ExecuteHexSearchAsync(call, ct),
+                ToolType.HexPatch => await ExecuteHexPatchAsync(call, ct),
+                ToolType.HexInfo => await ExecuteHexInfoAsync(call, ct),
+
+                // Subagent system (Sprint 1 #1 — ECC parity)
+                ToolType.SubAgentInvoke => ExecuteSubAgentInvoke(call),
+                ToolType.SubAgentList => ExecuteSubAgentList(call),
 
                 _ => new ToolResult
                 {
@@ -375,12 +556,14 @@ public class AgentToolService
         }
 
         // File tools
-        schemas.Add(new() { Name = "read_file", Description = "Read the contents of a file",
-            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true)) });
+        schemas.Add(new() { Name = "read_file", Description = "Read a file. Omit offset/limit to read the whole file; pass them to read a line range (returns lines as 'N<tab>text', 1-based — handy for large files or referencing a specific error line).",
+            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true), ("offset", "string", "1-based first line to read (optional)", false), ("limit", "string", "Max lines to read (optional, default 2000)", false)) });
         schemas.Add(new() { Name = "write_file", Description = "Create or overwrite a file",
             InputSchema = MakeSchema(("path", "string", "File path", true), ("content", "string", "File content", true)) });
-        schemas.Add(new() { Name = "edit_file", Description = "Find and replace text in an existing file",
-            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Text to find", true), ("replace", "string", "Replacement text", true)) });
+        schemas.Add(new() { Name = "edit_file", Description = "Find and replace text in an existing file. 'find' is matched newline- and whitespace-tolerantly and must be UNIQUE unless replace_all=true.",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Text to find", true), ("replace", "string", "Replacement text", true), ("replace_all", "string", "Set true to replace every occurrence; otherwise 'find' must match exactly once", false)) });
+        schemas.Add(new() { Name = "multi_edit", Description = "Apply MULTIPLE find/replace edits to ONE file in a single atomic step (all-or-nothing: if any edit fails to match, NOTHING is written). Prefer this over several edit_file calls. Each edit uses the same newline/whitespace-tolerant matching as edit_file.",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("edits", "string", "A JSON array of edits, e.g. [{\"find\":\"old\",\"replace\":\"new\"},{\"find\":\"a\",\"replace\":\"b\",\"replace_all\":true}]", true)) });
         schemas.Add(new() { Name = "list_files", Description = "List files and directories",
             InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
         schemas.Add(new() { Name = "search_files", Description = "Find files matching a pattern",
@@ -388,7 +571,7 @@ public class AgentToolService
         schemas.Add(new() { Name = "search_content", Description = "Search for text in file contents",
             InputSchema = MakeSchema(("query", "string", "Search text", true), ("path", "string", "Search directory", false), ("pattern", "string", "File pattern filter", false)) });
         schemas.Add(new() { Name = "run_command", Description = "Execute a shell command",
-            InputSchema = MakeSchema(("command", "string", "Shell command to run", true)) });
+            InputSchema = MakeSchema(("command", "string", "Shell command to run", true), ("timeout_ms", "string", "Optional timeout in ms (default 30000, max 600000) — raise it for slow builds/tests", false)) });
         schemas.Add(new() { Name = "create_directory", Description = "Create a directory",
             InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
 
@@ -403,23 +586,27 @@ public class AgentToolService
         {
             schemas.Add(new() { Name = "git_status", Description = "Show git working tree status", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "git_add", Description = "Stage files for commit", InputSchema = MakeSchema(("paths", "string", "Files to stage (space-separated)", true)) });
-            schemas.Add(new() { Name = "git_commit", Description = "Create a git commit", InputSchema = MakeSchema(("message", "string", "Commit message", true)) });
-            schemas.Add(new() { Name = "git_diff", Description = "Show changes", InputSchema = MakeSchema(("args", "string", "Diff arguments", false)) });
-            schemas.Add(new() { Name = "git_log", Description = "Show commit history", InputSchema = MakeSchema(("args", "string", "Log arguments", false)) });
-            schemas.Add(new() { Name = "git_branch", Description = "List or create branches", InputSchema = MakeSchema(("args", "string", "Branch arguments", false)) });
-            schemas.Add(new() { Name = "git_push", Description = "Push to remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
-            schemas.Add(new() { Name = "git_pull", Description = "Pull from remote", InputSchema = MakeSchema(("args", "string", "Pull arguments", false)) });
-            schemas.Add(new() { Name = "git_checkout", Description = "Switch branches or restore files", InputSchema = MakeSchema(("target", "string", "Branch or file", true)) });
+            schemas.Add(new() { Name = "git_commit", Description = "Create a git commit. Pass stage_all=true to stage every change first (like 'git add -A' then commit) so you don't need a separate git_add.", InputSchema = MakeSchema(("message", "string", "Commit message", true), ("stage_all", "string", "true to stage all changes before committing", false)) });
+            // NOTE: every advertised property below must be a key an executor actually reads.
+            // A generic "args" bag looked convenient but no executor parsed it, so the model's
+            // arguments were silently dropped and the tool "succeeded" doing something else.
+            schemas.Add(new() { Name = "git_diff", Description = "Show changes (working tree, or staged with staged=true)", InputSchema = MakeSchema(("path", "string", "Limit the diff to this file/dir", false), ("staged", "string", "true to diff the staged changes", false)) });
+            schemas.Add(new() { Name = "git_log", Description = "Show commit history", InputSchema = MakeSchema(("count", "string", "How many commits (default 10)", false), ("file", "string", "Only commits touching this file", false)) });
+            schemas.Add(new() { Name = "git_branch", Description = "List, create or delete branches", InputSchema = MakeSchema(("action", "string", "list|create|delete (default list)", false), ("name", "string", "Branch name for create/delete", false)) });
+            schemas.Add(new() { Name = "git_pull", Description = "Pull from remote", InputSchema = MakeSchema(("remote", "string", "Remote name (default origin)", false), ("branch", "string", "Branch name", false)) });
+            schemas.Add(new() { Name = "git_checkout", Description = "Switch to an existing branch", InputSchema = MakeSchema(("branch", "string", "Branch name to switch to", true)) });
+            schemas.Add(new() { Name = "git_merge", Description = "Merge a branch into the current branch", InputSchema = MakeSchema(("branch", "string", "Branch to merge into the current one", true)) });
             schemas.Add(new() { Name = "git_stash", Description = "Stash changes", InputSchema = MakeSchema(("action", "string", "push|pop|list|drop", false)) });
-            schemas.Add(new() { Name = "git_clone", Description = "Clone a repository", InputSchema = MakeSchema(("url", "string", "Repository URL", true), ("path", "string", "Target directory", false)) });
+            schemas.Add(new() { Name = "git_clone", Description = "Clone a repository", InputSchema = MakeSchema(("url", "string", "Repository URL", true), ("directory", "string", "Target directory name", false)) });
             schemas.Add(new() { Name = "git_init", Description = "Initialize a git repository", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "git_worktree_create", Description = "Create an isolated git worktree", InputSchema = MakeSchema(("branch", "string", "Branch name", true), ("path", "string", "Worktree path", true)) });
             schemas.Add(new() { Name = "git_worktree_remove", Description = "Remove a git worktree", InputSchema = MakeSchema(("path", "string", "Worktree path", true)) });
         }
 
-        // GitHub tools
+        // GitHub / publish tools — pushing to a remote is the monetized "publish" step.
         if (githubEnabled)
         {
+            schemas.Add(new() { Name = "git_push", Description = "Push commits to a remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
             schemas.Add(new() { Name = "gh_pr_create", Description = "Create a GitHub pull request", InputSchema = MakeSchema(("title", "string", "PR title", true), ("body", "string", "PR body", false), ("base", "string", "Base branch", false)) });
             schemas.Add(new() { Name = "gh_pr_list", Description = "List pull requests", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "gh_issue_create", Description = "Create a GitHub issue", InputSchema = MakeSchema(("title", "string", "Issue title", true), ("body", "string", "Issue body", false)) });
@@ -438,8 +625,10 @@ public class AgentToolService
         schemas.Add(new() { Name = "repl", Description = "Run code in a persistent REPL session (Python/Node.js)",
             InputSchema = MakeSchema(("language", "string", "python or node", true), ("code", "string", "Code to execute", true), ("action", "string", "exec or close", false)) });
 
-        // Task management
-        if (features.TaskManager)
+        // Task management — the schema gate MUST match IsToolAllowed exactly (which also requires
+        // activation), otherwise every free-tier model is handed task_* tools and told they are
+        // disabled the moment it uses one.
+        if (features.TaskManager && _activationService.IsFeatureUnlocked("feature.taskManager"))
         {
             schemas.Add(new() { Name = "task_create", Description = "Start a background command", InputSchema = MakeSchema(("command", "string", "Shell command", true)) });
             schemas.Add(new() { Name = "task_list", Description = "List background tasks", InputSchema = MakeSchema() });
@@ -448,7 +637,9 @@ public class AgentToolService
         }
 
         // Meta tools
-        schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("content", "string", "Todo item", true), ("status", "string", "pending|in_progress|completed", false)) });
+        // 'action' was missing from the schema, so completing/listing/clearing todos was
+        // unreachable and "mark done" silently appended a duplicate instead.
+        schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("action", "string", "add|complete|list|clear (default add)", false), ("content", "string", "Todo item text (required for add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
         schemas.Add(new() { Name = "powershell", Description = "Execute a PowerShell command", InputSchema = MakeSchema(("command", "string", "PowerShell command", true)) });
@@ -457,10 +648,33 @@ public class AgentToolService
         schemas.Add(new() { Name = "agent_spawn", Description = "Spawn a sub-agent for a complex sub-task", InputSchema = MakeSchema(("task", "string", "Task description", true), ("context", "string", "Additional context", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
+        // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
+        schemas.Add(new() { Name = "subagent_invoke", Description = "Spawn a specialised subagent (code-reviewer, security-reviewer, architect, csharp-reviewer, python-reviewer, code-explorer, silent-failure-hunter, performance-optimizer, doc-updater, tdd-guide) with a scoped tool set and isolated focus. Returns a constructed prompt that you should execute next.", InputSchema = MakeSchema(("type", "string", "Subagent name (e.g. 'code-reviewer')", true), ("prompt", "string", "Task / question for the subagent", true), ("context_files", "string", "Optional comma-separated file paths the subagent should read first", false)) });
+        schemas.Add(new() { Name = "subagent_list", Description = "List all available subagents with descriptions and tiers (cheap/mid/deep).", InputSchema = MakeSchema() });
+
         // Memory tools
         schemas.Add(new() { Name = "memory_save", Description = "Save persistent memory that survives across sessions", InputSchema = MakeSchema(("name", "string", "Memory name", true), ("content", "string", "Memory content", true), ("type", "string", "user|feedback|project|reference", false), ("description", "string", "Short description", false), ("scope", "string", "global|project", false)) });
         schemas.Add(new() { Name = "memory_list", Description = "List all saved memories", InputSchema = MakeSchema() });
         schemas.Add(new() { Name = "memory_delete", Description = "Delete a saved memory", InputSchema = MakeSchema(("name", "string", "Memory name to delete", true), ("scope", "string", "global|project", false)) });
+
+        // BrainX knowledge base — recall past decisions / coding-lessons / bug fixes across machines
+        schemas.Add(new() { Name = "brain_recall", Description = "Search your BrainX knowledge base (coding-lessons, past decisions, bug fixes, project context) for relevant prior knowledge BEFORE solving a problem. Returns matching note titles + previews. Set semantic=true for meaning-based search.", InputSchema = MakeSchema(("query", "string", "Keywords or a natural-language question", true), ("semantic", "string", "true for meaning-based (embedding) search", false), ("limit", "string", "Max results (default 5)", false)) });
+
+        // Code intelligence — language-server diagnostics (errors/warnings) for a file
+        schemas.Add(new() { Name = "lsp_diagnostics", Description = "Check a source file for errors/warnings via its language server (OmniSharp/pylsp/tsserver/rust-analyzer/gopls, if installed). Use after editing to verify your change compiles. Returns a hint if no server is installed.", InputSchema = MakeSchema(("path", "string", "Path to the source file to check", true)) });
+        schemas.Add(new() { Name = "list_symbols", Description = "Outline a source file — its classes/methods/functions with line numbers — WITHOUT reading the whole file. Use it to navigate a file cheaply before read_file/edit_file.", InputSchema = MakeSchema(("path", "string", "Path to the source file", true)) });
+        schemas.Add(new() { Name = "find_symbol", Description = "Find where a symbol (class/method/function/type) is DEFINED across the project, by NAME — a lightweight 'go to definition' that needs no language server. Returns file:line for each likely definition. Use this instead of blind-grepping to locate where to edit.", InputSchema = MakeSchema(("name", "string", "The symbol name to locate (e.g. a class or method name)", true)) });
+        schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false)) });
+        schemas.Add(new() { Name = "run_tests", Description = "Run the project's test suite and get a DISTILLED result: a pass/fail summary plus only the failing tests + their assertions (not a giant stdout blob). Auto-detects the runner (dotnet test/cargo test/go test/pytest/npm test/maven/gradle). Use it to verify behavior after a change. Pass 'command' to override.", InputSchema = MakeSchema(("command", "string", "Optional explicit test command (otherwise auto-detected)", false)) });
+        schemas.Add(new() { Name = "codebase_search", Description = "Find the most relevant files/lines for a natural-language query across the whole repo, ranked by filename + symbol + content relevance (smarter than raw grep for 'where is X handled?'). Then read_file the top hits.", InputSchema = MakeSchema(("query", "string", "What you're looking for (keywords or a question)", true), ("limit", "string", "Max results (default 12)", false)) });
+        schemas.Add(new() { Name = "instinct_evolve", Description = "Housekeeping: merge near-duplicate learned instincts via embedding similarity (preserves occurrence/accept counts, deletes redundant copies). Needs an Ollama embedding model; no-ops gracefully without one.", InputSchema = MakeSchema() });
+
+        // Hex editor tools — binary file inspection + AI-driven patching
+        schemas.Add(new() { Name = "hex_info", Description = "Get binary file info: size, sha256, magic bytes, detected type. Does not load the file into the editor.", InputSchema = MakeSchema(("path", "string", "Absolute path to the file", true)) });
+        schemas.Add(new() { Name = "hex_open", Description = "Open a binary file in the Hex Editor UI (also returns file info). Use this when you want the user to see the file visually.", InputSchema = MakeSchema(("path", "string", "Absolute path to the file", true)) });
+        schemas.Add(new() { Name = "hex_read", Description = "Read raw bytes from a file at a specific offset. Returns hex and ascii representations. Reads in-memory if the file is already open in the editor, else opens it transparently.", InputSchema = MakeSchema(("path", "string", "Absolute file path (optional if a file is already open)", false), ("offset", "string", "Byte offset (decimal or 0x-prefixed hex)", true), ("length", "string", "Number of bytes to read (default 256)", false)) });
+        schemas.Add(new() { Name = "hex_search", Description = "Search for a hex or text pattern in a file. Returns up to 100 match offsets. Mode: 'hex' (e.g. 'DE AD BE EF') or 'text' (UTF-8 substring).", InputSchema = MakeSchema(("path", "string", "Absolute file path (optional if a file is already open)", false), ("pattern", "string", "Pattern to find", true), ("mode", "string", "hex | text | text_ci (case-insensitive)", false), ("max_results", "string", "Cap on results (default 100)", false)) });
+        schemas.Add(new() { Name = "hex_patch", Description = "Patch bytes at a specific offset (in-place, same length only). Creates an undo entry. Set save=true to write changes to disk (with .bak backup).", InputSchema = MakeSchema(("path", "string", "Absolute file path (optional if a file is already open)", false), ("offset", "string", "Byte offset (decimal or 0x-prefixed hex)", true), ("bytes", "string", "Replacement bytes as hex (e.g. 'DEADBEEF')", true), ("save", "string", "true to save to disk after patching", false), ("description", "string", "Short description of the patch (logged in undo)", false)) });
 
         // MCP server tools (dynamically discovered)
         if (features.McpServers)
@@ -488,12 +702,64 @@ public class AgentToolService
                     }
                     catch { /* skip malformed schemas */ }
                 }
-                schemas.Add(new() { Name = mcpTool.QualifiedName, Description = mcpTool.Description ?? mcpTool.Name, InputSchema = MakeSchema(paramsList.ToArray()) });
+                // The Anthropic API rejects a tool name that isn't ^[a-zA-Z0-9_-]{1,128}$ — and it
+                // rejects the WHOLE request, so one server named with a space or a dot used to
+                // 400 every agentic turn. Skip such tools instead of poisoning the catalogue.
+                string mcpName = mcpTool.QualifiedName;
+                if (!System.Text.RegularExpressions.Regex.IsMatch(mcpName, @"^[a-zA-Z0-9_-]{1,128}$"))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[MCP] Skipping tool '{mcpName}' — name is not API-safe (letters, digits, '_' and '-' only, max 128). "
+                        + "Rename the server key in mcp_servers.json.");
+                    continue;
+                }
+                schemas.Add(new() { Name = mcpName, Description = mcpTool.Description ?? mcpTool.Name, InputSchema = MakeSchema(paramsList.ToArray()) });
             }
         }
 
+        // ── Skill AllowedTools: narrow the OFFER, not just the execution ──
+        //
+        // The gate at ExecuteToolAsync refuses a disallowed call, but until here
+        // the model was still handed every schema — so a restricted skill paid
+        // full context price for tools it would be refused, and spent its turns
+        // reaching for them. Observed 2026-07-31: a "tester" session told in prose
+        // not to edit files went straight to write_file anyway, then overflowed a
+        // 12,288-token window at ~14,885 tokens. A model does what its tool list
+        // permits, not what the prose asks; the list is the real instruction.
+        //
+        // Same resolution rule as the execution gate (resolved ToolType first,
+        // raw string for MCP-qualified names) so the two can't disagree about
+        // what a skill allows.
+        if (ActiveSkillAllowedTools is { Count: > 0 })
+            schemas = schemas.Where(s => IsAllowedByActiveSkill(s.Name)).ToList();
+
+        // No project open? Then only the project-independent tools are real.
+        // Every built-in above resolves paths against the working directory (or
+        // falls back to the app's own directory), so advertising them in a plain
+        // chat hands the model weapons that cannot fire — and a weak model that
+        // picks one, fails, and gets a confusing error tends to stop reaching for
+        // tools at all. MCP servers carry no such dependency: the brain, and
+        // anything else the owner wired up, works fine with no folder open.
+        if (!_fileSystem.HasWorkingDirectory)
+            schemas = schemas.Where(s => IsMcpSchemaName(s.Name)).ToList();
+
         return schemas;
     }
+
+    private static bool IsMcpSchemaName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Are any tools usable with NO project open? Today that means MCP servers.
+    ///
+    /// ChatViewModel routes on this: a plain chat used to go to the tool-less
+    /// streaming path, so a model that had been told "you have brainx-brain
+    /// tools" was handed no tool schemas at all. That mismatch is what produces
+    /// "I will use the agent_inbox tool — please go ahead" instead of a call,
+    /// and it is why the agent bus recorded calls: 0 for CluadeX indefinitely.
+    /// </summary>
+    public bool HasProjectIndependentTools =>
+        _settingsService.Settings.Features.McpServers
+        && _mcpManager.ToolRegistry.GetAllTools().Any();
 
     // ─── Get Tool Definitions Prompt (feature-aware) ───
     public string GetToolDefinitionsPrompt()
@@ -582,10 +848,6 @@ public class AgentToolService
                 message: your commit message here
                 [/ACTION]
 
-            12. git_push - Push commits to remote
-                [ACTION: git_push]
-                [/ACTION]
-
             13. git_pull - Pull changes from remote
                 [ACTION: git_pull]
                 [/ACTION]
@@ -599,6 +861,11 @@ public class AgentToolService
             15. git_checkout - Switch branches
                 [ACTION: git_checkout]
                 branch: main
+                [/ACTION]
+
+            15b. git_merge - Merge a branch into the current one
+                [ACTION: git_merge]
+                branch: feature-branch
                 [/ACTION]
 
             16. git_diff - Show changes
@@ -633,7 +900,11 @@ public class AgentToolService
         {
             sb.AppendLine("""
 
-            GITHUB TOOLS (requires gh CLI):
+            GITHUB / PUBLISH TOOLS (requires gh CLI):
+
+            20b. git_push - Push commits to a remote
+                [ACTION: git_push]
+                [/ACTION]
 
             21. gh_pr_create - Create a Pull Request
                 [ACTION: gh_pr_create]
@@ -839,6 +1110,98 @@ public class AgentToolService
                 args: fix login bug
                 [/ACTION]
                 Available skills: commit, review-pr, simplify (+ any user/project skills)
+
+            48. subagent_invoke - Spawn a specialised subagent with scoped tools and focused persona.
+                Useful when a sub-task is well-defined and deserves dedicated, single-purpose attention
+                (code review, security audit, architecture sketch, etc).
+                [ACTION: subagent_invoke]
+                type: code-reviewer
+                prompt: review the diff in src/Foo.cs for race conditions
+                context_files: src/Foo.cs
+                [/ACTION]
+                Built-in subagents (use 'subagent_list' to see full descriptions + tiers):
+                  - code-reviewer       (mid)    review diffs for bugs / security / style
+                  - security-reviewer   (deep)   OWASP-style scan: injection, secrets, access control
+                  - csharp-reviewer     (mid)    .NET-specific: async/await, IDisposable, WPF traps
+                  - python-reviewer     (mid)    Python-specific: type hints, mutable defaults, GIL
+                  - architect           (deep)   design BEFORE coding — contracts + risk register
+                  - code-explorer       (mid)    map unfamiliar code, find entry points + call traces
+                  - silent-failure-hunter (deep) bugs that don't throw — wrong-but-plausible behaviour
+                  - performance-optimizer (deep) profile-first hot-path proposals
+                  - doc-updater         (cheap)  keep README / CHANGELOG / docstrings in sync
+                  - tdd-guide           (mid)    strict red → green → refactor coach
+
+            49. subagent_list - List every available subagent with description and tier
+                [ACTION: subagent_list][/ACTION]
+
+            CODE INTELLIGENCE & VERIFICATION:
+            (These have working executors but used to be missing from this catalogue, which made
+             them invisible to every provider on the [ACTION:] protocol.)
+
+            50. multi_edit - Apply several find/replace edits to ONE file atomically
+                [ACTION: multi_edit]
+                path: src/Foo.cs
+                edits: [{"find": "old code", "replace": "new code"}, {"find": "a", "replace": "b"}]
+                [/ACTION]
+
+            51. run_build - Build the project and return compiler errors
+                [ACTION: run_build][/ACTION]
+
+            52. run_tests - Run the test suite and return failures
+                [ACTION: run_tests][/ACTION]
+
+            53. codebase_search - Semantic search over the indexed codebase
+                [ACTION: codebase_search]
+                query: where is the retry policy configured
+                [/ACTION]
+
+            54. find_symbol - Find where a symbol is defined
+                [ACTION: find_symbol]
+                name: CodeAgentService
+                [/ACTION]
+
+            55. list_symbols - List the symbols declared in a file
+                [ACTION: list_symbols]
+                path: src/Foo.cs
+                [/ACTION]
+
+            56. lsp_diagnostics - Current compiler/linter diagnostics for a file
+                [ACTION: lsp_diagnostics]
+                path: src/Foo.cs
+                [/ACTION]
+
+            57. brain_recall - Recall relevant notes from the connected BrainX knowledge base
+                [ACTION: brain_recall]
+                query: previous decisions about the agent loop
+                [/ACTION]
+
+            58. hex_open - Open a binary file in the hex editor (do this first)
+                [ACTION: hex_open]
+                path: build/app.bin
+                [/ACTION]
+
+            58a. hex_read - Read bytes from the open binary
+                [ACTION: hex_read]
+                offset: 0
+                length: 256
+                [/ACTION]
+
+            58b. hex_search - Find a byte/string pattern in the open binary
+                [ACTION: hex_search]
+                pattern: MZ
+                [/ACTION]
+
+            58c. hex_patch - Overwrite bytes at an offset
+                [ACTION: hex_patch]
+                offset: 128
+                bytes: 90 90 90
+                [/ACTION]
+
+            58d. hex_info - Size / type summary of the open binary
+                [ACTION: hex_info][/ACTION]
+
+            59. instinct_evolve - Housekeeping: merge near-duplicate learned instincts
+                [ACTION: instinct_evolve][/ACTION]
         """);
 
         // MCP server tools (dynamically discovered)
@@ -894,12 +1257,16 @@ public class AgentToolService
         var features = _settingsService.Settings.Features;
         return type switch
         {
-            // Git tools — require Git feature enabled + activation
+            // Local Git tools — free tier (feature.git is unlocked by default)
             ToolType.GitStatus or ToolType.GitAdd or ToolType.GitCommit or
-            ToolType.GitPush or ToolType.GitPull or ToolType.GitBranch or
-            ToolType.GitCheckout or ToolType.GitDiff or ToolType.GitLog or
+            ToolType.GitPull or ToolType.GitBranch or
+            ToolType.GitCheckout or ToolType.GitMerge or ToolType.GitDiff or ToolType.GitLog or
             ToolType.GitClone or ToolType.GitInit or ToolType.GitStash
                 => features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"),
+
+            // Pushing to a remote is the monetized "publish" step — gate behind GitHub activation.
+            ToolType.GitPush
+                => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
 
             // GitHub tools — require GitHub feature enabled + activation
             ToolType.GhPrCreate or ToolType.GhPrList or
@@ -943,6 +1310,22 @@ public class AgentToolService
             // Memory tools — always available
             ToolType.MemorySave or ToolType.MemoryList or ToolType.MemoryDelete => true,
 
+            // BrainX recall — always available (graceful no-op when the brain MCP is offline)
+            ToolType.BrainRecall => true,
+
+            // LSP diagnostics — always available (graceful when no language server is installed)
+            ToolType.LspDiagnostics => true,
+
+            // Codebase search — always available (pure local, no external deps)
+            ToolType.CodebaseSearch => true,
+
+            // Instinct evolve — always available (graceful when no embedding model)
+            ToolType.InstinctEvolve => true,
+
+            // Hex editor — always available; read tools are concurrent-safe, patches need permission
+            ToolType.HexOpen or ToolType.HexRead or ToolType.HexSearch
+            or ToolType.HexPatch or ToolType.HexInfo => true,
+
             // File/code tools — always available (core features)
             _ => true,
         };
@@ -958,7 +1341,28 @@ public class AgentToolService
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
+        // Ranged read (offset/limit) → numbered lines, so the agent can page big files / cite line numbers.
+        string offStr = call.GetArg("offset");
+        string limStr = call.GetArg("limit");
+        if (!string.IsNullOrEmpty(offStr) || !string.IsNullOrEmpty(limStr))
+        {
+            int off = int.TryParse(offStr, out var o) && o > 0 ? o : 1;
+            int lim = int.TryParse(limStr, out var l) && l > 0 ? l : 2000;
+            var (text, total) = _fileSystem.ReadLines(path, off, lim);
+            _fileSystem.MarkKnown(path);
+            int end = Math.Min(off + lim - 1, total);
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = text,
+                Summary = $"Read {path} lines {off}-{end} of {total}",
+            };
+        }
+
         string content = _fileSystem.ReadFile(path);
+        _fileSystem.MarkKnown(path);
         int lineCount = content.Split('\n').Length;
 
         return new ToolResult
@@ -971,6 +1375,56 @@ public class AgentToolService
         };
     }
 
+    /// <summary>
+    /// Best-effort preview of the file change a write/edit will make, so the permission prompt can show
+    /// the user a diff BEFORE they approve. Never throws and never mutates — returns null when there's
+    /// nothing meaningful to preview (the tool then prompts with just its description).
+    /// </summary>
+    private EditDiffResult? TryComputePreviewDiff(ToolCall call)
+    {
+        try
+        {
+            if (call.Type == ToolType.WriteFile)
+            {
+                string p = call.GetArg("path");
+                if (string.IsNullOrEmpty(p)) return null;
+                string before = _fileSystem.TryReadRaw(p) ?? "";
+                return CluadeX.Helpers.DiffUtil.Compute(before, call.GetArg("content"));
+            }
+            if (call.Type == ToolType.EditFile)
+            {
+                string p = call.GetArg("path");
+                string find = call.GetArg("find");
+                if (string.IsNullOrEmpty(p) || string.IsNullOrEmpty(find)) return null;
+                bool ra = bool.TryParse(call.GetArg("replace_all"), out var b) && b;
+                var prev = _fileSystem.PreviewEdit(p, find, call.GetArg("replace"), ra);
+                if (prev == null) return null;
+                return CluadeX.Helpers.DiffUtil.Compute(prev.Value.before, prev.Value.after);
+            }
+            if (call.Type == ToolType.MultiEdit)
+            {
+                string p = call.GetArg("path");
+                if (string.IsNullOrEmpty(p)) return null;
+                var edits = ParseEdits(call.GetArg("edits"), out string? err);
+                if (err != null || edits.Count == 0) return null;
+                var prev = _fileSystem.PreviewMultiEdit(p, edits);
+                if (prev == null || !prev.Value.ok) return null;
+                return CluadeX.Helpers.DiffUtil.Compute(prev.Value.before, prev.Value.after);
+            }
+        }
+        catch { /* preview is best-effort */ }
+        return null;
+    }
+
+    /// <summary>Enforce read-before-edit (gated by the EnforceReadBeforeEdit setting). Returns a Fail result
+    /// to short-circuit the tool, or null when the modification may proceed.</summary>
+    private ToolResult? CheckReadBeforeEdit(ToolCall call, string path)
+    {
+        if (!_settingsService.Settings.EnforceReadBeforeEdit) return null;
+        var block = _fileSystem.CheckCanModify(path);
+        return block == null ? null : Fail(call, block);
+    }
+
     private ToolResult ExecuteWriteFile(ToolCall call)
     {
         string path = call.GetArg("path");
@@ -978,7 +1432,13 @@ public class AgentToolService
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
+        var rbe = CheckReadBeforeEdit(call, path);
+        if (rbe != null) return rbe;
+
+        string? beforeWrite = _fileSystem.TryReadRaw(path);
         _fileSystem.WriteFile(path, content);
+        _fileSystem.MarkKnown(path);
+        var writeDiff = CluadeX.Helpers.DiffUtil.Compute(beforeWrite ?? "", content);
 
         return new ToolResult
         {
@@ -987,6 +1447,8 @@ public class AgentToolService
             Success = true,
             Output = $"File written: {path} ({content.Length} bytes)",
             Summary = $"Wrote {path}",
+            Diff = writeDiff,
+            FilePath = path,
         };
     }
 
@@ -995,25 +1457,121 @@ public class AgentToolService
         string path = call.GetArg("path");
         string find = call.GetArg("find");
         string replace = call.GetArg("replace");
+        bool replaceAll = bool.TryParse(call.GetArg("replace_all"), out var ra) && ra;
 
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
+
+        // Weak models express "append to the file" as find:"" with the new text in replace —
+        // honor the intent instead of failing the turn (the executor is the last line of ergonomics).
+        if (string.IsNullOrEmpty(find) && !string.IsNullOrEmpty(replace))
+        {
+            var rbeA = CheckReadBeforeEdit(call, path);
+            if (rbeA != null) return rbeA;
+
+            string? cur = _fileSystem.TryReadRaw(path);
+            if (cur == null)
+                return Fail(call, $"File not found: {path} — to create a new file use write_file.");
+
+            // WHERE to append matters. A plain EOF append is right for a script or a text file,
+            // but in a brace language the file ends with the class's closing brace — appending a
+            // method there puts it OUTSIDE the class and the build breaks. Observed for real:
+            // Qwen "added" a method, the build failed, and the model never recovered.
+            // So: if the file ends with '}' and the insert looks like a member declaration,
+            // splice it in BEFORE that final brace, which is what the model actually meant.
+            string trimmedEnd = cur.TrimEnd();
+            bool endsWithBrace = trimmedEnd.EndsWith("}");
+            bool looksLikeMember = System.Text.RegularExpressions.Regex.IsMatch(
+                replace, @"\b(public|private|protected|internal|static|func|def|function|const|let|var)\b");
+
+            string appendedContent;
+            string howDescription;
+            if (endsWithBrace && looksLikeMember)
+            {
+                int brace = cur.LastIndexOf('}');
+                string head = cur[..brace].TrimEnd('\r', '\n', ' ', '\t');
+                string tail = cur[brace..];
+                // Indent the inserted block one level so it reads like the rest of the body.
+                string body = string.Join("\n", replace.Replace("\r\n", "\n").Split('\n')
+                    .Select(l => l.Length == 0 ? l : (l.StartsWith("    ") ? l : "    " + l)));
+                appendedContent = head + "\n\n" + body.TrimEnd() + "\n" + tail;
+                howDescription = $"Inserted into {path} before the final closing brace "
+                               + "(empty 'find' = insert; appending after the brace would have broken the build)";
+            }
+            else
+            {
+                string glue = cur.Length > 0 && !cur.EndsWith("\n") && !replace.StartsWith("\n") && !replace.StartsWith("\r")
+                    ? "\n" : "";
+                appendedContent = cur + glue + replace;
+                howDescription = $"Appended to {path} (empty 'find' = append)";
+            }
+
+            _fileSystem.WriteFile(path, appendedContent);
+            _fileSystem.MarkKnown(path);
+            var appendDiff = CluadeX.Helpers.DiffUtil.Compute(cur, appendedContent);
+            return new ToolResult
+            {
+                Type = call.Type,
+                ToolName = call.ToolName,
+                Success = true,
+                Output = howDescription,
+                Summary = $"Appended to {path}",
+                Diff = appendDiff,
+                FilePath = path,
+            };
+        }
+
         if (string.IsNullOrEmpty(find))
             return Fail(call, "Missing 'find' argument");
 
-        var (found, replacements) = _fileSystem.EditFile(path, find, replace);
+        var rbe = CheckReadBeforeEdit(call, path);
+        if (rbe != null) return rbe;
+
+        // Capture the file BEFORE editing so we can show the user an exact before/after diff.
+        string? beforeEdit = _fileSystem.TryReadRaw(path);
+
+        bool found;
+        int replacements;
+        try
+        {
+            (found, replacements) = _fileSystem.EditFile(path, find, replace, replaceAll);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException)
+        {
+            // Ambiguous match / empty find / missing file — surface the actionable message to the model.
+            return Fail(call, ex.Message);
+        }
 
         if (!found)
         {
+            string? anchor = _fileSystem.FindNearestAnchor(path, find);
+            string hint = anchor != null ? $" {anchor}" : "";
+            // Weak local models frequently can't reproduce the exact find-block for find/replace, then
+            // give up and "verify" the UNCHANGED file (a false finish). For a small file, hand them the
+            // whole current content and tell them to WRITE the complete new file instead — a rewrite the
+            // model CAN do reliably. This is what turns a stuck edit into an actual change.
+            string? current = _fileSystem.TryReadRaw(path);
+            string rewriteHint = "";
+            if (current != null && current.Length <= 6000)
+                rewriteHint = $"\n\nThe file is small — instead of edit_file, call write_file('{path}', <full new content>) "
+                            + $"with the ENTIRE corrected file. Current content:\n---\n{current}\n---";
             return new ToolResult
             {
                 Type = call.Type,
                 ToolName = call.ToolName,
                 Success = false,
-                Error = $"Text not found in {path}. Make sure 'find' matches exactly.",
+                Error = $"Text not found in {path}. Matching is newline- and whitespace-tolerant, but the lines must exist.{hint}{rewriteHint}",
                 Summary = $"Edit failed: text not found in {path}",
+                FilePath = path,
             };
         }
+
+        _fileSystem.MarkKnown(path);
+
+        string? afterEdit = _fileSystem.TryReadRaw(path);
+        var editDiff = (beforeEdit != null && afterEdit != null)
+            ? CluadeX.Helpers.DiffUtil.Compute(beforeEdit, afterEdit)
+            : null;
 
         return new ToolResult
         {
@@ -1022,7 +1580,198 @@ public class AgentToolService
             Success = true,
             Output = $"Edited {path}: {replacements} replacement(s) made",
             Summary = $"Edited {path} ({replacements} changes)",
+            Diff = editDiff,
+            FilePath = path,
         };
+    }
+
+    private ToolResult ExecuteMultiEdit(ToolCall call)
+    {
+        string path = call.GetArg("path");
+        string editsJson = call.GetArg("edits");
+        if (string.IsNullOrEmpty(path)) return Fail(call, "Missing 'path' argument");
+        if (string.IsNullOrEmpty(editsJson)) return Fail(call, "Missing 'edits' (a JSON array of {find, replace, replace_all?}).");
+
+        var edits = ParseEdits(editsJson, out string? parseError);
+        if (parseError != null) return Fail(call, $"multi_edit: {parseError}");
+        if (edits.Count == 0) return Fail(call, "multi_edit: no edits provided.");
+
+        var rbe = CheckReadBeforeEdit(call, path);
+        if (rbe != null) return rbe;
+
+        string? before = _fileSystem.TryReadRaw(path);
+        bool ok; int applied; string message;
+        try { (ok, applied, message) = _fileSystem.MultiEdit(path, edits); }
+        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException) { return Fail(call, ex.Message); }
+
+        if (!ok)
+        {
+            // Same weak-model rescue as edit_file: on a small file, steer to a full write_file rewrite
+            // rather than let the model retry a find/replace it can't match and then fake-finish.
+            string rewriteHint = "";
+            if (before != null && before.Length <= 6000)
+                rewriteHint = $" The file is small — instead of multi_edit, call write_file('{path}', <full new content>) "
+                            + $"with the ENTIRE corrected file. Current content:\n---\n{before}\n---";
+            return Fail(call, $"multi_edit aborted ({applied}/{edits.Count} applied) — NO changes written (atomic). {message}{rewriteHint}");
+        }
+
+        _fileSystem.MarkKnown(path);
+
+        string? after = _fileSystem.TryReadRaw(path);
+        var diff = (before != null && after != null) ? CluadeX.Helpers.DiffUtil.Compute(before, after) : null;
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = $"multi_edit: {applied} edit(s) applied to {path}",
+            Summary = $"Edited {path} ({applied} edits)",
+            Diff = diff,
+            FilePath = path,
+        };
+    }
+
+    /// <summary>Parse the multi_edit 'edits' JSON array into find/replace tuples.</summary>
+    private static List<(string find, string replace, bool replaceAll)> ParseEdits(string editsJson, out string? error)
+    {
+        error = null;
+        var list = new List<(string find, string replace, bool replaceAll)>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(editsJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            {
+                error = "'edits' must be a JSON array of {find, replace, replace_all?}.";
+                return list;
+            }
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                string find = e.TryGetProperty("find", out var f) && f.ValueKind == System.Text.Json.JsonValueKind.String ? (f.GetString() ?? "") : "";
+                string replace = e.TryGetProperty("replace", out var r) && r.ValueKind == System.Text.Json.JsonValueKind.String ? (r.GetString() ?? "") : "";
+                bool all = false;
+                if (e.TryGetProperty("replace_all", out var a))
+                    all = a.ValueKind == System.Text.Json.JsonValueKind.True
+                          || (a.ValueKind == System.Text.Json.JsonValueKind.String && bool.TryParse(a.GetString(), out var b) && b);
+                list.Add((find, replace, all));
+            }
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            error = $"'edits' is not valid JSON: {ex.Message}";
+        }
+        return list;
+    }
+
+    private ToolResult ExecuteListSymbols(ToolCall call)
+    {
+        if (_repoMap == null) return Fail(call, "list_symbols: code map is not wired into this build.");
+        string path = call.GetArg("path");
+        if (string.IsNullOrEmpty(path)) return Fail(call, "Missing 'path' argument");
+
+        string? content = _fileSystem.TryReadRaw(path, 2 * 1024 * 1024);
+        if (content == null) return Fail(call, $"list_symbols: cannot read {path} (missing or larger than 2MB).");
+
+        var symbols = _repoMap.OutlineContent(content);
+        if (symbols.Count == 0)
+            return Ok(call, $"No top-level symbols detected in {path}. Use read_file to view it directly.");
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"{symbols.Count} symbol(s) in {path}:");
+        foreach (var (line, sym) in symbols)
+            sb.Append("  ").Append(line).Append('\t').Append(sym).Append('\n');
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = sb.ToString().TrimEnd(),
+            Summary = $"{symbols.Count} symbols in {path}",
+        };
+    }
+
+    private ToolResult ExecuteFindSymbol(ToolCall call)
+    {
+        if (_repoMap == null) return Fail(call, "find_symbol: code map is not wired into this build.");
+        string name = call.GetArg("name", call.GetArg("symbol", call.GetArg("query")));
+        if (string.IsNullOrWhiteSpace(name)) return Fail(call, "Missing 'name' (the symbol to locate).");
+
+        var hits = _repoMap.FindSymbolDefinitions(name, 25);
+        if (hits.Count == 0)
+            return Ok(call, $"No definition found for '{name}'. It may be external/third-party — try codebase_search to find usages, or read_file if you know the file.");
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"{hits.Count} likely definition(s) of '{name}':");
+        foreach (var h in hits)
+            sb.Append("  ").Append(h.File).Append(':').Append(h.Line + 1).Append("  ").Append(h.Snippet).Append('\n');
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = sb.ToString().TrimEnd(),
+            Summary = $"{hits.Count} definition(s) of {name}",
+        };
+    }
+
+    private async Task<ToolResult> ExecuteRunBuildAsync(ToolCall call, CancellationToken ct)
+    {
+        string cmd = call.GetArg("command");
+        if (string.IsNullOrEmpty(cmd)) cmd = _fileSystem.DetectBuildCommand() ?? "";
+        if (string.IsNullOrEmpty(cmd))
+            return Fail(call, "run_build: couldn't detect a build system in the project root (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+
+        // Reuse the hardened command runner (dangerous-command blocklist, timeout, output budget, cwd).
+        var inner = new ToolCall
+        {
+            Type = ToolType.RunCommand,
+            ToolName = "run_command",
+            Arguments = new Dictionary<string, string> { ["command"] = cmd, ["timeout_ms"] = "180000" },
+        };
+        var result = await ExecuteRunCommandAsync(inner, ct);
+        result.Type = call.Type;
+        result.ToolName = call.ToolName;
+        result.Summary = result.Success ? $"Build OK ({cmd})" : $"Build FAILED ({cmd}) — read the errors and fix them";
+        return result;
+    }
+
+    private async Task<ToolResult> ExecuteRunTestsAsync(ToolCall call, CancellationToken ct)
+    {
+        string cmd = call.GetArg("command");
+        if (string.IsNullOrEmpty(cmd)) cmd = _fileSystem.DetectTestCommand() ?? "";
+        if (string.IsNullOrEmpty(cmd))
+            return Fail(call, "run_tests: couldn't detect a test runner in the project root (no .csproj/Cargo.toml/go.mod/pyproject/package.json/pom.xml/…). Pass an explicit 'command', or use run_command.");
+
+        // Reuse the hardened command runner (blocklist, timeout, output budget, cwd). Tests can be slow → 5 min.
+        var inner = new ToolCall
+        {
+            Type = ToolType.RunCommand,
+            ToolName = "run_command",
+            Arguments = new Dictionary<string, string> { ["command"] = cmd, ["timeout_ms"] = "300000" },
+        };
+        var result = await ExecuteRunCommandAsync(inner, ct);
+
+        // Success comes from the runner's EXIT CODE (reliable across runners). The distiller only shapes the
+        // text into a pass/fail summary + failing tests so a weak model gets an actionable signal.
+        string distilled = CluadeX.Helpers.TestOutputDistiller.Distill(result.Output ?? "", result.Error ?? "", cmd);
+        result.Type = call.Type;
+        result.ToolName = call.ToolName;
+        result.Output = distilled;
+        if (result.Success) result.Error = "";
+        result.Summary = result.Success ? $"Tests passed ({cmd})" : $"Tests FAILED ({cmd}) — read the failures and fix them";
+        return result;
+    }
+
+    /// <summary>Run the project's detected/configured build for an automatic verify-after-edit. System-initiated,
+    /// so it deliberately bypasses the model permission gate + PreToolUse hooks (same precedent as the autonomous
+    /// loop's verify step) — the dangerous-command blocklist inside the runner still applies. Honors
+    /// AutoVerifyCommand when the user set one.</summary>
+    public Task<ToolResult> RunVerifyBuildAsync(CancellationToken ct)
+    {
+        var call = new ToolCall { Type = ToolType.RunBuild, ToolName = "run_build" };
+        string custom = _settingsService.Settings.AutoVerifyCommand;
+        if (!string.IsNullOrWhiteSpace(custom)) call.Arguments["command"] = custom;
+        return ExecuteRunBuildAsync(call, ct);
     }
 
     private ToolResult ExecuteListFiles(ToolCall call)
@@ -1105,42 +1854,11 @@ public class AgentToolService
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
 
-        // Security: block dangerous commands (respects DangerousCommandBlocking toggle)
-        if (_settingsService.Settings.Features.DangerousCommandBlocking)
-        {
-            string cmdLower = command.ToLowerInvariant().Trim();
-            string[] blockedPatterns = [
-                "rm -rf /", "rm -rf ~", "rm -rf .",
-                "format ", "format\t",
-                "del /s", "del /f", "del /q",
-                "rmdir /s", "rd /s",
-                "remove-item -recurse",
-                "shutdown", "restart-computer",
-                "reg delete", "reg add",
-                "net user", "net localgroup",
-                "takeown", "icacls",
-                "mkfs.", "dd if=",
-                "> /dev/", ">/dev/",
-            ];
-            string[] blockedContains = [
-                "| rm ", "| del ", "&& rm ", "&& del ",
-                "; rm ", "; del ", "` rm ", "` del ",
-                "invoke-webrequest", "invoke-restmethod",
-                "start-bitstransfer",
-                "certutil -urlcache",
-                "bitsadmin /transfer",
-            ];
-            foreach (var blocked in blockedPatterns)
-            {
-                if (cmdLower.StartsWith(blocked))
-                    return Fail(call, $"Command blocked for safety: {command}");
-            }
-            foreach (var blocked in blockedContains)
-            {
-                if (cmdLower.Contains(blocked))
-                    return Fail(call, $"Command blocked for safety: {command}");
-            }
-        }
+        // Security: block dangerous commands (defense-in-depth, NOT a boundary — the permission prompt
+        // is). Shared helper so powershell/repl can't bypass the run_command blocklist by switching tools.
+        var dangerReason = CheckDangerousCommand(command);
+        if (dangerReason != null)
+            return Fail(call, dangerReason);
 
         try
         {
@@ -1171,20 +1889,27 @@ public class AgentToolService
             if (process == null)
                 return Fail(call, "Failed to start process");
 
+            // Default 30s; callers (e.g. run_build) can pass a longer budget for slow builds/tests.
+            int timeoutMs = int.TryParse(call.GetArg("timeout_ms"), out var tms) && tms > 0 ? Math.Min(tms, 600000) : 30000;
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(30000); // 30s timeout
+            cts.CancelAfter(timeoutMs);
 
             string stdout, stderr;
             try
             {
+                // Start BOTH pipe reads before waiting for exit. Waiting first deadlocks any verbose
+                // command: the child blocks writing into a full 4KB pipe buffer while we block in
+                // WaitForExitAsync — neither side progresses until the timeout kills the process.
+                var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+                var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
                 await process.WaitForExitAsync(cts.Token);
-                stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);
-                stderr = await process.StandardError.ReadToEndAsync(cts.Token);
+                stdout = await stdoutTask;
+                stderr = await stderrTask;
             }
             catch (OperationCanceledException)
             {
                 try { process.Kill(true); } catch { }
-                return Fail(call, "Command timed out (30s limit)");
+                return Fail(call, $"Command timed out ({timeoutMs / 1000}s limit)");
             }
 
             string output = stdout;
@@ -1258,8 +1983,31 @@ public class AgentToolService
         string message = call.GetArg("message");
         if (string.IsNullOrEmpty(message))
             return Fail(call, "Missing 'message' argument");
+
+        // stage_all lets the model commit in one shot without a separate git_add —
+        // this mirrors what a user means by "commit my changes".
+        bool stageAll = call.GetArg("stage_all", "false").Trim().ToLowerInvariant() is "true" or "1" or "yes";
+        if (stageAll)
+        {
+            var add = await _gitService.AddAsync(".");
+            if (!add.Success)
+                return GitToToolResult(call, add, "Stage-all before commit");
+        }
+
         var r = await _gitService.CommitAsync(message);
         return GitToToolResult(call, r, $"Committed: {message}");
+    }
+
+    private async Task<ToolResult> ExecuteGitMergeAsync(ToolCall call)
+    {
+        // Accept "branch" (native schema) or "target"/"name" for robustness with weak models.
+        string branch = call.GetArg("branch", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("target", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("name", "");
+        if (string.IsNullOrEmpty(branch))
+            return Fail(call, "Missing 'branch' argument (the branch to merge into the current one)");
+        var r = await _gitService.MergeAsync(branch);
+        return GitToToolResult(call, r, $"Merged {branch}");
     }
 
     private async Task<ToolResult> ExecuteGitPushAsync(ToolCall call)
@@ -1314,9 +2062,13 @@ public class AgentToolService
 
     private async Task<ToolResult> ExecuteGitCheckoutAsync(ToolCall call)
     {
-        string branch = call.GetArg("branch");
+        // Accept the historical "target"/"name" spellings too — the native schema used to
+        // advertise "target", so in-flight transcripts and weak models still send it.
+        string branch = call.GetArg("branch", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("target", "");
+        if (string.IsNullOrEmpty(branch)) branch = call.GetArg("name", "");
         if (string.IsNullOrEmpty(branch))
-            return Fail(call, "Missing 'branch' argument");
+            return Fail(call, "Missing 'branch' argument (the branch to switch to)");
         var r = await _gitService.CheckoutAsync(branch);
         return GitToToolResult(call, r, $"Switched to: {branch}");
     }
@@ -1349,7 +2101,10 @@ public class AgentToolService
     private async Task<ToolResult> ExecuteGitCloneAsync(ToolCall call, CancellationToken ct)
     {
         string url = call.GetArg("url");
+        // "path" was the advertised name for a long time — honour both so the requested
+        // target directory is never silently ignored.
         string dir = call.GetArg("directory", "");
+        if (string.IsNullOrEmpty(dir)) dir = call.GetArg("path", "");
         if (string.IsNullOrEmpty(url))
             return Fail(call, "Missing 'url' argument");
 
@@ -1430,8 +2185,10 @@ public class AgentToolService
 
     private async Task<ToolResult> ExecuteGhRepoViewAsync(ToolCall call)
     {
-        var r = await _gitHubService.ViewRepoAsync();
-        return GitToToolResult(call, r, "Repo info");
+        // 'repo' is advertised in the schema, so it must actually be honoured (empty = current repo).
+        string repo = call.GetArg("repo", "");
+        var r = await _gitHubService.ViewRepoAsync(repo);
+        return GitToToolResult(call, r, string.IsNullOrEmpty(repo) ? "Repo info" : $"Repo info: {repo}");
     }
 
     /// <summary>Convert a GitResult to a ToolResult.</summary>
@@ -1846,8 +2603,34 @@ public class AgentToolService
         if (string.IsNullOrEmpty(task))
             return Fail(call, "Missing 'task' argument");
 
+        // No external host is subscribed in the desktop app (the event exists for embedders),
+        // so agent_spawn used to fail 100% of the time despite being advertised in both tool
+        // protocols. Fall back to the same in-loop mechanism subagent_invoke uses: hand the
+        // main agent a focused sub-task brief it executes before returning to the parent task.
         if (OnAgentSpawnRequested == null)
-            return Fail(call, "Agent spawning not available — no handler registered");
+        {
+            var brief = new StringBuilder();
+            brief.AppendLine("# 🧩 Sub-task");
+            brief.AppendLine("Run this as a self-contained sub-task NOW, then return to the parent task:");
+            brief.AppendLine();
+            brief.AppendLine($"**Task:** {task}");
+            if (!string.IsNullOrWhiteSpace(context))
+            {
+                brief.AppendLine();
+                brief.AppendLine($"**Context:** {context}");
+            }
+            brief.AppendLine();
+            brief.AppendLine("Work it end to end with your normal tools, verify the result, then summarise "
+                + "the outcome in 2-3 lines and continue what you were doing before.");
+            brief.AppendLine("(For a specialist persona with a scoped tool set, use subagent_invoke instead — "
+                + "run subagent_list to see the available specialists.)");
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = brief.ToString(),
+                Summary = $"Sub-task queued: {task[..Math.Min(50, task.Length)]}",
+            };
+        }
 
         try
         {
@@ -1932,10 +2715,13 @@ public class AgentToolService
             "read_file" or "readfile" => ToolType.ReadFile,
             "write_file" or "writefile" => ToolType.WriteFile,
             "edit_file" or "editfile" => ToolType.EditFile,
+            "multi_edit" or "multiedit" or "apply_edits" => ToolType.MultiEdit,
             "list_files" or "listfiles" or "list_directory" or "ls" => ToolType.ListFiles,
             "search_files" or "searchfiles" or "find_files" => ToolType.SearchFiles,
             "search_content" or "searchcontent" => ToolType.SearchContent,
             "run_command" or "runcommand" or "shell" or "exec" or "run" => ToolType.RunCommand,
+            "run_build" or "build" or "typecheck" or "type_check" => ToolType.RunBuild,
+            "run_tests" or "runtests" or "test" or "tests" or "run_test" or "unittest" => ToolType.RunTests,
             "create_directory" or "mkdir" or "create_dir" => ToolType.CreateDirectory,
 
             // Git tools
@@ -1946,6 +2732,7 @@ public class AgentToolService
             "git_pull" or "gitpull" => ToolType.GitPull,
             "git_branch" or "gitbranch" => ToolType.GitBranch,
             "git_checkout" or "gitcheckout" => ToolType.GitCheckout,
+            "git_merge" or "gitmerge" or "merge" => ToolType.GitMerge,
             "git_diff" or "gitdiff" => ToolType.GitDiff,
             "git_log" or "gitlog" => ToolType.GitLog,
             "git_clone" or "gitclone" => ToolType.GitClone,
@@ -1998,6 +2785,26 @@ public class AgentToolService
             "memory_save" or "save_memory" or "remember" => ToolType.MemorySave,
             "memory_list" or "list_memories" or "memories" => ToolType.MemoryList,
             "memory_delete" or "delete_memory" or "forget" => ToolType.MemoryDelete,
+
+            // BrainX knowledge base
+            "brain_recall" or "brain_search" or "recall" or "brain" => ToolType.BrainRecall,
+
+            // Code intelligence
+            "lsp_diagnostics" or "diagnostics" or "check_errors" or "check_diagnostics" => ToolType.LspDiagnostics,
+            "list_symbols" or "listsymbols" or "outline" or "file_outline" => ToolType.ListSymbols,
+            "find_symbol" or "findsymbol" or "go_to_definition" or "goto_definition" or "find_definition" or "where_defined" => ToolType.FindSymbol,
+            "codebase_search" or "search_codebase" or "find_code" or "code_search" => ToolType.CodebaseSearch,
+            "instinct_evolve" or "evolve_instincts" or "evolve" => ToolType.InstinctEvolve,
+
+            "hex_open" or "open_hex" => ToolType.HexOpen,
+            "hex_read" or "read_hex" or "hex_dump" => ToolType.HexRead,
+            "hex_search" or "search_hex" or "hex_find" => ToolType.HexSearch,
+            "hex_patch" or "patch_hex" or "hex_write" => ToolType.HexPatch,
+            "hex_info" or "file_info" or "binary_info" => ToolType.HexInfo,
+
+            // Subagent system (Sprint 1 #1 — ECC parity)
+            "subagent_invoke" or "spawn_subagent" or "invoke_subagent" => ToolType.SubAgentInvoke,
+            "subagent_list" or "list_subagents" or "subagents" => ToolType.SubAgentList,
 
             _ => null,
         };
@@ -2262,6 +3069,18 @@ public class AgentToolService
         };
     }
 
+    private static ToolResult Ok(ToolCall call, string output, string? summary = null)
+    {
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = true,
+            Output = output,
+            Summary = summary ?? (output.Length > 100 ? output[..100] + "…" : output),
+        };
+    }
+
     // ════════════════════════════════════════════
     // Memory Tools
     // ════════════════════════════════════════════
@@ -2348,6 +3167,132 @@ public class AgentToolService
     }
 
     // ════════════════════════════════════════════
+    // Wave 4: BrainX recall (read from the knowledge base)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteBrainRecallAsync(ToolCall call, CancellationToken ct)
+    {
+        string query = call.GetArg("query");
+        if (string.IsNullOrWhiteSpace(query))
+            return Fail(call, "brain_recall: 'query' is required (keywords or a natural-language question).");
+        if (_brainSync == null)
+            return Fail(call, "brain_recall: BrainX is not wired into this build.");
+
+        bool semantic = bool.TryParse(call.GetArg("semantic"), out var s) && s;
+        int limit = int.TryParse(call.GetArg("limit"), out var l) ? Math.Clamp(l, 1, 20) : 5;
+
+        string result = await _brainSync.SearchAsync(query, limit, semantic, ct);
+        return Ok(call, result);
+    }
+
+    // ════════════════════════════════════════════
+    // Code intelligence — LSP diagnostics (errors/warnings after an edit)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteLspDiagnosticsAsync(ToolCall call, CancellationToken ct)
+    {
+        if (_lspClient == null) return Fail(call, "lsp_diagnostics: LSP is not wired into this build.");
+
+        string path = call.GetArg("path");
+        if (string.IsNullOrWhiteSpace(path))
+            return Fail(call, "lsp_diagnostics: 'path' is required.");
+
+        string resolved;
+        try { resolved = Path.IsPathRooted(path) ? path : _fileSystem.ResolveSafePath(path); }
+        catch (Exception ex) { return Fail(call, ex.Message); }
+        if (!File.Exists(resolved))
+            return Fail(call, $"lsp_diagnostics: file not found: {path}");
+
+        string lang = Path.GetExtension(resolved).TrimStart('.').ToLowerInvariant();
+        bool started = await _lspClient.StartServerAsync(lang, ct);
+        if (!started)
+            return Ok(call, $"No language server available for '.{lang}' files. Install one (OmniSharp for C#, " +
+                            "pylsp for Python, typescript-language-server for TS/JS, rust-analyzer, gopls) for live " +
+                            "diagnostics. Fallback: run the project's build/lint via run_command.");
+
+        var diags = await _lspClient.GetDiagnosticsAsync(resolved, ct);
+        if (diags.Count == 0)
+            return Ok(call, $"No diagnostics reported for {path} ✓");
+
+        var sb = new StringBuilder($"Diagnostics for {path} ({diags.Count}):");
+        sb.AppendLine();
+        foreach (var d in diags.OrderByDescending(x => x.Severity == "error").ThenBy(x => x.Line).Take(50))
+            sb.AppendLine($"  [{d.Severity}] {d.Line + 1}:{d.Character + 1} — {d.Message}{(string.IsNullOrEmpty(d.Source) ? "" : $" ({d.Source})")}");
+        return Ok(call, sb.ToString());
+    }
+
+    // ════════════════════════════════════════════
+    // Code intelligence — ranked codebase search
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteCodebaseSearchAsync(ToolCall call, CancellationToken ct)
+    {
+        if (_repoMap == null) return Fail(call, "codebase_search: repo map is not wired into this build.");
+
+        string query = call.GetArg("query");
+        if (string.IsNullOrWhiteSpace(query))
+            return Fail(call, "codebase_search: 'query' is required (keywords or what you're looking for).");
+
+        int limit = int.TryParse(call.GetArg("limit"), out var l) ? Math.Clamp(l, 1, 50) : 12;
+
+        // Keyword recall first (always works, zero deps). Over-fetch so the semantic pass has room to re-rank.
+        var candidates = _repoMap.SearchCode(query, limit * 4);
+        if (candidates.Count == 0)
+            return Ok(call, $"No code found matching '{query}'. Try different keywords, or use grep for an exact pattern.");
+
+        string mode = "keyword";
+        List<CodeHit> ranked = candidates;
+
+        // Optional semantic re-rank. Embed the QUERY first — if that fails (Ollama/embedding model
+        // absent) bail to keyword instantly, so a missing embedder costs one fast call, not one per candidate.
+        if (_embeddingService is { Enabled: true })
+        {
+            float[]? qv = await _embeddingService.EmbedAsync(query, ct);
+            if (qv != null)
+            {
+                const int reRankCap = 24;
+                var scored = new List<(CodeHit hit, double sim)>();
+                foreach (var c in candidates.Take(reRankCap))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    float[]? cv = await _embeddingService.EmbedAsync($"{c.File}\n{c.Snippet}", ct);
+                    scored.Add((c, cv != null ? EmbeddingService.Cosine(qv, cv) : -1));
+                }
+                ranked = scored.OrderByDescending(x => x.sim).Select(x => x.hit).ToList();
+                ranked.AddRange(candidates.Skip(reRankCap)); // keep keyword order for the tail
+                mode = "semantic+keyword";
+            }
+        }
+
+        var top = ranked.Take(limit).ToList();
+        var sb = new StringBuilder($"Top {top.Count} matches for '{query}' ({mode}):");
+        sb.AppendLine();
+        foreach (var h in top)
+        {
+            string loc = h.Line >= 0 ? $"{h.File}:{h.Line + 1}" : h.File;
+            sb.Append("  ").Append(loc);
+            if (!string.IsNullOrEmpty(h.Snippet))
+                sb.Append("  — ").Append(h.Snippet.Length > 120 ? h.Snippet[..120] + "…" : h.Snippet);
+            sb.AppendLine();
+        }
+        sb.AppendLine();
+        sb.AppendLine("Use read_file on the most relevant paths for full context.");
+        return Ok(call, sb.ToString());
+    }
+
+    // ════════════════════════════════════════════
+    // Instinct maintenance — semantic evolve (merge near-duplicates)
+    // ════════════════════════════════════════════
+
+    private async Task<ToolResult> ExecuteInstinctEvolveAsync(ToolCall call, CancellationToken ct)
+    {
+        if (_instinctService == null || _embeddingService == null)
+            return Fail(call, "instinct_evolve: instinct / embedding services are not wired into this build.");
+        string result = await _instinctService.EvolveAsync(_embeddingService, ct: ct);
+        return Ok(call, result);
+    }
+
+    // ════════════════════════════════════════════
     // Phase 4: SkillInvoke Tool
     // ════════════════════════════════════════════
 
@@ -2410,6 +3355,123 @@ public class AgentToolService
             Type = call.Type, ToolName = call.ToolName, Success = true,
             Output = prompt.ToString(),
             Summary = $"Skill '{skill.Name}' prompt loaded — execute it now",
+        };
+    }
+
+    // ════════════════════════════════════════════
+    // Sprint 1 #1: Subagent Invocation (ECC parity)
+    // ════════════════════════════════════════════
+
+    /// <summary>
+    /// Spawn a specialised subagent. v1 implementation: build the subagent's
+    /// system prompt + task prompt + restrict tool set, then return as a
+    /// structured tool result the main agent re-enters its loop with. Tool
+    /// restrictions are enforced via the existing ActiveSkillAllowedTools
+    /// channel until proper context isolation lands in v2.
+    /// </summary>
+    private ToolResult ExecuteSubAgentInvoke(ToolCall call)
+    {
+        string type = call.GetArg("type");
+        if (string.IsNullOrWhiteSpace(type))
+        {
+            // No type → list all (same as subagent_list)
+            return ExecuteSubAgentList(call);
+        }
+
+        var agent = _subAgentService.GetByName(type);
+        if (agent == null)
+        {
+            var all = _subAgentService.GetAll();
+            var names = string.Join(", ", all.Select(a => a.Name));
+            return Fail(call, $"Subagent '{type}' not found. Available: {names}");
+        }
+
+        string userPrompt = call.GetArg("prompt", "").Trim();
+        string contextFiles = call.GetArg("context_files", "").Trim();
+
+        // Enforce the subagent's tool restriction for the duration of this
+        // invocation. The main agent will re-enter its loop with the new
+        // prompt and the restricted tool set.
+        if (agent.AllowedTools is { Count: > 0 })
+        {
+            // Always keep the subagent controls reachable, otherwise this is a one-way latch:
+            // once scoped, the model can neither switch specialist nor list them, and nothing
+            // releases the scope until the turn ends.
+            var scoped = new List<string>(agent.AllowedTools);
+            if (!scoped.Contains("subagent_invoke", StringComparer.OrdinalIgnoreCase)) scoped.Add("subagent_invoke");
+            if (!scoped.Contains("subagent_list", StringComparer.OrdinalIgnoreCase)) scoped.Add("subagent_list");
+            ActiveSkillAllowedTools = scoped;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"# 🤖 Subagent activated: **{agent.Name}**");
+        sb.AppendLine($"_{agent.Description}_");
+        sb.AppendLine();
+        sb.AppendLine($"**Tier:** {agent.TierBadge}  |  **Color:** {agent.Color}");
+        if (agent.AllowedTools.Count > 0)
+            sb.AppendLine($"**Allowed tools (scoped):** {string.Join(", ", agent.AllowedTools)}");
+        if (!string.IsNullOrEmpty(agent.WhenToUse))
+            sb.AppendLine($"**When to use:** {agent.WhenToUse}");
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## System persona");
+        sb.AppendLine(agent.SystemPrompt);
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("## Task");
+        if (!string.IsNullOrEmpty(userPrompt))
+            sb.AppendLine(userPrompt);
+        else
+            sb.AppendLine("(no task body provided — ask the user what they want this subagent to do)");
+
+        if (!string.IsNullOrEmpty(contextFiles))
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Context files to read first");
+            foreach (var f in contextFiles.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                sb.AppendLine($"- `{f.Trim()}`");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("**Now execute as this subagent.** Stay in persona until the task is done, " +
+                      "then report the result in the format described in the system persona.");
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = sb.ToString(),
+            Summary = $"Subagent '{agent.Name}' activated ({agent.TierBadge}) — execute now",
+        };
+    }
+
+    private ToolResult ExecuteSubAgentList(ToolCall call)
+    {
+        var all = _subAgentService.GetAll();
+        if (all.Count == 0)
+            return Fail(call, "No subagents available.");
+
+        var sb = new StringBuilder($"## Available subagents ({all.Count})\n\n");
+        foreach (var a in all.OrderBy(x => x.Tier).ThenBy(x => x.Name))
+        {
+            sb.AppendLine($"### `{a.Name}`  [{a.TierBadge}]");
+            sb.AppendLine($"{a.Description}");
+            if (!string.IsNullOrEmpty(a.WhenToUse))
+                sb.AppendLine($"_When:_ {a.WhenToUse}");
+            if (a.AllowedTools.Count > 0)
+                sb.AppendLine($"_Tools:_ {string.Join(", ", a.AllowedTools)}");
+            if (a.IsBuiltIn) sb.AppendLine("_(built-in)_");
+            sb.AppendLine();
+        }
+        sb.AppendLine("Invoke any of them via:\n");
+        sb.AppendLine("```\n[ACTION: subagent_invoke]\ntype: code-reviewer\nprompt: <your task>\n```\n");
+
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = sb.ToString(),
+            Summary = $"Listed {all.Count} subagents",
         };
     }
 
@@ -2824,11 +3886,53 @@ public class AgentToolService
     // Phase 3: PowerShell Tool
     // ════════════════════════════════════════════
 
+    /// <summary>Returns a block reason if <paramref name="command"/> matches a known-dangerous pattern
+    /// (when DangerousCommandBlocking is on), else null. Defense-in-depth, NOT a security boundary — the
+    /// permission prompt is. Shared by run_command + powershell so the blocklist can't be bypassed by
+    /// switching tools.</summary>
+    private string? CheckDangerousCommand(string command)
+    {
+        if (!_settingsService.Settings.Features.DangerousCommandBlocking) return null;
+        string cmdLower = command.ToLowerInvariant().Trim();
+        string[] blockedPrefixes = [
+            "rm -rf /", "rm -rf ~", "rm -rf .",
+            "format ", "format\t",
+            "del /s", "del /f", "del /q",
+            "rmdir /s", "rd /s",
+            "shutdown", "restart-computer", "stop-computer",
+            "reg delete", "reg add",
+            "net user", "net localgroup",
+            "takeown", "icacls",
+            "mkfs.", "dd if=",
+            "> /dev/", ">/dev/",
+        ];
+        string[] blockedContains = [
+            "| rm ", "| del ", "&& rm ", "&& del ",
+            "; rm ", "; del ", "` rm ", "` del ",
+            "invoke-webrequest", "invoke-restmethod",
+            "start-bitstransfer",
+            "certutil -urlcache",
+            "bitsadmin /transfer",
+            // PowerShell destructive forms (piped/chained — prefix matching misses these)
+            "remove-item -recurse", "remove-item -force", "-recurse -force",
+            "format-volume", "clear-disk", "format-disk",
+        ];
+        foreach (var b in blockedPrefixes)
+            if (cmdLower.StartsWith(b)) return $"Command blocked for safety: {command}";
+        foreach (var b in blockedContains)
+            if (cmdLower.Contains(b)) return $"Command blocked for safety: {command}";
+        return null;
+    }
+
     private async Task<ToolResult> ExecutePowerShellAsync(ToolCall call, CancellationToken ct)
     {
         string command = call.GetArg("command", call.GetArg("script"));
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
+
+        var psDanger = CheckDangerousCommand(command);
+        if (psDanger != null)
+            return Fail(call, psDanger);
 
         int timeoutMs = int.TryParse(call.GetArg("timeout", "30000"), out int t) ? t : 30000;
         timeoutMs = Math.Min(timeoutMs, 120000); // Cap at 2 minutes
@@ -2841,7 +3945,11 @@ public class AgentToolService
                 ? @"C:\Program Files\PowerShell\7\pwsh.exe"
                 : "powershell.exe";
 
-            var psi = new System.Diagnostics.ProcessStartInfo(psExe, $"-NoProfile -NonInteractive -Command \"{command.Replace("\"", "\\\"")}\"")
+            // Pass the script via -EncodedCommand (Base64 UTF-16LE). Inlining into -Command "..." with
+            // cmd-style \" escaping is WRONG for PowerShell (it uses backtick / doubled quotes), which
+            // broke legit quoted scripts AND allowed argument breakout. EncodedCommand is injection-proof.
+            string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+            var psi = new System.Diagnostics.ProcessStartInfo(psExe, $"-NoProfile -NonInteractive -EncodedCommand {encodedCommand}")
             {
                 WorkingDirectory = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory,
                 RedirectStandardOutput = true,
@@ -2893,5 +4001,228 @@ public class AgentToolService
         {
             proc?.Dispose();
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Hex Editor tools
+    // ─────────────────────────────────────────────────────────────────────
+    // These let the agent inspect and patch binary files surgically.
+    // hex_read and hex_search operate on a file path even if it's not open
+    // in the editor — they transparently load the file. hex_open is the
+    // explicit "show this in the UI" command. hex_patch and hex_open are
+    // gated by the standard permission system (write scope).
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>Event raised when the agent wants the user to see a file in the Hex Editor.</summary>
+    public event Action<string>? OnHexEditorRequested;
+
+    private static long ParseOffsetArg(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return 0;
+        s = s.Trim();
+        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return long.TryParse(s[2..], System.Globalization.NumberStyles.HexNumber, null, out var hex) ? hex : 0;
+        return long.TryParse(s, out var dec) ? dec : 0;
+    }
+
+    private async Task<bool> EnsureFileOpenAsync(string? path, CancellationToken ct)
+    {
+        // If editor already has THIS path open, no-op. Otherwise open it.
+        if (string.IsNullOrWhiteSpace(path))
+            return _hexEditor.HasFile;
+        path = ResolveHexPath(path);
+        if (_hexEditor.HasFile && string.Equals(_hexEditor.CurrentPath, path, StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!File.Exists(path)) return false;
+        await _hexEditor.OpenAsync(path, ct: ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Resolve a hex-tool path. Relative paths are sandboxed + resolved under the working directory
+    /// (a bare File.Exists would otherwise resolve against the process CWD — almost never what the
+    /// agent meant). Absolute paths pass through so the binary-inspection / RE workflows the hex
+    /// editor exists for keep working.
+    /// </summary>
+    private string? ResolveHexPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path)) return path;
+        try { return _fileSystem.ResolveSafePath(path); }
+        catch { return path; }
+    }
+
+    private static bool IsHexTool(ToolType type) =>
+        type is ToolType.HexInfo or ToolType.HexOpen or ToolType.HexRead or ToolType.HexSearch or ToolType.HexPatch;
+
+    /// <summary>True if the call's `path` arg is an absolute path resolving OUTSIDE the working directory.</summary>
+    private bool TryGetAbsoluteOutsidePath(ToolCall call, out string path)
+    {
+        path = call.GetArg("path");
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path)) return false;
+        try
+        {
+            if (!_fileSystem.HasWorkingDirectory) return true; // no project open → everything is "outside"
+            string full = Path.GetFullPath(path);
+            string root = Path.GetFullPath(_fileSystem.WorkingDirectory);
+            // Compare with a trailing separator so "C:\App" doesn't count sibling "C:\App-secrets" as inside.
+            string rootSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+            string fullSep = full.EndsWith(Path.DirectorySeparatorChar) ? full : full + Path.DirectorySeparatorChar;
+            return !fullSep.StartsWith(rootSep, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return true; }
+    }
+
+    private async Task<ToolResult> ExecuteHexInfoAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = ResolveHexPath(call.GetArg("path"));
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return Fail(call, $"hex_info: file not found: {path}");
+        try
+        {
+            // Read first 64 bytes for magic + compute SHA-256 over the file
+            var fi = new FileInfo(path);
+            byte[] sample = new byte[Math.Min(64, fi.Length)];
+            await using (var fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                int read = 0;
+                while (read < sample.Length)
+                {
+                    int n = await fs.ReadAsync(sample.AsMemory(read, sample.Length - read), ct);
+                    if (n == 0) break;
+                    read += n;
+                }
+            }
+            var info = HexFileInfo.From(path, sample, fi.Length);
+            await using (var fs2 = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                info.ComputeSha256(fs2);
+            }
+            var sb = new StringBuilder();
+            sb.AppendLine($"path:         {info.Path}");
+            sb.AppendLine($"size:         {info.Size} bytes ({info.SizeDisplay})");
+            sb.AppendLine($"detected:     {info.DetectedType}");
+            sb.AppendLine($"magic (hex):  {info.MagicHex}");
+            sb.AppendLine($"sha256:       {info.Sha256}");
+            return Ok(call, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"hex_info failed: {ex.Message}");
+        }
+    }
+
+    private async Task<ToolResult> ExecuteHexOpenAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = ResolveHexPath(call.GetArg("path"));
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return Fail(call, $"hex_open: file not found: {path}");
+        try
+        {
+            var info = await _hexEditor.OpenAsync(path, ct: ct);
+            // Tell the UI to navigate to the Hex Editor tab
+            try { OnHexEditorRequested?.Invoke(path); } catch { /* nav is best-effort */ }
+            var sb = new StringBuilder();
+            sb.AppendLine($"Opened {info.SizeDisplay} in the Hex Editor.");
+            sb.AppendLine($"  type:   {info.DetectedType}");
+            sb.AppendLine($"  magic:  {info.MagicHex}");
+            sb.AppendLine($"  sha256: {info.Sha256[..Math.Min(16, info.Sha256.Length)]}…");
+            sb.AppendLine("  (switch to the Hex Editor tab to see the file)");
+            return Ok(call, sb.ToString());
+        }
+        catch (Exception ex)
+        {
+            return Fail(call, $"hex_open failed: {ex.Message}");
+        }
+    }
+
+    private async Task<ToolResult> ExecuteHexReadAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = call.GetArg("path");
+        long offset = ParseOffsetArg(call.GetArg("offset"));
+        int length = 256;
+        if (int.TryParse(call.GetArg("length", "256"), out var l)) length = Math.Clamp(l, 1, 4096);
+
+        if (!await EnsureFileOpenAsync(string.IsNullOrWhiteSpace(path) ? null : path, ct))
+            return Fail(call, "hex_read: no file open and no path given (or path not found)");
+
+        var (hex, ascii) = _hexEditor.ReadHexAndAscii(offset, length);
+        var sb = new StringBuilder();
+        sb.AppendLine($"file:   {_hexEditor.CurrentPath}");
+        sb.AppendLine($"offset: 0x{offset:X8} ({offset})");
+        sb.AppendLine($"length: {length}");
+        sb.AppendLine();
+        sb.AppendLine("HEX:");
+        sb.AppendLine(hex);
+        sb.AppendLine();
+        sb.AppendLine("ASCII:");
+        sb.AppendLine(ascii);
+        return Ok(call, sb.ToString());
+    }
+
+    private async Task<ToolResult> ExecuteHexSearchAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = call.GetArg("path");
+        string pattern = call.GetArg("pattern");
+        string modeStr = call.GetArg("mode", "hex").ToLowerInvariant();
+        int max = 100;
+        if (int.TryParse(call.GetArg("max_results", "100"), out var m)) max = Math.Clamp(m, 1, 5000);
+        if (string.IsNullOrWhiteSpace(pattern))
+            return Fail(call, "hex_search: 'pattern' is required");
+
+        if (!await EnsureFileOpenAsync(string.IsNullOrWhiteSpace(path) ? null : path, ct))
+            return Fail(call, "hex_search: no file open and no path given (or path not found)");
+
+        var mode = modeStr switch
+        {
+            "text" => HexEditorService.SearchMode.Text,
+            "text_ci" or "text_ignorecase" or "ci" => HexEditorService.SearchMode.TextCaseInsensitive,
+            _ => HexEditorService.SearchMode.Hex,
+        };
+        var hits = _hexEditor.Search(pattern, mode, maxResults: max);
+        if (hits.Count == 0) return Ok(call, $"No matches for pattern '{pattern}' in {_hexEditor.CurrentPath}");
+        var sb = new StringBuilder();
+        sb.AppendLine($"Found {hits.Count} match(es) in {_hexEditor.CurrentPath} (mode={modeStr}):");
+        foreach (var h in hits.Take(max))
+        {
+            sb.AppendLine($"  {h.OffsetHex}  ({h.Length} bytes)  preview: {h.Preview}");
+        }
+        return Ok(call, sb.ToString());
+    }
+
+    private async Task<ToolResult> ExecuteHexPatchAsync(ToolCall call, CancellationToken ct)
+    {
+        string? path = call.GetArg("path");
+        long offset = ParseOffsetArg(call.GetArg("offset"));
+        string bytesHex = call.GetArg("bytes");
+        bool save = string.Equals(call.GetArg("save", "false"), "true", StringComparison.OrdinalIgnoreCase);
+        string desc = call.GetArg("description", "agent patch");
+
+        if (string.IsNullOrWhiteSpace(bytesHex))
+            return Fail(call, "hex_patch: 'bytes' (hex string) is required");
+        if (!HexEditorService.TryParseHex(bytesHex, out var newBytes))
+            return Fail(call, $"hex_patch: invalid hex string '{bytesHex}'");
+
+        if (!await EnsureFileOpenAsync(string.IsNullOrWhiteSpace(path) ? null : path, ct))
+            return Fail(call, "hex_patch: no file open and no path given (or path not found)");
+
+        bool ok = _hexEditor.Patch(offset, newBytes, desc);
+        if (!ok) return Fail(call, $"hex_patch: out-of-range or no change at 0x{offset:X8} ({newBytes.Length} bytes)");
+
+        string saveNote;
+        if (save)
+        {
+            try
+            {
+                await _hexEditor.SaveAsync(createBackup: true, ct: ct);
+                saveNote = " · saved to disk (.bak backup written)";
+            }
+            catch (Exception ex)
+            {
+                saveNote = $" · save FAILED: {ex.Message}";
+            }
+        }
+        else saveNote = " · NOT saved — call hex_patch again with save=true, or use Save in the UI";
+
+        return Ok(call, $"Patched {newBytes.Length} byte(s) at 0x{offset:X8} of {_hexEditor.CurrentPath}{saveNote}");
     }
 }

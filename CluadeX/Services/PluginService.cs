@@ -24,6 +24,46 @@ public class PluginService
         _pluginsDir = System.IO.Path.Combine(_settingsService.DataRoot, "plugins");
         _configPath = System.IO.Path.Combine(_pluginsDir, "plugins_config.json");
         Directory.CreateDirectory(_pluginsDir);
+
+        // The catalog is the source of truth for a built-in plugin's hooks. Installed copies
+        // persist hooks.json at install time, so a later bug-fix to a hook command (e.g. the
+        // branch-protector's batch `%%b` → cmd `findstr`) would otherwise never reach machines
+        // that already installed it. Re-materialize hooks.json for installed catalog plugins.
+        try { ResyncInstalledCatalogHooks(); } catch { /* best-effort — never block startup */ }
+    }
+
+    /// <summary>
+    /// Rewrites hooks.json for every installed plugin whose folder matches a curated-catalog id,
+    /// so catalog hook fixes propagate to existing installs without a manual reinstall.
+    /// </summary>
+    private void ResyncInstalledCatalogHooks()
+    {
+        if (!Directory.Exists(_pluginsDir)) return;
+        var byId = CuratedCatalog.ToDictionary(c => c.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in Directory.GetDirectories(_pluginsDir))
+        {
+            string id = System.IO.Path.GetFileName(dir);
+            if (!byId.TryGetValue(id, out var catalog) || catalog.Hooks.Count == 0) continue;
+
+            var hooksConfig = new Dictionary<string, object>();
+            var preHooks = catalog.Hooks.Where(h => h.Phase == "PreToolUse").ToList();
+            var postHooks = catalog.Hooks.Where(h => h.Phase == "PostToolUse").ToList();
+            if (preHooks.Count > 0)
+                hooksConfig["PreToolUse"] = preHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
+            if (postHooks.Count > 0)
+                hooksConfig["PostToolUse"] = postHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
+
+            var hooksJson = JsonSerializer.Serialize(new Dictionary<string, object> { ["hooks"] = hooksConfig }, JsonOptions);
+            string target = System.IO.Path.Combine(dir, "hooks.json");
+            // Only rewrite when the content actually changed — avoids needless disk writes each launch.
+            try
+            {
+                if (!File.Exists(target) || File.ReadAllText(target) != hooksJson)
+                    File.WriteAllText(target, hooksJson);
+            }
+            catch { /* skip a locked/unwritable plugin dir */ }
+        }
     }
 
     /// <summary>Scans subdirectories of the plugins folder for manifest.json files.</summary>
@@ -307,8 +347,12 @@ public class PluginService
             HookEvents = ["PreToolUse"],
             HookSummary = "Before BashTool git commit/push, checks current branch. Blocks if on protected branch (main, master, develop).",
             HookSummaryTh = "ก่อน git commit/push จะตรวจ branch ปัจจุบัน บล็อกถ้าอยู่บน branch ที่ป้องกัน",
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit", Command = "for /f %%b in ('git branch --show-current') do @if \"%%b\"==\"main\" exit 1 & if \"%%b\"==\"master\" exit 1 & if \"%%b\"==\"develop\" exit 1" },
-                     new() { Phase = "PreToolUse", Matcher = "git_push", Command = "for /f %%b in ('git branch --show-current') do @if \"%%b\"==\"main\" exit 1 & if \"%%b\"==\"master\" exit 1 & if \"%%b\"==\"develop\" exit 1" }],
+            // Runs via `cmd /c` (HookService), so use findstr — NOT batch `for /f %%b`, which is
+            // .bat-only syntax and errors with "%%b was unexpected at this time" on the command line.
+            // findstr /x /i matches the current branch exactly (case-insensitive) against the
+            // protected set; a match blocks (exit 1) with a clear stderr message, else allows (exit 0).
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit", Command = "git branch --show-current | findstr /x /i \"main master develop\" >nul && (echo [branch-protector] Blocked: don't commit directly to a protected branch. Create a feature branch first. 1>&2 & exit 1) || exit 0" },
+                     new() { Phase = "PreToolUse", Matcher = "git_push", Command = "git branch --show-current | findstr /x /i \"main master develop\" >nul && (echo [branch-protector] Blocked: don't push directly to a protected branch. Open a PR from a feature branch. 1>&2 & exit 1) || exit 0" }],
         },
         new CatalogPlugin
         {

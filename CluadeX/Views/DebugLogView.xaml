@@ -1,0 +1,308 @@
+﻿<UserControl x:Class="CluadeX.Views.DebugLogView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:vm="clr-namespace:CluadeX.ViewModels"
+             xmlns:m="clr-namespace:CluadeX.Models"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:DebugLogViewModel}"
+             Background="{StaticResource NeonBg0Brush}"
+             FontFamily="{StaticResource NeonUiFont}">
+    <UserControl.Resources>
+        <DataTemplate x:Key="LogEntryTemplate" DataType="{x:Type m:LogEntry}">
+            <Border Padding="10,4" Margin="0,0,0,1" CornerRadius="3"
+                    Background="#0AFFFFFF">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="92"/>   <!-- timestamp -->
+                        <ColumnDefinition Width="62"/>   <!-- level chip -->
+                        <ColumnDefinition Width="80"/>   <!-- category chip -->
+                        <ColumnDefinition Width="*"/>    <!-- message -->
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding TimestampDisplay}"
+                               FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                               Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Top"/>
+                    <Border Grid.Column="1" Padding="4,1" CornerRadius="3" Margin="0,0,8,0"
+                            Background="#22FFFFFF" BorderThickness="1"
+                            VerticalAlignment="Top" HorizontalAlignment="Left">
+                        <Border.BorderBrush>
+                            <SolidColorBrush Color="{Binding LevelColorHex, Converter={StaticResource HexToColor}}"/>
+                        </Border.BorderBrush>
+                        <TextBlock Text="{Binding LevelDisplay}" FontSize="9" FontWeight="Bold"
+                                   FontFamily="{StaticResource NeonMonoFont}">
+                            <TextBlock.Foreground>
+                                <SolidColorBrush Color="{Binding LevelColorHex, Converter={StaticResource HexToColor}}"/>
+                            </TextBlock.Foreground>
+                        </TextBlock>
+                    </Border>
+                    <Border Grid.Column="2" Padding="4,1" CornerRadius="3" Margin="0,0,8,0"
+                            Background="#15FFFFFF" BorderThickness="1"
+                            VerticalAlignment="Top" HorizontalAlignment="Left">
+                        <Border.BorderBrush>
+                            <SolidColorBrush Color="{Binding CategoryColorHex, Converter={StaticResource HexToColor}}"/>
+                        </Border.BorderBrush>
+                        <TextBlock Text="{Binding Category}" FontSize="9"
+                                   FontFamily="{StaticResource NeonMonoFont}">
+                            <TextBlock.Foreground>
+                                <SolidColorBrush Color="{Binding CategoryColorHex, Converter={StaticResource HexToColor}}"/>
+                            </TextBlock.Foreground>
+                        </TextBlock>
+                    </Border>
+                    <StackPanel Grid.Column="3">
+                        <TextBlock Text="{Binding Message}" FontSize="12"
+                                   FontFamily="{StaticResource NeonMonoFont}"
+                                   Foreground="{StaticResource NeonInk0Brush}"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding Exception}" FontSize="11"
+                                   FontFamily="{StaticResource NeonMonoFont}"
+                                   Foreground="{StaticResource NeonRedBrush}"
+                                   TextWrapping="Wrap"
+                                   Visibility="{Binding Exception, Converter={StaticResource BoolVis}}"
+                                   Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <Style x:Key="NeonAction" TargetType="Button">
+            <Setter Property="Background" Value="#7028326E"/>
+            <Setter Property="BorderBrush" Value="{StaticResource NeonLineHiBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#B22E3870"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="NeonTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#7011152E"/>
+            <Setter Property="BorderBrush" Value="{StaticResource NeonLineHiBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource NeonCyanBrush}"/>
+            <Setter Property="FontFamily" Value="{StaticResource NeonMonoFont}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="false"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Rectangle IsHitTestVisible="False">
+            <Rectangle.Fill>
+                <RadialGradientBrush Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+                    <GradientStop Color="#22FF6E6E" Offset="0"/>
+                    <GradientStop Color="#06071A" Offset="1"/>
+                </RadialGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <Border Grid.Row="0" Padding="24,16" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#7F141838" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Width="46" Height="46" CornerRadius="11">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#FF6E6E" Offset="0"/>
+                                <GradientStop Color="#A672FF" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Border.Effect>
+                            <DropShadowEffect Color="#FF6E6E" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+                        </Border.Effect>
+                        <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{services:Loc debuglog.title}" FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource NeonInk0Brush}"/>
+                        <TextBlock FontSize="11" Foreground="{StaticResource NeonInk2Brush}" Margin="0,2,0,0">
+                            <Run Text="{services:Loc debuglog.subtitle}"/>
+                            <Run Text="{Binding TotalCount, Mode=OneWay}"/>
+                            <Run Text="{services:Loc debuglog.visibleSuffix}"/>
+                            <Run Text="{Binding WarningCount, Mode=OneWay}"/>
+                            <Run Text=" ⚠ · "/>
+                            <Run Text="{Binding ErrorCount, Mode=OneWay}"/>
+                            <Run Text=" ✗ · "/>
+                            <Run Text="{Binding CriticalCount, Mode=OneWay}"/>
+                            <Run Text=" 🔥"/>
+                        </TextBlock>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Command="{Binding TestCommand}" Style="{StaticResource NeonAction}" ToolTip="{services:Loc debuglog.testTip}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xEC7A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc debuglog.test}"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding CopyAllCommand}" Style="{StaticResource NeonAction}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc debuglog.copyAll}"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding SaveDumpCommand}" Style="{StaticResource NeonAction}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc debuglog.saveDump}"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding OpenLogFolderCommand}" Style="{StaticResource NeonAction}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc debuglog.logFolder}"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding ClearCommand}" Style="{StaticResource NeonAction}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc debuglog.clear}"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Filter bar -->
+            <Border Grid.Row="1" Padding="24,10" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}"
+                    Background="#5511152E">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Text="{services:Loc debuglog.minLevel}" FontFamily="{StaticResource NeonMonoFont}" FontSize="9" FontWeight="Bold"
+                               Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding LevelChoices}"
+                              SelectedItem="{Binding SelectedLevelName}"
+                              Width="100" Height="28" Margin="0,0,16,0" VerticalContentAlignment="Center"
+                              FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
+                              Background="#7011152E" Foreground="{StaticResource NeonInk0Brush}"
+                              BorderBrush="{StaticResource NeonLineHiBrush}"/>
+
+                    <TextBlock Grid.Column="2" Text="{services:Loc debuglog.category}" FontFamily="{StaticResource NeonMonoFont}" FontSize="9" FontWeight="Bold"
+                               Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Column="3" ItemsSource="{Binding CategoryChoices}"
+                              SelectedItem="{Binding FilterCategory}"
+                              Width="140" Height="28" Margin="0,0,16,0" VerticalContentAlignment="Center"
+                              FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
+                              Background="#7011152E" Foreground="{StaticResource NeonInk0Brush}"
+                              BorderBrush="{StaticResource NeonLineHiBrush}"/>
+
+                    <TextBox Grid.Column="4" Style="{StaticResource NeonTextBox}"
+                             Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="{services:Loc debuglog.filterTip}"
+                             Margin="0,0,12,0"/>
+
+                    <CheckBox Grid.Column="5" IsChecked="{Binding AutoScroll}" Content="{services:Loc debuglog.autoScroll}"
+                              Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"
+                              FontSize="11"/>
+                </Grid>
+            </Border>
+
+            <!-- Entries list -->
+            <Border Grid.Row="2" Margin="20,16,20,8" Background="{StaticResource NeonPanelFill}"
+                    BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1" CornerRadius="10">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="Black" Opacity="0.5"/>
+                </Border.Effect>
+                <ListBox x:Name="EntriesList" ItemsSource="{Binding Entries}"
+                         ItemTemplate="{StaticResource LogEntryTemplate}"
+                         Background="Transparent" BorderThickness="0"
+                         HorizontalContentAlignment="Stretch"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Margin" Value="0"/>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+            </Border>
+
+            <!-- Status bar -->
+            <Border Grid.Row="3" Padding="20,8" BorderThickness="0,1,0,0"
+                    BorderBrush="{StaticResource NeonLineBrush}" Background="#88141838">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding StatusMessage}" FontSize="11"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonMintBrush}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding LogDirectory}" FontSize="10"
+                               FontFamily="{StaticResource NeonMonoFont}"
+                               Foreground="{StaticResource NeonInk3Brush}"/>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

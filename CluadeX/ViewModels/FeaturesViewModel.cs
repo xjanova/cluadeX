@@ -199,24 +199,16 @@ public class FeaturesViewModel : ViewModelBase
     {
         foreach (var item in items)
         {
-            bool isFreeFeature = IsFreeFeature(item.Key);
-            bool unlocked = isFreeFeature || _activation.IsActivated;
+            // Ask the ONE authority. This used to consult a second, hand-maintained free-tier
+            // list here, which drifted from ActivationService — e.g. local Git became free there
+            // but not here, so the Git toggle greyed out for good after any activation change.
+            bool unlocked = _activation.IsFeatureUnlocked(item.Key);
 
             item.IsLocked = !unlocked;
             item.IsUnlocked = unlocked;
         }
     }
 
-    /// <summary>Free features are never locked regardless of activation status.</summary>
-    private static bool IsFreeFeature(string key) => key switch
-    {
-        "feature.localInference" or "feature.chatPersistence" or "feature.markdown"
-        or "feature.gpuDetection" or "feature.darkTheme" or "feature.i18n"
-        or "feature.buddy" or "feature.dpapi" or "feature.pathSafety"
-        or "feature.noTelemetry" or "feature.codeExecution" or "feature.fileSystem"
-        or "feature.ollama" => true,
-        _ => false,
-    };
 
     private void BuildFeatureList()
     {

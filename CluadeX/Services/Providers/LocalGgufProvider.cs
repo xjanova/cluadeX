@@ -15,6 +15,7 @@ public class LocalGgufProvider : IAiProvider
 {
     private readonly LlamaInferenceService _llamaService;
     private readonly LlamaServerProvider _serverProvider;
+    private readonly SettingsService _settingsService;
 
     private enum Backend { None, LlamaSharp, LlamaServer }
     private Backend _activeBackend = Backend.None;
@@ -50,10 +51,11 @@ public class LocalGgufProvider : IAiProvider
     public event Action<bool>? OnLoadingChanged;
     public event Action<string>? OnError;
 
-    public LocalGgufProvider(LlamaInferenceService llamaService, LlamaServerProvider serverProvider)
+    public LocalGgufProvider(LlamaInferenceService llamaService, LlamaServerProvider serverProvider, SettingsService settingsService)
     {
         _llamaService = llamaService;
         _serverProvider = serverProvider;
+        _settingsService = settingsService;
 
         _statusHandler = s => { if (_activeBackend == Backend.LlamaSharp) OnStatusChanged?.Invoke(s); };
         _loadingHandler = b => { if (_activeBackend == Backend.LlamaSharp) OnLoadingChanged?.Invoke(b); };
@@ -85,21 +87,49 @@ public class LocalGgufProvider : IAiProvider
     /// </summary>
     public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
     {
+        var settings = _settingsService.Settings;
+
+        // Does the user want GPU? (-1 = auto/all layers, >0 = N layers, 0 = CPU-only; GpuBackend "CPU" = no GPU.)
+        bool wantGpu = settings.GpuLayerCount != 0
+            && !string.Equals(settings.GpuBackend, "CPU", StringComparison.OrdinalIgnoreCase);
+
         // Pre-inspect the GGUF so we can pick the backend BEFORE doing any expensive work
         // (memory mapping, GPU upload, etc.). If inspection returns null we assume the file
         // is loadable by LLamaSharp and let it fail naturally.
         var (needsFallback, arch) = GgufMetadataReader.InspectModel(modelPath);
 
-        if (needsFallback)
+        // Backend decision:
+        //   • Unsupported architecture → MUST use llama-server.
+        //   • GPU requested → PREFER llama-server. The in-process LLamaSharp backend only uses CUDA when the
+        //     CUDA Toolkit is installed (it gates detection on CUDA_PATH); the vast majority of users have
+        //     just the NVIDIA driver, so LLamaSharp silently runs everything on CPU — brutally slow for a
+        //     7B+ model (this is the real "local chat hangs / 75s and no answer" report). The bundled
+        //     llama-server ships the full CUDA runtime (cudart/cublas) and offloads to the GPU reliably,
+        //     so it is the correct GPU path. Verified: llama-server puts all 29/29 layers of a 7B on a
+        //     GTX 1070 Ti; in-process LLamaSharp leaves the GPU idle on the same machine.
+        bool preferServer = needsFallback || (wantGpu && _serverProvider.IsServerBackendAvailable);
+
+        if (preferServer)
         {
-            progress?.Report($"Detected '{arch}' architecture — using llama-server backend.");
-            await SwitchToServerBackendAsync(modelPath, progress, ct);
-            return;
+            progress?.Report(needsFallback
+                ? $"Detected '{arch}' architecture — using llama-server backend."
+                : "GPU requested — using llama-server backend for reliable CUDA offload.");
+            try
+            {
+                await SwitchToServerBackendAsync(modelPath, progress, ct);
+                return;
+            }
+            catch (Exception ex) when (!needsFallback)
+            {
+                // GPU-preferred server path failed (missing exe, port busy, etc.). Don't hard-fail — degrade
+                // to the in-process backend (CPU) so the user still gets a working model, just slower.
+                progress?.Report($"llama-server unavailable ({ex.Message}). Falling back to in-process (CPU)...");
+            }
         }
 
-        // Try LLamaSharp first. If it throws our typed "unsupported architecture" exception
-        // (the inspector missed something), fall back to llama-server transparently.
-        // For other failures we propagate — the user needs to see the real error.
+        // In-process LLamaSharp. Fast on CPU; uses GPU only if a CUDA Toolkit is present.
+        // If it throws our typed "unsupported architecture" exception (the inspector missed something),
+        // fall back to llama-server transparently. Other failures propagate — the user needs the real error.
         try
         {
             await UnloadInternalAsync(keepBackend: Backend.LlamaSharp);
@@ -181,6 +211,30 @@ public class LocalGgufProvider : IAiProvider
         => _activeBackend == Backend.LlamaServer
             ? _serverProvider.GenerateAsync(history, userMessage, systemPrompt, ct)
             : _llamaService.GenerateAsync(history, userMessage, systemPrompt, ct);
+
+    // ─── Native tool use: forward to the llama-server backend ───
+    // Without these overrides this router fell back to IAiProvider's default (SupportsNativeToolUse=false),
+    // so the ENTIRE weak-model tool harness (constrained decoding, salvage, auto-verify, escalation) was
+    // dead whenever the user picked "Local GGUF" — the default local path. LlamaSharp (in-proc) has no
+    // native tool calling, so only the server backend advertises support; the agent loop uses the
+    // legacy [ACTION:] text loop for LlamaSharp models as before.
+    public bool SupportsNativeToolUse
+        => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsNativeToolUse;
+
+    public Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages,
+        string systemPrompt,
+        List<ToolSchema> tools,
+        Action<string>? onTextDelta = null,
+        CancellationToken ct = default,
+        string? toolChoice = null)
+        => _activeBackend == Backend.LlamaServer
+            ? _serverProvider.ChatWithToolsAsync(messages, systemPrompt, tools, onTextDelta, ct, toolChoice)
+            : Task.FromResult(new NativeToolResponse
+            {
+                TextContent = "Native tool use is not supported by the in-process LLamaSharp backend.",
+                StopReason = "error",
+            });
 
     public Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)
     {

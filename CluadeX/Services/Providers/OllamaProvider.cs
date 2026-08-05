@@ -108,7 +108,7 @@ public class OllamaProvider : ApiProviderBase
         var messages = new List<object>();
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
-            messages.Add(new { role = "system", content = systemPrompt });
+            messages.Add(new ChatMsg("system", systemPrompt));
 
         string? lastRole = "system";
         foreach (var msg in history)
@@ -132,14 +132,13 @@ public class OllamaProvider : ApiProviderBase
             // Merge consecutive messages with same role (Ollama requires alternating)
             if (role == lastRole && messages.Count > 0)
             {
-                // Append to the last message's content
-                var lastMsg = messages[^1];
-                var lastContent = lastMsg.GetType().GetProperty("content")?.GetValue(lastMsg) as string;
-                messages[^1] = new { role, content = lastContent + "\n\n" + content };
+                // Append to the last message's content (ChatMsg record — no reflection, no null surprises)
+                var lastMsg = (ChatMsg)messages[^1];
+                messages[^1] = new ChatMsg(role, lastMsg.content + "\n\n" + content);
             }
             else
             {
-                messages.Add(new { role, content });
+                messages.Add(new ChatMsg(role, content));
             }
             lastRole = role;
         }
@@ -147,14 +146,18 @@ public class OllamaProvider : ApiProviderBase
         // Ensure last message before user is not also "user"
         if (lastRole == "user" && messages.Count > 0)
         {
-            var lastMsg = messages[^1];
-            var lastContent = lastMsg.GetType().GetProperty("content")?.GetValue(lastMsg) as string;
-            messages[^1] = new { role = "user", content = lastContent + "\n\n" + userMessage };
+            var lastMsg = (ChatMsg)messages[^1];
+            messages[^1] = new ChatMsg("user", lastMsg.content + "\n\n" + userMessage);
         }
         else
         {
-            messages.Add(new { role = "user", content = userMessage });
+            messages.Add(new ChatMsg("user", userMessage));
         }
+
+        // Clamp generation budget so the prompt isn't starved of the window (see TokenBudget — same
+        // prompt-starvation hang the in-process path already guards against).
+        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(messages));
+        int numPredict = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
 
         var requestObj = new
         {
@@ -165,9 +168,13 @@ public class OllamaProvider : ApiProviderBase
             {
                 temperature = (double)settings.Temperature,
                 top_p = (double)settings.TopP,
-                num_predict = settings.MaxTokens,
+                num_predict = numPredict,
                 repeat_penalty = (double)settings.RepeatPenalty,
                 repeat_last_n = settings.RepeatPenaltyTokens,
+                // Without num_ctx Ollama loads the model at its DEFAULT window (often 2048/4096) while
+                // all our budget math clamps against settings.ContextSize — the prompt silently truncated
+                // at the server even though the client believed it fit.
+                num_ctx = (int)settings.ContextSize,
             },
         };
 
@@ -277,6 +284,126 @@ public class OllamaProvider : ApiProviderBase
         await foreach (var token in ChatAsync(history, userMessage, systemPrompt, ct))
             sb.Append(token);
         return sb.ToString();
+    }
+
+    // ─── Native tool use (OpenAI-style function calling via Ollama /api/chat) ───
+    public override bool SupportsNativeToolUse => _settingsService.Settings.LocalNativeToolUseEnabled;
+
+    /// <summary>
+    /// Native tool-calling via Ollama /api/chat. Requires a tool-capable model (qwen2.5-coder,
+    /// llama3.1+, mistral-nemo…). Non-streaming so tool_calls arrive whole. Ollama encodes tool-call
+    /// arguments as JSON OBJECTS (not strings) both ways — handled by argumentsAsObject + ParseToolArguments.
+    /// </summary>
+    public override async Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages, string systemPrompt, List<ToolSchema> tools,
+        Action<string>? onTextDelta = null, CancellationToken ct = default, string? toolChoice = null)
+    {
+        // NOTE: Ollama's /api/chat has no tool_choice field — a forced toolChoice can't be honored here.
+        // The planner falls back to prompt-level steering on Ollama; constrained forcing works on llama-server.
+        _ = toolChoice;
+        LastPromptTokens = 0;
+        LastCompletionTokens = 0;
+        string baseUrl = GetBaseUrl();
+        var config = GetConfig();
+        string model = config.EffectiveModelId ?? "llama3.1";
+        var settings = _settingsService.Settings;
+
+        // Weak-model tool path: low temperature + top_k/min_p/repeat_penalty for deterministic, well-formed
+        // tool-call JSON. options is shared by reference into requestObj so adding num_predict after the
+        // estimate still reaches the wire.
+        var options = new Dictionary<string, object>
+        {
+            ["temperature"] = (double)Math.Min(settings.Temperature, settings.ToolCallTemperature),
+            ["top_p"] = (double)settings.TopP,
+            ["top_k"] = settings.TopK,
+            ["min_p"] = (double)settings.MinP,
+            ["repeat_penalty"] = (double)settings.RepeatPenalty,
+            ["num_ctx"] = (int)settings.ContextSize, // same gap as the chat path: clamp math must match the server's real window
+        };
+        var requestObj = new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["messages"] = BuildOpenAiToolMessages(messages, systemPrompt, argumentsAsObject: true),
+            ["stream"] = false,
+            ["options"] = options,
+        };
+        if (tools.Count > 0)
+            requestObj["tools"] = BuildOpenAiToolDefs(tools);
+
+        // Clamp AFTER assembling messages+tools so the estimate reflects the real prompt footprint.
+        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj));
+        options["num_predict"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
+
+        var body = JsonSerializer.Serialize(requestObj);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/chat");
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            IsReady = false;
+            return new NativeToolResponse { TextContent = $"Cannot connect to Ollama at {baseUrl}: {ex.Message}", StopReason = "end_turn" };
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync(ct);
+                return new NativeToolResponse
+                {
+                    TextContent = $"Ollama tool call failed ({(int)response.StatusCode}): {TruncateError(error)}",
+                    StopReason = "end_turn",
+                };
+            }
+            var responseText = await response.Content.ReadAsStringAsync(ct);
+            return ParseOllamaToolResponse(responseText);
+        }
+    }
+
+    private NativeToolResponse ParseOllamaToolResponse(string json)
+    {
+        var result = new NativeToolResponse();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("prompt_eval_count", out var pe) && pe.TryGetInt32(out var pei)) { result.InputTokens = pei; LastPromptTokens = pei; }
+            if (root.TryGetProperty("eval_count", out var ec) && ec.TryGetInt32(out var eci)) { result.OutputTokens = eci; LastCompletionTokens = eci; }
+            string doneReason = root.TryGetProperty("done_reason", out var dr) ? (dr.GetString() ?? "") : "";
+
+            if (root.TryGetProperty("message", out var message))
+            {
+                if (message.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                {
+                    var text = c.GetString();
+                    if (!string.IsNullOrEmpty(text)) result.TextContent = text;
+                }
+                if (message.TryGetProperty("tool_calls", out var tcs) && tcs.ValueKind == JsonValueKind.Array)
+                {
+                    int idx = 0;
+                    foreach (var tc in tcs.EnumerateArray())
+                    {
+                        if (!tc.TryGetProperty("function", out var fn)) continue;
+                        string name = fn.TryGetProperty("name", out var n) ? (n.GetString() ?? "") : "";
+                        if (string.IsNullOrEmpty(name)) continue;
+                        result.ToolCalls.Add(new NativeToolCall { Id = $"call_{idx}", Name = name, Input = ParseToolArguments(fn) });
+                        idx++;
+                    }
+                }
+            }
+            result.StopReason = result.ToolCalls.Count > 0 ? "tool_use" : doneReason == "length" ? "max_tokens" : "end_turn";
+        }
+        catch (Exception ex)
+        {
+            result.TextContent = $"[failed to parse Ollama tool response] {ex.Message}";
+            result.StopReason = "end_turn";
+        }
+        return result;
     }
 
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)

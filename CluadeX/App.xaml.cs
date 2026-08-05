@@ -12,6 +12,7 @@ namespace CluadeX;
 public partial class App : Application
 {
     private ServiceProvider? _serviceProvider;
+    private System.Threading.Mutex? _singleInstanceMutex;
 
     /// <summary>Directory crash logs are written to. Kept lightweight (no directory-exists check on each access).</summary>
     private static string CrashLogDir => Path.Combine(
@@ -21,6 +22,19 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // ─── Single instance ───
+        // Two CluadeX processes fight over the SAME settings.json/session DB, and the second
+        // instance's llama-server startup sweep kills the first instance's (still-owned) server —
+        // observed live as "llama-server stopped (crashed or was killed)" in the first window.
+        _singleInstanceMutex = new System.Threading.Mutex(true, @"Local\CluadeX_SingleInstance", out bool isFirstInstance);
+        if (!isFirstInstance)
+        {
+            MessageBox.Show("CluadeX is already running — check your taskbar.\n(เปิดอยู่แล้ว — ดูที่ taskbar)",
+                "CluadeX", MessageBoxButton.OK, MessageBoxImage.Information);
+            Shutdown();
+            return;
+        }
 
         // ─── Global Exception Handlers (must be installed BEFORE any real work) ───
         // Without these, an unhandled exception anywhere in the app silently kills the process
@@ -36,6 +50,16 @@ public partial class App : Application
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
 
+        // Async commands catch their own exceptions so async-void can't kill the process — but that
+        // made a throwing command look like a dead button with nothing in any log. Route those
+        // failures to the same debug log + crash log the sync path already uses.
+        CluadeX.ViewModels.CommandErrorSink.Handler = (source, ex) =>
+        {
+            WriteCrashLog("command", ex);
+            TryLogToDebugService(CluadeX.Models.LogLevel.Error, "Command",
+                $"{source} failed: {ex.Message}", ex);
+        };
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
 
@@ -48,6 +72,12 @@ public partial class App : Application
         }
         catch { }
 
+        // Resolve the debug log first so subsequent startup steps can log
+        // their progress / failures. If DI itself failed, this is null and
+        // each helper TryLogToDebugService call no-ops silently.
+        var dbg = _serviceProvider.GetService<DebugLogService>();
+        dbg?.Info("App", "MainWindow shown, starting background services");
+
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
@@ -56,16 +86,35 @@ public partial class App : Application
                 // Validate license key against online API
                 var activation = _serviceProvider.GetRequiredService<ActivationService>();
                 await activation.ValidateOnlineAsync();
+                dbg?.Debug("Activation", "License validation finished");
             }
-            catch { /* License validation is best-effort */ }
+            catch (Exception ex)
+            {
+                dbg?.Warn("Activation", "License validate threw (offline?)", ex);
+            }
 
             try
             {
                 // Initialize MCP servers
                 var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
+
+                // Surface the manager on MainViewModel BEFORE starting anything, so the
+                // status chip shows "connecting…" and then whatever really happens —
+                // including a start that fails outright. Binding it afterwards would
+                // hide exactly the case the chip exists for.
+                Dispatcher.Invoke(() =>
+                {
+                    var mainVm = _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>();
+                    mainVm.McpServers = mcpManager;
+                });
+
                 await mcpManager.InitializeAsync();
+                dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
             }
-            catch { /* MCP init is best-effort */ }
+            catch (Exception ex)
+            {
+                dbg?.Warn("MCP", "McpServerManager init failed", ex);
+            }
 
             try
             {
@@ -77,6 +126,11 @@ public partial class App : Application
                 // routes to ChatViewModel which spawns a visible session.
                 host.ToolDispatcher = (invocation, ct) => HandleMcpToolAsync(invocation, ct);
                 await host.StartAsync();
+                dbg?.Info("MCP", $"McpHostService listening on pipe '{host.PipeName}'");
+
+                // Self-register a discovery marker (~/.cluadex/install.json) so an external orchestrator
+                // (e.g. BrainX's CluadeXLauncher) can find THIS install's exe + pipe without guessing paths.
+                WriteInstallMarker(host.PipeName);
 
                 // Surface the host on MainViewModel so the sidebar status chip
                 // can data-bind to its observable properties. Do this on the UI
@@ -91,6 +145,50 @@ public partial class App : Application
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"McpHostService start failed: {ex.Message}");
+                dbg?.Error("MCP", "McpHostService start failed", ex);
+            }
+
+            // ─── HookBundleService: deploy bundled .ps1 scripts + project enabled set ───
+            // Resolving the service triggers its ctor which copies/refreshes the
+            // ~/.cluadex/hooks-bundled/ directory and writes hooks-bundled.json.
+            try
+            {
+                _ = _serviceProvider.GetRequiredService<HookBundleService>();
+                dbg?.Info("Hooks", "HookBundleService initialised");
+            }
+            catch (Exception ex)
+            {
+                dbg?.Warn("Hooks", "HookBundleService init failed", ex);
+            }
+
+            // ─── SessionStart hook ───
+            // Fire once at startup. Best-effort: hook failures must not block app.
+            try
+            {
+                var hooks = _serviceProvider.GetRequiredService<HookService>();
+                // Workspace-trust prompt: if the opened project defines auto-run hooks and the folder
+                // isn't trusted yet, offer to trust it (once per folder per session) instead of silently
+                // running shell scripts from a possibly-hostile cloned repo.
+                var promptedHookFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                hooks.OnUntrustedProjectHooks += folder =>
+                {
+                    lock (promptedHookFolders) { if (!promptedHookFolders.Add(folder)) return; }
+                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        var r = System.Windows.MessageBox.Show(
+                            $"This project defines automation hooks that run shell commands automatically:\n\n{folder}\\.cluadex\\hooks.json\n\nOnly enable hooks from projects you trust. Trust and enable this project's hooks?",
+                            "Workspace trust — untrusted project hooks",
+                            System.Windows.MessageBoxButton.YesNo,
+                            System.Windows.MessageBoxImage.Warning);
+                        if (r == System.Windows.MessageBoxResult.Yes) hooks.TrustProjectHooks(folder);
+                    });
+                };
+                await hooks.ExecuteSessionStartHooksAsync(new HookSessionContext());
+                dbg?.Debug("Hooks", "SessionStart hooks fired");
+            }
+            catch (Exception ex)
+            {
+                dbg?.Warn("Hooks", "SessionStart hooks threw", ex);
             }
         });
     }
@@ -103,6 +201,36 @@ public partial class App : Application
     //  to the dispatcher internally — so nothing UI-touching runs here at
     //  this top level.
     // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Write ~/.cluadex/install.json describing THIS running install (exe path, version, pipe name, token
+    /// file) so a launcher/orchestrator can discover and start CluadeX, and connect to its named pipe,
+    /// without hard-coding paths. Best-effort — never blocks startup.
+    /// </summary>
+    private static void WriteInstallMarker(string pipeName)
+    {
+        try
+        {
+            string dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
+            System.IO.Directory.CreateDirectory(dir);
+
+            string exe = Environment.ProcessPath ?? "";
+            var marker = new
+            {
+                exePath = exe,
+                installDir = string.IsNullOrEmpty(exe) ? "" : System.IO.Path.GetDirectoryName(exe),
+                version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "",
+                pipeName,
+                tokenFile = System.IO.Path.Combine(dir, "mcp-host-token"),
+                updatedAt = DateTime.UtcNow.ToString("o"),
+            };
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(dir, "install.json"),
+                System.Text.Json.JsonSerializer.Serialize(marker, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* discovery marker is best-effort */ }
+    }
 
     private async Task<McpToolResult> HandleMcpToolAsync(McpToolInvocation invocation, CancellationToken ct)
     {
@@ -176,14 +304,31 @@ public partial class App : Application
             sb.AppendLine("## Caller arguments");
             sb.AppendLine(skillArgs);
         }
-        string finalText = await chatVm.RunMcpTaskAsync(
-            taskId: $"{taskId}-skill-{skillName}",
-            spec: sb.ToString(),
-            lessons: null,
-            contextFiles: null,
-            workingDirectory: cwd,
-            ct: ct);
-        return TextResult(finalText);
+        // Carry the skill's tool whitelist across. Flattening the skill into a
+        // plain spec dropped it silently, so a skill invoked over the pipe ran
+        // UNRESTRICTED — /brainx-tester, whose entire point is that it cannot
+        // write files, happily called write_file (observed 2026-07-31). The
+        // in-app path sets this from SendMessage; the pipe path had no equivalent.
+        var toolService = _serviceProvider.GetRequiredService<Services.AgentToolService>();
+        if (skill.AllowedTools is { Count: > 0 })
+            toolService.ActiveSkillAllowedTools = skill.AllowedTools;
+
+        try
+        {
+            string finalText = await chatVm.RunMcpTaskAsync(
+                taskId: $"{taskId}-skill-{skillName}",
+                spec: sb.ToString(),
+                lessons: null,
+                contextFiles: null,
+                workingDirectory: cwd,
+                ct: ct);
+            return TextResult(finalText);
+        }
+        finally
+        {
+            // Never leak a restriction into the next chat the owner types by hand.
+            toolService.ActiveSkillAllowedTools = null;
+        }
     }
 
     /// <summary>
@@ -504,6 +649,9 @@ public partial class App : Application
         services.AddSingleton<CostTrackingService>();
         services.AddSingleton<MemoryService>();
         services.AddSingleton<SessionMemoryService>();
+        services.AddSingleton<RepoMapService>();
+        services.AddSingleton<EmbeddingService>();
+        services.AddSingleton<AutonomousCodingService>();
         services.AddSingleton<HookService>();
         services.AddSingleton<McpServerManager>();
         // McpHostService — exposes CluadeX's coding agent as an MCP server over
@@ -511,6 +659,50 @@ public partial class App : Application
         // Co-Pilot Arena to delegate write/run/review tasks while keeping the
         // chat visible inside CluadeX.
         services.AddSingleton<McpHostService>();
+        // TimeMachineService — git-backed commit timeline + safe rewind with
+        // auto-stash and snapshot branches. Drives the Time Machine view.
+        services.AddSingleton<TimeMachineService>();
+        // CodeWorkspaceService — backs the Code Editor page (file tree,
+        // open/save tabs, git status enrichment for tree badges).
+        services.AddSingleton<CodeWorkspaceService>();
+        // CodeIntelligenceService — search across files + go-to-definition /
+        // find-references / rename for the workbench. Works with nothing
+        // installed (bounded workspace scan) and upgrades to real semantic
+        // results whenever LspClientService has a language server connected.
+        services.AddSingleton<CodeIntelligenceService>();
+        // DebugAdapterService — DAP client (same stdio framing as LSP) driving the workbench
+        // debugger. Adapters are not bundled: it probes for netcoredbg / debugpy and reports
+        // exactly what is installed rather than offering a Start button that does nothing.
+        services.AddSingleton<DebugAdapterService>();
+        // SubAgentService — Sprint 1 #1: registry of specialised subagents
+        // (code-reviewer, security-reviewer, architect, ...). Built-in 10
+        // plus discovery of ~/.cluadex/agents/*.md and project agents.
+        services.AddSingleton<SubAgentService>();
+        // InstinctService — Sprint 2 #1: continuous learning. JSON-backed
+        // store of observed patterns, accept/reject voting, confidence
+        // scoring (success_rate × frequency × recency_decay), promote-to-skill.
+        services.AddSingleton<InstinctService>();
+        // DebugLogService — central in-app log with ring buffer + daily
+        // rotated file at %USERPROFILE%/.cluadex/logs/. Drives the Debug
+        // Log page (Ctrl+9) AND captures global exceptions routed from
+        // the dispatcher / appdomain / task handlers above.
+        services.AddSingleton<DebugLogService>();
+        // BrainSyncService — bridge between local Instincts and the ObsidianX
+        // brain via MCP. Pushes STRONG instincts as `coding-lesson` notes so
+        // the knowledge survives across machines / Claude Code sessions.
+        services.AddSingleton<BrainSyncService>();
+        // SecurityShieldService — Sprint 3 #1: static-analysis scanner with
+        // 25 ship-1 OWASP-style rules. Drives the SecurityShield page.
+        services.AddSingleton<SecurityShieldService>();
+        // HookBundleService — Sprint 3 #2: 15 bundled .ps1 hook scripts.
+        // On first resolve, deploys scripts to ~/.cluadex/hooks-bundled/ and
+        // projects the enabled set into ~/.cluadex/hooks-bundled.json which
+        // HookService reads alongside the user's own hooks.json.
+        services.AddSingleton<HookBundleService>();
+        // HexEditorService — binary file backend for both the Hex Editor view
+        // and the AI agent's hex_* tools. Shared instance so AI patches show
+        // up live in the UI and vice versa.
+        services.AddSingleton<HexEditorService>();
 
         // Local GGUF backends — registered as singletons so AiProviderManager and
         // LocalGgufProvider share the same LlamaServerProvider instance (otherwise
@@ -528,6 +720,15 @@ public partial class App : Application
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
+        services.AddSingleton<TimeMachineViewModel>();
+        services.AddSingleton<HexEditorViewModel>();
+        services.AddSingleton<CodeEditorViewModel>();
+        services.AddSingleton<SubAgentsViewModel>();
+        services.AddSingleton<SkillsViewModel>();
+        services.AddSingleton<InstinctsViewModel>();
+        services.AddSingleton<DebugLogViewModel>();
+        services.AddSingleton<SecurityShieldViewModel>();
+        services.AddSingleton<HookLibraryViewModel>();
 
         // Windows
         services.AddSingleton<MainWindow>();
@@ -561,10 +762,12 @@ public partial class App : Application
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         WriteCrashLog("dispatcher", e.Exception);
+        TryLogToDebugService(CluadeX.Models.LogLevel.Critical, "Dispatcher",
+            $"Unhandled dispatcher exception: {e.Exception.Message}", e.Exception);
         // Keep the app alive for non-fatal UI exceptions — losing unsaved chat state is worse than a blip.
         // Fatal exceptions (StackOverflow, OutOfMemory, AccessViolation) can't be caught here anyway.
         MessageBox.Show(
-            $"An error occurred:\n\n{e.Exception.Message}\n\nA crash log has been saved to:\n{CrashLogDir}",
+            $"An error occurred:\n\n{e.Exception.Message}\n\nA crash log has been saved to:\n{CrashLogDir}\n\nOpen Debug Log (Ctrl+9) to see context.",
             "CluadeX — Unexpected Error",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
@@ -575,14 +778,42 @@ public partial class App : Application
     {
         // AppDomain exceptions are typically fatal and the process will terminate after this returns.
         if (e.ExceptionObject is Exception ex)
+        {
             WriteCrashLog("appdomain", ex);
+            TryLogToDebugService(CluadeX.Models.LogLevel.Critical, "AppDomain",
+                $"Unhandled AppDomain exception (process likely terminating): {ex.Message}", ex);
+        }
     }
 
     private void OnUnobservedTaskException(object? sender, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
     {
         WriteCrashLog("task", e.Exception);
+        TryLogToDebugService(CluadeX.Models.LogLevel.Error, "Task",
+            $"Unobserved task exception: {e.Exception.Message}", e.Exception);
         // Mark as observed so GC doesn't terminate the process.
         e.SetObserved();
+    }
+
+    /// <summary>
+    /// Route global exceptions through DebugLogService so they show up in
+    /// the in-app Debug Log page (Ctrl+9) AND get persisted to the daily
+    /// rotated log file. Best-effort — never throws.
+    /// </summary>
+    private void TryLogToDebugService(CluadeX.Models.LogLevel level, string category, string message, Exception ex)
+    {
+        try
+        {
+            var log = _serviceProvider?.GetService<DebugLogService>();
+            if (log == null) return;
+            switch (level)
+            {
+                case CluadeX.Models.LogLevel.Warning:  log.Warn(category, message, ex); break;
+                case CluadeX.Models.LogLevel.Error:    log.Error(category, message, ex); break;
+                case CluadeX.Models.LogLevel.Critical: log.Critical(category, message, ex); break;
+                default:                               log.Info(category, message); break;
+            }
+        }
+        catch { /* logging must never crash crash handling */ }
     }
 
     private static void WriteCrashLog(string source, Exception ex)

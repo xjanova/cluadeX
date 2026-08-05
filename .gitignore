@@ -40,3 +40,9 @@ Thumbs.db
 desktop.ini
 publish/
 build-test
+
+# UI experiment artifacts (not part of the app)
+ui.zip
+ui2.zip
+ui_extracted/
+ui2_extracted/

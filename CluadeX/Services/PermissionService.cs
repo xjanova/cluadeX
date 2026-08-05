@@ -15,6 +15,7 @@ public class PermissionService
     };
 
     private readonly string _permissionsPath;
+    private readonly object _gate = new(); // guards Rules across agent-thread checks + UI-thread edits
 
     public List<PermissionRule> Rules { get; private set; } = new();
 
@@ -31,13 +32,15 @@ public class PermissionService
             if (File.Exists(_permissionsPath))
             {
                 string json = File.ReadAllText(_permissionsPath);
-                Rules = JsonSerializer.Deserialize<List<PermissionRule>>(json, JsonOptions)
+                var loaded = JsonSerializer.Deserialize<List<PermissionRule>>(json, JsonOptions)
                         ?? new List<PermissionRule>();
+                lock (_gate) Rules = loaded;
             }
         }
-        catch
+        catch (Exception ex)
         {
-            Rules = new List<PermissionRule>();
+            System.Diagnostics.Debug.WriteLine($"Failed to load permissions (using empty rule set): {ex.Message}");
+            lock (_gate) Rules = new List<PermissionRule>();
         }
     }
 
@@ -48,8 +51,23 @@ public class PermissionService
             string? dir = Path.GetDirectoryName(_permissionsPath);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            string json = JsonSerializer.Serialize(Rules, JsonOptions);
-            File.WriteAllText(_permissionsPath, json);
+            string json;
+            lock (_gate) json = JsonSerializer.Serialize(Rules, JsonOptions);
+
+            // Atomic + durable write (temp → fsync → replace) so a crash mid-write can't corrupt the rule
+            // file and silently drop the user back to "ask for everything" (or worse).
+            string tempPath = _permissionsPath + ".tmp";
+            using (var fs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var sw = new StreamWriter(fs, new System.Text.UTF8Encoding(false)))
+            {
+                sw.Write(json);
+                sw.Flush();
+                fs.Flush(flushToDisk: true);
+            }
+            if (File.Exists(_permissionsPath))
+                File.Replace(tempPath, _permissionsPath, destinationBackupFileName: null);
+            else
+                File.Move(tempPath, _permissionsPath);
         }
         catch (Exception ex)
         {
@@ -59,13 +77,13 @@ public class PermissionService
 
     public void AddRule(PermissionRule rule)
     {
-        Rules.Add(rule);
+        lock (_gate) Rules.Add(rule);
         SaveRules();
     }
 
     public void RemoveRule(PermissionRule rule)
     {
-        Rules.Remove(rule);
+        lock (_gate) Rules.Remove(rule);
         SaveRules();
     }
 
@@ -84,7 +102,11 @@ public class PermissionService
     /// </summary>
     public PermAction CheckPermission(string resource, string scope, string? toolName)
     {
-        foreach (var rule in Rules)
+        // Snapshot under the lock so a concurrent AddRule/RemoveRule (UI thread) can't throw
+        // "collection was modified" while the agent thread is iterating.
+        List<PermissionRule> rules;
+        lock (_gate) rules = Rules.ToList();
+        foreach (var rule in rules)
         {
             // Scope must match: either rule scope is "*" or matches exactly
             if (rule.Scope != "*" && !string.Equals(rule.Scope, scope, StringComparison.OrdinalIgnoreCase))

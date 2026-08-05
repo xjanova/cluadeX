@@ -23,13 +23,288 @@ public class CodeAgentService
     private readonly LocalizationService _localizationService;
     private readonly ActivationService _activationService;
     private readonly MemoryService _memoryService;
+    private readonly HookService? _hookService;
+    private readonly CostTrackingService? _costTrackingService;
 
-    private const int MaxAgentIterations = 15;
+    // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
+    private int MaxAgentIterations => Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
+
+    // High-value BUILT-IN tools offered to a SMALL-context local model (the full ~46-schema catalogue eats
+    // 40-70% of a 4k window). This list is BUILT-INS ONLY — MCP tools are selected by budget, not by name
+    // (see FitLocalToolSchemas). The small-ctx NOTE in GetSystemPrompt is derived from the same fit, so
+    // prompt + schemas cannot drift.
+    private static readonly HashSet<string> CoreLocalToolNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "read_file", "list_files", "search_content", "search_files", "codebase_search",
+        "find_symbol", "list_symbols", "edit_file", "multi_edit", "write_file",
+        "run_command", "run_build", "run_tests",
+        // Git finishing tools — small-ctx local models otherwise only have run_command for git, and
+        // weak models tend to shell-chain `git add && git commit && git merge` with POSIX quoting that
+        // breaks on Windows. The dedicated tools are reliable (temp-file commit msg, validated branch).
+        // These names only survive the subset filter when the Git feature already emitted their schemas.
+        // git_push is intentionally excluded — it's the paid "publish to remote" step (feature.github).
+        "git_status", "git_add", "git_commit", "git_merge",
+        // brain_recall stays in the core set: the system prompt instructs the model to consult BrainX,
+        // and stripping the tool here while keeping the instruction made small-ctx local models the ONLY
+        // tier that couldn't reach the brain (CluadeX ↔ BrainX are meant to be used together, always).
+        "brain_recall",
+        // Same contradiction as brain_recall: section 10 of the system prompt lists the available
+        // skills and tells the model to run them with skill_invoke, so the tool has to survive the
+        // subset filter or "/commit" style requests dead-end on a tool the model was told to use.
+        "skill_invoke",
+    };
+
+    // ─── Local tool-catalogue fit ───────────────────────────────────────────────────────────────
+    private static bool IsMcpToolName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
+
+    /// <summary>
+    /// MCP tools that must survive <see cref="FitLocalToolSchemas"/> at ANY context
+    /// size. Recall only — the brain's write/admin surface stays in the general
+    /// queue, because a rule that says "look before you act" only needs the readers.
+    /// Matched on the leaf of mcp__{server}__{tool} so it works whatever the user
+    /// named the server.
+    /// </summary>
+    private static readonly HashSet<string> PinnedMcpToolNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brain_search", "brain_semantic_search", "brain_get_note",
+    };
+
+    /// <summary>
+    /// Newest-first token-budgeted history for a local window. Static so the
+    /// behaviour is testable against the compiled binary without standing up the
+    /// service graph — the same reason LooksLikeBrainStatusQuestion is static.
+    /// Always keeps at least the last two messages, whatever they cost: context
+    /// that can't even hold the previous exchange has failed differently.
+    /// </summary>
+    internal static List<ChatMessage> FitLocalHistory(
+        List<ChatMessage> history, int localCtxTokens, out int spent, out int budget)
+    {
+        budget = Math.Min(3000, localCtxTokens / 5);
+        var kept = new List<ChatMessage>();
+        spent = 0;
+        for (int i = history.Count - 1; i >= 0; i--)
+        {
+            int cost = CluadeX.Helpers.TokenBudget.EstimateTokens(history[i].Content);
+            if (spent + cost > budget && kept.Count >= 2) break;
+            kept.Add(history[i]);
+            spent += cost;
+        }
+        kept.Reverse();
+        return kept;
+    }
+
+    /// <summary>
+    /// Any tool served by the brain, not just the three pinned recall ones. "Did this
+    /// turn consult the brain?" is a broader question than "did it call brain_search" —
+    /// a turn that read a note or walked the graph consulted it.
+    /// Server-name rule matches <see cref="Services.Mcp.McpServerManager.LooksLikeBrain"/>.
+    /// </summary>
+    private static bool IsBrainMcpTool(string qualifiedName)
+    {
+        if (!IsMcpToolName(qualifiedName)) return false;
+        int last = qualifiedName.LastIndexOf("__", StringComparison.Ordinal);
+        if (last <= "mcp__".Length) return false;
+        string server = qualifiedName["mcp__".Length..last];
+        return Services.Mcp.McpServerManager.LooksLikeBrain(server);
+    }
+
+    private static bool IsPinnedMcpTool(string qualifiedName)
+    {
+        if (!IsMcpToolName(qualifiedName)) return false;
+        int last = qualifiedName.LastIndexOf("__", StringComparison.Ordinal);
+        string leaf = last >= 0 ? qualifiedName[(last + 2)..] : qualifiedName;
+        return PinnedMcpToolNames.Contains(leaf);
+    }
+
+    /// <summary>Server key out of a qualified MCP name (mcp__{server}__{tool}).</summary>
+    private static string McpServerOf(string qualifiedName)
+    {
+        int start = "mcp__".Length;
+        int end = qualifiedName.IndexOf("__", start, StringComparison.Ordinal);
+        return end > start ? qualifiedName[start..end] : qualifiedName;
+    }
+
+    /// <summary>
+    /// Token cost of one schema once --jinja renders the OpenAI "tools" field into the prompt. Uses the
+    /// shared <see cref="CluadeX.Helpers.TokenBudget.EstimateTokens"/> (biased high, and counts non-ASCII
+    /// at 1 token/char) — a flat chars/4 under-counted the real prompt by ~25% and let the fit overflow
+    /// the window it exists to protect. The constant covers the per-tool JSON envelope
+    /// ({"type":"function","function":{"name":…,"description":…,"parameters":…}}).
+    /// </summary>
+    private static int EstimateSchemaTokens(Services.Providers.ToolSchema t)
+    {
+        string raw = "";
+        try
+        {
+            if (t.InputSchema.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                raw = t.InputSchema.GetRawText();
+        }
+        catch { raw = new string('x', 256); }
+        return CluadeX.Helpers.TokenBudget.EstimateTokens(t.Name + t.Description + raw) + 16;
+    }
+
+    /// <summary>
+    /// Choose the tool schemas a LOCAL model gets, fitted to its context window.
+    ///
+    /// Built-ins trim to <see cref="CoreLocalToolNames"/> below 16k ctx — the full catalogue costs
+    /// 6-8k tokens once the server's chat template renders it and overflows a small window.
+    ///
+    /// MCP tools are NOT name-trimmed. A whitelist of built-in names can never match a qualified
+    /// "mcp__server__tool", so filtering by that list dropped EVERY MCP tool at small ctx — silently,
+    /// and while the prompt told the model it had a core set that never mentioned them. The user
+    /// configured those servers deliberately and nothing built-in substitutes for them, so they are
+    /// bounded only by a token budget, which bites solely when a large fleet of servers would eat the
+    /// window. That budget applies at EVERY local ctx: the old ≥16k path sent the whole MCP catalogue
+    /// unmetered, which is its own overflow (30 BrainX schemas alone measure ~5.6k tokens).
+    ///
+    /// Admission order is core built-ins → MCP → the remaining built-ins. The long tail of built-ins
+    /// yielding to MCP is deliberate: everything in the tail has a run_command fallback, an MCP server
+    /// has none.
+    /// </summary>
+    /// <param name="reservedTokens">
+    /// Everything the request needs that ISN'T schemas — system prompt, history, and generation. Measured
+    /// by the caller, never guessed: a hardcoded fraction under-reserved a Thai system prompt and the
+    /// request overflowed at n_prompt_tokens=12729 against a 12288 window.
+    /// </param>
+    private static List<Services.Providers.ToolSchema> FitLocalToolSchemas(
+        List<Services.Providers.ToolSchema> all, int ctxTokens, int reservedTokens,
+        out int mcpKept, out int mcpDropped)
+    {
+        var builtIns = all.Where(t => !IsMcpToolName(t.Name)).ToList();
+        var mcp = all.Where(t => IsMcpToolName(t.Name)).ToList();
+        // Brain recall goes to the front of the whole queue. The brain-first rule in
+        // the system prompt tells the model to search BrainX before starting work,
+        // and at ctx=12288 the fit was dropping 63 of the brain's 83 schemas in
+        // registration order — so on a given turn brain_search might simply not be on
+        // the menu, and a mandatory rule the model cannot obey is worse than no rule.
+        // Three schemas, ~550 tokens; everything else keeps its old ordering.
+        var pinned = mcp.Where(t => IsPinnedMcpTool(t.Name)).ToList();
+        mcp = mcp.Where(t => !IsPinnedMcpTool(t.Name)).ToList();
+
+        var core = builtIns.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
+        if (core.Count == 0) core = builtIns; // guard: never nuke all tools on a name mismatch
+        var tail = ctxTokens < 16000
+            ? new List<Services.Providers.ToolSchema>()          // small ctx: core built-ins only
+            : builtIns.Except(core).ToList();
+
+        // Schemas may claim what is left over — but NEVER more than a third of the
+        // window, and never all of it.
+        //
+        // "ctx - reserved" is the space free at the START of the turn, and spending all
+        // of it is a trap that only springs once the model actually uses a tool: the
+        // results come back into the SAME window, on top of schemas that already filled
+        // it. Measured on the crash that produced this line — ctx=16384, schemas ~11,580
+        // tok, reserved 4,773, i.e. 16,353 of 16,384 committed (99.8%) before a single
+        // token was generated. The process died at `native loop start` with no error
+        // line at all; on an 8 GB card a 16k KV cache with a full prompt is also a
+        // CUDA-OOM away from taking llama-server with it.
+        //
+        // A third is not a tuned constant — it is "leave two thirds for the actual
+        // conversation", which is what the window is for. Raising ContextSize now buys
+        // MORE room for tool results instead of more schemas competing for the same air.
+        int freeAfterReserved = ctxTokens - reservedTokens;
+        int budget = Math.Max(600, Math.Min(freeAfterReserved, ctxTokens / 3));
+        var kept = new List<Services.Providers.ToolSchema>();
+        int keptMcp = 0, droppedMcp = 0;
+
+        void Admit(List<Services.Providers.ToolSchema> group, bool countMcp)
+        {
+            foreach (var t in group)
+            {
+                int cost = EstimateSchemaTokens(t);
+                if (cost > budget) { if (countMcp) droppedMcp++; continue; }
+                budget -= cost;
+                kept.Add(t);
+                if (countMcp) keptMcp++;
+            }
+        }
+
+        Admit(pinned, true); // brain recall — the one group the system prompt makes mandatory
+        Admit(core, false);
+        Admit(mcp, true); // registration order — the server's own idea of what matters first
+        Admit(tail, false);
+
+        mcpKept = keptMcp;
+        mcpDropped = droppedMcp;
+        return kept;
+    }
+
+    /// <summary>
+    /// The whole base prompt for a small-context local model, ~25 lines. Rules only,
+    /// ordered by what actually failed in the field:
+    ///
+    /// - "ตอบคนละทาง" → the FIRST rule is answer-the-question-that-was-asked, and the
+    ///   grounding rule says where answers about this machine come from (tools, not
+    ///   memory). A 7B weights early lines heaviest.
+    /// - "มโนคำตอบเอง" → an explicit I-don't-know escape. A model with no permitted
+    ///   way to say "ไม่รู้" fills the gap with fluent invention every time.
+    /// - Narration instead of calls → "call it now" phrased as an order, once.
+    ///
+    /// Everything environmental (brain status, tool NOTE, few-shot, project tree,
+    /// repo map, memory, habits) is appended by GetSystemPrompt afterwards and is
+    /// already ctx-gated. Thai here is expensive (~1 token/char) — keep tool names
+    /// and jargon in English, sentences short.
+    /// </summary>
+    private string BuildCompactLocalBasePrompt(bool isThai, FeatureToggles features)
+    {
+        var sb = new StringBuilder();
+        if (isThai)
+        {
+            sb.AppendLine("""
+                คุณคือ CluadeX ผู้ช่วยเขียนโค้ดบนเครื่องของผู้ใช้ ตอบภาษาไทยเสมอ (โค้ด/ชื่อ tool เป็นอังกฤษ)
+
+                # กฎเหล็ก
+                - ตอบ "คำถามที่ถูกถามจริงๆ" — อ่านคำถามล่าสุดของผู้ใช้อีกครั้งก่อนตอบ แล้วตอบเรื่องนั้นเรื่องเดียว
+                - คำถามเกี่ยวกับโปรเจกต์/ไฟล์/ระบบนี้: ห้ามตอบจากความจำ — หาความจริงก่อนด้วย tool
+                  (read_file / codebase_search / find_symbol / brain_search) แล้วตอบจากผลลัพธ์
+                - ถ้าไม่มี tool ที่ตอบได้และคุณไม่รู้จริง: พูดตรงๆ ว่า "ไม่รู้/ตรวจไม่ได้" — ห้ามแต่งคำตอบ
+                  คำตอบที่แต่งขึ้นแย่กว่าการยอมรับว่าไม่รู้เสมอ
+                - tool เป็นของจริง: เรียกเลยทันที ห้ามพิมพ์ว่า "จะเรียก" หรือบรรยาย JSON — เรียกจริงเท่านั้น
+                - ทักทาย/คำถามทั่วไปสั้นๆ (เช่น "ใช้โมเดลอะไร"): ตอบตรงๆ จาก Environment ไม่ต้องเรียก tool
+
+                # การแก้โค้ด
+                - read_file ก่อนแก้เสมอ → แก้ด้วย multi_edit/write_file → run_build (และ run_tests) จนเขียว
+                  แล้วค่อยบอกว่าเสร็จ — build แดง = ยังไม่เสร็จ ห้ามสรุปว่าเสร็จ
+                - แก้เฉพาะที่ถูกขอ ห้ามเพิ่ม feature/refactor/comment เกินคำขอ
+                - edit หา text ไม่เจอ = ไฟล์จริงไม่ตรงกับที่คิด → read_file ใหม่ก่อน retry
+                """);
+            if (features.GitIntegration)
+                sb.AppendLine("- งาน git: ใช้ git_status/git_add/git_commit/git_merge (อย่า shell 'git ...' เอง) · commit ใหม่เสมอ ห้าม --amend/--no-verify ถ้าไม่ถูกขอ");
+        }
+        else
+        {
+            sb.AppendLine("""
+                You are CluadeX, an AI coding assistant running locally on the user's machine.
+
+                # Hard rules
+                - Answer the question that was ACTUALLY asked — re-read the user's last message before answering, and answer that one thing.
+                - Questions about THIS project/files/system: never answer from memory — get the truth with a tool first (read_file / codebase_search / find_symbol / brain_search), then answer from its result.
+                - If no tool can answer it and you genuinely don't know: say "I don't know / can't verify" plainly. An invented answer is always worse than admitting you don't know.
+                - Tools are real: call them immediately. Never say you "will use" one or narrate JSON — only real calls count.
+                - Greetings / short generic questions (e.g. "which model are you"): answer directly from Environment, no tool needed.
+
+                # Editing code
+                - read_file before every edit → change via multi_edit/write_file → run_build (and run_tests) until green, only then say done — a red build means NOT done.
+                - Change only what was asked. No extra features, refactors, or comments.
+                - If an edit can't find its text, the real file differs from your guess → read_file again before retrying.
+                """);
+            if (features.GitIntegration)
+                sb.AppendLine("- Git work: use git_status/git_add/git_commit/git_merge (not shell 'git ...') · new commits always, never --amend/--no-verify unless asked.");
+        }
+        return sb.ToString();
+    }
 
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
     private string? _cachedSystemPrompt;
     private DateTime _promptCacheExpiry = DateTime.MinValue;
     private readonly object _promptCacheLock = new();
+    /// <summary>The brain status line baked into <see cref="_cachedSystemPrompt"/>.
+    /// The prompt now carries a MEASURED fact, and a measured fact with a 30-second
+    /// cache in front of it is how you ship a prompt that confidently says CONNECTED
+    /// about a server that died 25 seconds ago — the exact failure this whole change
+    /// exists to remove. Cheap to recompute (property reads, no I/O), so it is the
+    /// cache key rather than something to hope about.</summary>
+    private string? _cachedBrainStatusLine;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -37,10 +312,14 @@ public class CodeAgentService
     /// </summary>
     public async Task<string> GetSystemPromptAsync()
     {
-        // Return cached if still valid (cache for 30 seconds)
+        string? brainNow = _brainSync?.LiveStatusLine;
+
+        // Return cached if still valid (30 seconds) AND the brain still says the same
+        // thing. A reconnect or a death inside the window rebuilds the prompt now.
         lock (_promptCacheLock)
         {
-            if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry)
+            if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry
+                && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal))
                 return _cachedSystemPrompt;
         }
 
@@ -49,6 +328,7 @@ public class CodeAgentService
         lock (_promptCacheLock)
         {
             _cachedSystemPrompt = prompt;
+            _cachedBrainStatusLine = brainNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
@@ -61,6 +341,7 @@ public class CodeAgentService
         lock (_promptCacheLock)
         {
             _cachedSystemPrompt = null;
+            _cachedBrainStatusLine = null;
             _promptCacheExpiry = DateTime.MinValue;
         }
     }
@@ -75,6 +356,20 @@ public class CodeAgentService
     {
         bool isThai = _localizationService.CurrentLanguage == "th";
         var features = _settingsService.Settings.Features;
+
+        // ─── Local models get a COMPACT base, not a trimmed copy of the big one ───
+        // Sections 1-11 below measure ~3k tokens (Thai ≈ 1 token/char), which on a
+        // 12,288 window meant 47% of the context was instructions before the user's
+        // question arrived — measured live: sysPrompt~5769tok, a 16-char question,
+        // in=8238. A 7B does not read a prompt that long; it drowns in it, answers
+        // beside the question, and has no room left for tool schemas (71 of 83 MCP
+        // schemas dropped that turn). For a small window the base is ~25 lines: the
+        // discipline rules that change behaviour, none of the prose that describes it.
+        // API providers and big-ctx locals (≥32k) keep the full prompt unchanged.
+        bool compactLocal = (_providerManager.ActiveProviderType
+                is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+            && _settingsService.Settings.ContextSize < 32000;
+        if (compactLocal) return BuildCompactLocalBasePrompt(isThai, features);
 
         var sb = new StringBuilder();
 
@@ -130,15 +425,17 @@ public class CodeAgentService
 
         if (features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git"))
         {
+            // Local git only — push lives behind feature.github, so listing it here would
+            // promise a capability the runtime gate denies.
             sb.AppendLine(isThai
-                ? "- จัดการ Git เต็มรูปแบบ: status, add, commit, push, pull, branch, merge, diff, log, stash"
-                : "- Full Git version control: status, add, commit, push, pull, branch, merge, diff, log, stash");
+                ? "- จัดการ Git ในเครื่อง: status, add, commit, pull, branch, checkout, merge, diff, log, stash"
+                : "- Local Git version control: status, add, commit, pull, branch, checkout, merge, diff, log, stash");
         }
         if (features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"))
         {
             sb.AppendLine(isThai
-                ? "- เชื่อมต่อ GitHub: สร้าง PR, ดู issues, จัดการ repo (ต้องติดตั้ง gh CLI)"
-                : "- GitHub integration: create PRs, list issues, view repos (requires gh CLI)");
+                ? "- เชื่อมต่อ GitHub: push ขึ้น remote, สร้าง PR, ดู issues, จัดการ repo (ต้องติดตั้ง gh CLI)"
+                : "- GitHub integration: push to a remote, create PRs, list issues, view repos (requires gh CLI)");
         }
         if (features.SmartEditing)
         {
@@ -172,6 +469,46 @@ public class CodeAgentService
               - Don't create helpers, utilities, or abstractions for one-time operations.
               - Three similar lines of code is better than a premature abstraction.
               - If an approach fails, diagnose why before switching tactics — don't retry blindly.
+              """);
+
+        // ═══════════════════════════════════════════
+        // Section 3a: Respond efficiently (don't over-call tools on trivial asks)
+        // ═══════════════════════════════════════════
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "# ตอบอย่างมีประสิทธิภาพ" : "# Respond Efficiently");
+        sb.AppendLine(isThai
+            ? """
+              - คำถามง่ายๆ ทักทาย หรือพูดคุยทั่วไป (เช่น "ใช้โมเดลอะไร", "สวัสดี") ให้ตอบตรงๆ ทันที — อย่าเรียก tool ถ้ามันไม่ได้ช่วยอะไร
+              - ข้อมูลพื้นฐาน (โมเดล, ไดเรกทอรี, branch) อยู่ในหัวข้อ Environment ด้านล่างแล้ว ตอบจากตรงนั้นได้เลย ไม่ต้องเรียก tool
+              - เรียกอ่านไฟล์/รันคำสั่งเฉพาะเมื่องานนั้นต้องใช้บริบทโปรเจกต์จริงๆ หรือต้องลงมือแก้/ตรวจสอบ
+              - ขึ้นต้นด้วยคำตอบเลย กระชับ ไม่ต้องเกริ่นยาว
+              """
+            : """
+              - For simple questions, greetings, or chit-chat (e.g. "what model are you?", "hi"), answer directly — do NOT call a tool when it adds nothing.
+              - Basic facts (model, working directory, branch) are already in the Environment section below — answer from there without any tool call.
+              - Only read files or run commands when the task genuinely needs project context or an actual change/check.
+              - Lead with the answer. Keep it concise; skip long preambles.
+              """);
+
+        // ═══════════════════════════════════════════
+        // Section 3b: Code intelligence & memory (use what makes CluadeX unique)
+        // ═══════════════════════════════════════════
+        sb.AppendLine();
+        sb.AppendLine(isThai ? "# ปัญญาโค้ด & ความจำ" : "# Code Intelligence & Memory");
+        sb.AppendLine(isThai
+            ? """
+              - มี CODEBASE MAP (ด้านล่าง) สรุป type/function ของทั้งโปรเจค — ใช้นำทางก่อน แล้วค่อย read_file ไฟล์ที่เกี่ยวข้อง แทนการเดาหรือ grep มั่ว
+              - จะหาว่า "X อยู่ตรงไหน / ทำงานยังไง" ใช้ codebase_search (จัดอันดับความเกี่ยวข้อง ฉลาดกว่า grep ดิบ) แล้ว read_file ผลลัพธ์อันดับต้น
+              - หานิยามของชื่อ (class/method/function) ใช้ find_symbol "ชื่อ" (go-to-definition ไม่ต้องใช้ coord); ดูโครงไฟล์ (class/method พร้อมเลขบรรทัด) ใช้ list_symbols — แม่นกว่าและถูกกว่าการ read ทั้งไฟล์
+              - งานที่ไม่ trivial: เรียก brain_recall ก่อนลงมือ เพื่อดูบทเรียน/การตัดสินใจ/บั๊กที่เคยเจอจาก BrainX (อย่าแก้บั๊กเดิมซ้ำรอย)
+              - หลังแก้โค้ด: ยืนยันก่อนบอกว่าเสร็จ — เรียก run_build (auto-detect คำสั่ง build/type-check) และ run_tests (สรุป pass/fail + เทสต์ที่ fail) และ/หรือ lsp_diagnostics กับไฟล์ที่แก้ อ่าน error แล้วแก้ จน build ผ่านและเทสต์เขียว
+              """
+            : """
+              - A CODEBASE MAP (below) lists the project's types/functions. Use it to navigate, then read_file the relevant files — don't guess or blind-grep.
+              - To locate "where is X handled?", use codebase_search (ranked relevance, smarter than raw grep), then read_file the top hits.
+              - To find where a NAME (class/method/function) is DEFINED, use find_symbol "name" (go-to-definition, no coords needed). To outline a file (symbols + line numbers) use list_symbols — both beat reading the whole file.
+              - For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX (don't re-solve a bug you already solved).
+              - After editing code, VERIFY before claiming done: call run_build (auto-detects the build/type-check command), run_tests (distilled pass/fail + failing tests), and/or lsp_diagnostics on the changed file; read any errors and fix them, then build again until clean and tests pass.
               """);
 
         // ═══════════════════════════════════════════
@@ -249,7 +586,7 @@ public class CodeAgentService
               4. ปฏิบัติตาม best practices และรูปแบบ idiomatic ของภาษานั้นๆ
               5. เมื่อแก้ error ให้วิเคราะห์ error message อย่างละเอียดและให้โค้ดที่แก้ไขแล้วทั้งหมด
               6. ใส่คอมเมนต์เฉพาะ logic ที่ซับซ้อนเท่านั้น — อย่าเพิ่มคอมเมนต์ในโค้ดที่ไม่ได้แก้
-              7. เมื่อแก้ไฟล์ ใช้ edit_file กับ find/replace ที่แม่นยำ แทนการเขียนไฟล์ใหม่ทั้งหมด
+              7. อ่านไฟล์ด้วย read_file "ก่อน" แก้เสมอ (ระบบจะบล็อกการแก้ไฟล์ที่ยังไม่ได้อ่าน หรือไฟล์ที่เปลี่ยนบนดิสก์หลังอ่าน) แล้วใช้ edit_file find/replace ที่แม่นยำแทนการเขียนใหม่ทั้งไฟล์ — แก้หลายจุดใช้ multi_edit (atomic: พลาดจุดเดียวไม่เขียนทั้งไฟล์); ไฟล์ใหญ่ใช้ read_file offset/limit
               8. ตรวจสอบโค้ดในใจก่อนเขียน — ให้แน่ใจว่าวงเล็บ/ปีกกาสมดุล
               9. ห้ามแนะนำ security vulnerabilities (command injection, XSS, SQL injection)
               """
@@ -260,7 +597,7 @@ public class CodeAgentService
               4. Follow best practices and idiomatic patterns for the language
               5. When fixing errors, analyze the error message carefully and provide the complete corrected code
               6. Add comments for complex logic only — don't add comments to code you didn't change
-              7. When editing files, prefer minimal changes — use edit_file with precise find/replace over rewriting entire files
+              7. ALWAYS read_file a file BEFORE you edit/write it (the system blocks edits to a file you haven't read, or one that changed on disk since you read it). Then prefer minimal changes — edit_file with precise find/replace over rewriting whole files. For SEVERAL edits to one file, use multi_edit (atomic — if any hunk fails to match, nothing is written). For large files, read_file with offset+limit.
               8. Validate your code mentally before writing — ensure brackets/braces balance
               9. Do not introduce security vulnerabilities (command injection, XSS, SQL injection, OWASP top 10)
               """);
@@ -437,6 +774,7 @@ public class CodeAgentService
         ["git_diff"] = "Diffing",
         ["git_log"] = "Reading git log",
         ["git_commit"] = "Committing",
+        ["git_merge"] = "Merging",
         ["git_push"] = "Pushing",
         ["git_pull"] = "Pulling",
         ["git_clone"] = "Cloning",
@@ -457,6 +795,10 @@ public class CodeAgentService
         ["notebook_edit"] = "Editing notebook",
         ["memory_save"] = "Saving memory",
         ["memory_list"] = "Listing memories",
+        ["brain_recall"] = "Recalling from BrainX",
+        ["lsp_diagnostics"] = "Checking diagnostics",
+        ["codebase_search"] = "Searching codebase",
+        ["instinct_evolve"] = "Evolving instincts",
         ["memory_delete"] = "Deleting memory",
         ["skill_invoke"] = "Invoking skill",
         ["ask_user"] = "Asking user",
@@ -466,6 +808,11 @@ public class CodeAgentService
         ["plan_mode"] = "Planning",
         ["agent_spawn"] = "Spawning agent",
         ["config"] = "Reading config",
+        ["hex_info"] = "Inspecting binary",
+        ["hex_open"] = "Opening in Hex Editor",
+        ["hex_read"] = "Reading bytes",
+        ["hex_search"] = "Searching binary",
+        ["hex_patch"] = "Patching bytes",
     };
 
     // Random spinner verbs for the thinking phase (inspired by Claude Code spinnerVerbs.ts)
@@ -545,6 +892,9 @@ public class CodeAgentService
     /// <summary>Fires per-token during agentic generation for real-time streaming display.</summary>
     public event Action<string, int>? OnAgenticStreamingToken; // token, stepNumber
 
+    private readonly BrainSyncService? _brainSync;
+    private readonly RepoMapService? _repoMap;
+
     public CodeAgentService(
         AiProviderManager providerManager,
         CodeExecutionService codeExecutionService,
@@ -555,8 +905,16 @@ public class CodeAgentService
         ContextMemoryService contextMemoryService,
         LocalizationService localizationService,
         ActivationService activationService,
-        MemoryService memoryService)
+        MemoryService memoryService,
+        HookService? hookService = null,
+        CostTrackingService? costTrackingService = null,
+        BrainSyncService? brainSync = null,
+        RepoMapService? repoMap = null,
+        DebugLogService? debugLog = null)
     {
+        _debugLog = debugLog;
+        _brainSync = brainSync;
+        _repoMap = repoMap;
         _providerManager = providerManager;
         _codeExecutionService = codeExecutionService;
         _agentToolService = agentToolService;
@@ -567,12 +925,104 @@ public class CodeAgentService
         _localizationService = localizationService;
         _activationService = activationService;
         _memoryService = memoryService;
+        _hookService = hookService;
+        _costTrackingService = costTrackingService;
     }
+
+    // Agent-loop tracing: when the user reports "it just doesn't work", the daily log file must be
+    // able to answer WHAT the model returned and WHERE the turn died. Startup lines alone can't.
+    private readonly DebugLogService? _debugLog;
 
     /// <summary>Gets system prompt with or without tool definitions based on whether a project is open.</summary>
     public string GetSystemPrompt()
     {
         var sb = new StringBuilder(BuildBaseSystemPrompt());
+
+        // ─── BRAIN-FIRST ───
+        // Same standing rule Claude Code and Codex already run under: consult the
+        // brain BEFORE doing the work, not after. Appended right at the head because
+        // the local fit-guard below trims the TAIL of this prompt — a rule that can
+        // be trimmed away is not a rule.
+        //
+        // Gated on the brain actually being reachable. Telling a model to call
+        // brain_search when no brain server is running produces the worst outcome of
+        // all: it tries, fails, and burns the turn apologising. The pinned schemas in
+        // FitLocalToolSchemas are the other half — the rule is only enforceable if
+        // brain_search survives the context fit.
+        if (_brainSync?.IsBrainAvailable == true)
+        {
+            sb.AppendLine();
+            sb.AppendLine("# BrainX — brain-first protocol");
+            sb.AppendLine("You are connected to the owner's BrainX brain: past decisions, bug fixes and");
+            sb.AppendLine("gotchas already paid for on this machine.");
+            // The measured fact, not an inference. Without this line the model had no
+            // route to its own connection state except a tool call — and on 2026-08-05
+            // it skipped the call and asserted the opposite of the truth. State that
+            // it is not allowed to overrule this, because a fact it can contradict is
+            // no better than no fact.
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine("  That line is ground truth. NEVER claim you cannot reach the brain while it");
+            sb.AppendLine("  says CONNECTED — if asked about the connection, quote it and stop.");
+            sb.AppendLine("- Search FIRST, answer SECOND. Before a non-trivial answer or any file edit, call");
+            sb.AppendLine("  `brain_search` with 2-4 keywords. If it returns nothing, retry once with");
+            sb.AppendLine("  `brain_semantic_search` (it handles Thai and paraphrases).");
+            sb.AppendLine("- Searching is a STEP, never the answer. When results come back you must still do");
+            sb.AppendLine("  the work the user asked for, in the same turn. NEVER end a turn with only a");
+            sb.AppendLine("  remark about what you searched or fetched — that is a failed turn.");
+            sb.AppendLine("- Use `brain_get_note` only when one title is clearly decisive and its preview is");
+            sb.AppendLine("  not enough. One note at most, then get on with the task.");
+            sb.AppendLine("- Name the notes you relied on. Where the brain contradicts your instinct, the");
+            sb.AppendLine("  brain wins — it was written from something that really happened here.");
+            sb.AppendLine("- Skip the search for trivial questions, generic language facts, or a request that");
+            sb.AppendLine("  already names the exact file to change.");
+            sb.AppendLine("- A `<brainx_recall>` block in the user's message means the search already ran;");
+            sb.AppendLine("  read it and answer — only search again for a genuinely different angle.");
+        }
+        else if (_brainSync != null)
+        {
+            // The silent case was the dangerous one. With no brain the prompt said
+            // NOTHING about the brain, so a question about it had no anchor at all and
+            // the model was free to invent either answer. Being accurately negative is
+            // a feature: "the brain is down, here is why" is a true sentence a user can
+            // act on, and it costs three lines.
+            sb.AppendLine();
+            sb.AppendLine("# BrainX — not available this turn");
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine("  You have NO brain tools right now. Do not claim to have searched the brain, and");
+            sb.AppendLine("  do not promise to. If asked about the connection, quote the line above verbatim");
+            sb.AppendLine("  and tell the user to check the 🧠 chip in the status bar (MCP Servers, Ctrl+5).");
+        }
+
+        // ─── Context-window awareness (fixes the local-model "hang / no response") ───
+        // Local providers run with a SMALL context (default 4096 tokens). The full Anthropic-grade context
+        // dump — tool definitions + project tree + codebase map + key files — is many thousands of tokens
+        // and OVERFLOWS that window. On a local model that means an agonizingly slow prefill or no output at
+        // all. So we scale what we inject to the active model's actual context size. (API providers with huge
+        // windows are unaffected — they still get the full prompt, identical to before.)
+        bool isLocalProvider = _providerManager.ActiveProviderType
+            is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        int contextTokens = isLocalProvider
+            ? Math.Max(2048, (int)_settingsService.Settings.ContextSize)
+            : 1_000_000;
+        // The legacy TEXT tool catalogue (~3k tokens) is only for the [ACTION:] loop. When native tool
+        // use is on, schemas are sent via the API "tools" field (and rendered into the prompt by the
+        // server's chat template) — including the text catalogue too DOUBLE-pays those tokens, which is
+        // exactly what blew a ctx-8192 request up to ~13.7k and overflowed the window.
+        bool localNativeTools = isLocalProvider && _settingsService.Settings.LocalNativeToolUseEnabled;
+        bool includeToolDefs     = !isLocalProvider || (!localNativeTools && contextTokens >= 8000);
+        // Heavy tier at ≥32k for local, not ≥16k: the full tree + 6k-char codebase map +
+        // key-file dump measures ~3-4k tokens, which at 16384 would eat back everything
+        // the compact base prompt just freed. A 16k local model gets the shallow tree +
+        // small map below — the anti-hallucination floor — and pulls detail via tools.
+        //
+        // 32k is also past this machine's ceiling on purpose. Raising ContextSize from
+        // 12288 to 16384 killed the app TWICE mid-turn (2026-08-05): no managed
+        // exception, no Windows error event, no "stopped" line in mcp-host.log — the
+        // signature of a NATIVE abort, because LocalGgufProvider runs LLamaSharp
+        // in-process, so a CUDA OOM in the KV cache takes the whole WPF process with it.
+        // 16384 loaded fine when probed on an idle desktop and died under real load on
+        // the same 8 GB card. Prompt DIET is the way to buy room here, not more ctx.
+        bool includeHeavyContext = !isLocalProvider || contextTokens >= 32000; // codebase map + tree + key files
 
         // ═══════════════════════════════════════════
         // Dynamic Section: Environment Info
@@ -581,7 +1031,15 @@ public class CodeAgentService
         sb.AppendLine("# Environment");
         sb.AppendLine($"- Platform: {Environment.OSVersion.VersionString}");
         sb.AppendLine($"- Shell: PowerShell / cmd");
-        sb.AppendLine($"- Model: {_providerManager.ActiveProvider?.GetType().Name ?? "Unknown"}");
+        sb.AppendLine($"- Provider: {_providerManager.ActiveProvider?.DisplayName ?? "Unknown"}");
+        try
+        {
+            string activeProviderId = _providerManager.ActiveProvider?.ProviderId ?? "";
+            if (_settingsService.Settings.ProviderConfigs.TryGetValue(activeProviderId, out var activeCfg)
+                && !string.IsNullOrWhiteSpace(activeCfg.EffectiveModelId))
+                sb.AppendLine($"- Model: {activeCfg.EffectiveModelId}");
+        }
+        catch { /* model id is best-effort */ }
         sb.AppendLine($"- Date: {DateTime.Now:yyyy-MM-dd}");
         sb.AppendLine($"- CluadeX Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.1.0"}");
 
@@ -630,31 +1088,181 @@ public class CodeAgentService
             // Dynamic Section: Tool Definitions
             // ═══════════════════════════════════════════
             sb.AppendLine();
-            sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
-            sb.AppendLine();
 
-            // Include project tree (up to 3 levels, larger budget)
-            try
+            // False only in the MCP-only case (no project open): the few-shot below
+            // demonstrates read_file → multi_edit → run_build, which would be a
+            // worked example of tools the model does not have this turn.
+            bool builtInToolsAvailable = true;
+
+            if (includeToolDefs)
             {
-                string tree = _fileSystemService.GetProjectTree(3);
-                if (tree.Length > 4000)
-                    tree = tree[..4000] + "\n... (truncated)";
-                sb.AppendLine("PROJECT STRUCTURE:");
-                sb.AppendLine(tree);
+                sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
             }
-            catch { /* ignore */ }
+            else if (localNativeTools)
+            {
+                // Native tool use: schemas ride the API "tools" field, so the prompt only needs the
+                // discipline line — not a token-expensive text copy of every tool. It MUST describe the
+                // set we actually send, though: telling the model tools are "disabled", or naming a core
+                // set that omits the MCP tools we handed it, is the contradiction that wrecks weak-model
+                // tool selection. Derive the names from the real catalogue rather than a hardcoded list
+                // that has to be kept in sync by hand.
+                //
+                // Deliberately NOT the budget fit: that needs a measured system prompt, which is what we
+                // are building right now. Only the token BUDGET is unknown here — which built-ins qualify,
+                // and which servers exist, is not — so the NOTE stays truthful without the circularity.
+                var catalogue = _agentToolService.BuildNativeToolSchemas();
+                var builtInNames = catalogue.Where(t => !IsMcpToolName(t.Name))
+                    .Select(t => t.Name)
+                    .Where(n => contextTokens >= 16000 || CoreLocalToolNames.Contains(n))
+                    .ToList();
+                // git_* names reach the set only when the Git feature actually emitted their schemas —
+                // advertising them unconditionally offered tools IsToolAllowed denies.
+                bool gitInSet = builtInNames.Contains("git_commit", StringComparer.OrdinalIgnoreCase);
 
-            // Auto-read key project files for context
+                builtInToolsAvailable = builtInNames.Count > 0;
+
+                if (!builtInToolsAvailable)
+                {
+                    // No project open, so BuildNativeToolSchemas emitted MCP tools ONLY.
+                    // Say that plainly rather than describe a built-in set the model was
+                    // never handed: the MCP paragraph below is its whole arsenal this
+                    // turn, and the one thing it must not conclude is that it has no
+                    // tools and should therefore just talk.
+                    sb.AppendLine("NOTE: No project folder is open, so the file/build tools are unavailable this turn. "
+                        + "This does NOT leave you without tools — see the next line, and use them. "
+                        + "If the user asks for something that needs files, ask them to open a project folder first.");
+                }
+                else if (contextTokens >= 16000)
+                {
+                    sb.AppendLine("NOTE: You have the full built-in tool catalogue (provided as structured tool schemas). "
+                        + "ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify before you say you're done.");
+                }
+                else
+                {
+                    sb.AppendLine("NOTE: Context is limited, so you have a CORE built-in tool set: "
+                        + string.Join(", ", builtInNames)
+                        + ". ALWAYS read_file before editing; after an edit, run_build (and run_tests) to verify. "
+                        + (gitInSet
+                            ? "For git, PREFER the dedicated tools over run_command 'git ...': use git_commit "
+                              + "(pass stage_all=true to stage everything first) and git_merge — shell quoting for git is "
+                              + "unreliable on Windows. "
+                            : "")
+                        + "Increase Context Size to ≥ 16384 for the full built-in toolset.");
+                }
+
+                // MCP tools are the user's own configured servers. Say they exist, because a weak model
+                // that isn't told tends to NARRATE the call instead of making it. No counts: a tight
+                // window can drop some, and the tool list itself is the authority on what is callable.
+                var mcpServers = catalogue.Where(t => IsMcpToolName(t.Name))
+                    .Select(t => McpServerOf(t.Name))
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(s => s, StringComparer.Ordinal)
+                    .ToList();
+                if (mcpServers.Count > 0)
+                {
+                    sb.AppendLine("You ALSO have MCP tools from " + string.Join(", ", mcpServers.Select(s => $"'{s}'"))
+                        + ". They are REAL callable tools, named mcp__<server>__<tool> — call them by that full "
+                        + "qualified name, and only the ones actually present in your tool list. Never answer that "
+                        + "you 'will use' one or ask the user to go ahead: call it now, then answer from its result.");
+                }
+            }
+            else
+            {
+                // Legacy [ACTION:] path with no tool catalogue fits — run as a plain chat assistant rather
+                // than overflow the window (which is what hangs).
+                sb.AppendLine("NOTE: This local model's context window is small, so file/tool actions are "
+                    + "disabled for now to keep responses fast and reliable. Increase Context Size to ≥ 8192 "
+                    + "in Settings (or pick a larger-context model) to enable the full agentic toolset.");
+            }
             sb.AppendLine();
-            sb.AppendLine("KEY PROJECT FILES:");
-            AppendKeyFileIfExists(sb, "CLAUDE.md");
-            AppendKeyFileIfExists(sb, ".claude/CLAUDE.md");
-            AppendKeyFileIfExists(sb, ".cluadex/CLAUDE.md");
-            AppendKeyFileIfExists(sb, "README.md");
-            AppendKeyFileIfExists(sb, "package.json", 500);
-            AppendKeyFileIfExists(sb, "Cargo.toml", 300);
-            AppendKeyFileIfExists(sb, "pyproject.toml", 300);
-            AppendKeyFileIfExists(sb, ".gitignore", 200);
+
+            // ─── Few-shot trace (weak local models) ───
+            // Showing the read→edit→verify shape once teaches the call FORMAT + discipline far better than
+            // prose rules. Local-only + whenever tools are actually available (text catalogue OR native schemas).
+            if (isLocalProvider && (includeToolDefs || localNativeTools) && builtInToolsAvailable)
+            {
+                sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
+                sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
+                sb.AppendLine("  2. multi_edit(\"src/Calc.cs\", edits=[{find:\"return a - b;\", replace:\"return a + b;\"}]) — atomic find/replace.");
+                sb.AppendLine("  3. run_build — if it FAILS, read the error, fix with another edit, build again until green; then run_tests.");
+                sb.AppendLine("  4. Only after it's green do you say you're done.");
+                sb.AppendLine();
+            }
+
+            if (includeHeavyContext)
+            {
+                // Include project tree (up to 3 levels, larger budget)
+                try
+                {
+                    string tree = _fileSystemService.GetProjectTree(3);
+                    if (tree.Length > 4000)
+                        tree = tree[..4000] + "\n... (truncated)";
+                    sb.AppendLine("PROJECT STRUCTURE:");
+                    sb.AppendLine(tree);
+                }
+                catch { /* ignore */ }
+
+                // Codebase map — a symbol-level outline so the agent knows the whole project's types and
+                // APIs without being pointed at files (IDE-grade awareness). Bounded + cached; on Anthropic
+                // it rides inside the prompt-cached system prompt, so it's effectively free after request #1.
+                try
+                {
+                    string repoMap = _repoMap?.GetRepoMap(6000) ?? "";
+                    if (!string.IsNullOrWhiteSpace(repoMap))
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("CODEBASE MAP (key declarations per file — read a file for full content):");
+                        sb.AppendLine(repoMap);
+                    }
+                }
+                catch { /* ignore */ }
+
+                // Auto-read key project files for context
+                sb.AppendLine();
+                sb.AppendLine("KEY PROJECT FILES:");
+                AppendKeyFileIfExists(sb, "CLAUDE.md");
+                AppendKeyFileIfExists(sb, ".claude/CLAUDE.md");
+                AppendKeyFileIfExists(sb, ".cluadex/CLAUDE.md");
+                AppendKeyFileIfExists(sb, "README.md");
+                AppendKeyFileIfExists(sb, "package.json", 500);
+                AppendKeyFileIfExists(sb, "Cargo.toml", 300);
+                AppendKeyFileIfExists(sb, "pyproject.toml", 300);
+                AppendKeyFileIfExists(sb, ".gitignore", 200);
+            }
+            else
+            {
+                // Small local context: skip the multi-thousand-token codebase map + key-file dump that
+                // overflows the window (the root cause of the local "hang / no response"). Give just a
+                // shallow tree so the model knows the layout, and steer it to pull details on demand.
+                try
+                {
+                    string tree = _fileSystemService.GetProjectTree(2);
+                    if (tree.Length > 1200)
+                        tree = tree[..1200] + "\n... (truncated)";
+                    sb.AppendLine("PROJECT STRUCTURE (top level — use read_file / search tools to go deeper):");
+                    sb.AppendLine(tree);
+                }
+                catch { /* ignore */ }
+
+                // ─── Shrunk repo map at the 8k tier ───
+                // The full 6k-char map is reserved for ≥16k, but even ~400-800 tokens of "these are the real
+                // files + class names" massively cuts path/symbol hallucination — the #1 weak-model failure.
+                // So inject a tiny map from 8k upward instead of all-or-nothing at 16k.
+                if (contextTokens >= 8000)
+                {
+                    try
+                    {
+                        string smallMap = _repoMap?.GetRepoMap(1500) ?? "";
+                        if (!string.IsNullOrWhiteSpace(smallMap))
+                        {
+                            sb.AppendLine();
+                            sb.AppendLine("CODEBASE MAP (key types per file — read a file for full content):");
+                            sb.AppendLine(smallMap);
+                        }
+                    }
+                    catch { /* ignore */ }
+                }
+            }
 
             // Detect project type and add specific context
             string projType = DetectProjectType();
@@ -673,12 +1281,56 @@ public class CodeAgentService
             string memoryContent = _memoryService.LoadMemoryIndex();
             if (!string.IsNullOrWhiteSpace(memoryContent))
             {
+                // The memory index grows without bound as the user works; on a local
+                // window it competes with the question like every other block. Cap it —
+                // the newest entries are at the top of the index, so a head-keep is the
+                // right truncation.
+                if (isLocalProvider)
+                {
+                    while (CluadeX.Helpers.TokenBudget.EstimateTokens(memoryContent) > 600
+                           && memoryContent.Length > 400)
+                        memoryContent = memoryContent[..(int)(memoryContent.Length * 0.85)];
+                }
                 sb.AppendLine();
                 sb.AppendLine("# Memory");
                 sb.AppendLine(memoryContent);
             }
         }
         catch { /* memory not available */ }
+
+        // ─── Learned habits (instinct read-back) ───
+        // Closes the learning loop: instincts extracted across past sessions are finally re-injected so the
+        // model benefits from them (before, extraction was write-only and the model never saw them again).
+        try
+        {
+            string? instincts = _agentToolService.GetTopInstinctsBlock(5);
+            if (!string.IsNullOrWhiteSpace(instincts))
+            {
+                sb.AppendLine();
+                sb.AppendLine("# Learned habits (apply when relevant)");
+                sb.AppendLine(instincts);
+            }
+        }
+        catch { /* instincts optional */ }
+
+        // ─── Hard fit-guard for local models ───
+        // Last line of defence: never hand a local model a system prompt that alone blows past its context
+        // window — prefilling an over-long prompt is the slow-hang we're killing. Keep the head (identity +
+        // tools + env) and drop the tail, leaving room for the conversation and the reply.
+        if (isLocalProvider)
+        {
+            string built = sb.ToString();
+            int budgetTokens = (int)(contextTokens * 0.7); // leave ~30% for the question + the answer
+            if (_contextMemoryService.EstimateTokens(built) > budgetTokens)
+            {
+                int charBudget = Math.Max(800, budgetTokens * 4); // ~4 chars/token heuristic
+                if (built.Length > charBudget)
+                    built = built[..charBudget]
+                        + "\n\n[System prompt trimmed to fit this model's context window. Increase Context Size "
+                        + "in Settings, or use a larger-context model, for fuller project awareness.]";
+                return built;
+            }
+        }
 
         return sb.ToString();
     }
@@ -814,13 +1466,159 @@ public class CodeAgentService
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
+        // Entry trace FIRST — a turn that dies before the loop (brain recall, system prompt build,
+        // provider not ready) used to leave the log completely empty, which is indistinguishable
+        // from "the user never sent anything".
+        var prov = _providerManager.ActiveProvider;
+        _debugLog?.Info("Agent", $"turn start · provider={prov?.ProviderId ?? "null"} ready={prov?.IsReady} "
+            + $"nativeTools={prov?.SupportsNativeToolUse} msgLen={userMessage?.Length ?? 0} history={history.Count}");
+
+        // ─── "Are you connected to the brain?" — answered by the app, not the model ───
+        // Any answer a program can compute must never be generated. This one is a C#
+        // property; sending it through a 7B turned a measured fact into a coin flip and
+        // the coin came up wrong (2026-08-05, toolCalls=0, "เชื่อมต่อไม่ได้" while the
+        // server was Ready with 83 tools). Zero tokens, zero latency, cannot be wrong.
+        if (_brainSync != null && LooksLikeBrainStatusQuestion(userMessage))
+        {
+            string answer = _brainSync.LiveStatusLine;
+            _debugLog?.Info("Agent", $"brain-status question answered from ground truth (no model call) · {answer}");
+            return new AgentLoopResult
+            {
+                Success = true,
+                StopReason = "end_turn",
+                TurnCount = 1,
+                FinalResponse = answer,
+                Steps = { new AgentStep { StepNumber = 1, ResponseText = answer } },
+            };
+        }
+
+        // ─── claude-dev: delegate the WHOLE turn, wrap nothing ───
+        // The CLI is a complete agent (planner, tools, brain recall, verification).
+        // Sending it through either loop below would put a second planner on top of
+        // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
+        // over one task. One call, its answer is the turn.
+        if (_providerManager.ActiveProviderType == AiProviderType.ClaudeDev)
+        {
+            _debugLog?.Info("Agent", "claude-dev passthrough · delegating turn to the Claude Code CLI");
+            var cdResult = new AgentLoopResult { TurnCount = 1 };
+            var cdText = new StringBuilder();
+            await foreach (var chunk in _providerManager.ActiveProvider.ChatAsync(history, userMessage ?? "", null, ct))
+            {
+                cdText.Append(chunk);
+                OnAgenticStreamingToken?.Invoke(chunk, 1);
+            }
+            cdResult.FinalResponse = cdText.ToString().Trim();
+            cdResult.Success = cdResult.FinalResponse.Length > 0;
+            cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
+            cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
+            _debugLog?.Info("Agent", $"claude-dev passthrough done · textLen={cdResult.FinalResponse.Length}");
+            return cdResult;
+        }
+
+        // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
+        userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
+
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
         {
             return await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct);
         }
 
+        _debugLog?.Warn("Agent", "dispatching to LEGACY [ACTION:] loop (provider has no native tool use) — "
+            + "local file-edit reliability is much lower on this path");
         return await ExecuteLegacyToolLoopAsync(history, userMessage, progress, ct);
+    }
+
+    /// <summary>
+    /// Auto-recall: before an agentic task, search the connected BrainX for relevant coding-lessons /
+    /// past decisions and prepend the top hits to the user message (model input only — the persisted
+    /// user message is untouched). Best-effort: gated by setting, 3s timeout, silent on any failure so
+    /// the task never stalls on the brain.
+    /// </summary>
+    private async Task<string> MaybePrependBrainContextAsync(string userMessage, IProgress<string>? progress, CancellationToken ct)
+    {
+        if (_brainSync == null || !_settingsService.Settings.BrainAutoRecallEnabled) return userMessage;
+        if (string.IsNullOrWhiteSpace(userMessage)) return userMessage;
+        if (!_brainSync.IsBrainAvailable)
+        {
+            // Say it out loud. This gate returning false silently is exactly how
+            // auto-recall stayed dead for months behind an empty mcp_servers.json,
+            // and again on 2026-08-04 behind a crashed brainx-mcp: the user asks a
+            // question, gets a memoryless answer, and nothing anywhere says why.
+            _debugLog?.Warn("Agent", "Brain auto-recall skipped — no brain MCP server is running "
+                + "(check the 🧠 chip in the status bar / MCP Servers, Ctrl+5)");
+            return userMessage;
+        }
+        // Skip the brain round-trip for very short / conversational asks ("hi", "โมเดลอะไร", "thanks").
+        // Auto-recall targets non-trivial coding tasks; on a quick question the extra latency is exactly
+        // what makes the app feel sluggish — which is the whole complaint we're fixing here.
+        if (userMessage.Trim().Length < 25) return userMessage;
+
+        try
+        {
+            progress?.Report("Recalling from BrainX...");
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // 6s (was 3s): semantic search adds an embedding round-trip; still best-effort and skipped
+            // entirely for short conversational prompts, so the worst case stays bounded.
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(6));
+
+            string query = userMessage.Length > 200 ? userMessage[..200] : userMessage;
+            // Local windows get 2 hits, not 3. The injected block competes with the
+            // question for the model's attention BY MASS: three formatted notes measured
+            // ~2.4k tokens against a 16-char question, and the model answered the notes.
+            bool recallLocal = _providerManager.ActiveProviderType
+                is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+            // semantic:true — a raw 200-char task sentence (especially Thai) almost never keyword-matches
+            // note titles, so keyword search returned 0 hits and auto-recall was effectively dead. The
+            // brain's semantic search embeds the query and finds topical neighbors; it falls back to
+            // keyword search server-side when embeddings are unavailable.
+            string lessons = await _brainSync.SearchAsync(query, limit: recallLocal ? 2 : 3, semantic: true, timeoutCts.Token);
+
+            // SearchAsync returns "(...)" sentinels for not-connected / error / empty — skip those.
+            if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith("(", StringComparison.Ordinal))
+                return userMessage;
+
+            // Raw tool JSON → readable list. A 7B pattern-matches text; handed
+            // {"id":…,"score":74.4,"tags":[…],"appliesTo":…} it spends the tokens
+            // and learns nothing.
+            lessons = BrainSyncService.FormatSearchResultsForModel(lessons);
+            // Hard mass cap on the local path: background must stay smaller than the
+            // window's attention can absorb, whatever the notes' previews contain.
+            if (recallLocal)
+            {
+                while (CluadeX.Helpers.TokenBudget.EstimateTokens(lessons) > 1200 && lessons.Length > 400)
+                    lessons = lessons[..(int)(lessons.Length * 0.85)];
+            }
+            _debugLog?.Info("Agent", $"brain auto-recall injected · {lessons.Length} chars "
+                + $"(~{CluadeX.Helpers.TokenBudget.EstimateTokens(lessons)}tok)");
+
+            // Wording is MANDATORY, not advisory — the original said "Consult it if
+            // helpful; ignore if not relevant", which a small model reads as
+            // permission to skip.
+            //
+            // But mandatory is not enough on its own: the first version of this
+            // block ended "say so in one line and continue", and the 7B took the
+            // exit — it searched the brain, cited nothing, and replied in 93
+            // characters. A weak model treats the LAST instruction as the task, so
+            // the last instruction has to be "now answer the question", never
+            // anything that sounds like permission to be brief.
+            return
+                "<brainx_recall>\n" +
+                "Prior knowledge from your BrainX brain — past decisions, bug fixes and gotchas already " +
+                "paid for on this machine. Read it first and follow it where it applies; where it " +
+                "contradicts your instinct, the brain wins.\n\n" +
+                lessons +
+                "\n\nThis block is BACKGROUND, not the task. Now answer the user's message below in full, " +
+                "using the tools you need. Mention by title any note you actually relied on. If none of " +
+                "them apply, ignore them completely and answer the question anyway — never reply with " +
+                "only a remark about the search.\n" +
+                "</brainx_recall>\n\n" +
+                userMessage;
+        }
+        catch
+        {
+            return userMessage; // never block a task on the brain
+        }
     }
 
     /// <summary>Legacy agentic loop using [ACTION:] text parsing (for non-Anthropic providers).</summary>
@@ -904,6 +1702,8 @@ public class CodeAgentService
         int maxTokenRecoveryCount = 0;
         bool hasAttemptedReactiveCompact = false;
         const int MaxOutputTokenRecoveries = 3;
+        int unknownToolFeedbackCount = 0;          // legacy-path "unknown tool — did you mean" nudges (bounded)
+        const int MaxUnknownToolFeedbacks = 3;
 
         for (int iteration = 0; iteration < MaxAgentIterations; iteration++)
         {
@@ -971,6 +1771,33 @@ public class CodeAgentService
 
             if (toolCalls.Count == 0)
             {
+                // ─── Unknown-tool feedback (weak models, legacy [ACTION:] path) ───
+                // The model may have written an [ACTION:foo] for a tool that doesn't exist; ParseToolCalls
+                // drops those silently. Give it ONE bounded corrective nudge so it can retry with a real
+                // tool name instead of us treating the malformed attempt as a finished answer.
+                if (unknownToolFeedbackCount < MaxUnknownToolFeedbacks && iteration < MaxAgentIterations - 1)
+                {
+                    var unknownNames = _agentToolService.GetUnknownActionNames(response);
+                    if (unknownNames.Count > 0)
+                    {
+                        unknownToolFeedbackCount++;
+                        var known = _agentToolService.GetRegisteredToolNames().ToList();
+                        string fb = "These tool names are not registered: " + string.Join(", ", unknownNames.Select(u =>
+                        {
+                            var s = CluadeX.Helpers.ToolCallSalvage.SuggestClosestName(u, known);
+                            return s != null ? $"'{u}' (did you mean '{s}'?)" : $"'{u}'";
+                        })) + ". Re-issue your action using one of the exact tool names you were given.";
+
+                        step.ThinkingText = _agentToolService.StripToolCalls(response);
+                        OnThinkingUpdate?.Invoke(step.ThinkingText ?? "", iteration + 1);
+                        result.Steps.Add(step);
+                        workingHistory.Add(new ChatMessage { Role = MessageRole.Assistant, Content = response });
+                        workingHistory.Add(new ChatMessage { Role = MessageRole.System, Content = fb });
+                        currentMessage = fb;
+                        continue; // let the model retry with a valid tool name
+                    }
+                }
+
                 // No tools used — validate any code blocks in the final response
                 var validationFeedback = ValidateResponseCode(response);
                 if (validationFeedback != null && iteration < MaxAgentIterations - 1)
@@ -1189,6 +2016,58 @@ public class CodeAgentService
     }
 
     /// <summary>
+    /// <summary>
+    /// File names the model's answer talks about that really exist in the project. Used to catch
+    /// "here is the updated Program.cs: ```…```" when Program.cs was never written. Only names that
+    /// resolve to an actual file are returned, so prose mentioning a made-up path is ignored.
+    /// </summary>
+    internal static HashSet<string> ExtractMentionedProjectFiles(string text, string workingDir)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(workingDir) || !System.IO.Directory.Exists(workingDir)) return found;
+
+        // Only bother when the answer actually contains code — a plain sentence naming a file is
+        // discussion, not a claim to have edited it.
+        if (!text.Contains("```")) return found;
+
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                     text, @"[\w\-.]+\.(cs|csx|ts|tsx|js|jsx|py|java|kt|go|rb|php|cpp|c|h|hpp|xaml|json|md|html|css|sql)\b"))
+        {
+            string name = m.Value;
+            try
+            {
+                if (System.IO.Directory.EnumerateFiles(workingDir, name, System.IO.SearchOption.AllDirectories).Any())
+                    found.Add(name);
+            }
+            catch { /* unreadable tree — skip */ }
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Squeeze a build log down to the lines that actually name the problem (error/warning lines),
+    /// so a guard message stays small enough for an 8k local context.
+    /// </summary>
+    internal static string CondenseBuildErrors(string raw, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var lines = raw.Replace("\r\n", "\n").Split('\n');
+        var keep = lines
+            .Where(l => l.Contains("error", StringComparison.OrdinalIgnoreCase)
+                     || l.Contains("): warning", StringComparison.OrdinalIgnoreCase))
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .Distinct()
+            .Take(6)
+            .ToList();
+        // Nothing matched (a test runner, say) — fall back to the tail, which is where failures land.
+        string text = keep.Count > 0
+            ? string.Join("\n", keep)
+            : string.Join("\n", lines.Reverse().Take(6).Reverse());
+        if (text.Length > maxChars) text = text[..maxChars] + " …";
+        return text;
+    }
+
     /// Force-compact the working history for reactive compaction on 413.
     /// Keeps the last 10 messages (or fewer if history is small) and prepends a summary note.
     /// Technique from Claude Code: keep enough context for the agent to understand
@@ -1237,6 +2116,53 @@ public class CodeAgentService
         int maxTokenRecoveryCount = 0;
         const int MaxOutputTokenRecoveries = 3;
         bool hasAttemptedReactiveCompact = false;
+        int autoVerifyCount = 0;                 // bounded auto-build-after-edit (in-loop reflexion)
+        const int MaxAutoVerifies = 6;
+        // Write→review→finish discipline (the "เหมือนคุณ" loop): after the model has successfully
+        // changed files, it should review the result once and CONCLUDE — not wander (observed live:
+        // after a perfect write+edit it kept exploring/run_build-ing a txt project until the budget).
+        bool anyWriteSucceeded = false;
+        int stepsSinceMutation = 0;              // steps since the last successful file change
+        bool postWriteReviewNudged = false;
+        bool wrapUpForced = false;
+        int failedEditAttempts = 0;              // edits/writes the model TRIED that all failed
+        string? lastEditFailPath = null;         // file of the last failed edit — lets recovery name the exact call
+        int ctxCompactAttempts = 0;              // context-overflow compactions used this turn (max 3)
+        var unresolvedEditPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files whose edit failed and was never redone
+        int unresolvedGuards = 0;                // how many times we've blocked a finish on an unresolved file
+        var writtenPathsThisTurn = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // files actually written this turn
+        int describedNotDoneGuards = 0;          // blocks on "showed the code but never wrote it"
+        bool lastBuildFailed = false;            // the build/tests are currently RED
+        string lastBuildError = "";              // …and this is what they said
+        string lastBuildPath = "build";          // "build" or "tests" — for the message wording
+        int repeatedBuildNoEdit = 0;             // consecutive failing builds with no edit in between
+        int redBuildGuards = 0;                  // how many times we've blocked a finish on a red build
+        int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
+        int brainFirstGuards = 0;                // times we've refused a finish that never consulted the brain (cap 1)
+        bool anyBrainToolCalled = false;         // a brain MCP tool actually ran this turn
+        // Auto-recall already searched and pasted the hits in front of the model, so the
+        // brain-first guard must not demand a second search — the prompt itself tells the
+        // model that a <brainx_recall> block means the search has run.
+        bool recallAlreadyInjected = (userMessage ?? "").Contains("<brainx_recall>", StringComparison.Ordinal);
+        bool lastEditFailNeededRead = false;     // last edit failed the read-before-edit guard (recoverable)
+        string? forceToolNextStep = null;        // constrained-decoding override for the next turn (A3)
+        bool loopIsLocal = _providerManager.ActiveProviderType
+            is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        // Plan-first: force a tool call on step 0 of a non-trivial LOCAL task so the model acts instead of
+        // stalling with prose. Off for API models (they don't need it) and trivial questions.
+        bool planFirstPending = loopIsLocal
+            && _settingsService.Settings.PlanFirstForceToolEnabled
+            && LooksNonTrivialTask(userMessage);
+
+        // ─── Escalation ladder ───
+        // When the local model stalls, hand the task (with full accumulated context) to a stronger API model.
+        var loopProvider = _providerManager.ActiveProvider;
+        int iterationBudget = MaxAgentIterations;
+        bool hasEscalated = false;
+        const int EscalationBonusIterations = 8;
+        Services.Providers.IAiProvider? escalationProvider = loopIsLocal ? ResolveEscalationProvider(loopProvider) : null;
+        string? lastErrorSig = null;
+        int repeatErrorCount = 0;
 
         // ─── Smart context enrichment (respects SmartEditing toggle) ───
         if (_fileSystemService.HasWorkingDirectory && _settingsService.Settings.Features.SmartEditing)
@@ -1252,11 +2178,72 @@ public class CodeAgentService
         // Build native tool schemas
         var toolSchemas = _agentToolService.BuildNativeToolSchemas();
 
+        // ─── Ctx-aware tool subset (weak local models) ───
+        // The full catalogue costs ~6-8k tokens once the server's chat template renders it — it only fits
+        // comfortably from 16k ctx upward (at 8192 it blew the request up to ~13.7k and overflowed). Fit it
+        // to the window instead: built-ins trim to the core below 16k, MCP tools are budgeted (never
+        // name-filtered — a built-in whitelist can't match "mcp__server__tool", so filtering by it stripped
+        // every MCP tool the user had configured). The prompt's NOTE is derived from the same fit.
+        bool isLocal = _providerManager.ActiveProviderType
+            is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        int localCtxTokens = Math.Max(2048, (int)_settingsService.Settings.ContextSize);
+        int mcpKept = 0, mcpDropped = 0, reservedTokens = 0;
+        // Count the brain recall tools BEFORE the fit, so the log can prove the
+        // pin held. Without this the brain-first rule is unfalsifiable from the
+        // log: "67 dropped" never said WHICH 67, and the one turn that mattered
+        // was the one where brain_search was among them.
+        int recallOffered = toolSchemas.Count(t => IsPinnedMcpTool(t.Name));
+        // ─── History budget (local): tokens, not message count ───
+        // TakeLast(20) counted MESSAGES, and messages are not a unit of cost: twenty
+        // of them measured 8,238 input tokens against a 16-character question — the
+        // question was 0.2% of what the model saw, and it answered whatever the pile
+        // suggested instead ("ถามอะไร ตอบคนละทาง"). Walk backward accumulating real
+        // token cost and stop at the budget: recent short turns all survive, one old
+        // giant tool dump falls off first. Newest-first is the point — the messages
+        // closest to the question are the ones that disambiguate it.
+        List<ChatMessage> relevantHistory;
+        if (isLocal)
+        {
+            relevantHistory = FitLocalHistory(history, localCtxTokens, out int histSpent, out int histBudget);
+            if (relevantHistory.Count < history.Count)
+                _debugLog?.Info("Agent", $"history budget: kept {relevantHistory.Count}/{history.Count} messages (~{histSpent}tok of {histBudget}tok budget)");
+        }
+        else
+        {
+            relevantHistory = history.Count > 20 ? history.TakeLast(20).ToList() : history;
+        }
+
+        if (isLocal)
+        {
+            // Measure the non-schema footprint instead of assuming a fraction of the window: system
+            // prompt + the history that will be sent + real room to answer. The generation share is
+            // capped at a sixth of the window so a large MaxTokens can't starve the prompt.
+            reservedTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)
+                + CluadeX.Helpers.TokenBudget.EstimateTokens(userMessage)
+                + relevantHistory.Sum(m => CluadeX.Helpers.TokenBudget.EstimateTokens(m.Content))
+                + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
+            toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped);
+        }
+
+        _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
+            + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · recall {toolSchemas.Count(t => IsPinnedMcpTool(t.Name))}/{recallOffered} pinned · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
+            + $"sysPrompt~{CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)}tok");
+        if (mcpDropped > 0)
+            _debugLog?.Warn("Agent", $"{mcpDropped} MCP tool schema(s) did not fit ctx={localCtxTokens} — raise Context Size to offer the full set");
+        // The number that actually predicts a dead turn. Schemas + everything else must
+        // leave room for the tool RESULTS, which arrive later into the same window.
+        if (isLocal)
+        {
+            int committed = reservedTokens + toolSchemas.Sum(EstimateSchemaTokens);
+            int pct = localCtxTokens > 0 ? committed * 100 / localCtxTokens : 0;
+            if (pct >= 85)
+                _debugLog?.Warn("Agent", $"context {pct}% committed before generation ({committed}/{localCtxTokens}) — tool results may overflow this turn");
+            else
+                _debugLog?.Info("Agent", $"context {pct}% committed before generation ({committed}/{localCtxTokens})");
+        }
+
         // Build initial messages (with history compaction)
         var nativeMessages = new List<Services.Providers.NativeMessage>();
-
-        // Use last 20 messages (compact if conversation is longer)
-        var relevantHistory = history.Count > 20 ? history.TakeLast(20).ToList() : history;
         foreach (var msg in relevantHistory)
         {
             string role = msg.Role == MessageRole.Assistant ? "assistant" : "user";
@@ -1282,7 +2269,7 @@ public class CodeAgentService
         // Ensure alternating roles
         nativeMessages = EnsureAlternatingRoles(nativeMessages);
 
-        for (int iteration = 0; iteration < MaxAgentIterations; iteration++)
+        for (int iteration = 0; iteration < iterationBudget; iteration++)
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
@@ -1298,45 +2285,129 @@ public class CodeAgentService
 
             // Microcompact — shrink old tool results (keep recent turns verbatim).
             // Runs only when the conversation has accumulated enough turns for it to matter.
-            var outboundMessages = _settingsService.Settings.MicrocompactEnabled && nativeMessages.Count > 6
+            bool willCompact = _settingsService.Settings.MicrocompactEnabled && nativeMessages.Count > 6;
+
+            // PreCompact hook fires once per loop iteration where compaction would run,
+            // BEFORE the trimming so a snapshot hook can capture the full history.
+            if (willCompact && _hookService != null)
+            {
+                int approxTokens = nativeMessages.Sum(m =>
+                    m.Content.Sum(c => (c.Text?.Length ?? 0) / 4));
+                try
+                {
+                    await _hookService.ExecutePreCompactHooksAsync(
+                        new HookSessionContext
+                        {
+                            MessageCount = nativeMessages.Count,
+                            TokenEstimate = approxTokens,
+                        }, ct);
+                }
+                catch { /* best-effort */ }
+            }
+
+            var outboundMessages = willCompact
                 ? MicrocompactNativeMessages(nativeMessages,
                     _settingsService.Settings.MicrocompactKeepRecentTurns,
                     _settingsService.Settings.MicrocompactMaxOldResultChars)
                 : nativeMessages;
 
-            // Call API with native tools
-            Services.Providers.NativeToolResponse response;
-            try
+            // Call API with native tools. Two fixes for the "feels frozen / no response" problems live here:
+            //   1. onTextDelta streams the model's reply to the UI live (agentic mode used to stay silent
+            //      until the entire multi-step turn finished, so even a one-line answer looked like a hang).
+            //   2. An IDLE timeout wraps the request: the window resets on every streamed chunk, so a
+            //      healthy (even slow) generation is never cut off — only a genuinely stalled connection
+            //      trips it, surfacing a clean retryable error instead of the HttpClient's 5-minute ceiling.
+            int nativeStreamStep = iteration + 1;
+            int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
+            // The local native tool path is NON-streaming: onTextDelta never fires, so the idle window
+            // can never reset. A long prefill + generation on a big local model routinely exceeds the
+            // interactive timeout — the "idle" timer was killing perfectly healthy turns. A local server
+            // is compute-bound, not network-flaky, so give it a much larger absolute budget instead.
+            if (timeoutSec > 0 && loopIsLocal) timeoutSec = Math.Max(timeoutSec, 600);
+            Services.Providers.NativeToolResponse response = null!;
+            using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
-                response = await _providerManager.ActiveProvider.ChatWithToolsAsync(
-                    outboundMessages, systemPrompt, toolSchemas, ct);
-            }
-            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge)
-            {
-                // ─── Reactive compaction on 413 (prompt too long) ───
-                if (!hasAttemptedReactiveCompact)
+                if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+                // Force a tool call only on step 0 of a non-trivial local task (constrained decoding via A3).
+                string? iterToolChoice = (iteration == 0 && planFirstPending && toolSchemas.Count > 0)
+                    ? "required" : null;
+                // Forced recovery (set by the false-finish guard): a weak model that failed an edit and
+                // then reverts to PROSE instead of reading/writing. Force the exact recovery tool so it
+                // acts instead of apologizing. Takes priority over plan-first/wrap-up for this one turn.
+                if (forceToolNextStep != null && toolSchemas.Any(t => t.Name == forceToolNextStep || forceToolNextStep is "required"))
                 {
-                    hasAttemptedReactiveCompact = true;
-                    OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
-                    int keepCount = Math.Min(10, nativeMessages.Count);
-                    nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
-                    nativeMessages.Insert(0, new Services.Providers.NativeMessage
-                    {
-                        Role = "user",
-                        Content = { new Services.Providers.ContentBlock
-                        {
-                            Type = "text",
-                            Text = "[Context was compacted due to length. Earlier conversation history has been summarized.]",
-                        }},
-                    });
-                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
-                    continue;
+                    iterToolChoice = forceToolNextStep;
+                    forceToolNextStep = null;
                 }
-                result.StopReason = "error";
-                result.FinalResponse = isThai
-                    ? "Context ยาวเกินไปแม้หลังบีบอัดแล้ว กรุณาเริ่ม session ใหม่"
-                    : "Context too long even after compaction. Please start a new session.";
-                break;
+                // Anti-wander: the task's files are written and the model has burned several steps
+                // without changing anything since — force a FINAL prose answer (tool_choice=none) so
+                // the turn concludes instead of exploring until the iteration budget dies.
+                else if (wrapUpForced && iterToolChoice == null) iterToolChoice = "none";
+                try
+                {
+                    response = await loopProvider.ChatWithToolsAsync(
+                        outboundMessages, systemPrompt, toolSchemas,
+                        onTextDelta: token =>
+                        {
+                            if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); // reset idle window
+                            OnAgenticStreamingToken?.Invoke(token, nativeStreamStep);
+                        },
+                        ct: callCts.Token,
+                        toolChoice: iterToolChoice);
+                }
+                catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    // Per-call timeout fired (NOT a user cancel) — surface as retryable so the outer
+                    // auto-retry re-issues the request instead of leaving a dead spinner.
+                    throw new TimeoutException(
+                        $"Request timed out after {timeoutSec}s — the model did not respond (timeout).");
+                }
+                catch (HttpRequestException ex) when (
+                    ex.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge
+                    // Anthropic reports context overflow as 400 invalid_request_error "prompt is too long",
+                    // not 413 — without this clause the compaction path never fired for Anthropic at all.
+                    || (ex.StatusCode == System.Net.HttpStatusCode.BadRequest
+                        && (ex.Message.Contains("too long", StringComparison.OrdinalIgnoreCase)
+                            || ex.Message.Contains("context", StringComparison.OrdinalIgnoreCase))))
+                {
+                    // ─── Reactive compaction on 413 (prompt too long) ───
+                    if (!hasAttemptedReactiveCompact)
+                    {
+                        hasAttemptedReactiveCompact = true;
+                        OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
+                        int keepCount = Math.Min(10, nativeMessages.Count);
+                        nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
+                        // TakeLast can sever a tool_use/tool_result pair (assistant tool_use dropped, its
+                        // user tool_result kept) — Anthropic rejects the very next request with a 400,
+                        // which used to surface as an immediate unrecoverable error right after compacting.
+                        StripOrphanedToolBlocks(nativeMessages);
+                        nativeMessages.Insert(0, new Services.Providers.NativeMessage
+                        {
+                            Role = "user",
+                            Content = { new Services.Providers.ContentBlock
+                            {
+                                Type = "text",
+                                Text = "[Context was compacted due to length. Earlier conversation history has been summarized.]",
+                            }},
+                        });
+                        nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                        continue;
+                    }
+                    result.StopReason = "error";
+                    result.FinalResponse = isThai
+                        ? "Context ยาวเกินไปแม้หลังบีบอัดแล้ว กรุณาเริ่ม session ใหม่"
+                        : "Context too long even after compaction. Please start a new session.";
+                    break;
+                }
+            }
+
+            // ─── Strip leaked control tokens from local-model tool-turn text ───
+            // The streaming chat path sanitizes, but the native tool path surfaces TextContent raw — a weak
+            // local model that leaks <|im_end|>/<|eot_id|>/role tokens on a tool turn would show them verbatim.
+            if (loopIsLocal && !string.IsNullOrEmpty(response.TextContent))
+            {
+                var (cleanText, _) = CluadeX.Helpers.ModelOutputSanitizer.SanitizeStreamChunk(response.TextContent);
+                response.TextContent = cleanText;
             }
 
             // Display thinking content
@@ -1348,6 +2419,64 @@ public class CodeAgentService
 
             step.ResponseText = response.TextContent ?? "";
 
+            _debugLog?.Info("Agent", $"step {iteration + 1}: stop={response.StopReason} toolCalls={response.ToolCalls.Count} "
+                + $"textLen={(response.TextContent ?? "").Length} in={response.InputTokens} out={response.OutputTokens}"
+                + (response.ToolCalls.Count > 0 ? $" [{string.Join(",", response.ToolCalls.Select(t => t.Name))}]" : ""));
+
+            // Recorded from what the model ASKED for, not from what succeeded: a brain call
+            // that errored still means it consulted the brain, and forcing a second one after
+            // a failure just spends the turn on the same error.
+            if (!anyBrainToolCalled && response.ToolCalls.Any(t => IsBrainMcpTool(t.Name)))
+                anyBrainToolCalled = true;
+
+            // ─── Provider-reported error (HTTP failure, unsupported backend) ───
+            // Providers signal hard failures with StopReason="error" instead of throwing, so the
+            // tool_use/tool_result bookkeeping above stays balanced. Surface it as a failed turn —
+            // previously these arrived as "end_turn" and the error text was shown as the model's answer.
+            if (response.StopReason == "error")
+            {
+                // Context overflow arrives as a NON-thrown error on the local path (llama-server 400 →
+                // StopReason=error), which bypassed the HttpRequestException compaction catch above —
+                // a long turn died at the exact step compaction exists to save. Route it there.
+                string errText = response.TextContent ?? "";
+                // Compaction is retried, NOT one-shot. A single attempt meant that once anything else
+                // in the turn had already compacted, the next overflow — even by 3 tokens — killed the
+                // run outright. Each attempt keeps fewer messages than the last.
+                if (ctxCompactAttempts < 3
+                    && (errText.Contains("Context window too small", StringComparison.OrdinalIgnoreCase)
+                        || errText.Contains("context size", StringComparison.OrdinalIgnoreCase)))
+                {
+                    ctxCompactAttempts++;
+                    hasAttemptedReactiveCompact = true;
+                    _debugLog?.Warn("Agent", $"context overflow at step {iteration + 1} — compacting and retrying "
+                        + $"(attempt {ctxCompactAttempts}/3)");
+                    OnAgentStatus?.Invoke(isThai ? "Context เต็ม — กำลังบีบอัด..." : "Context overflow — compacting...");
+                    int[] ladder = { 10, 6, 3 };
+                    int keepCount = Math.Min(ladder[Math.Min(ctxCompactAttempts - 1, ladder.Length - 1)], nativeMessages.Count);
+                    nativeMessages = nativeMessages.TakeLast(keepCount).ToList();
+                    StripOrphanedToolBlocks(nativeMessages);
+                    nativeMessages.Insert(0, new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = "[Context was compacted due to length. Earlier conversation history has been summarized. Continue the task.]",
+                        }},
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    continue;
+                }
+
+                _debugLog?.Error("Agent", $"provider error at step {iteration + 1}: {errText.Replace("\n", " ")}");
+                result.Steps.Add(step);
+                result.StopReason = "error";
+                result.FinalResponse = string.IsNullOrWhiteSpace(response.TextContent)
+                    ? (isThai ? "Provider ตอบกลับผิดพลาด (ไม่มีรายละเอียด)" : "The provider returned an error (no details).")
+                    : response.TextContent;
+                break;
+            }
+
             // ─── Max output token recovery ───
             if (response.StopReason == "max_tokens" && maxTokenRecoveryCount < MaxOutputTokenRecoveries)
             {
@@ -1356,10 +2485,15 @@ public class CodeAgentService
                     ? $"คำตอบถูกตัด — กำลังขอต่อ... ({maxTokenRecoveryCount}/{MaxOutputTokenRecoveries})"
                     : $"Response truncated — requesting continuation... ({maxTokenRecoveryCount}/{MaxOutputTokenRecoveries})");
 
-                // Add the partial response as assistant, then ask to continue
+                // Add the partial response as assistant, then ask to continue. The text block must never
+                // be empty: a thinking-only truncation leaves TextContent null, and an assistant message
+                // with zero content blocks is rejected by the API (400) — killing the recovery it's part of.
                 var partialAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
-                if (!string.IsNullOrEmpty(response.TextContent))
-                    partialAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = response.TextContent });
+                partialAssistant.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = !string.IsNullOrEmpty(response.TextContent) ? response.TextContent : "(response truncated before any text was produced)",
+                });
                 nativeMessages.Add(partialAssistant);
                 nativeMessages.Add(new Services.Providers.NativeMessage
                 {
@@ -1375,9 +2509,276 @@ public class CodeAgentService
                 continue;
             }
 
+            // ─── Tool-call repair (weak local models) ───
+            // A small model often emits the tool call as JSON/prose in content instead of via the
+            // structured tool_calls channel. Salvage it so the loop continues instead of treating the
+            // attempt as a final answer. Deterministic; only names that resolve to a real tool are accepted.
+            // loopIsLocal gate: salvage exists for weak local models that emit tool JSON as prose. An API
+            // model's final answer that merely QUOTES tool-call JSON (examples, docs) must never be
+            // hijacked into an actual tool execution.
+            if (response.ToolCalls.Count == 0 && loopIsLocal && !hasEscalated && _settingsService.Settings.LocalToolCallRepairEnabled)
+            {
+                var salvaged = CluadeX.Helpers.ToolCallSalvage.ExtractFromText(
+                    response.TextContent, name => _agentToolService.ResolveToolTypePublic(name) != null);
+                if (salvaged.Count > 0)
+                {
+                    int si = 0;
+                    foreach (var (name, input) in salvaged)
+                        response.ToolCalls.Add(new Services.Providers.NativeToolCall
+                        {
+                            Id = $"call_salvage_{iteration}_{si++}",
+                            Name = name,
+                            Input = input,
+                        });
+                    response.StopReason = "tool_use";
+                    response.TextContent = null; // the "text" WAS the tool call — don't echo the raw JSON back
+                    OnAgentStatus?.Invoke(isThai ? "กู้คืน tool call จากข้อความ..." : "Recovered tool call from text...");
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: salvaged {salvaged.Count} tool call(s) from prose [{string.Join(",", salvaged.Select(s => s.Name))}]");
+                }
+            }
+
             // No tool calls = final response
             if (response.ToolCalls.Count == 0)
             {
+                // ─── Brain-first guard ───
+                // The sword exists; this is what makes it get drawn.
+                //
+                // 2026-08-05: two turns in a row ended `stop=end_turn toolCalls=0` with
+                // `recall 3/3 pinned` in the same log line — brain_search was on the menu
+                // and the model answered from its own head anyway. The brain-first rule
+                // in the system prompt is ADVICE; a weak model is free to ignore advice.
+                // tool_choice is a constraint, and a constraint is the only form of a rule
+                // that a 7B cannot decline. Same lesson as the schema-fit fix: a mandatory
+                // rule the model does not obey is worse than no rule.
+                //
+                // Fires at most once, and only where it is really warranted: the brain is
+                // up, a recall tool survived the context fit, auto-recall did NOT already
+                // put a <brainx_recall> block in front of the model, and the ask is not
+                // trivial. On the second refusal the answer stands — burning the whole
+                // budget arguing with the model is worse than a memoryless answer.
+                if (brainFirstGuards < 1
+                    && _brainSync?.IsBrainAvailable == true
+                    && !anyBrainToolCalled
+                    && !recallAlreadyInjected
+                    && LooksNonTrivialTask(userMessage)
+                    && iteration < iterationBudget - 1)
+                {
+                    var recallTool = toolSchemas.FirstOrDefault(t =>
+                        IsPinnedMcpTool(t.Name) && t.Name.EndsWith("brain_search", StringComparison.OrdinalIgnoreCase))
+                        ?? toolSchemas.FirstOrDefault(t => IsPinnedMcpTool(t.Name));
+                    if (recallTool != null)
+                    {
+                        brainFirstGuards++;
+                        _debugLog?.Warn("Agent", $"brain-first guard at step {iteration + 1}: finished with "
+                            + $"toolCalls=0 and no brain recall — forcing {recallTool.Name}");
+                        OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้ค้นสมอง — กำลังค้น..." : "Brain not consulted — searching...");
+                        result.Steps.Add(step);
+
+                        var bfAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                        bfAssistant.Content.Add(new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(no answer yet)" : response.TextContent,
+                        });
+                        nativeMessages.Add(bfAssistant);
+                        nativeMessages.Add(new Services.Providers.NativeMessage
+                        {
+                            Role = "user",
+                            Content = { new Services.Providers.ContentBlock
+                            {
+                                Type = "text",
+                                // Last line = the task, for a small model. So the last line is
+                                // "then answer in full", never anything that reads as permission
+                                // to reply with a remark about having searched.
+                                Text = "You answered without consulting the brain. The owner's BrainX holds what was "
+                                     + "already learned on this machine — answering from memory alone is how a solved "
+                                     + "bug gets solved twice.\n"
+                                     + $"Call `{recallTool.Name}` now with 2-4 keywords from the question. "
+                                     + "Then answer the original question IN FULL using what comes back, naming any "
+                                     + "note you relied on.",
+                            }},
+                        });
+                        nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                        forceToolNextStep = recallTool.Name;
+                        wrapUpForced = false;
+                        continue;
+                    }
+                }
+
+                // ─── Red-build guard ───
+                // The single most important honesty rule: never let the turn end while the build the
+                // model itself ran is still failing. Without this the model watched run_build fail four
+                // times, changed nothing, and then wrote a confident "I added the method" summary while
+                // the project did not compile. A red build outranks the model's opinion that it is done.
+                if (redBuildGuards < 3 && lastBuildFailed && iteration < MaxAgentIterations - 1)
+                {
+                    redBuildGuards++;
+                    _debugLog?.Warn("Agent", $"red-build guard at step {iteration + 1}: "
+                        + $"{lastBuildPath} still failing, refusing to finish (guard {redBuildGuards}/3)");
+                    OnAgentStatus?.Invoke(isThai
+                        ? "build ยังไม่ผ่าน — ให้แก้ต่อ..."
+                        : "The build is still failing — fixing...");
+                    result.Steps.Add(step);
+
+                    var redAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    redAssistant.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent,
+                    });
+                    nativeMessages.Add(redAssistant);
+
+                    // Keep this SHORT. On an 8k local context a verbose guard is itself what pushes the
+                    // next request over the limit — keep only the compiler lines that name the problem.
+                    string errTail = CondenseBuildErrors(lastBuildError, 500);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = $"STOP — the {lastBuildPath} is STILL FAILING. Do not summarise.\n{errTail}\n"
+                                 + "Fix it: read_file the file in the error, then write_file with the COMPLETE "
+                                 + "corrected content. Do not re-run the build before editing.",
+                        } },
+                    });
+                    // Force a tool call so it cannot answer in prose again.
+                    forceToolNextStep = "required";
+                    // A red build also cancels any pending wrap-up: finishing is exactly what we're blocking.
+                    wrapUpForced = false;
+                    stepsSinceMutation = 0;
+                    continue;
+                }
+
+                // ─── Described-but-not-done guard ───
+                // The weak-model failure that no build check can catch: it does step 1, then WRITES OUT
+                // steps 2-4 as prose ("Now let's add the call in Program.cs: ```csharp …```") and stops.
+                // The build is green, no edit failed — but the task is half done. If the final answer
+                // names a project file it never actually wrote this turn, send it back to do it.
+                if (describedNotDoneGuards < 2 && iteration < MaxAgentIterations - 1
+                    && !string.IsNullOrWhiteSpace(response.TextContent))
+                {
+                    var named = ExtractMentionedProjectFiles(response.TextContent!, _fileSystemService.WorkingDirectory);
+                    named.ExceptWith(writtenPathsThisTurn);
+                    if (named.Count > 0)
+                    {
+                        describedNotDoneGuards++;
+                        string todo = named.First();
+                        _debugLog?.Warn("Agent", $"described-not-done guard at step {iteration + 1}: "
+                            + $"answer describes changes to {todo} but it was never written");
+                        OnAgentStatus?.Invoke(isThai
+                            ? $"ยังไม่ได้เขียน {todo} จริง — ให้ทำต่อ..."
+                            : $"{todo} was described but never written — continuing...");
+                        result.Steps.Add(step);
+
+                        var descAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                        descAssistant.Content.Add(new Services.Providers.ContentBlock
+                        { Type = "text", Text = response.TextContent! });
+                        nativeMessages.Add(descAssistant);
+                        nativeMessages.Add(new Services.Providers.NativeMessage
+                        {
+                            Role = "user",
+                            Content = { new Services.Providers.ContentBlock
+                            {
+                                Type = "text",
+                                Text = $"You DESCRIBED the change to '{todo}' but never wrote it — showing code in a "
+                                     + "reply does not modify the file. Do it for real now: "
+                                     + $"write_file('{todo}', <the COMPLETE file content including your change>). "
+                                     + "One tool call. No explanation.",
+                            } },
+                        });
+                        forceToolNextStep = "required";
+                        wrapUpForced = false;
+                        stepsSinceMutation = 0;
+                        continue;
+                    }
+                }
+
+                // ─── Unresolved-file guard ───
+                // Some file the model tried to change is STILL not changed. A green build does not
+                // prove the task is done — a call that was never added simply doesn't compile into
+                // anything. Name the exact file and make it finish the job.
+                if (unresolvedGuards < 2 && unresolvedEditPaths.Count > 0 && iteration < MaxAgentIterations - 1)
+                {
+                    unresolvedGuards++;
+                    string stuck = unresolvedEditPaths.First();
+                    _debugLog?.Warn("Agent", $"unresolved-file guard at step {iteration + 1}: "
+                        + $"{unresolvedEditPaths.Count} file(s) still unchanged ({stuck}) — refusing to finish");
+                    OnAgentStatus?.Invoke(isThai
+                        ? $"ยังไม่ได้แก้ {stuck} — ให้ทำต่อ..."
+                        : $"{stuck} was not actually changed — continuing...");
+                    result.Steps.Add(step);
+
+                    var unresolvedAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    unresolvedAssistant.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent,
+                    });
+                    nativeMessages.Add(unresolvedAssistant);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = $"STOP — '{stuck}' was NOT changed. Your edit to it failed and you never retried, "
+                                 + "so do not claim it is done.\nDo this now, in one step: "
+                                 + $"write_file('{stuck}', <the COMPLETE file content including your change>). "
+                                 + "If you need to see it first, read_file it — but do not summarise until it is written.",
+                        } },
+                    });
+                    forceToolNextStep = "required";
+                    wrapUpForced = false;
+                    stepsSinceMutation = 0;
+                    continue;
+                }
+
+                // ─── False-finish guard ───
+                // The model is concluding, but it TRIED to change files and every attempt failed while
+                // NOTHING was ever successfully written (the observed "edit failed x2 → build/test the
+                // unchanged file → 'tests passed!'" fake finish). Don't let it claim success — send it
+                // back once with an explicit instruction to actually make the change via write_file.
+                // Trigger on the FIRST failed edit with zero successful writes (a weak model that hits the
+                // read-before-edit guard or one find-mismatch and then gives up / fake-finishes). >=1, not >=2.
+                if (falseFinishGuards < 2 && !anyWriteSucceeded && failedEditAttempts >= 1
+                    && iteration < MaxAgentIterations - 1)
+                {
+                    falseFinishGuards++;
+                    // Force the model's hand on the recovery turn: read the file (if that was the blocker),
+                    // else force SOME tool so it can't apologize its way out again.
+                    forceToolNextStep = lastEditFailNeededRead ? "read_file" : "required";
+                    _debugLog?.Warn("Agent", $"false-finish blocked at step {iteration + 1}: {failedEditAttempts} failed edit(s), 0 successful writes, neededRead={lastEditFailNeededRead}, force={forceToolNextStep}");
+                    OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้แก้ไฟล์จริง — ให้ทำต่อ..." : "No change was actually written — retrying...");
+                    result.Steps.Add(step);
+                    var fakeAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                    fakeAssistant.Content.Add(new Services.Providers.ContentBlock { Type = "text",
+                        Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(done)" : response.TextContent });
+                    nativeMessages.Add(fakeAssistant);
+                    // read-before-edit failure is fully recoverable BY YOU — don't ask the user, just read+edit.
+                    // Second block = the model already got a chance (and typically already read the file);
+                    // stop suggesting reads entirely and dictate the ONE call that finishes the job.
+                    string pathArg = lastEditFailPath != null ? $"'{lastEditFailPath}'" : "path";
+                    string recover = falseFinishGuards >= 2
+                        ? $"STOP — the file is STILL unchanged and you have already read it. Do NOT read again, do NOT "
+                          + $"explain, do NOT ask. Your NEXT message must be exactly ONE tool call: "
+                          + $"write_file({pathArg}, <the ENTIRE corrected file content — every line, including your change>)."
+                        : lastEditFailNeededRead
+                        ? "STOP — you have NOT changed the file yet. Your edit failed because you must read the "
+                          + "file FIRST. Do it yourself now — do NOT ask the user. Call read_file(path), then "
+                          + "edit_file / multi_edit with the exact lines, then run_build to verify."
+                        : $"STOP — you have NOT changed any file yet. Your edit failed, so the file is unchanged. "
+                          + $"Do NOT say you are done and do NOT ask the user. Call write_file({pathArg}, <the "
+                          + $"COMPLETE corrected file content>) now, then verify.";
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock { Type = "text", Text = recover } },
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    continue;
+                }
+
                 // ─── Self-correction: validate code blocks in final response ───
                 string textContent = response.TextContent ?? "";
                 var validationFeedback = ValidateResponseCode(textContent);
@@ -1438,7 +2839,11 @@ public class CodeAgentService
             int aggregateChars = 0;
             async Task ExecuteNativeToolCall(Services.Providers.NativeToolCall toolCall)
             {
-                // Add tool_use block to assistant message
+                // Add tool_use block to assistant message FIRST. From here on, this tool_use MUST get a
+                // matching tool_result or the next API request is malformed — Anthropic rejects an
+                // assistant tool_use with no corresponding user tool_result. So everything below runs
+                // under a try that ALWAYS emits a result (even when a tool throws), and a single failing
+                // tool can no longer abort the entire turn through Task.WhenAll.
                 lock (assistantMsg.Content)
                 {
                     assistantMsg.Content.Add(new Services.Providers.ContentBlock
@@ -1450,47 +2855,86 @@ public class CodeAgentService
                     });
                 }
 
-                ct.ThrowIfCancellationRequested();
-                var call = new ToolCall
+                string resultContent;
+                bool isError;
+                try
                 {
-                    ToolName = toolCall.Name,
-                    Type = _agentToolService.ResolveToolTypePublic(toolCall.Name) ?? ToolType.RunCommand,
-                    Arguments = ParseJsonInputToArgs(toolCall.Input),
-                };
-                string nativeCallStatus = GetToolStatusMessage(toolCall.Name, call.Arguments);
-                OnAgentStatus?.Invoke(nativeCallStatus);
-                progress?.Report(nativeCallStatus);
-                OnToolStarting?.Invoke(toolCall.Name, nativeCallStatus);
+                    ct.ThrowIfCancellationRequested();
 
-                var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
-
-                // ─── Write validation for write/edit operations ───
-                if (call.Type is ToolType.WriteFile or ToolType.EditFile && toolResult.Success)
-                {
-                    var writeValidation = ValidateToolWrite(call);
-                    if (writeValidation != null)
+                    // Unknown tool name → surface a clear error to the model (handled by the catch below).
+                    // NEVER silently fall back to RunCommand: a misspelled tool name must not become a shell exec.
+                    var resolvedType = _agentToolService.ResolveToolTypePublic(toolCall.Name);
+                    if (resolvedType == null)
                     {
-                        toolResult = new ToolResult
-                        {
-                            ToolName = toolResult.ToolName,
-                            Type = toolResult.Type,
-                            Success = true,
-                            Output = toolResult.Output + $"\n⚠ Validation: {writeValidation}",
-                            Summary = toolResult.Summary + " (with warnings)",
-                        };
+                        var suggestion = CluadeX.Helpers.ToolCallSalvage.SuggestClosestName(
+                            toolCall.Name, toolSchemas.Select(t => t.Name));
+                        string didYouMean = suggestion != null ? $" Did you mean '{suggestion}'?" : "";
+                        throw new InvalidOperationException(
+                            $"Unknown tool '{toolCall.Name}' — not a registered tool.{didYouMean} Only call tools that were provided to you.");
                     }
+
+                    var call = new ToolCall
+                    {
+                        ToolName = toolCall.Name,
+                        Type = resolvedType.Value,
+                        Arguments = ParseJsonInputToArgs(toolCall.Input),
+                    };
+                    string nativeCallStatus = GetToolStatusMessage(toolCall.Name, call.Arguments);
+                    OnAgentStatus?.Invoke(nativeCallStatus);
+                    progress?.Report(nativeCallStatus);
+                    OnToolStarting?.Invoke(toolCall.Name, nativeCallStatus);
+
+                    var toolResult = await _agentToolService.ExecuteToolAsync(call, ct);
+
+                    // ─── Write validation for write/edit operations ───
+                    if (call.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit && toolResult.Success)
+                    {
+                        var writeValidation = ValidateToolWrite(call);
+                        if (writeValidation != null)
+                        {
+                            toolResult = new ToolResult
+                            {
+                                ToolName = toolResult.ToolName,
+                                Type = toolResult.Type,
+                                Success = true,
+                                Output = toolResult.Output + $"\n⚠ Validation: {writeValidation}",
+                                Summary = toolResult.Summary + " (with warnings)",
+                            };
+                        }
+                    }
+
+                    lock (toolResults) { toolResults.Add(toolResult); }
+                    OnToolExecuted?.Invoke(toolResult);
+                    if (_debugLog != null)
+                    {
+                        string errHead = (toolResult.Error ?? "").Replace("\n", " ").Trim();
+                        if (errHead.Length > 160) errHead = errHead[..160];
+                        _debugLog.Info("Agent", $"tool {toolCall.Name}: {(toolResult.Success ? "OK" : "FAIL · " + errHead)}");
+                    }
+
+                    // Per-tool and aggregate budget enforcement
+                    resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
+                    isError = !toolResult.Success;
+                    if (resultContent.Length > MaxPerToolOutputChars)
+                        resultContent = resultContent[..MaxPerToolOutputChars] + "\n... (truncated)";
+                    int currentAggregate = Interlocked.Add(ref aggregateChars, resultContent.Length);
+                    if (currentAggregate > MaxAggregateOutputChars)
+                        resultContent = resultContent[..Math.Min(resultContent.Length, 500)] + "\n... (aggregate budget exceeded, truncated)";
                 }
-
-                lock (toolResults) { toolResults.Add(toolResult); }
-                OnToolExecuted?.Invoke(toolResult);
-
-                // Per-tool and aggregate budget enforcement
-                string resultContent = toolResult.Success ? toolResult.Output : toolResult.Error;
-                if (resultContent.Length > MaxPerToolOutputChars)
-                    resultContent = resultContent[..MaxPerToolOutputChars] + "\n... (truncated)";
-                int currentAggregate = Interlocked.Add(ref aggregateChars, resultContent.Length);
-                if (currentAggregate > MaxAggregateOutputChars)
-                    resultContent = resultContent[..Math.Min(resultContent.Length, 500)] + "\n... (aggregate budget exceeded, truncated)";
+                catch (OperationCanceledException)
+                {
+                    throw; // user cancelled — let the whole turn unwind; these local messages are discarded, never sent
+                }
+                catch (Exception ex)
+                {
+                    // Degrade a thrown tool into an error result instead of nuking the turn (and breaking
+                    // the tool_use/tool_result balance for every OTHER tool in this same batch).
+                    resultContent = $"Tool '{toolCall.Name}' failed: {ex.GetType().Name}: {ex.Message}";
+                    isError = true;
+                    var errResult = new ToolResult { ToolName = toolCall.Name, Success = false, Error = resultContent };
+                    lock (toolResults) { toolResults.Add(errResult); }
+                    OnToolExecuted?.Invoke(errResult);
+                }
 
                 lock (userResultMsg.Content)
                 {
@@ -1499,7 +2943,7 @@ public class CodeAgentService
                         Type = "tool_result",
                         ToolUseId = toolCall.Id,
                         Content = resultContent,
-                        IsError = !toolResult.Success,
+                        IsError = isError,
                     });
                 }
             }
@@ -1511,6 +2955,211 @@ public class CodeAgentService
             // Run write tools sequentially
             foreach (var toolCall in writeCalls)
                 await ExecuteNativeToolCall(toolCall);
+
+            // ─── Auto-verify after edits (in-loop reflexion) ───
+            // A weak model edits, claims done, and never runs the build. If this turn changed files (and the
+            // model didn't already verify), run the detected build and feed failures back so it's FORCED to
+            // confront real compiler errors instead of declaring false victory. Bounded so a slow build can't
+            // dominate the task; system-initiated so it doesn't prompt for permission.
+            if (_settingsService.Settings.AutoVerifyAfterEditEnabled
+                && autoVerifyCount < MaxAutoVerifies
+                && !ct.IsCancellationRequested
+                && toolResults.Any(r => r.Success && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit)
+                && !toolResults.Any(r => r.Type is ToolType.RunBuild)
+                && _fileSystemService.DetectBuildCommand() != null)
+            {
+                autoVerifyCount++;
+                OnAgentStatus?.Invoke(isThai ? "ตรวจ build อัตโนมัติหลังแก้ไข..." : "Auto-verifying build after edit...");
+                try
+                {
+                    var verify = await _agentToolService.RunVerifyBuildAsync(ct);
+                    OnToolExecuted?.Invoke(verify);
+                    string note;
+                    if (verify.Success)
+                    {
+                        note = "[auto-verify] ✓ Build passed after your edit.";
+                    }
+                    else
+                    {
+                        string raw = ((verify.Output ?? "") + "\n" + (verify.Error ?? "")).Trim();
+                        if (raw.Length > 2000) raw = raw[..2000] + "\n... (truncated)";
+                        note = "[auto-verify] ✗ Build FAILED after your edit — fix these errors before continuing:\n" + raw;
+                    }
+                    userResultMsg.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = note });
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* verify is best-effort; never break the turn */ }
+            }
+
+            // ─── Write→review→finish bookkeeping ───
+            bool mutatedThisStep = toolResults.Any(r => r.Success
+                && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit);
+            if (mutatedThisStep) { anyWriteSucceeded = true; stepsSinceMutation = 0; }
+            else if (anyWriteSucceeded) stepsSinceMutation++;
+            // Count edit/write attempts that FAILED (find-block mismatch, etc.) — used to catch the
+            // "edit failed, then gave up / declared success on the unchanged file" false finish.
+            var failedEdits = toolResults.Where(r => !r.Success
+                && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit).ToList();
+            failedEditAttempts += failedEdits.Count;
+            if (failedEdits.Count > 0)
+            {
+                lastEditFailNeededRead =
+                    (failedEdits[^1].Error ?? "").Contains("must read", StringComparison.OrdinalIgnoreCase);
+                lastEditFailPath = failedEdits[^1].FilePath ?? lastEditFailPath;
+            }
+
+            // Per-file edit outcome. A turn that touches two files can succeed on one and fail on the
+            // other; the old whole-turn "did anything get written?" flag then reported success and the
+            // model confidently claimed BOTH were done. Observed exactly that: StringUtils.cs edited,
+            // Program.cs edit failed, build still green (a missing call doesn't break compilation),
+            // and the summary claimed both. Track which paths are still unresolved.
+            foreach (var f in failedEdits)
+                if (!string.IsNullOrEmpty(f.FilePath)) unresolvedEditPaths.Add(f.FilePath!);
+            foreach (var w in toolResults.Where(r => r.Success
+                         && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit))
+                if (!string.IsNullOrEmpty(w.FilePath))
+                {
+                    unresolvedEditPaths.Remove(w.FilePath!);
+                    writtenPathsThisTurn.Add(System.IO.Path.GetFileName(w.FilePath!));
+                }
+
+            // ─── Build-state bookkeeping ───
+            // A red build is the strongest signal we have that the work is NOT done. Track it so the
+            // turn cannot end while it is red, and so re-running the build without editing anything
+            // gets called out. (Observed: the model watched run_build fail four times in a row, never
+            // touched the file, and the wandering breaker then let it finish claiming success.)
+            var buildResults = toolResults.Where(r => r.Type is ToolType.RunBuild or ToolType.RunTests).ToList();
+            if (buildResults.Count > 0)
+            {
+                var last = buildResults[^1];
+                bool nowFailing = !last.Success;
+                if (nowFailing && lastBuildFailed && !mutatedThisStep) repeatedBuildNoEdit++;
+                else if (!nowFailing || mutatedThisStep) repeatedBuildNoEdit = 0;
+                lastBuildFailed = nowFailing;
+                lastBuildError = nowFailing
+                    ? ((last.Error ?? "") + "\n" + (last.Output ?? "")).Trim()
+                    : "";
+                lastBuildPath = last.Type == ToolType.RunBuild ? "build" : "tests";
+            }
+            else if (mutatedThisStep)
+            {
+                // The file changed, so whatever the previous build said is now stale.
+                lastBuildFailed = false;
+                repeatedBuildNoEdit = 0;
+            }
+
+            // Re-running a build that can't have changed wastes the whole step budget. Say so.
+            if (repeatedBuildNoEdit >= 1 && !mutatedThisStep)
+            {
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = $"[stop] You ran the {lastBuildPath} again without changing any file, so the result is "
+                         + "identical. The build will keep failing until you EDIT the source. Fix the code now: "
+                         + "read_file the failing file, then write_file with the COMPLETE corrected content.",
+                });
+            }
+
+            // After a successful write in a project with NO build system (html/docs/scripts), there is
+            // no compiler oracle — teach the same review loop a strong assistant uses: read the file
+            // back once, then CONCLUDE. Without this the weak model kept "verifying" a txt project
+            // with dotnet build and wandering until the step budget died.
+            if (mutatedThisStep && !postWriteReviewNudged
+                && _settingsService.Settings.AutoVerifyAfterEditEnabled
+                && _fileSystemService.DetectBuildCommand() == null)
+            {
+                postWriteReviewNudged = true;
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = "[post-write review] There is no build system in this project, so do NOT run build "
+                         + "commands. Review your work like this: read_file the file you just wrote ONCE to "
+                         + "confirm it is correct and complete; then give your FINAL answer summarizing what "
+                         + "you created. Do not explore other files.",
+                });
+            }
+
+            // Wandering breaker: files were written, and several consecutive steps changed nothing —
+            // next step forces a final prose answer (see iterToolChoice above).
+            // NOT while the build is red: wrapping up a failing build is the exact false finish the
+            // red-build guard exists to prevent, and this breaker used to hand it the exit.
+            if (anyWriteSucceeded && !wrapUpForced && stepsSinceMutation >= 4 && loopIsLocal
+                && !lastBuildFailed)
+            {
+                wrapUpForced = true;
+                _debugLog?.Info("Agent", $"wrap-up forced at step {iteration + 1} (no file changes for {stepsSinceMutation} steps after a successful write)");
+                OnAgentStatus?.Invoke(isThai ? "งานหลักเสร็จแล้ว — ให้สรุปปิดงาน..." : "Main work done — wrapping up...");
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = "[wrap up] The files are written. Stop exploring — give your final answer NOW: "
+                         + "state what you created/changed and where. Keep it short.",
+                });
+            }
+
+            // ─── Mid-loop goal re-injection (anti-drift for weak small-ctx models) ───
+            // After microcompaction trims old turns, a small model loses the thread. Periodically re-state the
+            // original request + the read→verify rule so it keeps finishing the task instead of wandering.
+            int reminderEvery = Math.Max(2, _settingsService.Settings.MidLoopReminderEvery);
+            if (_settingsService.Settings.MidLoopReminderEnabled && loopIsLocal
+                && iteration > 0 && (iteration + 1) % reminderEvery == 0)
+            {
+                // userMessage may have a <brainx_recall> block prepended by auto-recall — skip past it so
+                // the reminder quotes the user's actual request, not the first 200 chars of brain JSON.
+                string goal = userMessage;
+                int recallEnd = goal.IndexOf("</brainx_recall>", StringComparison.Ordinal);
+                if (recallEnd >= 0) goal = goal[(recallEnd + "</brainx_recall>".Length)..];
+                goal = goal.Replace("\n", " ").Trim();
+                if (goal.Length > 200) goal = goal[..200] + "…";
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = $"[reminder] The user's request: \"{goal}\". Stay focused on completing it — read a file "
+                         + "before editing it, then run_build / run_tests to verify before you say you're done.",
+                });
+            }
+
+            // ─── Escalation trigger (local model stuck → hand off to a stronger API model) ───
+            if (escalationProvider != null && !hasEscalated)
+            {
+                string errSig = string.Join("|", toolResults
+                    .Where(r => !r.Success).Select(r => (r.Error ?? "").Trim()).Where(e => e.Length > 0).Take(3));
+                bool stagnating = false;
+                if (errSig.Length > 0)
+                {
+                    if (errSig == lastErrorSig) repeatErrorCount++;
+                    else { repeatErrorCount = 0; lastErrorSig = errSig; }
+                    stagnating = repeatErrorCount >= 2; // the same error 3 turns running
+                }
+                else
+                {
+                    // Clean turn breaks the streak — without this, error→success→same-error counted as
+                    // "consecutive" and escalated (paid hand-off) off non-consecutive hiccups.
+                    repeatErrorCount = 0;
+                    lastErrorSig = "";
+                }
+                bool nearExhaustion = !result.Success && iteration >= iterationBudget - 1;
+                if (stagnating || nearExhaustion)
+                {
+                    hasEscalated = true;
+                    _debugLog?.Warn("Agent", $"escalating to {escalationProvider.ProviderId} · reason={(stagnating ? "repeated error" : "near exhaustion")} · errSig={lastErrorSig[..Math.Min(120, lastErrorSig.Length)]}");
+                    loopProvider = escalationProvider;
+                    toolSchemas = _agentToolService.BuildNativeToolSchemas(); // full catalogue for the strong model
+                    iterationBudget = iteration + 1 + EscalationBonusIterations;
+                    string elabel = escalationProvider.DisplayName ?? escalationProvider.ProviderId;
+                    OnAgentStatus?.Invoke(isThai
+                        ? $"⤴ ส่งต่อให้ {elabel} (โมเดล local ติด)..."
+                        : $"⤴ Escalating to {elabel} (local model stuck)...");
+                    userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text",
+                        Text = "[escalation] A smaller local model was working on this task and got stuck "
+                             + (stagnating ? "(it kept repeating the same error). " : "(it ran out of steps). ")
+                             + "You are a stronger model — review the conversation and tool results above, then "
+                             + "finish the task correctly.",
+                    });
+                }
+            }
 
             step.ToolResults = toolResults;
             step.ToolCalls = toolResults.Select(r => new ToolCall
@@ -1526,14 +3175,146 @@ public class CodeAgentService
         }
 
         if (!result.Success)
+            _debugLog?.Warn("Agent", $"loop ended NOT successful · stop={result.StopReason} steps={result.Steps.Count}");
+
+        if (!result.Success && string.IsNullOrEmpty(result.StopReason))
         {
             result.StopReason = "max_iterations";
-            result.FinalResponse = result.Steps.LastOrDefault()?.ResponseText ?? "Agent reached maximum iterations.";
+            string lastText = result.Steps.LastOrDefault()?.ResponseText ?? "";
+            // Never end the turn with an empty bubble: when the last step produced no text (it was a
+            // tool-only step), say plainly that the step budget ran out instead of showing nothing.
+            result.FinalResponse = !string.IsNullOrWhiteSpace(lastText)
+                ? lastText
+                : (isThai
+                    ? $"หมดงบ {result.Steps.Count} ขั้นตอนก่อนงานเสร็จ — งานอาจค้างกลางทาง พิมพ์ \"ทำต่อ\" เพื่อให้ทำต่อจากจุดเดิม"
+                    : $"Ran out of steps ({result.Steps.Count}) before finishing — the task may be incomplete. Say \"continue\" to pick up where it left off.");
+        }
+
+        // Stop hook — runs after the agentic loop returns, with session telemetry.
+        if (_hookService != null)
+        {
+            try
+            {
+                decimal totalCost = _costTrackingService?.TotalCostUsd ?? 0;
+                int totalTokens = (_costTrackingService?.TotalInputTokens ?? 0)
+                                + (_costTrackingService?.TotalOutputTokens ?? 0);
+                await _hookService.ExecuteStopHooksAsync(
+                    new HookSessionContext
+                    {
+                        Model = _providerManager.ActiveProvider?.GetType().Name ?? "unknown",
+                        SessionCostUsd = (double)totalCost,
+                        SessionTokens = totalTokens,
+                        TurnCount = result.TurnCount,
+                    }, ct);
+            }
+            catch { /* best-effort */ }
         }
 
         progress?.Report("Done");
         OnAgentStatus?.Invoke("Ready");
         return result;
+    }
+
+    /// <summary>Remove tool_result blocks whose matching assistant tool_use was dropped (and vice versa)
+    /// after a hard truncation like TakeLast — an unpaired block makes the next API request invalid.
+    /// Messages left with no content are removed entirely.</summary>
+    private static void StripOrphanedToolBlocks(List<Services.Providers.NativeMessage> messages)
+    {
+        var toolUseIds = new HashSet<string>(
+            messages.Where(m => m.Role == "assistant")
+                    .SelectMany(m => m.Content)
+                    .Where(b => b.Type == "tool_use" && !string.IsNullOrEmpty(b.Id))
+                    .Select(b => b.Id!));
+        var toolResultIds = new HashSet<string>(
+            messages.Where(m => m.Role == "user")
+                    .SelectMany(m => m.Content)
+                    .Where(b => b.Type == "tool_result" && !string.IsNullOrEmpty(b.ToolUseId))
+                    .Select(b => b.ToolUseId!));
+
+        foreach (var msg in messages)
+        {
+            msg.Content.RemoveAll(b =>
+                (b.Type == "tool_result" && (string.IsNullOrEmpty(b.ToolUseId) || !toolUseIds.Contains(b.ToolUseId)))
+                || (b.Type == "tool_use" && (string.IsNullOrEmpty(b.Id) || !toolResultIds.Contains(b.Id))));
+        }
+        messages.RemoveAll(m => m.Content.Count == 0);
+    }
+
+    /// <summary>The configured escalation-target provider, or null when escalation is off / mis-configured /
+    /// points back at the current provider / can't run the native tool loop.</summary>
+    private Services.Providers.IAiProvider? ResolveEscalationProvider(Services.Providers.IAiProvider current)
+    {
+        var s = _settingsService.Settings;
+        if (!s.EscalationEnabled) return null;
+        if (!Enum.TryParse<AiProviderType>(s.EscalationProviderName, ignoreCase: true, out var t)) return null;
+        var p = _providerManager.GetProvider(t);
+        if (p == null || ReferenceEquals(p, current)) return null;
+        if (!p.IsReady) return null; // unconfigured target (no API key / not connected) must not kill a live task
+        if (!p.SupportsNativeToolUse) return null; // escalation rides the native tool loop
+        return p;
+    }
+
+    /// <summary>Heuristic: does the user message describe a non-trivial coding TASK (worth forcing a first
+    /// tool call / planning) vs a trivial question? Length or an action verb (EN or TH) ⇒ non-trivial.</summary>
+    private static bool LooksNonTrivialTask(string userMessage)
+    {
+        if (string.IsNullOrWhiteSpace(userMessage)) return false;
+        string m = userMessage.ToLowerInvariant();
+        if (m.Length > 200) return true;
+        string[] verbs =
+        {
+            "implement", "add ", "create", "build", "fix", "refactor", "write ", "change", "update",
+            "rename", "move ", "delete", "remove", "replace", "migrate", "wire ", "extract", "generate",
+            // git / repo / shell tasks — these need a tool call, but weak models otherwise chat/refuse.
+            "clone", "git", "repo", "download", "fetch", "install", "setup", "run ", "npm", "dotnet",
+            // analysis tasks that still require reading files / running tools before answering.
+            "read", "explain", "summari", "review", "analyz", "explore", "find ", "search", "list ",
+            "แก้", "เพิ่ม", "สร้าง", "ทำ", "เขียน", "ย้าย", "ลบ", "ปรับ", "รีแฟกเตอร์",
+            "โคลน", "ดาวน์โหลด", "ติดตั้ง", "รัน", "อ่าน", "สรุป", "อธิบาย", "ตรวจ", "ดู", "หา", "ค้นหา", "รีวิว",
+        };
+        foreach (var v in verbs) if (m.Contains(v)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Is the user asking about the brain LINK itself ("เชื่อมสมองหรือยัง", "are you
+    /// connected to the brain?") rather than asking us to USE it ("ค้นสมองเรื่อง X")?
+    ///
+    /// Deliberately narrow, because a false positive is worse than a false negative:
+    /// answering a real task with a status line is a dead turn, while missing a status
+    /// question just falls through to the model — which now carries the same fact in
+    /// its prompt. Hence all four conditions: short, a brain word, a link word, and no
+    /// action verb anywhere.
+    /// </summary>
+    private static bool LooksLikeBrainStatusQuestion(string? userMessage)
+    {
+        if (string.IsNullOrWhiteSpace(userMessage)) return false;
+        string m = userMessage.Trim().ToLowerInvariant();
+        // A status question is a one-liner. Anything longer is carrying a task.
+        if (m.Length > 120) return false;
+
+        string[] brainWords = { "brainx", "brain", "สมอง", "obsidianx" };
+        if (!brainWords.Any(w => m.Contains(w, StringComparison.Ordinal))) return false;
+
+        string[] linkWords =
+        {
+            "connect", "connected", "connection", "reach", "online", "offline", "alive",
+            "status", "up?", "down", "hooked",
+            "เชื่อม", "ต่อ", "ติด", "สถานะ", "ออนไลน์", "ใช้ได้", "พร้อม",
+        };
+        if (!linkWords.Any(w => m.Contains(w, StringComparison.Ordinal))) return false;
+
+        // "search the brain", "save this to the brain" — a job, not a question about the
+        // wire. `brain_search` also lands here, which is correct: it names a tool to run.
+        string[] actionWords =
+        {
+            "search", "find", "look up", "save", "write", "note", "remember", "append", "create",
+            "fix", "debug", "implement", "add ", "_",
+            "ค้น", "หา", "บันทึก", "เขียน", "จำ", "สร้าง", "แก้", "เพิ่ม",
+        };
+        if (actionWords.Any(w => m.Contains(w, StringComparison.Ordinal))) return false;
+
+        return true;
     }
 
     /// <summary>Parse JSON input element to string dictionary for ToolCall args.</summary>
@@ -1798,13 +3579,29 @@ public class CodeAgentService
                 // Use unique step ID per retry so UI creates fresh bubble (avoids appending to partial content)
                 int effectiveStep = stepNumber * 100 + retry;
 
+                // Idle timeout: the window resets on every streamed token (below), so a healthy stream is
+                // never cut off — only a stalled one becomes a retryable error instead of hanging on the
+                // shared HttpClient's 5-minute ceiling.
+                int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
+                using var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+
                 // Use streaming (ChatAsync) to fire tokens in real-time to UI
                 var sb = new System.Text.StringBuilder();
-                await foreach (var token in _providerManager.ActiveProvider.ChatAsync(
-                    history, message, systemPrompt, ct))
+                try
                 {
-                    sb.Append(token);
-                    OnAgenticStreamingToken?.Invoke(token, effectiveStep);
+                    await foreach (var token in _providerManager.ActiveProvider.ChatAsync(
+                        history, message, systemPrompt, callCts.Token))
+                    {
+                        if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); // reset idle window
+                        sb.Append(token);
+                        OnAgenticStreamingToken?.Invoke(token, effectiveStep);
+                    }
+                }
+                catch (OperationCanceledException) when (callCts.IsCancellationRequested && !ct.IsCancellationRequested)
+                {
+                    // Timeout, not a user cancel — convert to a transient error so the retry loop re-issues.
+                    throw new TimeoutException($"Request timed out after {timeoutSec}s (timeout).");
                 }
                 return sb.ToString();
             }

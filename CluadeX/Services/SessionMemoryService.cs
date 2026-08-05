@@ -19,6 +19,8 @@ public class SessionMemoryService
     private readonly AiProviderManager _providerManager;
     private readonly SettingsService _settingsService;
     private readonly LocalizationService _localizationService;
+    private readonly InstinctService? _instinctService;
+    private readonly BrainSyncService? _brainSync;
 
     // Keep extraction cheap — if a session is too short there's nothing to learn,
     // and too long would blow past typical context windows for a background pass.
@@ -30,12 +32,16 @@ public class SessionMemoryService
         MemoryService memoryService,
         AiProviderManager providerManager,
         SettingsService settingsService,
-        LocalizationService localizationService)
+        LocalizationService localizationService,
+        InstinctService? instinctService = null,
+        BrainSyncService? brainSync = null)
     {
         _memoryService = memoryService;
         _providerManager = providerManager;
         _settingsService = settingsService;
         _localizationService = localizationService;
+        _instinctService = instinctService;
+        _brainSync = brainSync;
     }
 
     /// <summary>
@@ -44,7 +50,9 @@ public class SessionMemoryService
     /// </summary>
     public void ExtractInBackground(IReadOnlyList<ChatMessage> messages)
     {
-        if (!_settingsService.Settings.SessionMemoryEnabled) return;
+        bool wantMemory = _settingsService.Settings.SessionMemoryEnabled;
+        bool wantInstincts = _settingsService.Settings.InstinctLearningEnabled && _instinctService != null;
+        if (!wantMemory && !wantInstincts) return;
         if (messages.Count < MinMessagesToExtract) return;
 
         // Copy defensively — the session's message list can keep mutating after we return.
@@ -54,11 +62,12 @@ public class SessionMemoryService
         {
             try
             {
-                await ExtractAndSaveAsync(snapshot, CancellationToken.None);
+                if (wantMemory) await ExtractAndSaveAsync(snapshot, CancellationToken.None);
+                if (wantInstincts) await ExtractInstinctsAsync(snapshot, CancellationToken.None);
             }
             catch
             {
-                // Memory extraction is best-effort. Never surface errors to the user.
+                // Extraction is best-effort. Never surface errors to the user.
             }
         });
     }
@@ -109,6 +118,116 @@ public class SessionMemoryService
             }
             catch { /* best-effort */ }
         }
+    }
+
+    // ─── Instinct extraction (Wave 5 — the learning loop) ───────────────
+
+    /// <summary>
+    /// Extract reusable behavioral instincts from the transcript and feed them into the Instinct
+    /// system (create-or-bump). Any STRONG instincts then sync to BrainX so the lesson survives across
+    /// machines. Best-effort: the caller gates this; failures here are swallowed.
+    /// </summary>
+    public async Task ExtractInstinctsAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+    {
+        if (_instinctService == null) return;
+        var provider = _providerManager.ActiveProvider;
+        if (!provider.IsReady) return;
+
+        string transcript = BuildTranscript(messages);
+        if (string.IsNullOrWhiteSpace(transcript)) return;
+
+        string response;
+        try
+        {
+            response = await provider.GenerateAsync(
+                history: new List<ChatMessage>(),
+                userMessage: $"TRANSCRIPT:\n---\n{transcript}\n---\n\nReturn a JSON array of instincts learned. Empty array if nothing clear.",
+                systemPrompt: SystemPromptForInstinctExtraction,
+                ct: ct);
+        }
+        catch { return; }
+
+        var candidates = ParseInstinctCandidates(response);
+        if (candidates.Count == 0) return;
+
+        foreach (var c in candidates)
+        {
+            try { _instinctService.RecordObservation(c.Pattern, c.Trigger, c.Action); }
+            catch { /* best-effort */ }
+        }
+
+        // Push any now-STRONG, unsynced instincts to BrainX so the lesson survives across machines.
+        if (_brainSync != null)
+        {
+            try
+            {
+                await _brainSync.SyncAllStrongAsync(_instinctService.GetAll(), ct);
+                // Persist the BrainNoteId that sync assigned in-memory — otherwise a restart re-creates
+                // duplicate brain notes (sync sets the id on the cached object but doesn't write the store).
+                foreach (var inst in _instinctService.GetAll())
+                    if (inst.SyncedToBrain) _instinctService.Persist(inst);
+            }
+            catch { /* brain offline — fine */ }
+        }
+    }
+
+    private const string SystemPromptForInstinctExtraction = """
+        You extract behavioral INSTINCTS from a transcript between a user and an AI coding assistant —
+        reusable working patterns that should guide FUTURE sessions. Return JSON only, no prose/fences.
+
+        An instinct captures HOW to work well with this user/codebase, learned from what happened:
+          - pattern: a short imperative rule (the lesson). e.g. "Build before claiming a fix is done"
+          - trigger: WHEN it applies.  e.g. "After editing C# in this WPF project"
+          - action:  WHAT to do.       e.g. "dotnet build the csproj and check for CS errors"
+
+        Extract ONLY instincts with clear evidence in THIS transcript:
+          - the user corrected the assistant's approach (encode the corrected behavior)
+          - an approach clearly worked and should be repeated
+          - a workflow / convention the user expects
+
+        DO NOT extract: one-off task facts, file contents, generic programming advice, or anything
+        speculative. If there's no evidence it worked or was requested, skip it.
+
+        Output schema (JSON array, possibly empty):
+        [ { "pattern": "...", "trigger": "...", "action": "..." } ]
+
+        Prefer precision. 0-3 instincts per session is normal. Return [] if nothing was clearly learned.
+        """;
+
+    /// <summary>Parse the first JSON array of instincts from the model response, tolerant of prose.</summary>
+    internal static List<InstinctCandidate> ParseInstinctCandidates(string response)
+    {
+        var result = new List<InstinctCandidate>();
+        if (string.IsNullOrWhiteSpace(response)) return result;
+        int start = response.IndexOf('[');
+        int end = response.LastIndexOf(']');
+        if (start < 0 || end <= start) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(response[start..(end + 1)]);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                var c = new InstinctCandidate
+                {
+                    Pattern = GetStringProp(item, "pattern"),
+                    Trigger = GetStringProp(item, "trigger"),
+                    Action = GetStringProp(item, "action"),
+                };
+                if (string.IsNullOrWhiteSpace(c.Pattern)) continue;
+                result.Add(c);
+            }
+        }
+        catch { /* malformed — return what we have */ }
+        return result;
+    }
+
+    internal class InstinctCandidate
+    {
+        public string Pattern { get; set; } = "";
+        public string Trigger { get; set; } = "";
+        public string Action { get; set; } = "";
     }
 
     private static string BuildTranscript(IReadOnlyList<ChatMessage> messages)

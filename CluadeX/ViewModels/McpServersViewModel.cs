@@ -87,6 +87,16 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
         _mcpManager.OnServerLog += OnServerLog;
         _mcpManager.OnToolsChanged += OnToolsChanged;
+        // A server that crashes and reconnects on its own must move this page's
+        // status text without the user pressing Refresh — the page showing "running"
+        // for a corpse is the same lie the status bar was fixed to stop telling.
+        // BeginInvoke, NOT Invoke: this fires from the Process.Exited callback
+        // thread. A blocking hop to the UI thread from there is the same deadlock
+        // shape already documented in InstinctsViewModel — the exit thread waits
+        // on the UI thread while the UI thread is inside Refresh() reading the
+        // tool registry the exit path is mutating.
+        _mcpManager.OnServerStateChanged += (_, _) =>
+            Application.Current?.Dispatcher.BeginInvoke(new Action(Refresh));
         _loc.LanguageChanged += () =>
         {
             OnPropertyChanged(nameof(PageTitle));
@@ -300,9 +310,12 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
     // ─── Events ───
 
+    // Both of these are now raised from the Process.Exited callback thread as well
+    // as from the UI thread, so neither may block on the dispatcher — see the
+    // OnServerStateChanged subscription above.
     private void OnServerLog(string serverName, string message)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             var item = Servers.FirstOrDefault(s => s.Name == serverName);
             if (item != null)
@@ -318,7 +331,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
     private void OnToolsChanged()
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             foreach (var s in Servers)
                 s.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(s.Name).Count;

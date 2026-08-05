@@ -38,11 +38,11 @@ CluadeX คือผู้ช่วยเขียนโค้ด AI เต็�
 | Sprint | Feature | Why It Matters |
 |--------|---------|----------------|
 | **S1** | **Subagent System** (10 built-in: code-reviewer, security-reviewer, architect, silent-failure-hunter, …) | Scoped context per agent → better answers, lower cost |
-| **S1** | **Skill `.md` Library** (15 built-in: verification-loop, tdd-workflow, deep-research, eval-harness, multi-plan, …) | Unlimited workflow templates loadable from URL/git |
+| **S1** | **Skill `.md` Library** (18 built-in: verification-loop, tdd-workflow, deep-research, eval-harness, multi-plan, …) | Unlimited workflow templates loadable from URL/git |
 | **S2** | **Instinct System** (continuous learning) | CluadeX learns your patterns and promotes them to reusable skills |
 | **S2** | **Strategic Compaction Toast** | Smart `/compact` suggestion at logical breakpoints |
-| **S3** | **SecurityShield Scanner** (50 OWASP rules + red-team/blue-team/auditor pipeline) | Production-grade security review on every change |
-| **S3** | **Hook Script Library** (15 pre-bundled hooks) | One-toggle automation — prettier, secret scan, push confirm, … |
+| **S3** | **SecurityShield Scanner** (51 OWASP rules + red-team/blue-team/auditor pipeline) | Production-grade security review on every change |
+| **S3** | **Hook Script Library** (16 pre-bundled hooks) | One-toggle automation — prettier, secret scan, push confirm, … |
 | **S4** | **Multi-Execute Worktree Arena** (3 parallel implementations side-by-side) | Pick the best of 3 approaches without losing the others |
 | **S4** | **Eval Harness** (pass@k, LLM judge / rule / unit-test graders) | Measure skill + subagent quality, catch regressions |
 | **S4** | **Marketplace 2.0** (manifest-driven install, signature verified) | One-click profile install: "fullstack-web" / "ml-engineer" / "blockchain" |
@@ -77,7 +77,7 @@ Things a CLI tool fundamentally cannot do:
 | **Catppuccin Mocha Theme** | Beautiful dark theme with metallic gradients, drop shadows, glowing menu, and rounded corners. | ธีมมืดสวยงามพร้อมเมนูเรืองแสง กราเดียนท์เมทัลลิก เงาตกกระทบ ขอบมน |
 | **HuggingFace Model Hub** | Browse, search, and download GGUF models directly from HuggingFace Hub. Search is filtered to GGUF text-generation LLMs only (no embeddings/image/audio). Every result card has a "Read more" link to the HF model page. | ค้นหาและดาวน์โหลด GGUF กรองเฉพาะ LLM text-generation ทุกผลมีลิงก์ Read more ไปดู model card |
 | **Rich Model Catalog** | Curated catalog with fit indicator on every card: 🟢 Fast (fits GPU) · 🟦 Good · 🟡 Partial (CPU offload) · 🟠 Slow · 🔴 Too large. 17 Gemma variants (4, 3N, 3, 3 QAT, 2, CodeGemma) plus Qwen 2.5, DeepSeek, Llama 3, Phi 3.5, StarCoder 2, CodeLlama. List/Grid view toggle. | แคตตาล็อกโมเดลพร้อมตัวบอกความเหมาะสมกับ VRAM ของคุณ มี 17 Gemma + รุ่นอื่นอีก toggle ระหว่าง list/grid |
-| **Thai/English Localization** | Hot-swappable Thai/English with `{services:Loc key}` XAML markup extension — all bound labels refresh live on language change. 200+ translations covering Settings, Features, navigation, buddy, common UI. | สลับภาษาแบบ hot-reload ผ่าน MarkupExtension 200+ คำแปล |
+| **Thai/English Localization** | Hot-swappable Thai/English with `{services:Loc key}` XAML markup extension — bound labels refresh live on language change. 622 translation entries, every one with both EN and TH, wired into every page. Technical identifiers (data-type names, sampling parameters, shortcut labels) intentionally stay English. | สลับภาษาแบบ hot-reload ผ่าน MarkupExtension 200+ คำแปล |
 | **Feature Toggles** | Enable or disable optional features from the Features page. | เปิด/ปิดฟีเจอร์เสริมได้จากหน้า Features |
 | **Activation Key System** | Advanced features gated behind activation key. Free tier includes local inference, chat, Ollama, buddy, and more. | ฟีเจอร์ขั้นสูงต้องใส่ activation key ฟรีเทียร์มีครบเรื่องพื้นฐาน |
 | **Portable Mode** | Place a `portable` or `portable.txt` file next to the exe to store all data locally. | วางไฟล์ `portable` ข้างไฟล์ exe เพื่อเก็บข้อมูลทั้งหมดในโฟลเดอร์เดียวกัน |
@@ -88,6 +88,7 @@ Things a CLI tool fundamentally cannot do:
 
 | Feature | Description | คำอธิบาย |
 |---------|-------------|----------|
+| **Command Palette (Ctrl+K)** | One box over pages, skills and project files. Subsequence matching (`ce` finds Code Editor), ↑↓ to move, Enter to run, Esc to dismiss. Running a skill drops its slash command into chat; running a file opens it in the editor. | แถบคำสั่ง Ctrl+K ค้นหน้า skill และไฟล์ในที่เดียว |
 | **Collapsible Menu** | System menu (Chat/Models/Settings/Plugins/…) collapses to a gradient "MENU" strip so chat history dominates. Default collapsed; state persisted. | เมนูระบบพับได้ — default พับเพื่อเน้นประวัติแชท |
 | **Per-Project Session Filter** | Sidebar shows sessions from the current project folder only. Toggle switch exposes "all projects" view. Legacy sessions (no project tag) always visible. | sidebar แสดง session เฉพาะโปรเจคที่เปิด มี toggle ให้ดูทุกโปรเจค |
 | **Project Header** | Current project name + icon shown prominently above chat history. Tooltip shows full path. | หัวโปรเจคแสดงชื่อโฟลเดอร์ปัจจุบัน |
@@ -563,6 +564,22 @@ CluadeX/
 
 ---
 
+## Known Limitations / ข้อจำกัดที่ควรรู้
+
+Stated plainly so nothing above reads as a promise it can't keep.
+บอกตรงๆ เพื่อไม่ให้ข้างบนกลายเป็นคำโฆษณาเกินจริง
+
+| Area | Where it stands / สถานะจริง |
+|------|------------------------------|
+| **Sprint 4 features** | Multi-Execute Worktree Arena, Eval Harness, Marketplace 2.0 and Session Handoff Exporter are **planned, not shipped**. They appear only in the roadmap table above. / ยังไม่ได้ทำ อยู่ในแผนเท่านั้น |
+| **Localization** | Every page is wired to the translation table (622 entries, all EN + TH). What deliberately stays English: type/encoding names in the Hex Editor (int8, float32, UTF-8), sampling parameter names (Top-P, Top-K, Min-P), keyboard shortcut labels and the CluadeX brand name. / แปลครบทุกหน้าแล้ว ที่เหลือเป็นอังกฤษคือศัพท์เทคนิคที่ไม่ควรแปล |
+| **Platform** | Windows only. There is no macOS or Linux build. / รองรับ Windows เท่านั้น |
+| **Weak local models** | The harness (constrained decoding, tool-call salvage, auto-verify, false-finish guard) makes small GGUF models finish real edits, but it cannot add reasoning the weights lack — a 7B model still hallucinates when summarising unfamiliar code. Connect an API provider for hard tasks. / โมเดลเล็กยังมโนได้ในงานที่ต้องคิดเยอะ |
+| **Embedded terminal** | A real persistent PowerShell for running commands — not a full PTY. Cursor-driven TUIs (vim, htop) will not render. / ไม่ใช่ PTY เต็มรูปแบบ |
+| **git push / GitHub** | Local Git (commit, branch, merge, diff, stash) is free. Pushing to a remote and GitHub PR tools require activation. / push ขึ้น remote ต้อง activate |
+
+---
+
 ## Roadmap & Contributing / แผนพัฒนาและการมีส่วนร่วม
 
 The complete development plan is in [ROADMAP.md](ROADMAP.md) — covering 4 sprints, 10 major features, 7 CluadeX-only innovations, and success metrics.
@@ -571,9 +588,9 @@ The complete development plan is in [ROADMAP.md](ROADMAP.md) — covering 4 spri
 
 **Sprint priorities at a glance / ลำดับการพัฒนา:**
 
-1. **Sprint 1 — Foundation:** Subagent System + Skill `.md` Library (10 subagents + 15 skills built-in)
+1. **Sprint 1 — Foundation:** Subagent System + Skill `.md` Library (10 subagents + 18 skills built-in)
 2. **Sprint 2 — Intelligence:** Instinct System (continuous learning) + Strategic Compaction Toast
-3. **Sprint 3 — Safety:** SecurityShield Scanner (50 rules) + Hook Script Library (15 bundled hooks)
+3. **Sprint 3 — Safety:** SecurityShield Scanner (51 rules) + Hook Script Library (16 bundled hooks)
 4. **Sprint 4 — Power:** Multi-Execute Worktree Arena + Eval Harness + Marketplace 2.0 + Session Handoff Exporter
 
 Pull requests and issues welcome at [github.com/xjanova/CluadeX](https://github.com/xjanova/CluadeX).

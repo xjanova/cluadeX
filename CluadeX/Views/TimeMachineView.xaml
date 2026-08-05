@@ -1,0 +1,1053 @@
+﻿<UserControl x:Class="CluadeX.Views.TimeMachineView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:vm="clr-namespace:CluadeX.ViewModels"
+             xmlns:m="clr-namespace:CluadeX.Models"
+             d:DataContext="{d:DesignInstance Type=vm:TimeMachineViewModel}"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             mc:Ignorable="d"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             FontFamily="{StaticResource NeonUiFont}"
+             Background="{StaticResource NeonBg0Brush}"
+             Loaded="OnLoaded">
+    <UserControl.Resources>
+        <!-- Soft glow shadow effects (instance-per-use; WPF Effects can't be reused as resource brushes) -->
+        <Style x:Key="NeonPanel" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource NeonPanelFill}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource NeonLineBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Effect" Value="{StaticResource NeonPanelShadow}"/>
+        </Style>
+
+        <Style x:Key="NeonButton" TargetType="Button">
+            <Setter Property="Background" Value="#7028326E"/>
+            <Setter Property="BorderBrush" Value="{StaticResource NeonLineHiBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Padding" Value="12,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#B22E3870"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="NeonPrimaryButton" TargetType="Button" BasedOn="{StaticResource NeonButton}">
+            <Setter Property="Background" Value="{StaticResource NeonRewindGradient}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource NeonMagentaBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="14,9"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.45"/>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource NeonRewindHover}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Filter chip — RadioButton styled as pill -->
+        <Style x:Key="FilterChip" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource NeonInk2Brush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="bd" Background="Transparent"
+                                BorderBrush="{StaticResource NeonLineBrush}"
+                                BorderThickness="1" CornerRadius="14"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#384CDFFF"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Commit row template -->
+        <DataTemplate x:Key="CommitRowTemplate" DataType="{x:Type m:CommitInfo}">
+            <Button Click="OnCommitClick" Tag="{Binding}" Cursor="Hand"
+                    Background="Transparent" BorderThickness="0" Padding="0"
+                    HorizontalContentAlignment="Stretch">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="row" Padding="14,10,18,10" CornerRadius="0">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                                    <Setter Property="BorderBrush" Value="Transparent"/>
+                                </Style>
+                            </Border.Style>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="42"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Commit sphere -->
+                                <Grid Grid.Column="0" Width="26" Height="26" Margin="6,0,0,0"
+                                      HorizontalAlignment="Left" VerticalAlignment="Top">
+                                    <!-- Halo -->
+                                    <Ellipse Width="42" Height="42" Margin="-8" Opacity="0.5">
+                                        <Ellipse.Fill>
+                                            <RadialGradientBrush>
+                                                <GradientStop Color="#A672FF" Offset="0"/>
+                                                <GradientStop Color="Transparent" Offset="0.7"/>
+                                            </RadialGradientBrush>
+                                        </Ellipse.Fill>
+                                        <Ellipse.Effect>
+                                            <BlurEffect Radius="6"/>
+                                        </Ellipse.Effect>
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsAiAuthored}" Value="False">
+                                                        <Setter Property="Fill">
+                                                            <Setter.Value>
+                                                                <RadialGradientBrush>
+                                                                    <GradientStop Color="#4CDFFF" Offset="0"/>
+                                                                    <GradientStop Color="Transparent" Offset="0.7"/>
+                                                                </RadialGradientBrush>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                    <!-- Core sphere with radial highlight -->
+                                    <Ellipse Width="26" Height="26" StrokeThickness="1.5">
+                                        <Ellipse.Fill>
+                                            <RadialGradientBrush Center="0.28,0.28" RadiusX="0.75" RadiusY="0.75">
+                                                <GradientStop Color="#FFFFFF" Offset="0"/>
+                                                <GradientStop Color="#A672FF" Offset="0.4"/>
+                                                <GradientStop Color="#4F2A8C" Offset="1"/>
+                                            </RadialGradientBrush>
+                                        </Ellipse.Fill>
+                                        <Ellipse.Stroke>
+                                            <SolidColorBrush Color="#7E4DCE"/>
+                                        </Ellipse.Stroke>
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsAiAuthored}" Value="False">
+                                                        <Setter Property="Fill">
+                                                            <Setter.Value>
+                                                                <RadialGradientBrush Center="0.28,0.28" RadiusX="0.75" RadiusY="0.75">
+                                                                    <GradientStop Color="#FFFFFF" Offset="0"/>
+                                                                    <GradientStop Color="#4CDFFF" Offset="0.4"/>
+                                                                    <GradientStop Color="#1D6E8C" Offset="1"/>
+                                                                </RadialGradientBrush>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <Setter Property="Stroke" Value="#286E94"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                    <!-- Specular highlight -->
+                                    <Ellipse Width="8" Height="5" Margin="2,3,0,0"
+                                             HorizontalAlignment="Left" VerticalAlignment="Top"
+                                             Fill="#80FFFFFF" IsHitTestVisible="False"/>
+                                    <!-- HEAD indicator: pulsing outer ring -->
+                                    <Ellipse Width="34" Height="34" StrokeThickness="2" Stroke="#5CFFB0"
+                                             Visibility="{Binding IsHead, Converter={StaticResource BoolVis}}"
+                                             Opacity="0.7" IsHitTestVisible="False">
+                                        <Ellipse.Effect>
+                                            <DropShadowEffect Color="#5CFFB0" BlurRadius="14" ShadowDepth="0" Opacity="0.8"/>
+                                        </Ellipse.Effect>
+                                        <Ellipse.Triggers>
+                                            <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                                <BeginStoryboard>
+                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                         From="0.3" To="0.95" Duration="0:0:1.2"/>
+                                                    </Storyboard>
+                                                </BeginStoryboard>
+                                            </EventTrigger>
+                                        </Ellipse.Triggers>
+                                    </Ellipse>
+                                </Grid>
+
+                                <!-- Content -->
+                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding ShortSha}"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
+                                        <Border Margin="8,0,0,0" Padding="6,1" CornerRadius="3"
+                                                BorderThickness="1" BorderBrush="#665CFFB0"
+                                                Background="#245CFFB0"
+                                                Visibility="{Binding IsHead, Converter={StaticResource BoolVis}}">
+                                            <TextBlock Text="HEAD" FontSize="9"
+                                                       FontFamily="{StaticResource NeonMonoFont}"
+                                                       Foreground="{StaticResource NeonMintBrush}"/>
+                                        </Border>
+                                        <ItemsControl ItemsSource="{Binding Tags}" Margin="6,0,0,0">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="2,0" Padding="5,1" CornerRadius="3"
+                                                            BorderThickness="1" BorderBrush="#66A672FF"
+                                                            Background="#22A672FF">
+                                                        <TextBlock Text="{Binding}" FontSize="9"
+                                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                                   Foreground="{StaticResource NeonVioletBrush}"/>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Message}" Margin="0,2,0,0"
+                                               FontSize="13" Foreground="{StaticResource NeonInk0Brush}"
+                                               FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <TextBlock Text="{Binding Author}" FontSize="10"
+                                                   Foreground="{Binding IsAiAuthored, Converter={StaticResource AiBoolBrush}}"/>
+                                        <TextBlock Text=" · " FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
+                                        <TextBlock Text="{Binding RelativeTime}" FontSize="10"
+                                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                        <TextBlock Text=" · " FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
+                                        <TextBlock Text="{Binding FilesChanged}" FontSize="10"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                        <TextBlock Text="{services:Loc timemachine.filesSuffix}" FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
+                                        <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                                   Foreground="{StaticResource NeonMintBrush}">
+                                            <Run Text="+"/>
+                                            <Run Text="{Binding Additions, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                                   Margin="6,0,0,0" Foreground="{StaticResource NeonRedBrush}">
+                                            <Run Text="−"/>
+                                            <Run Text="{Binding Deletions, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="row" Property="Background" Value="#10FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </DataTemplate>
+
+        <!-- File change row in tab strip -->
+        <DataTemplate x:Key="FileChangeTabTemplate" DataType="{x:Type m:CommitFileChange}">
+            <Button Click="OnFileClick" Tag="{Binding}" Margin="2,0"
+                    Background="Transparent" BorderThickness="1"
+                    BorderBrush="{StaticResource NeonLineBrush}"
+                    Foreground="{StaticResource NeonInk2Brush}"
+                    Padding="8,4" Cursor="Hand">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Status, Converter={StaticResource FileStatusText}}"
+                                           Margin="0,0,6,0" FontSize="10"
+                                           FontFamily="{StaticResource NeonMonoFont}"
+                                           Foreground="{StaticResource NeonAmberBrush}"/>
+                                <TextBlock Text="{Binding Path}" FontSize="11"
+                                           FontFamily="{StaticResource NeonMonoFont}"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </DataTemplate>
+
+        <!-- Diff line template -->
+        <DataTemplate x:Key="DiffLineTemplate" DataType="{x:Type m:DiffLine}">
+            <Border BorderThickness="3,0,0,0" Background="{Binding Kind, Converter={StaticResource DiffKindBg}}">
+                <Border.BorderBrush>
+                    <SolidColorBrush Color="Transparent"/>
+                </Border.BorderBrush>
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Kind}" Value="+">
+                                <Setter Property="BorderBrush" Value="{StaticResource NeonMintBrush}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Kind}" Value="-">
+                                <Setter Property="BorderBrush" Value="{StaticResource NeonRedBrush}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Kind}" Value="@">
+                                <Setter Property="BorderBrush" Value="{StaticResource NeonVioletBrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="38"/>
+                        <ColumnDefinition Width="18"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding NewLineNo}" TextAlignment="Right"
+                               FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                               Foreground="{StaticResource NeonInk3Brush}"
+                               Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Kind}" TextAlignment="Center"
+                               FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                               FontWeight="Bold"
+                               Foreground="{Binding Kind, Converter={StaticResource DiffKindBrush}}"
+                               VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="2" Text="{Binding Content}"
+                               FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
+                               Foreground="{Binding Kind, Converter={StaticResource DiffKindBrush}}"
+                               TextWrapping="NoWrap" VerticalAlignment="Center"
+                               Padding="0,2"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <!-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ -->
+        <!-- Nebula background — radial gradient + 4 depth orbs                -->
+        <!-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ -->
+        <Rectangle IsHitTestVisible="False">
+            <Rectangle.Fill>
+                <RadialGradientBrush Center="0.5,0" RadiusX="0.8" RadiusY="0.6">
+                    <GradientStop Color="#33A672FF" Offset="0"/>
+                    <GradientStop Color="#06071A" Offset="1"/>
+                </RadialGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+
+        <Grid IsHitTestVisible="False" ClipToBounds="True">
+            <!-- 4 depth orbs with subtle drift animation -->
+            <Ellipse Width="220" Height="220" Margin="-50,80,0,0"
+                     HorizontalAlignment="Left" VerticalAlignment="Top" Opacity="0.22">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#A672FF" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="0.6"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+                <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
+                <Ellipse.RenderTransform><TranslateTransform x:Name="orb1Tr"/></Ellipse.RenderTransform>
+                <Ellipse.Triggers>
+                    <EventTrigger RoutedEvent="Ellipse.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                <DoubleAnimation Storyboard.TargetName="orb1Tr"
+                                                 Storyboard.TargetProperty="Y"
+                                                 From="-10" To="10" Duration="0:0:9"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Ellipse.Triggers>
+            </Ellipse>
+            <Ellipse Width="180" Height="180" Margin="0,40,80,0"
+                     HorizontalAlignment="Right" VerticalAlignment="Top" Opacity="0.2">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#4CDFFF" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="0.6"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+                <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
+                <Ellipse.RenderTransform><TranslateTransform x:Name="orb2Tr"/></Ellipse.RenderTransform>
+                <Ellipse.Triggers>
+                    <EventTrigger RoutedEvent="Ellipse.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                <DoubleAnimation Storyboard.TargetName="orb2Tr"
+                                                 Storyboard.TargetProperty="Y"
+                                                 From="8" To="-8" Duration="0:0:11" BeginTime="0:0:2"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Ellipse.Triggers>
+            </Ellipse>
+            <Ellipse Width="240" Height="240" Margin="0,0,200,80"
+                     HorizontalAlignment="Right" VerticalAlignment="Bottom" Opacity="0.18">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#FF5EC4" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="0.6"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+                <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
+                <Ellipse.RenderTransform><TranslateTransform x:Name="orb3Tr"/></Ellipse.RenderTransform>
+                <Ellipse.Triggers>
+                    <EventTrigger RoutedEvent="Ellipse.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                <DoubleAnimation Storyboard.TargetName="orb3Tr"
+                                                 Storyboard.TargetProperty="Y"
+                                                 From="-12" To="12" Duration="0:0:14" BeginTime="0:0:5"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Ellipse.Triggers>
+            </Ellipse>
+            <Ellipse Width="160" Height="160" Margin="180,0,0,40"
+                     HorizontalAlignment="Left" VerticalAlignment="Bottom" Opacity="0.16">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#5CFFB0" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="0.6"/>
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+                <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
+                <Ellipse.RenderTransform><TranslateTransform x:Name="orb4Tr"/></Ellipse.RenderTransform>
+                <Ellipse.Triggers>
+                    <EventTrigger RoutedEvent="Ellipse.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                <DoubleAnimation Storyboard.TargetName="orb4Tr"
+                                                 Storyboard.TargetProperty="Y"
+                                                 From="6" To="-6" Duration="0:0:8" BeginTime="0:0:1.5"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Ellipse.Triggers>
+            </Ellipse>
+        </Grid>
+
+        <!-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ -->
+        <!-- Main content                                                       -->
+        <!-- ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ -->
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- ═══ HEADER ═══ -->
+            <Border Grid.Row="0" Padding="24,16" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#7F141838" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Logo orb with spinning halo -->
+                    <Grid Grid.Column="0" Width="46" Height="46" VerticalAlignment="Center">
+                        <Ellipse Width="46" Height="46" Opacity="0.5">
+                            <Ellipse.Fill>
+                                <RadialGradientBrush>
+                                    <GradientStop Color="#FF5EC4" Offset="0"/>
+                                    <GradientStop Color="#A672FF" Offset="0.5"/>
+                                    <GradientStop Color="Transparent" Offset="1"/>
+                                </RadialGradientBrush>
+                            </Ellipse.Fill>
+                            <Ellipse.Effect><BlurEffect Radius="10"/></Ellipse.Effect>
+                            <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
+                            <Ellipse.RenderTransform><RotateTransform x:Name="haloRotate"/></Ellipse.RenderTransform>
+                            <Ellipse.Triggers>
+                                <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                    <BeginStoryboard>
+                                        <Storyboard RepeatBehavior="Forever">
+                                            <DoubleAnimation Storyboard.TargetName="haloRotate"
+                                                             Storyboard.TargetProperty="Angle"
+                                                             From="0" To="360" Duration="0:0:10"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Ellipse.Triggers>
+                        </Ellipse>
+                        <Border Width="38" Height="38" CornerRadius="10">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#FF5EC4" Offset="0"/>
+                                    <GradientStop Color="#A672FF" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Border.Effect>
+                                <DropShadowEffect Color="#FF5EC4" BlurRadius="20" ShadowDepth="0" Opacity="0.6"/>
+                            </Border.Effect>
+                            <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets"
+                                       FontSize="18" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
+
+                    <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{services:Loc timemachine.title}" FontSize="20" FontWeight="Bold"
+                                   Foreground="{StaticResource NeonInk0Brush}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <TextBlock Text="{services:Loc timemachine.subtitle}"
+                                       FontSize="11" Foreground="{StaticResource NeonInk2Brush}"/>
+                            <Border Margin="12,0,0,0" Padding="6,2" CornerRadius="3"
+                                    Background="#222D3F66" BorderThickness="1" BorderBrush="{StaticResource NeonLineBrush}"
+                                    Visibility="{Binding CurrentBranchName, Converter={StaticResource BoolVis}}">
+                                <TextBlock FontSize="10" FontFamily="{StaticResource NeonMonoFont}"
+                                           Foreground="{StaticResource NeonCyanBrush}">
+                                    <Run Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets" FontSize="9"/>
+                                    <Run Text=" "/>
+                                    <Run Text="{Binding CurrentBranchName, Mode=OneWay}"/>
+                                </TextBlock>
+                            </Border>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <RadioButton GroupName="TmFilter" Content="{services:Loc timemachine.filterAll}" IsChecked="{Binding FilterAllChecked, Mode=OneWay}"
+                                     Command="{Binding ShowAllCommand}"
+                                     Style="{StaticResource FilterChip}" Margin="0,0,6,0"/>
+                        <RadioButton GroupName="TmFilter" Content="{services:Loc timemachine.filterAgent}"
+                                     IsChecked="{Binding FilterAgentChecked, Mode=OneWay}"
+                                     Command="{Binding ShowAgentOnlyCommand}"
+                                     Style="{StaticResource FilterChip}" Margin="0,0,12,0"/>
+                        <Border Width="1" Background="{StaticResource NeonLineBrush}" Margin="0,4,12,4"/>
+                        <Button Content="&#xE72C; Refresh" FontFamily="Segoe UI"
+                                Command="{Binding RefreshCommand}"
+                                Style="{StaticResource NeonButton}" Margin="0,0,8,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ═══ SPLIT CONTENT ═══ -->
+            <Grid Grid.Row="1" Margin="20,16,20,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="460"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- ═══ LEFT: timeline panel ═══ -->
+                <Border Grid.Column="0" Style="{StaticResource NeonPanel}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Header strip -->
+                        <Border Grid.Row="0" Padding="18,14" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE823;" FontFamily="Segoe MDL2 Assets"
+                                           FontSize="14" Foreground="{StaticResource NeonMagentaBrush}"
+                                           VerticalAlignment="Center" Margin="0,0,10,0">
+                                    <TextBlock.Effect>
+                                        <DropShadowEffect Color="#FF5EC4" BlurRadius="10" ShadowDepth="0" Opacity="0.8"/>
+                                    </TextBlock.Effect>
+                                </TextBlock>
+                                <TextBlock Text="{services:Loc timemachine.timeline}" FontWeight="SemiBold"
+                                           Foreground="{StaticResource NeonInk0Brush}" VerticalAlignment="Center"/>
+                                <TextBlock FontSize="10" Margin="10,0,0,0"
+                                           FontFamily="{StaticResource NeonMonoFont}"
+                                           Foreground="{StaticResource NeonInk3Brush}"
+                                           VerticalAlignment="Center">
+                                    <Run Text="{Binding VisibleCount, Mode=OneWay}"/>
+                                    <Run Text=" / "/>
+                                    <Run Text="{Binding CommitCount, Mode=OneWay}"/>
+                                    <Run Text="{services:Loc timemachine.commitsSuffix}"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Commit list with spine -->
+                        <Grid Grid.Row="1">
+                            <!-- Spine layers — drawn behind ItemsControl -->
+                            <Grid HorizontalAlignment="Left" Margin="36,12,0,12">
+                                <Rectangle Width="6" Margin="-3,0,0,0" Opacity="0.18">
+                                    <Rectangle.Fill>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                            <GradientStop Color="#4CDFFF" Offset="0"/>
+                                            <GradientStop Color="#A672FF" Offset="0.4"/>
+                                            <GradientStop Color="#FF5EC4" Offset="0.75"/>
+                                            <GradientStop Color="#5CFFB0" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Rectangle.Fill>
+                                    <Rectangle.Effect>
+                                        <BlurEffect Radius="4"/>
+                                    </Rectangle.Effect>
+                                </Rectangle>
+                                <Rectangle Width="2" Margin="-1,0,0,0" Opacity="0.7">
+                                    <Rectangle.Fill>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                            <GradientStop Color="#4CDFFF" Offset="0"/>
+                                            <GradientStop Color="#A672FF" Offset="0.4"/>
+                                            <GradientStop Color="#FF5EC4" Offset="0.75"/>
+                                            <GradientStop Color="#5CFFB0" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Rectangle.Fill>
+                                </Rectangle>
+                                <Rectangle Width="1" Margin="-0.5,0,0,0" Fill="#80FFFFFF"/>
+                            </Grid>
+
+                            <!-- Rewind beam (animated overlay) -->
+                            <Rectangle x:Name="RewindBeam" Width="10" Height="100"
+                                       HorizontalAlignment="Left" VerticalAlignment="Top"
+                                       Margin="32,0,0,0" Opacity="0"
+                                       Visibility="{Binding IsRewinding, Converter={StaticResource BoolVis}}">
+                                <Rectangle.Fill>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                        <GradientStop Color="Transparent" Offset="0"/>
+                                        <GradientStop Color="#FF5EC4" Offset="0.4"/>
+                                        <GradientStop Color="#4CDFFF" Offset="0.5"/>
+                                        <GradientStop Color="#FF5EC4" Offset="0.6"/>
+                                        <GradientStop Color="Transparent" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Rectangle.Fill>
+                                <Rectangle.Effect>
+                                    <DropShadowEffect Color="#FF5EC4" BlurRadius="40" ShadowDepth="0" Opacity="0.9"/>
+                                </Rectangle.Effect>
+                                <Rectangle.RenderTransform><TranslateTransform x:Name="beamTr"/></Rectangle.RenderTransform>
+                            </Rectangle>
+
+                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          Padding="0,8,0,16">
+                                <ItemsControl ItemsSource="{Binding VisibleCommits}"
+                                              ItemTemplate="{StaticResource CommitRowTemplate}"/>
+                            </ScrollViewer>
+                        </Grid>
+                    </Grid>
+                </Border>
+
+                <!-- ═══ RIGHT: detail + diff ═══ -->
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="16"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Commit detail card -->
+                    <Border Grid.Row="0" Style="{StaticResource NeonPanel}" Padding="20"
+                            Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}}">
+                        <Grid>
+                            <!-- corner glow -->
+                            <Ellipse Width="220" Height="220" Margin="0,-50,-50,0"
+                                     HorizontalAlignment="Right" VerticalAlignment="Top"
+                                     IsHitTestVisible="False">
+                                <Ellipse.Fill>
+                                    <RadialGradientBrush>
+                                        <GradientStop Color="#3CFF5EC4" Offset="0"/>
+                                        <GradientStop Color="Transparent" Offset="0.6"/>
+                                    </RadialGradientBrush>
+                                </Ellipse.Fill>
+                                <Ellipse.Effect><BlurEffect Radius="16"/></Ellipse.Effect>
+                            </Ellipse>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="56"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Avatar -->
+                                <Border Grid.Column="0" Width="48" Height="48" CornerRadius="12"
+                                        VerticalAlignment="Top"
+                                        Background="{Binding SelectedIsAi, Converter={StaticResource AiBoolAvatar}}">
+                                    <Border.Effect>
+                                        <DropShadowEffect Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.5"/>
+                                    </Border.Effect>
+                                    <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="22"
+                                               Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="&#xE99A;"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedIsAi}" Value="False">
+                                                        <Setter Property="Text" Value="&#xE77B;"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Border>
+
+                                <StackPanel Grid.Column="1" Margin="14,0,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Padding="6,2" CornerRadius="4"
+                                                Background="#10FFFFFF"
+                                                BorderThickness="1" BorderBrush="{StaticResource NeonLineHiBrush}">
+                                            <TextBlock Text="{Binding SelectedShortSha}"
+                                                       FontFamily="{StaticResource NeonMonoFont}"
+                                                       FontSize="11" Foreground="{StaticResource NeonInk0Brush}"/>
+                                        </Border>
+                                        <TextBlock Margin="10,0,0,0" FontSize="11"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonCyanBrush}"
+                                                   VerticalAlignment="Center"
+                                                   Visibility="{Binding SelectedBranch, Converter={StaticResource BoolVis}}">
+                                            <Run Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
+                                            <Run Text=" "/>
+                                            <Run Text="{Binding SelectedBranch, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Margin="10,0,0,0" Text="·" Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center"/>
+                                        <TextBlock Margin="10,0,0,0" Text="{Binding SelectedTime}" FontSize="11"
+                                                   Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding SelectedMessage}" Margin="0,8,0,0"
+                                               FontSize="18" FontWeight="Bold"
+                                               Foreground="{StaticResource NeonInk0Brush}"
+                                               TextWrapping="Wrap"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock Text="by " Foreground="{StaticResource NeonInk2Brush}" FontSize="11"/>
+                                        <TextBlock Text="{Binding SelectedAuthor}" FontSize="11"
+                                                   Foreground="{Binding SelectedIsAi, Converter={StaticResource AiBoolBrush}}"/>
+                                        <TextBlock Margin="14,0,0,0" Text="{Binding SelectedFilesCount}"
+                                                   FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                                   Foreground="{StaticResource NeonInk2Brush}"/>
+                                        <TextBlock Text=" files" FontSize="11" Foreground="{StaticResource NeonInk2Brush}"/>
+                                        <TextBlock Margin="14,0,0,0" FontSize="11"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonMintBrush}">
+                                            <Run Text="+"/>
+                                            <Run Text="{Binding SelectedAdditions, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Margin="6,0,0,0" FontSize="11"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonRedBrush}">
+                                            <Run Text="−"/>
+                                            <Run Text="{Binding SelectedDeletions, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2" VerticalAlignment="Top">
+                                    <Button Command="{Binding OpenConfirmCommand}"
+                                            Style="{StaticResource NeonPrimaryButton}" Margin="0,0,0,6"
+                                            IsEnabled="{Binding HasSelection}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="11" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{services:Loc timemachine.rewindHere}"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Command="{Binding BranchFromCommand}"
+                                            Style="{StaticResource NeonButton}" Margin="0,0,0,6">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="11" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{services:Loc timemachine.branchHere}"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Command="{Binding CherryPickCommand}"
+                                            Style="{StaticResource NeonButton}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE71D;" FontFamily="Segoe MDL2 Assets"
+                                                       FontSize="11" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{services:Loc timemachine.cherryPick}"/>
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <!-- Diff panel -->
+                    <Border Grid.Row="2" Style="{StaticResource NeonPanel}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Diff header / file tabs -->
+                            <Border Grid.Row="0" Padding="14,10" BorderThickness="0,0,0,1"
+                                    BorderBrush="{StaticResource NeonLineBrush}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                        <TextBlock Text="&#xE17C;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14" Foreground="{StaticResource NeonCyanBrush}"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="{services:Loc timemachine.changes}" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource NeonInk0Brush}" VerticalAlignment="Center"/>
+                                        <TextBlock Margin="10,0,0,0" FontSize="11"
+                                                   FontFamily="{StaticResource NeonMonoFont}"
+                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding SelectedFile.Path, Mode=OneWay, TargetNullValue='(select a file)'}"/>
+                                    </StackPanel>
+                                    <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                                                  VerticalScrollBarVisibility="Disabled" Margin="12,0,0,0">
+                                        <ItemsControl ItemsSource="{Binding Files}"
+                                                      ItemTemplate="{StaticResource FileChangeTabTemplate}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+
+                            <!-- Diff lines -->
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Auto" Padding="0,8">
+                                <ItemsControl ItemsSource="{Binding DiffLines}"
+                                              ItemTemplate="{StaticResource DiffLineTemplate}"/>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+
+            <!-- Status bar -->
+            <Border Grid.Row="2" Padding="20,6" BorderThickness="0,1,0,0"
+                    BorderBrush="{StaticResource NeonLineBrush}"
+                    Background="#88141838"
+                    Visibility="{Binding StatusMessage, Converter={StaticResource BoolVis}}">
+                <TextBlock Text="{Binding StatusMessage}" FontSize="11"
+                           FontFamily="{StaticResource NeonMonoFont}"
+                           Foreground="{StaticResource NeonInk1Brush}"/>
+            </Border>
+        </Grid>
+
+        <!-- ═══ CONFIRM REWIND DIALOG ═══ -->
+        <Grid Background="#B2060718"
+              Visibility="{Binding IsConfirmOpen, Converter={StaticResource BoolVis}}">
+            <Border Width="460" Padding="24" Style="{StaticResource NeonPanel}"
+                    VerticalAlignment="Center" HorizontalAlignment="Center">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                        <Border Width="46" Height="46" CornerRadius="11"
+                                Background="{StaticResource NeonRewindGradient}">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.5"/>
+                            </Border.Effect>
+                            <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets"
+                                       FontSize="22" Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <StackPanel Margin="14,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="{services:Loc timemachine.rewindConfirmTitle}" FontSize="16" FontWeight="Bold"
+                                       Foreground="{StaticResource NeonInk0Brush}"/>
+                            <TextBlock FontSize="12" Foreground="{StaticResource NeonInk2Brush}"
+                                       Margin="0,4,0,0" TextWrapping="Wrap">
+                                Working changes will be auto-stashed. Your history is preserved.
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Border Background="#10FFFFFF" BorderThickness="1" BorderBrush="{StaticResource NeonLineBrush}"
+                            CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="{Binding SelectedShortSha}" FontSize="11"
+                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       Foreground="{StaticResource NeonInk3Brush}"/>
+                            <TextBlock Text="{Binding SelectedMessage}" FontSize="13" FontWeight="Medium"
+                                       Foreground="{StaticResource NeonInk0Brush}" Margin="0,4,0,0"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+
+                    <CheckBox Content="{services:Loc timemachine.snapshotBranch}"
+                              IsChecked="{Binding CreateSnapshot}" Margin="0,0,0,18"
+                              Foreground="{StaticResource NeonInk1Brush}"/>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="{services:Loc timemachine.cancel}" Style="{StaticResource NeonButton}"
+                                Margin="0,0,8,0" Command="{Binding CancelConfirmCommand}"/>
+                        <Button Command="{Binding ConfirmRewindCommand}"
+                                Style="{StaticResource NeonPrimaryButton}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets"
+                                           FontSize="11" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc timemachine.confirmRewind}"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ═══ REWIND OVERLAY ═══ -->
+        <Grid Background="#D9060718"
+              Visibility="{Binding IsRewinding, Converter={StaticResource BoolVis}}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Grid Width="220" Height="220">
+                    <!-- Concentric expanding rings -->
+                    <Ellipse Width="220" Height="220" StrokeThickness="2" Stroke="{StaticResource NeonMagentaBrush}" Opacity="0">
+                        <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
+                        <Ellipse.RenderTransform><ScaleTransform x:Name="ring1Scale" ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
+                        <Ellipse.Triggers>
+                            <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard RepeatBehavior="Forever">
+                                        <DoubleAnimation Storyboard.TargetName="ring1Scale" Storyboard.TargetProperty="ScaleX"
+                                                         From="0.4" To="1.6" Duration="0:0:2.2"/>
+                                        <DoubleAnimation Storyboard.TargetName="ring1Scale" Storyboard.TargetProperty="ScaleY"
+                                                         From="0.4" To="1.6" Duration="0:0:2.2"/>
+                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                         From="0.9" To="0" Duration="0:0:2.2"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Ellipse.Triggers>
+                    </Ellipse>
+                    <Ellipse Width="220" Height="220" StrokeThickness="2" Stroke="{StaticResource NeonCyanBrush}" Opacity="0">
+                        <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
+                        <Ellipse.RenderTransform><ScaleTransform x:Name="ring2Scale" ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
+                        <Ellipse.Triggers>
+                            <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard RepeatBehavior="Forever" BeginTime="0:0:0.55">
+                                        <DoubleAnimation Storyboard.TargetName="ring2Scale" Storyboard.TargetProperty="ScaleX"
+                                                         From="0.4" To="1.6" Duration="0:0:2.2"/>
+                                        <DoubleAnimation Storyboard.TargetName="ring2Scale" Storyboard.TargetProperty="ScaleY"
+                                                         From="0.4" To="1.6" Duration="0:0:2.2"/>
+                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                         From="0.9" To="0" Duration="0:0:2.2"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Ellipse.Triggers>
+                    </Ellipse>
+                    <Ellipse Width="220" Height="220" StrokeThickness="2" Stroke="{StaticResource NeonMagentaBrush}" Opacity="0">
+                        <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
+                        <Ellipse.RenderTransform><ScaleTransform x:Name="ring3Scale" ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
+                        <Ellipse.Triggers>
+                            <EventTrigger RoutedEvent="Ellipse.Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard RepeatBehavior="Forever" BeginTime="0:0:1.1">
+                                        <DoubleAnimation Storyboard.TargetName="ring3Scale" Storyboard.TargetProperty="ScaleX"
+                                                         From="0.4" To="1.6" Duration="0:0:2.2"/>
+                                        <DoubleAnimation Storyboard.TargetName="ring3Scale" Storyboard.TargetProperty="ScaleY"
+                                                         From="0.4" To="1.6" Duration="0:0:2.2"/>
+                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                         From="0.9" To="0" Duration="0:0:2.2"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Ellipse.Triggers>
+                    </Ellipse>
+
+                    <!-- Center orb with spinning rewind icon -->
+                    <Border Width="80" Height="80" CornerRadius="40"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Border.Background>
+                            <RadialGradientBrush>
+                                <GradientStop Color="#FF5EC4" Offset="0"/>
+                                <GradientStop Color="#A672FF" Offset="1"/>
+                            </RadialGradientBrush>
+                        </Border.Background>
+                        <Border.Effect>
+                            <DropShadowEffect Color="#FF5EC4" BlurRadius="44" ShadowDepth="0" Opacity="0.9"/>
+                        </Border.Effect>
+                        <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="32" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   RenderTransformOrigin="0.5,0.5">
+                            <TextBlock.RenderTransform>
+                                <RotateTransform x:Name="rewindIconRotate"/>
+                            </TextBlock.RenderTransform>
+                            <TextBlock.Triggers>
+                                <EventTrigger RoutedEvent="TextBlock.Loaded">
+                                    <BeginStoryboard>
+                                        <Storyboard RepeatBehavior="Forever">
+                                            <DoubleAnimation Storyboard.TargetName="rewindIconRotate"
+                                                             Storyboard.TargetProperty="Angle"
+                                                             From="0" To="-360" Duration="0:0:1.6"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </TextBlock.Triggers>
+                        </TextBlock>
+                    </Border>
+                </Grid>
+
+                <TextBlock Text="{services:Loc timemachine.rewinding}" Margin="0,24,0,0" FontSize="22" FontWeight="Bold"
+                           HorizontalAlignment="Center">
+                    <TextBlock.Foreground>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                            <GradientStop Color="#FF5EC4" Offset="0"/>
+                            <GradientStop Color="#4CDFFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </TextBlock.Foreground>
+                </TextBlock>
+                <TextBlock Text="{services:Loc timemachine.rewindSteps}"
+                           Margin="0,6,0,0" FontSize="11"
+                           FontFamily="{StaticResource NeonMonoFont}"
+                           Foreground="{StaticResource NeonInk2Brush}"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

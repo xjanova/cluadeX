@@ -1,9 +1,10 @@
-<UserControl x:Class="CluadeX.Views.ChatView"
+﻿<UserControl x:Class="CluadeX.Views.ChatView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:conv="clr-namespace:CluadeX.Converters"
              xmlns:models="clr-namespace:CluadeX.Models"
              xmlns:helpers="clr-namespace:CluadeX.Helpers"
+             xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
@@ -18,6 +19,44 @@
         <conv:BoolToStringConverter x:Key="BoolStr"/>
         <conv:ContextUsageBrushConverter x:Key="CtxBrush"/>
         <conv:ContextLedGateConverter x:Key="CtxLedGate"/>
+
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <!-- NEON RETHEME — local overrides of Catppuccin keys.            -->
+        <!-- Scope: this UserControl only. The brush keys used throughout  -->
+        <!-- ChatView are bound to StaticResource — by re-declaring them   -->
+        <!-- here we recolor the entire surface without touching any of    -->
+        <!-- the 1000+ bindings below. Other Catppuccin-themed views are  -->
+        <!-- unaffected because resource resolution is local-first.        -->
+        <!-- ═══════════════════════════════════════════════════════════ -->
+        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
+        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
+        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
+        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
+        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
+        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
+        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
+        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
+        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
+        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
+        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
+        <!-- Accent rainbow: keep semantic mapping (Blue=action, Mauve=AI, etc.) -->
+        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>  <!-- user msg / focus -->
+        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
+        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>  <!-- success / additions -->
+        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
+        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
+        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
+        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
+        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>  <!-- assistant / agent -->
+        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
+        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
+        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
+        <!-- Fonts -->
+        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
+        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
 
         <!-- ═══ Reusable Pulse Animation Style ═══ -->
         <Style x:Key="PulseDot" TargetType="Ellipse">
@@ -93,19 +132,29 @@
                               IsChecked="{Binding AgenticMode}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
-                              ToolTip="Enable agentic mode (file access, commands, Git)"/>
-                    <CheckBox Content="Thinking" Margin="4,0"
+                              ToolTip="{services:Loc chat.agentTip}"/>
+                    <CheckBox Content="{services:Loc chat.auto}" Margin="4,0"
+                              IsChecked="{Binding AutonomousMode}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="10" VerticalAlignment="Center"
+                              ToolTip="{services:Loc chat.autoTip}"/>
+                    <CheckBox Content="{services:Loc chat.thinkingToggle}" Margin="4,0"
                               IsChecked="{Binding ShowThinking}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
-                              ToolTip="Show AI thinking/reasoning steps in real-time"/>
+                              ToolTip="{services:Loc chat.thinkingTip}"/>
+                    <CheckBox Content="Steps" Margin="4,0"
+                              IsChecked="{Binding ShowAgentInternals}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="10" VerticalAlignment="Center"
+                              ToolTip="แสดงขั้นตอนการทำงานของ agent (tool calls / สถานะ) ในแชท&#10;ปิดไว้ = เห็นเฉพาะคำถามกับคำตอบ · ข้อผิดพลาด diff และคำขออนุญาตยังแสดงเสมอ"/>
                 </StackPanel>
 
                 <Button Grid.Column="4" Content="&#xE711;"
                         FontFamily="Segoe MDL2 Assets"
                         Style="{StaticResource IconButton}"
                         Command="{Binding CloseFolderCommand}"
-                        ToolTip="Close project folder"
+                        ToolTip="{services:Loc chat.closeProjectTip}"
                         FontSize="11" Padding="6,4"/>
             </Grid>
         </Border>
@@ -142,7 +191,7 @@
                 <Button Grid.Column="3" Content="&#xE711;" FontFamily="Segoe MDL2 Assets"
                         Style="{StaticResource IconButton}" FontSize="10" Padding="4,4"
                         Command="{Binding CloseChatSearchCommand}"
-                        ToolTip="Close search (Esc)"/>
+                        ToolTip="{services:Loc chat.closeSearchTip}"/>
             </Grid>
         </Border>
 
@@ -187,6 +236,41 @@
                                     </ControlTemplate>
                                 </Setter.Value>
                             </Setter>
+                            <Style.Triggers>
+                                <!-- ═══ "Steps" off: the transcript is the conversation, not the log ═══
+                                     Collapsing the CONTAINER (not the content) is what makes the row take
+                                     zero height — a hidden bubble inside a live ListBoxItem still leaves
+                                     its margin behind and the chat reads as full of blank gaps.
+
+                                     Three deliberate exemptions, checked as extra Conditions below: a
+                                     FAILED tool, a tool carrying a file DIFF, and permission requests.
+                                     Those are decisions the user has to make or verify; hiding them would
+                                     be the UI concealing its own state, which is the bug this whole
+                                     session has been about. -->
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                        <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                        <Condition Binding="{Binding HasError}" Value="False"/>
+                                        <Condition Binding="{Binding HasDiff}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}"/>
+                                        <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.Thinking}"/>
+                                        <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
+                            </Style.Triggers>
                         </Style>
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
@@ -207,7 +291,7 @@
                                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets"
                                                        FontSize="10" Foreground="{StaticResource MauveBrush}"
                                                        VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                            <TextBlock Text="Thinking" FontSize="11" FontStyle="Italic"
+                                            <TextBlock Text="{services:Loc chat.thinkingToggle}" FontSize="11" FontStyle="Italic"
                                                        Foreground="{StaticResource MauveBrush}"
                                                        VerticalAlignment="Center"/>
                                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="8"
@@ -266,12 +350,54 @@
                                                        FontSize="13" FontFamily="{StaticResource MainFont}"
                                                        TextWrapping="Wrap"/>
                                         </StackPanel>
+                                        <!-- Preview diff of the change being requested (file edits/writes) -->
+                                        <Border Background="{StaticResource Surface0Brush}"
+                                                CornerRadius="6" Padding="0,4,0,4" Margin="22,0,0,8"
+                                                Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                                           Foreground="{StaticResource Subtext0Brush}" Margin="10,2,10,4"/>
+                                                <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <ItemsControl ItemsSource="{Binding DiffLines}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}"
+                                                                           FontSize="11" Padding="10,0" TextWrapping="NoWrap">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                                            <Setter Property="Background" Value="Transparent"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Add}">
+                                                                                    <Setter Property="Foreground" Value="#A6E3A1"/>
+                                                                                    <Setter Property="Background" Value="#1A40A02B"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Remove}">
+                                                                                    <Setter Property="Foreground" Value="#F38BA8"/>
+                                                                                    <Setter Property="Background" Value="#1AF38BA8"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Hunk}">
+                                                                                    <Setter Property="Foreground" Value="#89B4FA"/>
+                                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </StackPanel>
+                                        </Border>
+
                                         <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
-                                            <Button Content="Allow" Padding="16,4" Margin="0,0,8,0"
+                                            <Button Content="{services:Loc chat.allow}" Padding="16,4" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionAllow_Click"/>
-                                            <Button Content="Deny" Padding="16,4"
+                                            <Button Content="{services:Loc chat.deny}" Padding="16,4"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionDeny_Click"/>
@@ -473,7 +599,7 @@
                                                 <Border CornerRadius="4" Padding="4,1" Margin="6,0,0,0"
                                                         Background="#30F38BA8"
                                                         Visibility="{Binding IsInterrupted, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                    <TextBlock Text="interrupted" FontSize="9"
+                                                    <TextBlock Text="{services:Loc chat.interrupted}" FontSize="9"
                                                                Foreground="{StaticResource RedBrush}"
                                                                FontFamily="{StaticResource MonoFont}"/>
                                                 </Border>
@@ -495,14 +621,14 @@
                                                 <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
                                                         Style="{StaticResource IconButton}"
                                                         FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="Copy message"
+                                                        ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
                                                 <!-- Retry (only for error messages) -->
                                                 <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
                                                         Style="{StaticResource IconButton}"
                                                         FontSize="10" Padding="4,2" Margin="2,0"
-                                                        ToolTip="Retry"
+                                                        ToolTip="{services:Loc chat.retryTip}"
                                                         Click="RetryMessage_Click"
                                                         Visibility="{Binding HasError, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                             </StackPanel>
@@ -564,22 +690,72 @@
                                                      Style="{StaticResource PulseDot}"/>
                                             <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}"
                                                      Style="{StaticResource PulseDot}"/>
-                                            <TextBlock Text="  Thinking..."
+                                            <TextBlock Text="{services:Loc chat.thinkingInline}"
                                                        Foreground="{StaticResource Subtext0Brush}"
                                                        FontSize="11" FontStyle="Italic"
                                                        FontFamily="{StaticResource MainFont}"
                                                        VerticalAlignment="Center" Margin="4,0,0,0"/>
                                         </StackPanel>
 
-                                        <!-- Row 4: Tool Output (collapsible) -->
-                                        <Expander Grid.Row="4" Margin="0,6,0,0"
-                                                  IsExpanded="{Binding IsExpanded}">
+                                        <!-- Row 4: inline diff (file edits) + collapsible tool output -->
+                                        <StackPanel Grid.Row="4" Margin="0,6,0,0">
+
+                                        <!-- Colorized before/after diff — shown for every file edit/write -->
+                                        <Border Background="{StaticResource Surface0Brush}"
+                                                CornerRadius="6" Padding="0,4,0,4" Margin="0,0,0,4"
+                                                Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal" Margin="10,2,10,4">
+                                                    <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                               Foreground="{StaticResource Overlay0Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <TextBlock Text="{services:Loc chat.changes}" FontSize="10" Foreground="{StaticResource Overlay0Brush}"
+                                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                    <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
+                                                               Foreground="{StaticResource Subtext0Brush}" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                                <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <ItemsControl ItemsSource="{Binding DiffLines}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}"
+                                                                           FontSize="11" Padding="10,0" TextWrapping="NoWrap">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                                            <Setter Property="Background" Value="Transparent"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Add}">
+                                                                                    <Setter Property="Foreground" Value="#A6E3A1"/>
+                                                                                    <Setter Property="Background" Value="#1A40A02B"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Remove}">
+                                                                                    <Setter Property="Foreground" Value="#F38BA8"/>
+                                                                                    <Setter Property="Background" Value="#1AF38BA8"/>
+                                                                                </DataTrigger>
+                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Hunk}">
+                                                                                    <Setter Property="Foreground" Value="#89B4FA"/>
+                                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <!-- Raw tool output (collapsible) -->
+                                        <Expander IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
                                                 <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
-                                                    <Run Text="Show output"/>
+                                                    <Run Text="{services:Loc chat.showOutput}"/>
                                                     <Run Text=" ("/>
                                                     <Run Text="{Binding ToolOutputLines, Mode=OneWay}"/>
-                                                    <Run Text=" lines)"/>
+                                                    <Run Text="{services:Loc chat.linesSuffix}"/>
                                                 </TextBlock>
                                             </Expander.Header>
                                             <Border Background="{StaticResource Surface0Brush}"
@@ -604,6 +780,7 @@
                                                 </Style>
                                             </Expander.Style>
                                         </Expander>
+                                        </StackPanel>
 
                                         <!-- Row 5: Error bar with retry hint -->
                                         <Border Grid.Row="5" Margin="0,4,0,0" Padding="6,3"
@@ -612,7 +789,7 @@
                                             <TextBlock FontSize="10" Foreground="{StaticResource RedBrush}"
                                                        FontFamily="{StaticResource MainFont}">
                                                 <Run Text="&#xE783;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
-                                                <Run Text=" An error occurred. Hover for retry button."/>
+                                                <Run Text="{services:Loc chat.errorHover}"/>
                                             </TextBlock>
                                         </Border>
 
@@ -647,12 +824,12 @@
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
             <TextBlock Text="&#x2728;" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
-            <TextBlock Text="CluadeX AI Coding Assistant"
+            <TextBlock Text="{services:Loc chat.welcomeTitle}"
                        Foreground="{StaticResource TextBrush}"
                        FontSize="24" FontWeight="Bold"
                        FontFamily="{StaticResource MainFont}"
                        HorizontalAlignment="Center"/>
-            <TextBlock Text="Ask me to write, debug, or explain any code."
+            <TextBlock Text="{services:Loc chat.welcomeSubtitle}"
                        Foreground="{StaticResource Subtext0Brush}"
                        FontSize="14" HorizontalAlignment="Center"
                        Margin="0,8,0,0"/>
@@ -665,7 +842,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource MauveBrush}"/>
-                        <TextBlock Text="Explain codebase" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestExplain}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -674,7 +851,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource RedBrush}"/>
-                        <TextBlock Text="Find bugs" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestBugs}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -683,7 +860,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8A0;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource GreenBrush}"/>
-                        <TextBlock Text="Write tests" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestTests}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -692,24 +869,36 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource TealBrush}"/>
-                        <TextBlock Text="Code review" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                        <TextBlock Text="{services:Loc chat.suggestReview}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
                     </StackPanel>
                 </Button>
             </WrapPanel>
 
-            <Button Style="{StaticResource SecondaryButton}"
-                    Command="{Binding OpenFolderCommand}"
-                    HorizontalAlignment="Center"
-                    Margin="0,20,0,0" Padding="16,10">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                               FontSize="16" VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
-                    <TextBlock Text="Open Project Folder" FontFamily="{StaticResource MainFont}"
-                               FontSize="13" VerticalAlignment="Center"/>
-                </StackPanel>
-            </Button>
-            <TextBlock Text="Open a folder to enable agent mode (file access, editing, commands)"
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                <Button Style="{StaticResource SecondaryButton}"
+                        Command="{Binding OpenFolderCommand}"
+                        Padding="16,10" Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="16" VerticalAlignment="Center"
+                                   Margin="0,0,8,0"/>
+                        <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{StaticResource MainFont}"
+                                   FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource SecondaryButton}"
+                        Command="{Binding CloneRepoCommand}"
+                        Padding="16,10" Margin="8,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="16" VerticalAlignment="Center"
+                                   Margin="0,0,8,0" Foreground="{StaticResource MauveBrush}"/>
+                        <TextBlock Text="{services:Loc chat.connectRepo}" FontFamily="{StaticResource MainFont}"
+                                   FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+            <TextBlock Text="{services:Loc chat.openHint}"
                        Foreground="{StaticResource Overlay0Brush}"
                        FontSize="11" HorizontalAlignment="Center"
                        Margin="0,6,0,0"/>
@@ -737,7 +926,7 @@
                              VerticalScrollBarVisibility="Auto"
                              IsEnabled="{Binding IsGenerating, Converter={StaticResource InvertBool}}"/>
 
-                    <TextBlock Text="Type a message... (Enter to send, Shift+Enter for new line)"
+                    <TextBlock Text="{services:Loc chat.placeholder}"
                                FontFamily="{StaticResource MainFont}"
                                FontSize="13"
                                Foreground="{StaticResource Overlay0Brush}"
@@ -751,35 +940,215 @@
                     <Button Content="&#xE838;" Style="{StaticResource IconButton}"
                             Command="{Binding OpenFolderCommand}"
                             FontFamily="Segoe MDL2 Assets"
-                            ToolTip="Open project folder"
+                            ToolTip="{services:Loc chat.openProjectTip}"
                             Margin="0,0,4,0"/>
 
                     <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
                             Command="{Binding SendMessageCommand}"
                             FontFamily="Segoe MDL2 Assets" FontSize="16"
                             Padding="14,10" Margin="0,0,4,0"
-                            ToolTip="Send message (Enter)"
+                            ToolTip="{services:Loc chat.send}"
                             Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
 
                     <Button Content="&#xE71A;" Style="{StaticResource DangerButton}"
                             Command="{Binding StopGenerationCommand}"
                             FontFamily="Segoe MDL2 Assets" FontSize="16"
                             Padding="14,10" Margin="0,0,4,0"
-                            ToolTip="Stop generation"
+                            ToolTip="{services:Loc chat.stop}"
                             Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}"/>
 
                     <Button Content="&#xE74D;" Style="{StaticResource IconButton}"
                             Command="{Binding ClearChatCommand}"
                             FontFamily="Segoe MDL2 Assets"
-                            ToolTip="Clear chat"/>
+                            ToolTip="{services:Loc chat.clearChatTip}"/>
                 </StackPanel>
             </Grid>
         </Border>
 
+        <!-- ════ STRATEGIC COMPACTION TOAST (Sprint 2 #2) ════ -->
+        <!-- Non-blocking nudge that fires at logical breakpoints (50+ tool calls /
+             ctx ≥ 60% / ctx ≥ 75%) BEFORE the urgent warning bar below. Severity
+             drives the color: info=cyan, warn=amber, critical=red. -->
+        <Border Grid.Row="3" Padding="14,10" Margin="12,6,12,0" CornerRadius="10"
+                BorderThickness="1"
+                Visibility="{Binding ShowCompactionToast, Converter={StaticResource BoolVis}}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <!-- Default = info (cyan) -->
+                    <Setter Property="Background" Value="#1A4CDFFF"/>
+                    <Setter Property="BorderBrush" Value="#664CDFFF"/>
+                    <Setter Property="Effect">
+                        <Setter.Value>
+                            <DropShadowEffect Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
+                        </Setter.Value>
+                    </Setter>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="warn">
+                            <Setter Property="Background" Value="#1AFFD166"/>
+                            <Setter Property="BorderBrush" Value="#66FFD166"/>
+                            <Setter Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect Color="#FFD166" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
+                                </Setter.Value>
+                            </Setter>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="critical">
+                            <Setter Property="Background" Value="#1AFF6E6E"/>
+                            <Setter Property="BorderBrush" Value="#66FF6E6E"/>
+                            <Setter Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect Color="#FF6E6E" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+                                </Setter.Value>
+                            </Setter>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Severity glyph -->
+                <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" FontSize="20"
+                           VerticalAlignment="Center" Margin="0,0,12,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Text" Value="&#xE946;"/>
+                            <Setter Property="Foreground">
+                                <Setter.Value>
+                                    <SolidColorBrush Color="#4CDFFF"/>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="warn">
+                                    <Setter Property="Text" Value="&#xE7BA;"/>
+                                    <Setter Property="Foreground">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="#FFD166"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="critical">
+                                    <Setter Property="Text" Value="&#xE783;"/>
+                                    <Setter Property="Foreground">
+                                        <Setter.Value>
+                                            <SolidColorBrush Color="#FF6E6E"/>
+                                        </Setter.Value>
+                                    </Setter>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding CompactionToastTitle}" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}"/>
+                    <TextBlock Text="{Binding CompactionToastReason}" FontSize="11"
+                               Foreground="{StaticResource Subtext0Brush}"
+                               Margin="0,2,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <!-- Compact now (primary action) -->
+                <Button Grid.Column="2" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
+                        Command="{Binding AcceptCompactionToastCommand}"
+                        Background="#A672FF" BorderThickness="0" Foreground="White"
+                        ToolTip="{services:Loc chat.compactNowTip}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#C78AFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{services:Loc chat.compactNow}" FontSize="11" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Snooze 10 turns -->
+                <Button Grid.Column="3" Padding="10,6" Margin="0,0,6,0" Cursor="Hand"
+                        Command="{Binding SnoozeCompactionToastCommand}"
+                        Background="Transparent"
+                        BorderBrush="{StaticResource Surface2Brush}" BorderThickness="1"
+                        Foreground="{StaticResource Subtext0Brush}"
+                        ToolTip="{services:Loc chat.snoozeTip}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#11FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xEC92;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{services:Loc chat.snooze}" FontSize="11"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Dismiss (x) -->
+                <Button Grid.Column="4" Width="28" Height="28" Cursor="Hand"
+                        Command="{Binding DismissCompactionToastCommand}"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTip="{services:Loc chat.dismissTip}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="14">
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{StaticResource Overlay0Brush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </Border>
+
         <!-- CONTEXT WARNING BAR with action buttons -->
+        <!-- Hidden when the strategic compaction toast is active to avoid visual stacking at Row 3 -->
         <Border Grid.Row="3" Padding="10,6"
-                BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}"
-                Visibility="{Binding ShowContextWarning, Converter={StaticResource BoolVis}}">
+                BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding ShowContextWarning}" Value="True"/>
+                                <Condition Binding="{Binding ShowCompactionToast}" Value="False"/>
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <Border.Background>
                 <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.1"/>
             </Border.Background>
@@ -817,11 +1186,11 @@
                 <Button Grid.Column="2" Padding="8,3" Margin="4,0"
                         Style="{StaticResource SecondaryButton}"
                         Command="{Binding CompactCommand}"
-                        ToolTip="Compress conversation to free up context">
+                        ToolTip="{services:Loc chat.compactTip}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="Compact" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.compact}" FontFamily="{StaticResource MainFont}"
                                    FontSize="10" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -830,11 +1199,11 @@
                 <Button Grid.Column="3" Padding="10,4" Margin="4,0,0,0"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding NewSessionCommand}"
-                        ToolTip="Start a new chat to reset context">
+                        ToolTip="{services:Loc chat.newChatTip}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                        <TextBlock Text="New Chat" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.newChat}" FontFamily="{StaticResource MainFont}"
                                    FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -863,7 +1232,7 @@
                               SelectedItem="{Binding SelectedLocalModel}"
                               Style="{StaticResource ModernComboBox}"
                               Width="220" FontSize="11"
-                              ToolTip="Select a local model to load">
+                              ToolTip="{services:Loc chat.selectModelTip}">
                         <ComboBox.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
@@ -884,9 +1253,9 @@
                     <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
                             Style="{StaticResource IconButton}"
                             Command="{Binding RefreshModelsCommand}"
-                            ToolTip="Refresh model list"
+                            ToolTip="{services:Loc chat.refreshModelsTip}"
                             FontSize="10" Padding="4,4" Margin="2,0,0,0"/>
-                    <TextBlock Text="Loading..."
+                    <TextBlock Text="{services:Loc chat.loading}"
                                Foreground="{StaticResource YellowBrush}"
                                FontSize="10" FontWeight="SemiBold"
                                VerticalAlignment="Center" Margin="6,0,0,0"
@@ -932,7 +1301,7 @@
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
-                        <TextBlock Text="Generating..."
+                        <TextBlock Text="{services:Loc chat.generating}"
                                    Foreground="{StaticResource MauveBrush}"
                                    FontSize="11" FontWeight="SemiBold"
                                    VerticalAlignment="Center">
@@ -964,7 +1333,7 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0"
                             VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
-                                ToolTip="Context Memory — AI quality degrades as this fills up">
+                                ToolTip="{services:Loc chat.ctxTip}">
                         <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
                             <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=0}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
                         </Border>
@@ -1003,43 +1372,50 @@
                            Foreground="{StaticResource Overlay0Brush}"
                            FontSize="9" FontFamily="{StaticResource MonoFont}"
                            VerticalAlignment="Center" Margin="6,0"
-                           ToolTip="Last turn: tokens · time · speed"/>
+                           ToolTip="{services:Loc chat.lastTurnTip}"/>
 
                 <!-- API Cost -->
                 <TextBlock Grid.Column="3" Text="{Binding CostText}"
                            Foreground="{StaticResource MauveBrush}"
                            FontSize="9" FontFamily="{StaticResource MonoFont}"
                            VerticalAlignment="Center" Margin="6,0"
-                           ToolTip="Session API cost (USD)"/>
+                           ToolTip="{services:Loc chat.costTip}"/>
 
                 <!-- Review + Auto-Execute -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource IconButton}"
                             Command="{Binding ReviewCodeCommand}"
-                            ToolTip="Review code changes"
+                            ToolTip="{services:Loc chat.reviewTip}"
                             FontSize="10" Padding="4,3" Margin="0,0,4,0"
                             Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
                     </Button>
-                    <CheckBox Content="Auto" IsChecked="{Binding AutoExecute}"
+                    <CheckBox Content="{services:Loc chat.auto}" IsChecked="{Binding AutoExecute}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center"
-                              ToolTip="Automatically run code blocks and fix errors"/>
+                              ToolTip="{services:Loc chat.autoRunTip}"/>
+                    <!-- Lives on the BOTTOM bar, not the project bar: the project bar is
+                         hidden whenever no folder is open, and a plain chat with only the
+                         brain connected is exactly where the step spam is worst. -->
+                    <CheckBox Content="Steps" IsChecked="{Binding ShowAgentInternals}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
+                              ToolTip="แสดงขั้นตอนการทำงานของ agent (tool calls / สถานะ) ในแชท&#10;ปิดไว้ = เห็นเฉพาะคำถามกับคำตอบ · ข้อผิดพลาด diff และคำขออนุญาตยังแสดงเสมอ"/>
                     <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
                               Foreground="{StaticResource MauveBrush}"
                               FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="Extended Thinking — enables deeper reasoning (Anthropic only)">
+                              ToolTip="{services:Loc chat.extendedThinkingTip}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="10"
                                        VerticalAlignment="Center" Margin="0,0,3,0"/>
-                            <TextBlock Text="Think" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc chat.think}" VerticalAlignment="Center"/>
                         </StackPanel>
                     </CheckBox>
                 </StackPanel>
 
                 <Button Grid.Column="5" Style="{StaticResource IconButton}"
                         Command="{Binding NewSessionCommand}"
-                        ToolTip="New Chat"
+                        ToolTip="{services:Loc chat.newChat}"
                         FontSize="12" Padding="6,4" Margin="4,0">
                     <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
                 </Button>

@@ -1,19 +1,76 @@
+using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.IO;
 using System.Text.Json;
 using CluadeX.Models;
 
 namespace CluadeX.Services.Mcp;
 
+/// <summary>Lifecycle of one configured MCP server, as the UI should see it.</summary>
+public enum McpServerState
+{
+    /// <summary>Configured but not started (or deliberately stopped).</summary>
+    Stopped,
+    /// <summary>Process spawning / handshaking.</summary>
+    Starting,
+    /// <summary>Handshake done, tools discovered, calls will work.</summary>
+    Ready,
+    /// <summary>Died on its own; the supervisor is retrying with backoff.</summary>
+    Reconnecting,
+    /// <summary>Retries exhausted — needs a human (MCP Servers page → Restart).</summary>
+    Failed,
+}
+
 /// <summary>
 /// Manages MCP server lifecycles: load config, start/stop servers,
 /// discover tools, handle reconnection.
+///
+/// SUPERVISION (2026-08-04): servers used to be started exactly once at app
+/// startup and never watched again. On 2026-08-04 the brainx-mcp child died
+/// ~30s in; nothing noticed for four minutes, the registry kept advertising its
+/// 83 tools, and every call came back "not running". So: a transport that exits
+/// on its own now clears its tools, flips this object's observable state, and is
+/// respawned with backoff. INotifyPropertyChanged so the status bar can bind to
+/// the truth instead of the user having to open a page and press Refresh.
 /// </summary>
-public sealed class McpServerManager : IDisposable
+public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposable
 {
+    /// <summary>How many times to respawn a server that died on its own before giving up.</summary>
+    private const int MaxReconnectAttempts = 5;
+
+    /// <summary>
+    /// Crash-loop brake. <see cref="MaxReconnectAttempts"/> bounds consecutive
+    /// FAILED STARTS and nothing else, so a server that handshakes cleanly and
+    /// then dies a second later resets that counter every cycle and respawns
+    /// forever — a process pair per second, indefinitely.
+    ///
+    /// That is not hypothetical: it is the exact shape of the 2026-08-04 failure
+    /// this supervisor was written for (Ready at 10:19:16, gone by 10:19:46).
+    /// A server that dies this soon after reaching Ready this many times is
+    /// broken, and the honest answer is a red chip, not a spawn loop.
+    /// </summary>
+    private const int MaxRapidCrashes = 4;
+    private static readonly TimeSpan RapidCrashWindow = TimeSpan.FromSeconds(60);
+
     private readonly SettingsService _settingsService;
+    private readonly DebugLogService? _log;
     private readonly McpToolRegistry _toolRegistry;
-    private readonly Dictionary<string, McpStdioTransport> _transports = new();
-    private readonly Dictionary<string, McpServerConfig> _configs = new();
+    // Concurrent: touched by the UI thread (start/stop), the agent thread (CallTool reads), and the
+    // server read-loop/notification callback thread — plain Dictionary structural writes raced reads.
+    private readonly ConcurrentDictionary<string, McpStdioTransport> _transports = new();
+    private readonly ConcurrentDictionary<string, McpServerConfig> _configs = new();
+    private readonly ConcurrentDictionary<string, McpServerState> _states = new();
+    // Only servers that finished a full successful start are supervised. A start
+    // that fails mid-handshake is handled by StartServerAsync's own catch — letting
+    // the exit event ALSO fire a reconnect there would double-spawn.
+    private readonly ConcurrentDictionary<string, byte> _supervised = new();
+    // When each server last reached Ready, and how many times it has died inside
+    // RapidCrashWindow of doing so. Feeds the crash-loop brake above.
+    private readonly ConcurrentDictionary<string, DateTime> _readySinceUtc = new();
+    private readonly ConcurrentDictionary<string, int> _rapidCrashes = new();
+    // One start at a time per server, or a user-pressed Restart racing the
+    // supervisor leaks an orphan process pair.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates = new();
     private bool _disposed;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -24,15 +81,140 @@ public sealed class McpServerManager : IDisposable
 
     public event Action? OnToolsChanged;
     public event Action<string, string>? OnServerLog; // serverName, message
+    /// <summary>serverName, new state — raised on every lifecycle transition.</summary>
+    public event Action<string, McpServerState>? OnServerStateChanged;
+    public event PropertyChangedEventHandler? PropertyChanged;
 
     public McpToolRegistry ToolRegistry => _toolRegistry;
     public IReadOnlyDictionary<string, McpServerConfig> Configs => _configs;
 
-    public McpServerManager(SettingsService settingsService)
+    public McpServerManager(SettingsService settingsService, DebugLogService? log = null)
     {
         _settingsService = settingsService;
+        _log = log;
         _toolRegistry = new McpToolRegistry();
     }
+
+    // ─── "Which server is the brain?" — ONE definition ────────────────
+    // BrainSyncService, the auto-recall gate and the status chip all need this
+    // answer. Three copies of the rule is how a UI ends up disagreeing with the
+    // thing it reports on, so they all call here.
+
+    /// <summary>True if this server name looks like an ObsidianX/BrainX brain.</summary>
+    public static bool LooksLikeBrain(string name)
+        => name.Contains("brain", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("obsidianx", StringComparison.OrdinalIgnoreCase);
+
+    // ─── Observable status for the status-bar chip ────────────────────
+
+    /// <summary>Name of the configured brain server, or null if none is configured.</summary>
+    public string? BrainServerName
+        => _configs.Keys.FirstOrDefault(LooksLikeBrain);
+
+    /// <summary>Lifecycle state of the brain server (Stopped when none is configured).</summary>
+    public McpServerState BrainState
+    {
+        get
+        {
+            var name = BrainServerName;
+            return name != null && _states.TryGetValue(name, out var s) ? s : McpServerState.Stopped;
+        }
+    }
+
+    /// <summary>True only when a brain call would actually reach a live process.</summary>
+    public bool IsBrainConnected => BrainState == McpServerState.Ready;
+
+    /// <summary>Tools the brain currently advertises. Zero whenever it isn't Ready.</summary>
+    public int BrainToolCount
+    {
+        get
+        {
+            var name = BrainServerName;
+            return name == null ? 0 : _toolRegistry.GetToolsForServer(name).Count;
+        }
+    }
+
+    /// <summary>Short label for the chip: "ready · 83 tools", "reconnecting 2/5", …</summary>
+    public string BrainStatusText => BrainState switch
+    {
+        McpServerState.Ready        => $"brain · {BrainToolCount} tools",
+        McpServerState.Starting     => "brain · connecting…",
+        McpServerState.Reconnecting => $"brain · reconnecting {_reconnectAttempt}/{MaxReconnectAttempts}",
+        McpServerState.Failed       => "brain · DOWN",
+        _                           => BrainServerName == null ? "brain · not configured" : "brain · stopped",
+    };
+
+    /// <summary>Last error seen on the brain server — the tooltip's whole point.</summary>
+    public string? BrainLastError { get; private set; }
+
+    private int _reconnectAttempt;
+
+    private void RaiseBrainStatus()
+    {
+        foreach (var p in new[] { nameof(BrainState), nameof(IsBrainConnected), nameof(BrainToolCount),
+                                  nameof(BrainStatusText), nameof(BrainLastError), nameof(BrainServerName) })
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(p));
+    }
+
+    /// <summary>Record a lifecycle transition and tell everyone who is bound to it.</summary>
+    private void SetState(string name, McpServerState state, string? error = null)
+    {
+        _states[name] = state;
+        if (error != null || state == McpServerState.Ready) BrainLastError = error;
+        try { OnServerStateChanged?.Invoke(name, state); } catch { }
+        RaiseBrainStatus();
+    }
+
+    /// <summary>Current state of any configured server.</summary>
+    public McpServerState GetServerState(string name)
+        => _states.TryGetValue(name, out var s) ? s : McpServerState.Stopped;
+
+    // ─── Logging ──────────────────────────────────────────────────────
+    // OnServerLog's only subscriber is the MCP Servers page view-model, which is
+    // built lazily and holds its lines in memory. That is why the launcher stderr
+    // explaining the 2026-08-04 death was gone by the time anyone looked. Mirror
+    // everything into the on-disk debug log.
+
+    private void Log(string name, string message)
+    {
+        _log?.Info("MCP", $"[{name}] {message}");
+        try { OnServerLog?.Invoke(name, message); } catch { }
+    }
+
+    private void LogStderr(string name, string message)
+    {
+        _log?.Debug("MCP", $"[{name}] {RedactSecrets(message)}");
+        try { OnServerLog?.Invoke(name, $"[stderr] {message}"); } catch { }
+    }
+
+    /// <summary>
+    /// Scrub obvious credentials out of a line before it reaches the on-disk log.
+    ///
+    /// Mirroring MCP stderr to `~/.cluadex/logs/` is what finally made a dead
+    /// server explain itself — but stderr belongs to servers this app does not
+    /// control, configured with API keys in `mcp_servers.json`, and a crashing
+    /// one that dumps its environment would write those keys to a plaintext file
+    /// the user is then asked to paste into a bug report.
+    ///
+    /// Deliberately narrow: known token prefixes and KEY=value shapes only. No
+    /// generic "long hex" rule — brainx-mcp logs note shas, and a redactor that
+    /// eats the diagnostics is a redactor nobody keeps switched on.
+    /// </summary>
+    internal static string RedactSecrets(string line)
+    {
+        if (string.IsNullOrEmpty(line)) return line;
+        line = SecretAssignment().Replace(line, "$1=«redacted»");
+        line = SecretToken().Replace(line, "«redacted»");
+        return line;
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*)\s*[=:]\s*\S+")]
+    private static partial System.Text.RegularExpressions.Regex SecretAssignment();
+
+    [System.Text.RegularExpressions.GeneratedRegex(
+        @"(?i)\b(?:Bearer\s+[\w\-.~+/]{12,}|sk-[A-Za-z0-9\-_]{16,}|gh[posur]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9\-]{10,}|AIza[A-Za-z0-9\-_]{30,})")]
+    private static partial System.Text.RegularExpressions.Regex SecretToken();
 
     /// <summary>Path to the MCP config file.</summary>
     private string ConfigPath => Path.Combine(_settingsService.DataRoot, "mcp_servers.json");
@@ -74,7 +256,7 @@ public sealed class McpServerManager : IDisposable
         }
         catch (Exception ex)
         {
-            OnServerLog?.Invoke("config", $"Failed to load MCP config: {ex.Message}");
+            Log("config", $"Failed to load MCP config: {ex.Message}");
         }
     }
 
@@ -92,7 +274,7 @@ public sealed class McpServerManager : IDisposable
         }
         catch (Exception ex)
         {
-            OnServerLog?.Invoke("config", $"Failed to save MCP config: {ex.Message}");
+            Log("config", $"Failed to save MCP config: {ex.Message}");
         }
     }
 
@@ -104,7 +286,7 @@ public sealed class McpServerManager : IDisposable
     }
 
     /// <summary>Remove a server configuration by name.</summary>
-    public bool RemoveConfig(string name) => _configs.Remove(name);
+    public bool RemoveConfig(string name) => _configs.TryRemove(name, out _);
 
     /// <summary>Start all enabled MCP servers.</summary>
     public async Task StartAllEnabledAsync(CancellationToken ct = default)
@@ -121,24 +303,43 @@ public sealed class McpServerManager : IDisposable
     {
         if (!_configs.TryGetValue(name, out var config))
         {
-            OnServerLog?.Invoke(name, "Server config not found");
+            Log(name, "Server config not found");
             return false;
         }
 
-        // Stop existing transport if running
+        // Serialize starts per server: the supervisor's respawn and a user-pressed
+        // Restart can arrive at the same instant, and two winners means two live
+        // launcher+worker pairs with only one of them reachable.
+        var gate = _startGates.GetOrAdd(name, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            return await StartServerCoreAsync(name, config, ct);
+        }
+        finally { gate.Release(); }
+    }
+
+    private async Task<bool> StartServerCoreAsync(string name, McpServerConfig config, CancellationToken ct)
+    {
+        // Stop existing transport if running. Supervision comes off FIRST so the
+        // stop we are about to perform can't be mistaken for a crash.
+        _supervised.TryRemove(name, out _);
         if (_transports.TryGetValue(name, out var existing))
         {
             await existing.StopAsync();
             existing.Dispose();
-            _transports.Remove(name);
+            _transports.TryRemove(name, out _);
         }
+
+        SetState(name, McpServerState.Starting);
 
         try
         {
-            OnServerLog?.Invoke(name, $"Starting: {config.Command} {string.Join(' ', config.Args)}");
+            Log(name, $"Starting: {config.Command} {string.Join(' ', config.Args)}");
 
             var transport = new McpStdioTransport();
-            transport.OnServerError += msg => OnServerLog?.Invoke(name, $"[stderr] {msg}");
+            transport.OnServerError += msg => LogStderr(name, msg);
+            transport.OnUnexpectedExit += () => HandleTransportExit(name, transport);
             transport.OnNotification += notif =>
             {
                 if (notif.Method == "notifications/tools/list_changed")
@@ -148,7 +349,7 @@ public sealed class McpServerManager : IDisposable
             // Start process and wait for read loop to be ready (prevents race condition)
             await transport.StartAsync(config);
             _transports[name] = transport;
-            OnServerLog?.Invoke(name, "Process started. Sending initialize handshake...");
+            Log(name, "Process started. Sending initialize handshake...");
 
             // Initialize handshake (use 15s timeout instead of 30s default)
             var initParams = new McpInitializeParams
@@ -165,23 +366,30 @@ public sealed class McpServerManager : IDisposable
             if (!initResponse.IsSuccess)
             {
                 string errorMsg = initResponse.Error?.Message ?? "Unknown error";
-                OnServerLog?.Invoke(name, $"Initialize failed: {errorMsg}");
+                Log(name, $"Initialize failed: {errorMsg}");
                 await transport.StopAsync();
                 transport.Dispose();
-                _transports.Remove(name);
+                _transports.TryRemove(name, out _);
+                SetState(name, McpServerState.Failed, errorMsg);
                 return false;
             }
 
             // Send initialized notification
             await transport.SendNotificationAsync("notifications/initialized", ct: ct);
 
-            OnServerLog?.Invoke(name, "Connected. Discovering tools...");
+            Log(name, "Connected. Discovering tools...");
 
             // Discover tools
             await RefreshToolsAsync(name, ct);
 
             int toolCount = _toolRegistry.GetToolsForServer(name).Count;
-            OnServerLog?.Invoke(name, $"Ready ({toolCount} tools)");
+            // Arm supervision only now: everything above is covered by the catch
+            // blocks, and a half-started transport must not trigger a respawn race.
+            _supervised[name] = 1;
+            _readySinceUtc[name] = DateTime.UtcNow;
+            _reconnectAttempt = 0;
+            SetState(name, McpServerState.Ready);
+            Log(name, $"Ready ({toolCount} tools)");
             return true;
         }
         catch (TimeoutException)
@@ -192,25 +400,27 @@ public sealed class McpServerManager : IDisposable
                 stderrHint = timedOut.LastStartupError.Trim();
                 await timedOut.StopAsync();
                 timedOut.Dispose();
-                _transports.Remove(name);
+                _transports.TryRemove(name, out _);
             }
             string detail = !string.IsNullOrEmpty(stderrHint)
                 ? $"Handshake timed out. Server stderr:\n{stderrHint}"
                 : "Handshake timed out — server did not respond to initialize request within 15s.";
-            OnServerLog?.Invoke(name, detail);
+            Log(name, detail);
+            SetState(name, McpServerState.Failed, detail);
             return false;
         }
         catch (Exception ex)
         {
-            OnServerLog?.Invoke(name, $"Failed to start: {ex.Message}");
+            Log(name, $"Failed to start: {ex.Message}");
 
             if (_transports.TryGetValue(name, out var failed))
             {
                 await failed.StopAsync();
                 failed.Dispose();
-                _transports.Remove(name);
+                _transports.TryRemove(name, out _);
             }
 
+            SetState(name, McpServerState.Failed, ex.Message);
             return false;
         }
     }
@@ -218,39 +428,204 @@ public sealed class McpServerManager : IDisposable
     /// <summary>Stop a specific MCP server.</summary>
     public async Task StopServerAsync(string name)
     {
+        _supervised.TryRemove(name, out _);
+        // An explicit stop clears the crash-loop brake: the next start is the
+        // user's decision, and a server they deliberately restarted deserves the
+        // full budget again rather than inheriting a verdict from before the fix.
+        _rapidCrashes.TryRemove(name, out _);
+        _readySinceUtc.TryRemove(name, out _);
         if (_transports.TryGetValue(name, out var transport))
         {
             await transport.StopAsync();
             transport.Dispose();
-            _transports.Remove(name);
+            _transports.TryRemove(name, out _);
             _toolRegistry.RemoveServer(name);
             OnToolsChanged?.Invoke();
-            OnServerLog?.Invoke(name, "Stopped");
+            Log(name, "Stopped");
         }
+        SetState(name, McpServerState.Stopped);
+    }
+
+    // ─── Supervision ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// A server process died without being asked to. Retire its tools immediately
+    /// — leaving them in the registry is what let the local model keep picking
+    /// brain_search out of a dead server's catalogue — then respawn with backoff.
+    /// </summary>
+    private void HandleTransportExit(string name, McpStdioTransport dead)
+    {
+        if (_disposed) return;
+        // Not supervised (start never completed), or already replaced — either way
+        // someone else owns this transport's fate.
+        if (!_supervised.ContainsKey(name)) return;
+        if (!_transports.TryGetValue(name, out var current) || !ReferenceEquals(current, dead)) return;
+
+        _supervised.TryRemove(name, out _);
+        _transports.TryRemove(name, out _);
+        _toolRegistry.RemoveServer(name);
+        try { OnToolsChanged?.Invoke(); } catch { }
+
+        string stderr = dead.LastStartupError.Trim();
+        string detail = string.IsNullOrEmpty(stderr)
+            ? "Server process exited unexpectedly."
+            : $"Server process exited unexpectedly. Last stderr:\n{stderr}";
+        _log?.Warn("MCP", $"[{name}] {detail}");
+        try { dead.Dispose(); } catch { }
+
+        // Crash-loop brake. A server that dies soon after every successful
+        // handshake would otherwise reset the reconnect counter on each cycle and
+        // respawn forever — see MaxRapidCrashes.
+        var upFor = _readySinceUtc.TryGetValue(name, out var since)
+            ? DateTime.UtcNow - since
+            : TimeSpan.MaxValue;
+        int rapid = upFor < RapidCrashWindow
+            ? _rapidCrashes.AddOrUpdate(name, 1, (_, v) => v + 1)
+            : _rapidCrashes[name] = 0;
+
+        if (rapid >= MaxRapidCrashes)
+        {
+            string give = $"Died {rapid}× within {RapidCrashWindow.TotalSeconds:F0}s of starting — "
+                        + "not restarting it again. Fix the server, then Restart it from MCP Servers (Ctrl+5).";
+            _log?.Error("MCP", $"[{name}] {give}");
+            SetState(name, McpServerState.Failed, $"{detail}\n\n{give}");
+            try { OnServerLog?.Invoke(name, give); } catch { }
+            return;
+        }
+
+        SetState(name, McpServerState.Reconnecting, detail);
+        try { OnServerLog?.Invoke(name, detail); } catch { }
+
+        _ = Task.Run(() => ReconnectLoopAsync(name));
+    }
+
+    /// <summary>
+    /// Respawn a crashed server: 1s, 2s, 4s, 8s, 16s. Bounded because an endless
+    /// loop against a genuinely broken binary is just a quieter kind of hang —
+    /// after the last attempt the state goes Failed and the chip says DOWN.
+    /// </summary>
+    private async Task ReconnectLoopAsync(string name)
+    {
+        for (int attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
+        {
+            _reconnectAttempt = attempt;
+            RaiseBrainStatus();
+
+            try { await Task.Delay(TimeSpan.FromSeconds(1 << (attempt - 1))); } catch { return; }
+
+            if (_disposed) return;
+            if (!_configs.TryGetValue(name, out var cfg) || !cfg.Enabled)
+            {
+                SetState(name, McpServerState.Stopped);
+                return;
+            }
+            if (IsServerRunning(name)) return;   // the user restarted it first
+
+            Log(name, $"Reconnect attempt {attempt}/{MaxReconnectAttempts}…");
+            bool ok;
+            try { ok = await StartServerAsync(name); }
+            catch (Exception ex) { Log(name, $"Reconnect attempt {attempt} threw: {ex.Message}"); ok = false; }
+            if (ok)
+            {
+                Log(name, $"Reconnected after {attempt} attempt(s)");
+                return;
+            }
+        }
+
+        string give = $"Gave up after {MaxReconnectAttempts} reconnect attempts — restart it from MCP Servers (Ctrl+5).";
+        _log?.Error("MCP", $"[{name}] {give}");
+        SetState(name, McpServerState.Failed, give);
+        try { OnServerLog?.Invoke(name, give); } catch { }
     }
 
     /// <summary>Call a tool on a specific server.</summary>
     public async Task<McpToolResult> CallToolAsync(string serverName, string toolName, Dictionary<string, string> arguments, CancellationToken ct = default)
     {
-        if (!_transports.TryGetValue(serverName, out var transport) || !transport.IsAlive)
-            throw new InvalidOperationException($"MCP server '{serverName}' is not running");
-
-        // Convert string args to JsonElement for proper typing
+        // Convert string args back to typed args (int / double / bool / array / object / string).
+        // The agent dispatch path flattens every tool argument to a string (ToolCall.Arguments is
+        // Dictionary<string,string>), so an array/object argument arrived here as its JSON TEXT.
+        // Without the array/object branch below the server received a quoted string like
+        // "[\"a\",\"b\"]" where it expected a real array, and rejected the call — which made every
+        // MCP tool with a non-scalar parameter unusable from the agent.
         var argsDict = new Dictionary<string, object>();
         foreach (var (key, value) in arguments)
         {
-            // Try to parse as number or bool, otherwise string
-            if (int.TryParse(value, out int intVal))
+            string v = value ?? "";
+            string t = v.TrimStart();
+            if (t.Length > 0 && (t[0] == '[' || t[0] == '{'))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(v);
+                    argsDict[key] = JsonElementToObject(doc.RootElement) ?? v;
+                    continue;
+                }
+                catch { /* not valid JSON — fall through and send it as a plain string */ }
+            }
+            if (int.TryParse(v, out int intVal))
                 argsDict[key] = intVal;
-            else if (double.TryParse(value, out double dblVal))
+            else if (double.TryParse(v, System.Globalization.NumberStyles.Float,
+                         System.Globalization.CultureInfo.InvariantCulture, out double dblVal))
                 argsDict[key] = dblVal;
-            else if (bool.TryParse(value, out bool boolVal))
+            else if (bool.TryParse(v, out bool boolVal))
                 argsDict[key] = boolVal;
             else
-                argsDict[key] = value;
+                argsDict[key] = v;
+        }
+        return await CallToolWithObjectArgsAsync(serverName, toolName, argsDict, ct);
+    }
+
+    /// <summary>Materialize a JsonElement into plain CLR objects so it re-serializes
+    /// as real JSON (array/object/number/bool/null) rather than as a quoted string.</summary>
+    private static object? JsonElementToObject(System.Text.Json.JsonElement el)
+    {
+        switch (el.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Array:
+                var list = new List<object?>();
+                foreach (var item in el.EnumerateArray()) list.Add(JsonElementToObject(item));
+                return list;
+            case System.Text.Json.JsonValueKind.Object:
+                var map = new Dictionary<string, object?>();
+                foreach (var p in el.EnumerateObject()) map[p.Name] = JsonElementToObject(p.Value);
+                return map;
+            case System.Text.Json.JsonValueKind.String:
+                return el.GetString();
+            case System.Text.Json.JsonValueKind.Number:
+                return el.TryGetInt64(out long l) ? l : el.GetDouble();
+            case System.Text.Json.JsonValueKind.True: return true;
+            case System.Text.Json.JsonValueKind.False: return false;
+            default: return null;
+        }
+    }
+
+    /// <summary>
+    /// Object-typed overload — use when an argument must reach the server
+    /// as a JSON array / object / strong type, not a string. Fixes the
+    /// audit CRITICAL #4 issue where `Dictionary&lt;string,string&gt;` forced
+    /// every value through string parsing.
+    /// </summary>
+    public async Task<McpToolResult> CallToolWithObjectArgsAsync(
+        string serverName, string toolName, Dictionary<string, object> arguments,
+        CancellationToken ct = default)
+    {
+        if (!_transports.TryGetValue(serverName, out var transport) || !transport.IsAlive)
+        {
+            // Say WHICH of the several "not running" situations this is — the bare
+            // message sent the model (and the human) hunting for a config problem
+            // when the real answer was "it crashed and is coming back in 4s".
+            var state = GetServerState(serverName);
+            string hint = state switch
+            {
+                McpServerState.Reconnecting => "it crashed and is being restarted — retry in a few seconds",
+                McpServerState.Failed       => $"it failed to start ({BrainLastError ?? "no detail"}); restart it from MCP Servers (Ctrl+5)",
+                McpServerState.Starting     => "it is still starting up — retry in a few seconds",
+                _                           => "it is stopped; start it from MCP Servers (Ctrl+5)",
+            };
+            throw new InvalidOperationException($"MCP server '{serverName}' is not running: {hint}");
         }
 
-        var callParams = new { name = toolName, arguments = argsDict };
+        var callParams = new { name = toolName, arguments = arguments };
         var response = await transport.SendRequestAsync("tools/call", callParams, ct: ct);
 
         if (!response.IsSuccess)
@@ -320,11 +695,12 @@ public sealed class McpServerManager : IDisposable
 
                 _toolRegistry.UpdateServer(name, tools);
                 OnToolsChanged?.Invoke();
+                RaiseBrainStatus();   // the chip shows the tool count
             }
         }
         catch (Exception ex)
         {
-            OnServerLog?.Invoke(name, $"Failed to list tools: {ex.Message}");
+            Log(name, $"Failed to list tools: {ex.Message}");
         }
     }
 
@@ -340,6 +716,10 @@ public sealed class McpServerManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Disarm supervision BEFORE killing anything, or app shutdown looks like
+        // five crashes and the reconnect loops race the process exit.
+        _supervised.Clear();
 
         // Take a snapshot so concurrent mutation during shutdown is safe.
         var snapshot = _transports.Values.ToList();
@@ -364,5 +744,11 @@ public sealed class McpServerManager : IDisposable
             try { t.Dispose(); }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"MCP dispose error: {ex.Message}"); }
         }
+
+        foreach (var gate in _startGates.Values)
+        {
+            try { gate.Dispose(); } catch { }
+        }
+        _startGates.Clear();
     }
 }

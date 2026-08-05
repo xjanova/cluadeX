@@ -9,10 +9,13 @@ public enum ToolType
     ReadFile,
     WriteFile,
     EditFile,
+    MultiEdit,       // Apply several find/replace edits to one file atomically (all-or-nothing)
     ListFiles,
     SearchFiles,
     SearchContent,
     RunCommand,
+    RunBuild,        // Auto-detect the project's build/type-check command and run it (the verify loop)
+    RunTests,        // Auto-detect + run the project's test suite; returns a distilled pass/fail + failing tests
     CreateDirectory,
 
     // Git operations
@@ -23,6 +26,7 @@ public enum ToolType
     GitPull,
     GitBranch,
     GitCheckout,
+    GitMerge,
     GitDiff,
     GitLog,
     GitClone,
@@ -78,6 +82,33 @@ public enum ToolType
     MemorySave,      // Save a memory entry
     MemoryList,      // List all memories
     MemoryDelete,    // Delete a memory
+
+    // Hex editor tools (binary file inspection + patching)
+    HexOpen,         // Open a binary file in the Hex Editor view + return file info
+    HexRead,         // Read bytes from a file at offset (returns hex + ascii)
+    HexSearch,       // Find a hex/text pattern in a file (returns offsets)
+    HexPatch,        // Patch bytes at offset (in-place, with undo, optionally save)
+    HexInfo,         // Get file size, sha256, magic bytes without loading into editor
+
+    // Subagent system (Sprint 1 #1 — ECC parity)
+    SubAgentInvoke,  // Spawn a specialised subagent (code-reviewer, security-reviewer, etc.)
+    SubAgentList,    // List available subagents
+
+    // BrainX knowledge base (Wave 4 — cross-machine memory)
+    BrainRecall,     // Search the connected BrainX for relevant notes / coding-lessons
+
+    // Code intelligence (LSP)
+    LspDiagnostics,  // Get errors/warnings for a file from a language server
+
+    // Codebase search (ranked retrieval)
+    CodebaseSearch,  // Ranked relevance search across the repo (filename + symbol + content)
+
+    // Code navigation (regex/symbol index — no language server required)
+    ListSymbols,     // Outline one file's classes/methods/functions (line-numbered)
+    FindSymbol,      // Find where a symbol is DEFINED across the repo (go-to-definition by name)
+
+    // Instinct maintenance
+    InstinctEvolve,  // Merge near-duplicate learned instincts (semantic clustering)
 }
 
 /// <summary>
@@ -109,7 +140,9 @@ public class ToolCall
         or ToolType.GhPrList or ToolType.GhIssueList or ToolType.GhRepoView
         or ToolType.WebSearch or ToolType.WebFetch
         or ToolType.TaskList or ToolType.TaskOutput
-        or ToolType.AskUser or ToolType.MemoryList => true,
+        or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
+        or ToolType.LspDiagnostics or ToolType.CodebaseSearch
+        or ToolType.ListSymbols or ToolType.FindSymbol => true,
         _ => false,
     };
 
@@ -122,7 +155,9 @@ public class ToolCall
         or ToolType.GitDiff or ToolType.GitBranch
         or ToolType.GhPrList or ToolType.GhIssueList or ToolType.GhRepoView
         or ToolType.TaskList or ToolType.TaskOutput
-        or ToolType.AskUser or ToolType.MemoryList => true,
+        or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
+        or ToolType.LspDiagnostics or ToolType.CodebaseSearch
+        or ToolType.ListSymbols or ToolType.FindSymbol => true,
         _ => false,
     };
 }
@@ -141,6 +176,22 @@ public class ToolResult
     public string Summary { get; set; } = string.Empty;
     /// <summary>Input arguments passed to the tool (for UI display).</summary>
     public Dictionary<string, string>? Arguments { get; set; }
+
+    /// <summary>Colorized before/after diff for file-mutating tools (edit/write). Null when N/A.</summary>
+    public EditDiffResult? Diff { get; set; }
+
+    /// <summary>For file-mutating tools: the (relative) path that changed — drives the live editor follow.</summary>
+    public string? FilePath { get; set; }
+}
+
+/// <summary>Payload for a human-in-the-loop permission prompt (carries an optional preview diff).</summary>
+public class PermissionRequestInfo
+{
+    public string ToolName { get; set; } = string.Empty;
+    /// <summary>Human-readable description of what is being requested (e.g. "write: src/foo.cs").</summary>
+    public string Detail { get; set; } = string.Empty;
+    /// <summary>Preview of the file change to be applied, shown before the user approves. Null = no preview.</summary>
+    public EditDiffResult? Diff { get; set; }
 }
 
 /// <summary>

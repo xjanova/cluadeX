@@ -1,4 +1,4 @@
-<UserControl x:Class="CluadeX.Views.SettingsView"
+﻿<UserControl x:Class="CluadeX.Views.SettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:conv="clr-namespace:CluadeX.Converters"
@@ -6,6 +6,35 @@
              xmlns:services="clr-namespace:CluadeX.Services">
 
     <UserControl.Resources>
+        <!-- ── Neon retheme — local override of Catppuccin keys ── -->
+        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
+        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
+        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
+        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
+        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
+        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
+        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
+        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
+        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
+        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
+        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
+        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
+        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
+        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>
+        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
+        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
+        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
+        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
+        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>
+        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
+        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
+        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
+        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
+        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
+
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
 
         <Style x:Key="SettingLabel" TargetType="TextBlock">
@@ -258,11 +287,11 @@
                          Style="{StaticResource ModernTextBox}"/>
                 <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}"
                         FontFamily="Segoe MDL2 Assets"
-                        Command="{Binding BrowseModelDirCommand}" Margin="4,0" ToolTip="Browse"/>
+                        Command="{Binding BrowseModelDirCommand}" Margin="4,0" ToolTip="{services:Loc settings.browseTip}"/>
                 <Button Grid.Column="2" Content="&#xE838;" Style="{StaticResource IconButton}"
                         FontFamily="Segoe MDL2 Assets"
                         Command="{Binding OpenDirectoryCommand}"
-                        CommandParameter="{Binding ModelDirectory}" ToolTip="Open folder"/>
+                        CommandParameter="{Binding ModelDirectory}" ToolTip="{services:Loc settings.openFolderTip}"/>
             </Grid>
 
             <!-- Cache Directory -->
@@ -309,6 +338,12 @@
                         FontFamily="Segoe MDL2 Assets"
                         Command="{Binding BrowseTempDirCommand}" Margin="4,0"/>
             </Grid>
+
+            <TextBlock Text="{services:Loc settings.sessionFolder}" Style="{StaticResource SettingLabel}"/>
+            <TextBlock Text="{services:Loc settings.sessionFolderDesc}"
+                       Style="{StaticResource SettingDesc}"/>
+            <TextBox Text="{Binding SessionDirectory, UpdateSourceTrigger=PropertyChanged}"
+                     Style="{StaticResource ModernTextBox}" Margin="0,0,0,16"/>
 
             <!-- ═══════ INFERENCE ═══════ -->
             <TextBlock Text="{services:Loc settings.inference}" Style="{StaticResource SectionTitle}"/>
@@ -382,7 +417,7 @@
                 <StackPanel>
                     <CheckBox Content="{services:Loc settings.extendedThinking}" IsChecked="{Binding ExtendedThinkingEnabled}"
                               Margin="0,0,0,4"/>
-                    <TextBlock Text="Enable Claude's extended thinking mode for complex reasoning. Uses additional tokens for internal reasoning before responding."
+                    <TextBlock Text="{services:Loc settings.thinkingDesc}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,12" TextWrapping="Wrap"/>
 
                     <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
@@ -395,7 +430,7 @@
 
                     <CheckBox Content="{services:Loc settings.promptCaching}" IsChecked="{Binding PromptCachingEnabled}"
                               Margin="0,12,0,4"/>
-                    <TextBlock Text="Cache the system prompt across API calls to reduce costs. Recommended for Anthropic."
+                    <TextBlock Text="{services:Loc settings.cachingDesc}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,12" TextWrapping="Wrap"/>
 
                     <CheckBox Content="{services:Loc settings.microcompact}" IsChecked="{Binding MicrocompactEnabled}"
@@ -406,7 +441,155 @@
                     <CheckBox Content="{services:Loc settings.sessionMemory}" IsChecked="{Binding SessionMemoryEnabled}"
                               Margin="0,0,0,4"/>
                     <TextBlock Text="{services:Loc settings.sessionMemoryDesc}"
-                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,0" TextWrapping="Wrap"/>
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,12" TextWrapping="Wrap"/>
+
+                    <!-- ═══ Agent behaviour ═══
+                         These drive real code paths but previously had no UI at all — the only way
+                         to change them was hand-editing settings.json. -->
+                    <TextBlock Text="{services:Loc settings.agentBehaviour}" FontWeight="SemiBold"
+                               Foreground="{StaticResource Subtext0Brush}" Margin="0,10,0,4"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="{services:Loc settings.maxSteps}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding MaxAgentIterations, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="56" VerticalContentAlignment="Center"
+                                 ToolTip="{services:Loc settings.maxStepsTip}"/>
+                        <TextBlock Text="{services:Loc settings.idleTimeout}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="20,0,8,0"/>
+                        <TextBox Text="{Binding InteractiveRequestTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="56" VerticalContentAlignment="Center"
+                                 ToolTip="{services:Loc settings.idleTimeoutTip}"/>
+                    </StackPanel>
+
+                    <CheckBox Content="{services:Loc settings.readBeforeEdit}"
+                              IsChecked="{Binding EnforceReadBeforeEdit}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{services:Loc settings.readBeforeEditDesc}"
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <CheckBox Content="{services:Loc settings.autoVerify}"
+                              IsChecked="{Binding AutoVerifyAfterEditEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{services:Loc settings.autoVerifyDesc}"
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <CheckBox Content="{services:Loc settings.planFirst}"
+                              IsChecked="{Binding PlanFirstForceToolEnabled}" Margin="0,0,0,4"/>
+                    <CheckBox Content="{services:Loc settings.midLoopReminder}"
+                              IsChecked="{Binding MidLoopReminderEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="{services:Loc settings.remindEvery}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding MidLoopReminderEvery, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="48" VerticalContentAlignment="Center"/>
+                    </StackPanel>
+
+                    <CheckBox Content="{services:Loc settings.escalate}"
+                              IsChecked="{Binding EscalationEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="{services:Loc settings.escalateTo}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding EscalationProviderName, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="150" VerticalContentAlignment="Center"
+                                 ToolTip="{services:Loc settings.escalateToTip}"/>
+                    </StackPanel>
+
+                    <CheckBox Content="{services:Loc settings.learnInstincts}"
+                              IsChecked="{Binding InstinctLearningEnabled}" Margin="0,0,0,4"/>
+                    <CheckBox Content="{services:Loc settings.brainRecall}"
+                              IsChecked="{Binding BrainAutoRecallEnabled}" Margin="0,0,0,4"/>
+                    <CheckBox Content="{services:Loc settings.semanticSearch}"
+                              IsChecked="{Binding SemanticSearchEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,12">
+                        <TextBlock Text="{services:Loc settings.embeddingModel}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding EmbeddingModel, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="220" VerticalContentAlignment="Center"
+                                 ToolTip="{services:Loc settings.embeddingModelTip}"/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,12">
+                        <TextBlock Text="{services:Loc settings.microKeep}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding MicrocompactKeepRecentTurns, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="48" VerticalContentAlignment="Center"/>
+                        <TextBlock Text="{services:Loc settings.microTruncate}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,8,0"/>
+                        <TextBox Text="{Binding MicrocompactMaxOldResultChars, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="64" VerticalContentAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- ═══ Local model: tool calling + sampling ═══ -->
+                    <TextBlock Text="{services:Loc settings.localModelSection}" FontWeight="SemiBold"
+                               Foreground="{StaticResource Subtext0Brush}" Margin="0,4,0,4"/>
+
+                    <CheckBox Content="{services:Loc settings.nativeToolUse}"
+                              IsChecked="{Binding LocalNativeToolUseEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{services:Loc settings.nativeToolUseDesc}"
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <CheckBox Content="{services:Loc settings.toolRepair}"
+                              IsChecked="{Binding LocalToolCallRepairEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{services:Loc settings.toolRepairDesc}"
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBlock Text="Top-K:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding TopK, UpdateSourceTrigger=PropertyChanged}" Width="48"
+                                 VerticalContentAlignment="Center" ToolTip="{services:Loc settings.zeroDisabled}"/>
+                        <TextBlock Text="Min-P:" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,6,0"/>
+                        <TextBox Text="{Binding MinP, UpdateSourceTrigger=PropertyChanged}" Width="48"
+                                 VerticalContentAlignment="Center" ToolTip="{services:Loc settings.zeroDisabled}"/>
+                        <TextBlock Text="{services:Loc settings.repeatWindow}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,6,0"/>
+                        <TextBox Text="{Binding RepeatPenaltyTokens, UpdateSourceTrigger=PropertyChanged}" Width="56"
+                                 VerticalContentAlignment="Center" ToolTip="{services:Loc settings.repeatWindowTip}"/>
+                        <TextBlock Text="{services:Loc settings.toolCallTemp}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="16,0,6,0"/>
+                        <TextBox Text="{Binding ToolCallTemperature, UpdateSourceTrigger=PropertyChanged}" Width="48"
+                                 VerticalContentAlignment="Center" ToolTip="{services:Loc settings.toolCallTempTip}"/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBlock Text="{services:Loc settings.customBackend}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding CustomLlamaCppBackendPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="300" VerticalContentAlignment="Center"
+                                 ToolTip="{services:Loc settings.customBackendTip}"/>
+                    </StackPanel>
+
+                    <!-- ═══ Autonomous build-test-fix-review loop ═══ -->
+                    <TextBlock Text="{services:Loc settings.autoLoopSection}" FontWeight="SemiBold"
+                               Foreground="{StaticResource Subtext0Brush}" Margin="0,4,0,4"/>
+                    <CheckBox Content="{services:Loc settings.autoLoopEnable}"
+                              IsChecked="{Binding AutonomousLoopEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{services:Loc settings.autoLoopDesc}"
+                               Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,8" TextWrapping="Wrap"/>
+
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,8">
+                        <TextBlock Text="{services:Loc settings.maxFixIterations}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <TextBox Text="{Binding AutoFixMaxIterations}" Width="56" VerticalContentAlignment="Center"/>
+                        <TextBlock Text="{services:Loc settings.verifyCommand}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="20,0,8,0"/>
+                        <TextBox Text="{Binding AutoVerifyCommand}" Width="220" VerticalContentAlignment="Center"
+                                 ToolTip="{services:Loc settings.verifyCommandTip}"/>
+                    </StackPanel>
+
+                    <CheckBox Content="{services:Loc settings.reviewAfterGreen}"
+                              IsChecked="{Binding AutoReviewEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="30,0,0,0">
+                        <TextBlock Text="{services:Loc settings.reviewMode}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="0,0,8,0"/>
+                        <ComboBox SelectedValue="{Binding AutoReviewMode}" SelectedValuePath="Tag" Width="150">
+                            <ComboBoxItem Content="{services:Loc settings.reviewUntilClean}" Tag="until_clean"/>
+                            <ComboBoxItem Content="{services:Loc settings.reviewFixedRounds}" Tag="fixed_rounds"/>
+                        </ComboBox>
+                        <TextBlock Text="{services:Loc settings.maxReviewRounds}" VerticalAlignment="Center"
+                                   Foreground="{StaticResource Subtext0Brush}" Margin="20,0,8,0"/>
+                        <TextBox Text="{Binding AutoReviewMaxRounds}" Width="56" VerticalContentAlignment="Center"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 
@@ -415,20 +598,20 @@
 
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <CheckBox Content="Auto-Execute Code" IsChecked="{Binding AutoExecuteCode}"
+                    <CheckBox Content="{services:Loc settings.autoExecute}" IsChecked="{Binding AutoExecuteCode}"
                               Margin="0,0,0,4"/>
-                    <TextBlock Text="When enabled, CluadeX will automatically run generated code and fix errors."
+                    <TextBlock Text="{services:Loc settings.autoExecuteDesc}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="30,0,0,16" TextWrapping="Wrap"/>
 
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                        <TextBlock Text="Max Auto-Fix Attempts:" Foreground="{StaticResource TextBrush}"
+                        <TextBlock Text="{services:Loc settings.maxAutoFix}" Foreground="{StaticResource TextBrush}"
                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,12,0"/>
                         <TextBox Text="{Binding MaxAutoFixAttempts, UpdateSourceTrigger=PropertyChanged}"
                                  Style="{StaticResource ModernTextBox}" Width="60"/>
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                        <TextBlock Text="Preferred Language:" Foreground="{StaticResource TextBrush}"
+                        <TextBlock Text="{services:Loc settings.preferredLanguage}" Foreground="{StaticResource TextBrush}"
                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,12,0"/>
                         <ComboBox ItemsSource="{Binding LanguageOptions}"
                                   SelectedItem="{Binding PreferredLanguage}"
@@ -448,7 +631,7 @@
                                    FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     </StackPanel>
 
-                    <CheckBox Content="Stream Output (show tokens as they generate)" IsChecked="{Binding StreamOutput}"/>
+                    <CheckBox Content="{services:Loc settings.streamOutput}" IsChecked="{Binding StreamOutput}"/>
                 </StackPanel>
             </Border>
 
@@ -456,8 +639,8 @@
             <TextBlock Text="{services:Loc settings.huggingface}" Style="{StaticResource SectionTitle}"/>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="API Token (optional)" Style="{StaticResource SettingLabel}"/>
-                    <TextBlock Text="Required only for private or gated models. Get your token from huggingface.co/settings/tokens" Style="{StaticResource SettingDesc}"/>
+                    <TextBlock Text="{services:Loc settings.apiTokenOptional}" Style="{StaticResource SettingLabel}"/>
+                    <TextBlock Text="{services:Loc settings.apiTokenDesc}" Style="{StaticResource SettingDesc}"/>
                     <TextBox Text="{Binding HuggingFaceToken, UpdateSourceTrigger=PropertyChanged}"
                              Style="{StaticResource ModernTextBox}"/>
                 </StackPanel>
@@ -467,7 +650,7 @@
             <TextBlock Text="{services:Loc settings.memoryMgmt}" Style="{StaticResource SectionTitle}"/>
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Persistent memories saved by the AI agent. These survive across chat sessions."
+                    <TextBlock Text="{services:Loc settings.memoriesDesc}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="11" Margin="0,0,0,8" TextWrapping="Wrap"/>
 
                     <!-- Memory List -->
@@ -532,7 +715,7 @@
 
             <!-- ═══════ BUTTONS ═══════ -->
             <StackPanel Orientation="Horizontal" Margin="0,20,0,24" VerticalAlignment="Center">
-                <Button Content="💾 Save Settings" Style="{StaticResource PrimaryButton}"
+                <Button Content="{services:Loc settings.saveSettings}" Style="{StaticResource PrimaryButton}"
                         Command="{Binding SaveCommand}" Margin="0,0,12,0"/>
                 <Button Content="{services:Loc settings.resetDefaults}" Style="{StaticResource SecondaryButton}"
                         Command="{Binding ResetDefaultsCommand}" Margin="0,0,12,0"/>

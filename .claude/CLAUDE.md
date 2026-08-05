@@ -1,5 +1,14 @@
 # CluadeX — Claude Code Instructions
 
+## ⚠ CHECK THE BRANCH BEFORE EDITING ANYTHING
+Active development lives on **`feat/claude-code-style-status-display`**, not `main`.
+`main` has been left far behind (v2.2.x) and its files look plausibly current, so editing there
+means silently working on a months-old codebase. First two commands of every session:
+```bash
+git branch --show-current
+grep -m1 "<Version>" CluadeX/CluadeX.csproj
+```
+
 ## Project Overview
 CluadeX is a WPF .NET 8 desktop AI coding assistant at ~97% feature parity with Claude Code CLI.
 The Claude Code source is at `E:\Code\src\src` (TypeScript/Node.js) — use it as reference for any new features.
@@ -24,6 +33,29 @@ The Claude Code source is at `E:\Code\src\src` (TypeScript/Node.js) — use it a
 | HookService | PreToolUse/PostToolUse shell hooks |
 | PermissionService | Wildcard + tool-scoped permission patterns |
 | McpServerManager | MCP 2.0 stdio transport, tool registry |
+| CodeIntelligenceService | Search across files, go-to-definition, find-references, rename, autocomplete |
+| DiffService | Side-by-side diff (Myers) + merge-conflict parse/resolve |
+| DebugAdapterService | DAP client — debugpy / netcoredbg, breakpoints, stack, variables |
+
+## IDE surface (the "replace VS Code for the AI coding workflow" track)
+The workbench left panel is a three-mode activity bar: **EXPLORER | SEARCH | DEBUG**.
+
+| Feature | Key | Notes |
+|---------|-----|-------|
+| Search across files | `Ctrl+Shift+F` | literal/regex, case, whole-word, include/exclude globs |
+| Go to definition | `F12` | |
+| Find references | `Shift+F12` | |
+| Rename symbol | `F2` | preview mandatory, then confirm |
+| Autocomplete | `Ctrl+Space` | also auto-opens after 2 chars |
+| Side-by-side diff | diff button in Source Control | HEAD vs working tree |
+| Breakpoints | click the editor gutter | |
+
+**Design rule these all follow — no dead buttons.** Nothing here requires an install to be useful:
+navigation/search/rename/completion work off a bounded workspace scan plus `RepoMapService`
+heuristics, and *upgrade* to real semantic results when a language server happens to be connected
+(none is installed on the dev machine — that is exactly why the fallback exists). The debugger is
+the one feature that genuinely needs an external adapter, so it **probes** for `debugpy` /
+`netcoredbg` and shows the install command instead of offering a Start button that does nothing.
 
 ## What Was Already Done (10 Phases)
 1. ✅ System prompt (10 sections, env info, git status, Claude Code standard)
@@ -96,10 +128,12 @@ The Claude Code source is at `E:\Code\src\src` (TypeScript/Node.js) — use it a
 - All live-polling (GPU stats) uses DispatcherTimer + Task.Run marshaling. No UI-thread blocking.
 
 ## Remaining Work (for next session)
+- [ ] The whole IDE surface above is built and unit-proven but **has not been driven by hand in the
+      running app** — click through search / F12 / F2 / diff / breakpoints once.
+- [ ] The 7B two-file ceiling: a weak local model reliably does single-file+build, but a coordinated
+      two-file change is at its limit. Options: escalate-to-API on stall (`EscalationEnabled` has UI)
+      or plan → per-file subtask decomposition in the agent loop.
 - [ ] Run full integration test with Anthropic API (real keys, multi-turn agentic session)
-- [ ] Localization: PermissionsView, TasksView, McpServersView still have hardcoded strings
-- [ ] Fit indicator's `-ngl` suggestion is not auto-applied when user clicks "Load" — user has to set it manually in Settings. Could add "Apply recommended settings" button per-card.
-- [ ] Session Memory extraction UI — currently opt-in via settings only; no visible indicator when it runs/completes.
 
 ## Build & Run
 ```bash
@@ -107,6 +141,26 @@ cd E:\Code\ClaudeClient
 dotnet build CluadeX/CluadeX.csproj
 # Output: CluadeX\bin\Debug\net8.0-windows\CluadeX.exe
 ```
+**Building while CluadeX is running fails with MSB3027** (the .exe is locked). Either kill it, or
+build somewhere else — which is also how to compile-check without disturbing a running instance:
+```bash
+dotnet build CluadeX/CluadeX.csproj -p:OutDir=/some/scratch/bld/
+```
+
+## Proving a feature actually works
+The house standard is a console harness that `<Reference>`s the **built `CluadeX.dll`** and asserts
+against real inputs — not mocks. See `scratchpad/navtest` (132 assertions covering search,
+navigation, rename, completion, diff, merge conflicts, and a live debugpy session).
+It has repeatedly caught bugs the compiler could not: loose subsequence matching in completion,
+a phantom deleted line when diffing a new file, a debugpy launch rejected for sending two spellings
+of the same field.
+
+**`navtest` links the DLL and does NOT rebuild it — always rebuild CluadeX first**, or you will
+test a stale binary and believe a fix that isn't in it.
+
+Static checkers worth re-running after any XAML change (they catch what compiles but renders blank):
+every `{Binding}` path resolves to a real member, every `{StaticResource}` key exists, every
+`{services:Loc}` key is defined **with a Thai value** (a missing key renders as the raw key).
 
 ## File Map (key files)
 ```

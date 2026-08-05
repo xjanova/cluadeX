@@ -9,6 +9,7 @@ namespace CluadeX.ViewModels;
 public class MainViewModel : ViewModelBase
 {
     private readonly SettingsService _settingsService;
+    private readonly AgentToolService _agentToolService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;
     private readonly BuddyService _buddyService;
@@ -153,6 +154,19 @@ public class MainViewModel : ViewModelBase
         set => SetProperty(ref _mcpHost, value);
     }
 
+    // ─── BrainX link (outbound MCP client) ───
+    // The mirror image of McpHost: that chip says "orchestrators can reach us",
+    // this one says "we can reach the brain". Missing until 2026-08-04, which is
+    // why a brainx-mcp that died 30s after startup was invisible for four minutes
+    // while the agent kept calling brain_search into the corpse. Binds to
+    // McpServerManager's observable BrainState/BrainStatusText.
+    private McpServerManager? _mcpServers;
+    public McpServerManager? McpServers
+    {
+        get => _mcpServers;
+        set => SetProperty(ref _mcpServers, value);
+    }
+
     // ─── Auto-Update ───
     private bool _showUpdateBar;
     private string _updateMessage = "";
@@ -175,8 +189,91 @@ public class MainViewModel : ViewModelBase
     public TaskManagerViewModel TaskManagerVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
     public McpServersViewModel McpServersVM { get; }
+    public TimeMachineViewModel TimeMachineVM { get; }
+    public CodeEditorViewModel CodeEditorVM { get; }
+    public SubAgentsViewModel SubAgentsVM { get; }
+    public SkillsViewModel SkillsVM { get; }
+    public InstinctsViewModel InstinctsVM { get; }
+    public DebugLogViewModel DebugLogVM { get; }
+    public SecurityShieldViewModel SecurityShieldVM { get; }
+    public HookLibraryViewModel HookLibraryVM { get; }
+    public HexEditorViewModel HexEditorVM { get; }
 
     public ICommand NavigateToCommand { get; }
+
+    // ── Command palette (Ctrl+K) ──
+    public CommandPaletteViewModel Palette { get; private set; } = null!;
+    public ICommand OpenPaletteCommand { get; private set; } = null!;
+    public ICommand TogglePaletteCommand { get; private set; } = null!;
+    public ICommand ClosePaletteCommand { get; private set; } = null!;
+    public ICommand RunPaletteItemCommand { get; private set; } = null!;
+
+    /// <summary>Everything the palette can jump to: pages, skills, and project files.</summary>
+    private IEnumerable<PaletteItem> BuildPaletteItems()
+    {
+        var items = new List<PaletteItem>();
+
+        // Pages — the same targets NavigateTo understands.
+        (string Target, string Title, string Glyph)[] pages =
+        {
+            ("Chat", "Chat", ""), ("Code", "Code Editor", ""),
+            ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
+            ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
+            ("McpServers", "MCP Servers", ""), ("Tasks", "Tasks", ""),
+            ("Permissions", "Permissions", ""), ("Features", "Features", ""),
+            ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
+            ("Instincts", "Instincts", ""), ("DebugLog", "Debug Log", ""),
+            ("SecurityShield", "SecurityShield", ""), ("HookLibrary", "Hook Library", ""),
+            ("Settings", "Settings", ""),
+        };
+        foreach (var (target, title, glyph) in pages)
+        {
+            string t = target;
+            items.Add(new PaletteItem
+            {
+                Icon = glyph, Title = title, Subtitle = "Go to page", Kind = "Page",
+                KindColor = "#4CDFFF",
+                Haystack = (title + " page " + target).ToLowerInvariant(),
+                Run = () => NavigateTo(t),
+            });
+        }
+
+        // Skills — running one drops its slash command into the chat box.
+        try
+        {
+            foreach (var (name, desc) in _agentToolService.GetAvailableSkillNames())
+            {
+                string n = name;
+                items.Add(new PaletteItem
+                {
+                    Icon = "", Title = "/" + name, Subtitle = desc, Kind = "Skill",
+                    KindColor = "#A672FF",
+                    Haystack = (name + " " + desc).ToLowerInvariant(),
+                    Run = () =>
+                    {
+                        NavigateTo("Chat");
+                        ChatVM.UserInput = "/" + n + " ";
+                    },
+                });
+            }
+        }
+        catch { /* skills are optional */ }
+
+        // Project files — open in the editor.
+        try
+        {
+            items.AddRange(CommandPaletteViewModel.BuildFileItems(
+                ChatVM.WorkingDirectory,
+                path =>
+                {
+                    NavigateTo("Code");
+                    _ = CodeEditorVM.OpenPathAsync(path);
+                }));
+        }
+        catch { /* no project open */ }
+
+        return items;
+    }
     public ICommand PetBuddyCommand { get; }
     public ICommand InstallUpdateCommand { get; }
     public ICommand DismissUpdateCommand { get; }
@@ -191,6 +288,16 @@ public class MainViewModel : ViewModelBase
         TaskManagerViewModel taskManagerVM,
         FeaturesViewModel featuresVM,
         McpServersViewModel mcpServersVM,
+        TimeMachineViewModel timeMachineVM,
+        HexEditorViewModel hexEditorVM,
+        CodeEditorViewModel codeEditorVM,
+        SubAgentsViewModel subAgentsVM,
+        SkillsViewModel skillsVM,
+        InstinctsViewModel instinctsVM,
+        DebugLogViewModel debugLogVM,
+        SecurityShieldViewModel securityShieldVM,
+        HookLibraryViewModel hookLibraryVM,
+        AgentToolService agentToolService,
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
@@ -207,6 +314,21 @@ public class MainViewModel : ViewModelBase
         TaskManagerVM = taskManagerVM;
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
+        TimeMachineVM = timeMachineVM;
+        HexEditorVM = hexEditorVM;
+        CodeEditorVM = codeEditorVM;
+        SubAgentsVM = subAgentsVM;
+        SkillsVM = skillsVM;
+        InstinctsVM = instinctsVM;
+        DebugLogVM = debugLogVM;
+        SecurityShieldVM = securityShieldVM;
+        HookLibraryVM = hookLibraryVM;
+
+        // When the AI agent invokes hex_open, switch the active page to the
+        // Hex Editor so the user can see the file the agent is working on.
+        _agentToolService = agentToolService;
+        agentToolService.OnHexEditorRequested += _ =>
+            App.Current?.Dispatcher.Invoke(() => NavigateTo("HexEditor"));
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
@@ -219,7 +341,39 @@ public class MainViewModel : ViewModelBase
         // Auto-navigate to Chat when user clicks a session from another page
         chatVM.NavigateToChatRequested += () => NavigateTo("Chat");
 
+        // Opening/cloning a project lands the user in the workbench (Code page) — the IDE moment.
+        chatVM.NavigateToEditorRequested += () => NavigateTo("Code");
+
+        // Cowork follow: the agent just mutated a file — bring the Code page forward so the
+        // live edit is visible (the editor embeds the same chat docked right, so the
+        // conversation stays on screen). Raised on the UI thread.
+        //
+        // This used to also require ReferenceEquals(CurrentView, ChatVM), i.e. it only
+        // followed when the user happened to be sitting on the Chat page. Anywhere else —
+        // Home, Models, Tasks, Settings, or a session driven from BrainX over the MCP host
+        // pipe, where the user never opened Chat at all — the agent wrote files and the UI
+        // just sat there. AutoOpenEditorOnAgentEdit is already the user's switch for this
+        // behaviour; gating it a second time on the current page made the setting a lie.
+        chatVM.FileMutatedByAgent += (_, _) =>
+        {
+            if (_settingsService.Settings.AutoOpenEditorOnAgentEdit)
+                NavigateTo("Code");
+        };
+
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
+
+        // Real Ctrl+K command palette. The title-bar pill used to be cosmetic — it advertised
+        // "Search files, symbols & commands…" and just opened Settings.
+        Palette = new CommandPaletteViewModel(BuildPaletteItems);
+        OpenPaletteCommand = new RelayCommand(() => Palette.Open());
+        TogglePaletteCommand = new RelayCommand(() => Palette.Toggle());
+        ClosePaletteCommand = new RelayCommand(() => Palette.Close());
+        RunPaletteItemCommand = new RelayCommand<PaletteItem>(item =>
+        {
+            if (item == null) return;
+            Palette.Close();
+            try { item.Run(); } catch (Exception ex) { CommandErrorSink.Report("CommandPalette", ex); }
+        });
         PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
         DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
@@ -340,6 +494,15 @@ public class MainViewModel : ViewModelBase
             "Tasks" => TaskManagerVM,
             "Features" => FeaturesVM,
             "McpServers" => McpServersVM,
+            "TimeMachine" => TimeMachineVM,
+            "HexEditor" => HexEditorVM,
+            "Code" => CodeEditorVM,
+            "SubAgents" => SubAgentsVM,
+            "Skills" => SkillsVM,
+            "Instincts" => InstinctsVM,
+            "DebugLog" => DebugLogVM,
+            "SecurityShield" => SecurityShieldVM,
+            "HookLibrary" => HookLibraryVM,
             _ => ChatVM,
         };
 
@@ -354,13 +517,48 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
+            // Whatever we are running now is the verdict on the last apply attempt.
+            // Must happen before any check so a package that already landed stops
+            // being counted as a failure.
+            _autoUpdate.NoteRunningVersion();
+
+            // A paused updater must SAY it is paused. Silence here reads as "you are
+            // up to date", which is the one message that is certainly wrong.
+            string? paused = _autoUpdate.PausedReason;
+            if (paused != null)
+            {
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = "⚠ " + paused;
+                    ShowUpdateBar = true;
+                    IsUpdating = false;
+                });
+            }
+
+            // Preferred path: a real Velopack install self-updates atomically.
+            string? staged = await _autoUpdate.VelopackCheckAndStageAsync();
+            if (staged != null)
+            {
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = $"🔔 Update v{staged} downloaded — click Install to restart and apply.";
+                    ShowUpdateBar = true;
+                    IsUpdating = false;
+                });
+                return;
+            }
+
+            // Fallback for portable / dev builds, which Velopack cannot update: still
+            // tell the user a newer release exists so they can install it by hand.
             var info = await _autoUpdate.CheckForUpdateAsync();
             if (info != null)
             {
                 _pendingUpdate = info;
                 App.Current?.Dispatcher.Invoke(() =>
                 {
-                    UpdateMessage = $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}";
+                    UpdateMessage = _autoUpdate.CanSelfUpdate
+                        ? $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}"
+                        : $"🔔 v{info.NewVersion} is out (running v{info.CurrentVersion}) — this is a portable build, install via Setup.exe once to enable self-update.";
                     ShowUpdateBar = true;
                     IsUpdating = false;
                 });
@@ -371,7 +569,25 @@ public class MainViewModel : ViewModelBase
 
     private async Task InstallUpdate()
     {
-        if (_pendingUpdate == null || IsUpdating) return;
+        if (IsUpdating) return;
+
+        // Velopack first: when a package is already staged this is an atomic swap
+        // plus a restart, not a download. The call does not return.
+        if (_autoUpdate.HasStagedUpdate)
+        {
+            IsUpdating = true;
+            UpdateMessage = $"Applying v{_autoUpdate.StagedVersion} — CluadeX will restart…";
+            UpdateProgress = 100;
+            await Task.Delay(600);
+            if (!_autoUpdate.VelopackApplyAndRestart())
+            {
+                UpdateMessage = "Could not apply the update — see the log. It will be retried on the next launch.";
+                IsUpdating = false;
+            }
+            return;
+        }
+
+        if (_pendingUpdate == null) return;
 
         IsUpdating = true;
         UpdateMessage = "Downloading update...";

@@ -19,7 +19,15 @@ public sealed class McpStdioTransport : IDisposable
     private bool _disposed;
     private readonly Dictionary<int, TaskCompletionSource<JsonRpcResponse>> _pending = new();
     private readonly object _lock = new();
+    // Serializes writes to the server's stdin. StreamWriter is NOT safe for concurrent WriteLineAsync,
+    // and a notification-triggered tools/list can overlap an in-flight tools/call → corrupt JSON-RPC
+    // framing → mystery request timeouts.
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private CancellationTokenSource? _readCts;
+    // Set by StopAsync/Dispose so the exit handler can tell "we asked it to stop"
+    // from "it died on us". Without this a supervisor would try to resurrect a
+    // server the user deliberately stopped.
+    private volatile bool _stopRequested;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -30,6 +38,15 @@ public sealed class McpStdioTransport : IDisposable
     public bool IsAlive => _process != null && !_process.HasExited;
     public event Action<string>? OnServerError; // stderr output
     public event Action<JsonRpcNotification>? OnNotification; // server→client notifications
+
+    /// <summary>
+    /// The server process exited without us asking. Nobody listened for this before,
+    /// so a brainx-mcp that died 30s after startup left the app offering its 83 tool
+    /// schemas to the model for the next four minutes and answering every call with
+    /// "not running" — with no log line, no retry and no UI. Subscribe BEFORE
+    /// <see cref="StartAsync"/>; it never fires for a stop we initiated.
+    /// </summary>
+    public event Action? OnUnexpectedExit;
 
     /// <summary>Collected stderr lines during startup for error diagnosis.</summary>
     public string LastStartupError { get; private set; } = "";
@@ -135,7 +152,9 @@ public sealed class McpStdioTransport : IDisposable
             var request = new JsonRpcRequest { Id = id, Method = method, Params = parameters };
             string json = JsonSerializer.Serialize(request, JsonOpts);
 
-            await _writer!.WriteLineAsync(json.AsMemory(), ct);
+            await _writeLock.WaitAsync(ct);
+            try { await _writer!.WriteLineAsync(json.AsMemory(), ct); }
+            finally { _writeLock.Release(); }
 
             // Wait with timeout
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -161,12 +180,15 @@ public sealed class McpStdioTransport : IDisposable
 
         var notification = new JsonRpcNotification { Method = method, Params = parameters };
         string json = JsonSerializer.Serialize(notification, JsonOpts);
-        await _writer!.WriteLineAsync(json.AsMemory(), ct);
+        await _writeLock.WaitAsync(ct);
+        try { await _writer!.WriteLineAsync(json.AsMemory(), ct); }
+        finally { _writeLock.Release(); }
     }
 
     /// <summary>Gracefully stop the server.</summary>
     public async Task StopAsync()
     {
+        _stopRequested = true;
         if (_process == null) return;
 
         _readCts?.Cancel();
@@ -277,12 +299,20 @@ public sealed class McpStdioTransport : IDisposable
                 tcs.TrySetException(new IOException("MCP server process exited unexpectedly"));
             _pending.Clear();
         }
+
+        // Tell the supervisor. Outside the lock, and swallowing subscriber
+        // exceptions, because this runs on the Process.Exited callback thread.
+        if (!_stopRequested)
+        {
+            try { OnUnexpectedExit?.Invoke(); } catch { }
+        }
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _stopRequested = true;
         // Use async-safe pattern to avoid blocking the finalizer thread.
         // StopAsync().Wait() can deadlock if called from a sync context with SynchronizationContext.
         try
