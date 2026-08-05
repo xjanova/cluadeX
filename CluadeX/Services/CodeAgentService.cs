@@ -70,6 +70,30 @@ public class CodeAgentService
     };
 
     /// <summary>
+    /// Newest-first token-budgeted history for a local window. Static so the
+    /// behaviour is testable against the compiled binary without standing up the
+    /// service graph — the same reason LooksLikeBrainStatusQuestion is static.
+    /// Always keeps at least the last two messages, whatever they cost: context
+    /// that can't even hold the previous exchange has failed differently.
+    /// </summary>
+    internal static List<ChatMessage> FitLocalHistory(
+        List<ChatMessage> history, int localCtxTokens, out int spent, out int budget)
+    {
+        budget = Math.Min(3000, localCtxTokens / 5);
+        var kept = new List<ChatMessage>();
+        spent = 0;
+        for (int i = history.Count - 1; i >= 0; i--)
+        {
+            int cost = CluadeX.Helpers.TokenBudget.EstimateTokens(history[i].Content);
+            if (spent + cost > budget && kept.Count >= 2) break;
+            kept.Add(history[i]);
+            spent += cost;
+        }
+        kept.Reverse();
+        return kept;
+    }
+
+    /// <summary>
     /// Any tool served by the brain, not just the three pinned recall ones. "Did this
     /// turn consult the brain?" is a broader question than "did it call brain_search" —
     /// a turn that read a note or walked the graph consulted it.
@@ -189,6 +213,71 @@ public class CodeAgentService
         return kept;
     }
 
+    /// <summary>
+    /// The whole base prompt for a small-context local model, ~25 lines. Rules only,
+    /// ordered by what actually failed in the field:
+    ///
+    /// - "ตอบคนละทาง" → the FIRST rule is answer-the-question-that-was-asked, and the
+    ///   grounding rule says where answers about this machine come from (tools, not
+    ///   memory). A 7B weights early lines heaviest.
+    /// - "มโนคำตอบเอง" → an explicit I-don't-know escape. A model with no permitted
+    ///   way to say "ไม่รู้" fills the gap with fluent invention every time.
+    /// - Narration instead of calls → "call it now" phrased as an order, once.
+    ///
+    /// Everything environmental (brain status, tool NOTE, few-shot, project tree,
+    /// repo map, memory, habits) is appended by GetSystemPrompt afterwards and is
+    /// already ctx-gated. Thai here is expensive (~1 token/char) — keep tool names
+    /// and jargon in English, sentences short.
+    /// </summary>
+    private string BuildCompactLocalBasePrompt(bool isThai, FeatureToggles features)
+    {
+        var sb = new StringBuilder();
+        if (isThai)
+        {
+            sb.AppendLine("""
+                คุณคือ CluadeX ผู้ช่วยเขียนโค้ดบนเครื่องของผู้ใช้ ตอบภาษาไทยเสมอ (โค้ด/ชื่อ tool เป็นอังกฤษ)
+
+                # กฎเหล็ก
+                - ตอบ "คำถามที่ถูกถามจริงๆ" — อ่านคำถามล่าสุดของผู้ใช้อีกครั้งก่อนตอบ แล้วตอบเรื่องนั้นเรื่องเดียว
+                - คำถามเกี่ยวกับโปรเจกต์/ไฟล์/ระบบนี้: ห้ามตอบจากความจำ — หาความจริงก่อนด้วย tool
+                  (read_file / codebase_search / find_symbol / brain_search) แล้วตอบจากผลลัพธ์
+                - ถ้าไม่มี tool ที่ตอบได้และคุณไม่รู้จริง: พูดตรงๆ ว่า "ไม่รู้/ตรวจไม่ได้" — ห้ามแต่งคำตอบ
+                  คำตอบที่แต่งขึ้นแย่กว่าการยอมรับว่าไม่รู้เสมอ
+                - tool เป็นของจริง: เรียกเลยทันที ห้ามพิมพ์ว่า "จะเรียก" หรือบรรยาย JSON — เรียกจริงเท่านั้น
+                - ทักทาย/คำถามทั่วไปสั้นๆ (เช่น "ใช้โมเดลอะไร"): ตอบตรงๆ จาก Environment ไม่ต้องเรียก tool
+
+                # การแก้โค้ด
+                - read_file ก่อนแก้เสมอ → แก้ด้วย multi_edit/write_file → run_build (และ run_tests) จนเขียว
+                  แล้วค่อยบอกว่าเสร็จ — build แดง = ยังไม่เสร็จ ห้ามสรุปว่าเสร็จ
+                - แก้เฉพาะที่ถูกขอ ห้ามเพิ่ม feature/refactor/comment เกินคำขอ
+                - edit หา text ไม่เจอ = ไฟล์จริงไม่ตรงกับที่คิด → read_file ใหม่ก่อน retry
+                """);
+            if (features.GitIntegration)
+                sb.AppendLine("- งาน git: ใช้ git_status/git_add/git_commit/git_merge (อย่า shell 'git ...' เอง) · commit ใหม่เสมอ ห้าม --amend/--no-verify ถ้าไม่ถูกขอ");
+        }
+        else
+        {
+            sb.AppendLine("""
+                You are CluadeX, an AI coding assistant running locally on the user's machine.
+
+                # Hard rules
+                - Answer the question that was ACTUALLY asked — re-read the user's last message before answering, and answer that one thing.
+                - Questions about THIS project/files/system: never answer from memory — get the truth with a tool first (read_file / codebase_search / find_symbol / brain_search), then answer from its result.
+                - If no tool can answer it and you genuinely don't know: say "I don't know / can't verify" plainly. An invented answer is always worse than admitting you don't know.
+                - Tools are real: call them immediately. Never say you "will use" one or narrate JSON — only real calls count.
+                - Greetings / short generic questions (e.g. "which model are you"): answer directly from Environment, no tool needed.
+
+                # Editing code
+                - read_file before every edit → change via multi_edit/write_file → run_build (and run_tests) until green, only then say done — a red build means NOT done.
+                - Change only what was asked. No extra features, refactors, or comments.
+                - If an edit can't find its text, the real file differs from your guess → read_file again before retrying.
+                """);
+            if (features.GitIntegration)
+                sb.AppendLine("- Git work: use git_status/git_add/git_commit/git_merge (not shell 'git ...') · new commits always, never --amend/--no-verify unless asked.");
+        }
+        return sb.ToString();
+    }
+
     // ─── System prompt cache (avoids blocking git/file I/O on UI thread) ───
     private string? _cachedSystemPrompt;
     private DateTime _promptCacheExpiry = DateTime.MinValue;
@@ -251,6 +340,20 @@ public class CodeAgentService
     {
         bool isThai = _localizationService.CurrentLanguage == "th";
         var features = _settingsService.Settings.Features;
+
+        // ─── Local models get a COMPACT base, not a trimmed copy of the big one ───
+        // Sections 1-11 below measure ~3k tokens (Thai ≈ 1 token/char), which on a
+        // 12,288 window meant 47% of the context was instructions before the user's
+        // question arrived — measured live: sysPrompt~5769tok, a 16-char question,
+        // in=8238. A 7B does not read a prompt that long; it drowns in it, answers
+        // beside the question, and has no room left for tool schemas (71 of 83 MCP
+        // schemas dropped that turn). For a small window the base is ~25 lines: the
+        // discipline rules that change behaviour, none of the prose that describes it.
+        // API providers and big-ctx locals (≥32k) keep the full prompt unchanged.
+        bool compactLocal = (_providerManager.ActiveProviderType
+                is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+            && _settingsService.Settings.ContextSize < 32000;
+        if (compactLocal) return BuildCompactLocalBasePrompt(isThai, features);
 
         var sb = new StringBuilder();
 
@@ -891,7 +994,11 @@ public class CodeAgentService
         // exactly what blew a ctx-8192 request up to ~13.7k and overflowed the window.
         bool localNativeTools = isLocalProvider && _settingsService.Settings.LocalNativeToolUseEnabled;
         bool includeToolDefs     = !isLocalProvider || (!localNativeTools && contextTokens >= 8000);
-        bool includeHeavyContext = !isLocalProvider || contextTokens >= 16000; // codebase map + tree + key files
+        // Heavy tier at ≥32k for local, not ≥16k: the full tree + 6k-char codebase map +
+        // key-file dump measures ~3-4k tokens, which at 16384 would eat back everything
+        // the compact base prompt just freed. A 16k local model gets the shallow tree +
+        // small map below — the anti-hallucination floor — and pulls detail via tools.
+        bool includeHeavyContext = !isLocalProvider || contextTokens >= 32000; // codebase map + tree + key files
 
         // ═══════════════════════════════════════════
         // Dynamic Section: Environment Info
@@ -1150,6 +1257,16 @@ public class CodeAgentService
             string memoryContent = _memoryService.LoadMemoryIndex();
             if (!string.IsNullOrWhiteSpace(memoryContent))
             {
+                // The memory index grows without bound as the user works; on a local
+                // window it competes with the question like every other block. Cap it —
+                // the newest entries are at the top of the index, so a head-keep is the
+                // right truncation.
+                if (isLocalProvider)
+                {
+                    while (CluadeX.Helpers.TokenBudget.EstimateTokens(memoryContent) > 600
+                           && memoryContent.Length > 400)
+                        memoryContent = memoryContent[..(int)(memoryContent.Length * 0.85)];
+                }
                 sb.AppendLine();
                 sb.AppendLine("# Memory");
                 sb.AppendLine(memoryContent);
@@ -1351,6 +1468,29 @@ public class CodeAgentService
             };
         }
 
+        // ─── claude-dev: delegate the WHOLE turn, wrap nothing ───
+        // The CLI is a complete agent (planner, tools, brain recall, verification).
+        // Sending it through either loop below would put a second planner on top of
+        // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
+        // over one task. One call, its answer is the turn.
+        if (_providerManager.ActiveProviderType == AiProviderType.ClaudeDev)
+        {
+            _debugLog?.Info("Agent", "claude-dev passthrough · delegating turn to the Claude Code CLI");
+            var cdResult = new AgentLoopResult { TurnCount = 1 };
+            var cdText = new StringBuilder();
+            await foreach (var chunk in _providerManager.ActiveProvider.ChatAsync(history, userMessage ?? "", null, ct))
+            {
+                cdText.Append(chunk);
+                OnAgenticStreamingToken?.Invoke(chunk, 1);
+            }
+            cdResult.FinalResponse = cdText.ToString().Trim();
+            cdResult.Success = cdResult.FinalResponse.Length > 0;
+            cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
+            cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
+            _debugLog?.Info("Agent", $"claude-dev passthrough done · textLen={cdResult.FinalResponse.Length}");
+            return cdResult;
+        }
+
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
 
@@ -1399,11 +1539,16 @@ public class CodeAgentService
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(6));
 
             string query = userMessage.Length > 200 ? userMessage[..200] : userMessage;
+            // Local windows get 2 hits, not 3. The injected block competes with the
+            // question for the model's attention BY MASS: three formatted notes measured
+            // ~2.4k tokens against a 16-char question, and the model answered the notes.
+            bool recallLocal = _providerManager.ActiveProviderType
+                is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
             // semantic:true — a raw 200-char task sentence (especially Thai) almost never keyword-matches
             // note titles, so keyword search returned 0 hits and auto-recall was effectively dead. The
             // brain's semantic search embeds the query and finds topical neighbors; it falls back to
             // keyword search server-side when embeddings are unavailable.
-            string lessons = await _brainSync.SearchAsync(query, limit: 3, semantic: true, timeoutCts.Token);
+            string lessons = await _brainSync.SearchAsync(query, limit: recallLocal ? 2 : 3, semantic: true, timeoutCts.Token);
 
             // SearchAsync returns "(...)" sentinels for not-connected / error / empty — skip those.
             if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith("(", StringComparison.Ordinal))
@@ -1413,6 +1558,13 @@ public class CodeAgentService
             // {"id":…,"score":74.4,"tags":[…],"appliesTo":…} it spends the tokens
             // and learns nothing.
             lessons = BrainSyncService.FormatSearchResultsForModel(lessons);
+            // Hard mass cap on the local path: background must stay smaller than the
+            // window's attention can absorb, whatever the notes' previews contain.
+            if (recallLocal)
+            {
+                while (CluadeX.Helpers.TokenBudget.EstimateTokens(lessons) > 1200 && lessons.Length > 400)
+                    lessons = lessons[..(int)(lessons.Length * 0.85)];
+            }
             _debugLog?.Info("Agent", $"brain auto-recall injected · {lessons.Length} chars "
                 + $"(~{CluadeX.Helpers.TokenBudget.EstimateTokens(lessons)}tok)");
 
@@ -2017,6 +2169,26 @@ public class CodeAgentService
         // log: "67 dropped" never said WHICH 67, and the one turn that mattered
         // was the one where brain_search was among them.
         int recallOffered = toolSchemas.Count(t => IsPinnedMcpTool(t.Name));
+        // ─── History budget (local): tokens, not message count ───
+        // TakeLast(20) counted MESSAGES, and messages are not a unit of cost: twenty
+        // of them measured 8,238 input tokens against a 16-character question — the
+        // question was 0.2% of what the model saw, and it answered whatever the pile
+        // suggested instead ("ถามอะไร ตอบคนละทาง"). Walk backward accumulating real
+        // token cost and stop at the budget: recent short turns all survive, one old
+        // giant tool dump falls off first. Newest-first is the point — the messages
+        // closest to the question are the ones that disambiguate it.
+        List<ChatMessage> relevantHistory;
+        if (isLocal)
+        {
+            relevantHistory = FitLocalHistory(history, localCtxTokens, out int histSpent, out int histBudget);
+            if (relevantHistory.Count < history.Count)
+                _debugLog?.Info("Agent", $"history budget: kept {relevantHistory.Count}/{history.Count} messages (~{histSpent}tok of {histBudget}tok budget)");
+        }
+        else
+        {
+            relevantHistory = history.Count > 20 ? history.TakeLast(20).ToList() : history;
+        }
+
         if (isLocal)
         {
             // Measure the non-schema footprint instead of assuming a fraction of the window: system
@@ -2024,7 +2196,7 @@ public class CodeAgentService
             // capped at a sixth of the window so a large MaxTokens can't starve the prompt.
             reservedTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)
                 + CluadeX.Helpers.TokenBudget.EstimateTokens(userMessage)
-                + history.TakeLast(20).Sum(m => CluadeX.Helpers.TokenBudget.EstimateTokens(m.Content))
+                + relevantHistory.Sum(m => CluadeX.Helpers.TokenBudget.EstimateTokens(m.Content))
                 + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
             toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped);
         }
@@ -2037,9 +2209,6 @@ public class CodeAgentService
 
         // Build initial messages (with history compaction)
         var nativeMessages = new List<Services.Providers.NativeMessage>();
-
-        // Use last 20 messages (compact if conversation is longer)
-        var relevantHistory = history.Count > 20 ? history.TakeLast(20).ToList() : history;
         foreach (var msg in relevantHistory)
         {
             string role = msg.Role == MessageRole.Assistant ? "assistant" : "user";
