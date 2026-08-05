@@ -69,6 +69,21 @@ public class CodeAgentService
         "brain_search", "brain_semantic_search", "brain_get_note",
     };
 
+    /// <summary>
+    /// Any tool served by the brain, not just the three pinned recall ones. "Did this
+    /// turn consult the brain?" is a broader question than "did it call brain_search" —
+    /// a turn that read a note or walked the graph consulted it.
+    /// Server-name rule matches <see cref="Services.Mcp.McpServerManager.LooksLikeBrain"/>.
+    /// </summary>
+    private static bool IsBrainMcpTool(string qualifiedName)
+    {
+        if (!IsMcpToolName(qualifiedName)) return false;
+        int last = qualifiedName.LastIndexOf("__", StringComparison.Ordinal);
+        if (last <= "mcp__".Length) return false;
+        string server = qualifiedName["mcp__".Length..last];
+        return Services.Mcp.McpServerManager.LooksLikeBrain(server);
+    }
+
     private static bool IsPinnedMcpTool(string qualifiedName)
     {
         if (!IsMcpToolName(qualifiedName)) return false;
@@ -178,6 +193,13 @@ public class CodeAgentService
     private string? _cachedSystemPrompt;
     private DateTime _promptCacheExpiry = DateTime.MinValue;
     private readonly object _promptCacheLock = new();
+    /// <summary>The brain status line baked into <see cref="_cachedSystemPrompt"/>.
+    /// The prompt now carries a MEASURED fact, and a measured fact with a 30-second
+    /// cache in front of it is how you ship a prompt that confidently says CONNECTED
+    /// about a server that died 25 seconds ago — the exact failure this whole change
+    /// exists to remove. Cheap to recompute (property reads, no I/O), so it is the
+    /// cache key rather than something to hope about.</summary>
+    private string? _cachedBrainStatusLine;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -185,10 +207,14 @@ public class CodeAgentService
     /// </summary>
     public async Task<string> GetSystemPromptAsync()
     {
-        // Return cached if still valid (cache for 30 seconds)
+        string? brainNow = _brainSync?.LiveStatusLine;
+
+        // Return cached if still valid (30 seconds) AND the brain still says the same
+        // thing. A reconnect or a death inside the window rebuilds the prompt now.
         lock (_promptCacheLock)
         {
-            if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry)
+            if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry
+                && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal))
                 return _cachedSystemPrompt;
         }
 
@@ -197,6 +223,7 @@ public class CodeAgentService
         lock (_promptCacheLock)
         {
             _cachedSystemPrompt = prompt;
+            _cachedBrainStatusLine = brainNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
@@ -209,6 +236,7 @@ public class CodeAgentService
         lock (_promptCacheLock)
         {
             _cachedSystemPrompt = null;
+            _cachedBrainStatusLine = null;
             _promptCacheExpiry = DateTime.MinValue;
         }
     }
@@ -808,6 +836,14 @@ public class CodeAgentService
             sb.AppendLine("# BrainX — brain-first protocol");
             sb.AppendLine("You are connected to the owner's BrainX brain: past decisions, bug fixes and");
             sb.AppendLine("gotchas already paid for on this machine.");
+            // The measured fact, not an inference. Without this line the model had no
+            // route to its own connection state except a tool call — and on 2026-08-05
+            // it skipped the call and asserted the opposite of the truth. State that
+            // it is not allowed to overrule this, because a fact it can contradict is
+            // no better than no fact.
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine("  That line is ground truth. NEVER claim you cannot reach the brain while it");
+            sb.AppendLine("  says CONNECTED — if asked about the connection, quote it and stop.");
             sb.AppendLine("- Search FIRST, answer SECOND. Before a non-trivial answer or any file edit, call");
             sb.AppendLine("  `brain_search` with 2-4 keywords. If it returns nothing, retry once with");
             sb.AppendLine("  `brain_semantic_search` (it handles Thai and paraphrases).");
@@ -822,6 +858,20 @@ public class CodeAgentService
             sb.AppendLine("  already names the exact file to change.");
             sb.AppendLine("- A `<brainx_recall>` block in the user's message means the search already ran;");
             sb.AppendLine("  read it and answer — only search again for a genuinely different angle.");
+        }
+        else if (_brainSync != null)
+        {
+            // The silent case was the dangerous one. With no brain the prompt said
+            // NOTHING about the brain, so a question about it had no anchor at all and
+            // the model was free to invent either answer. Being accurately negative is
+            // a feature: "the brain is down, here is why" is a true sentence a user can
+            // act on, and it costs three lines.
+            sb.AppendLine();
+            sb.AppendLine("# BrainX — not available this turn");
+            sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
+            sb.AppendLine("  You have NO brain tools right now. Do not claim to have searched the brain, and");
+            sb.AppendLine("  do not promise to. If asked about the connection, quote the line above verbatim");
+            sb.AppendLine("  and tell the user to check the 🧠 chip in the status bar (MCP Servers, Ctrl+5).");
         }
 
         // ─── Context-window awareness (fixes the local-model "hang / no response") ───
@@ -1281,6 +1331,25 @@ public class CodeAgentService
         var prov = _providerManager.ActiveProvider;
         _debugLog?.Info("Agent", $"turn start · provider={prov?.ProviderId ?? "null"} ready={prov?.IsReady} "
             + $"nativeTools={prov?.SupportsNativeToolUse} msgLen={userMessage?.Length ?? 0} history={history.Count}");
+
+        // ─── "Are you connected to the brain?" — answered by the app, not the model ───
+        // Any answer a program can compute must never be generated. This one is a C#
+        // property; sending it through a 7B turned a measured fact into a coin flip and
+        // the coin came up wrong (2026-08-05, toolCalls=0, "เชื่อมต่อไม่ได้" while the
+        // server was Ready with 83 tools). Zero tokens, zero latency, cannot be wrong.
+        if (_brainSync != null && LooksLikeBrainStatusQuestion(userMessage))
+        {
+            string answer = _brainSync.LiveStatusLine;
+            _debugLog?.Info("Agent", $"brain-status question answered from ground truth (no model call) · {answer}");
+            return new AgentLoopResult
+            {
+                Success = true,
+                StopReason = "end_turn",
+                TurnCount = 1,
+                FinalResponse = answer,
+                Steps = { new AgentStep { StepNumber = 1, ResponseText = answer } },
+            };
+        }
 
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
@@ -1893,6 +1962,12 @@ public class CodeAgentService
         int repeatedBuildNoEdit = 0;             // consecutive failing builds with no edit in between
         int redBuildGuards = 0;                  // how many times we've blocked a finish on a red build
         int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
+        int brainFirstGuards = 0;                // times we've refused a finish that never consulted the brain (cap 1)
+        bool anyBrainToolCalled = false;         // a brain MCP tool actually ran this turn
+        // Auto-recall already searched and pasted the hits in front of the model, so the
+        // brain-first guard must not demand a second search — the prompt itself tells the
+        // model that a <brainx_recall> block means the search has run.
+        bool recallAlreadyInjected = (userMessage ?? "").Contains("<brainx_recall>", StringComparison.Ordinal);
         bool lastEditFailNeededRead = false;     // last edit failed the read-before-edit guard (recoverable)
         string? forceToolNextStep = null;        // constrained-decoding override for the next turn (A3)
         bool loopIsLocal = _providerManager.ActiveProviderType
@@ -2144,6 +2219,12 @@ public class CodeAgentService
                 + $"textLen={(response.TextContent ?? "").Length} in={response.InputTokens} out={response.OutputTokens}"
                 + (response.ToolCalls.Count > 0 ? $" [{string.Join(",", response.ToolCalls.Select(t => t.Name))}]" : ""));
 
+            // Recorded from what the model ASKED for, not from what succeeded: a brain call
+            // that errored still means it consulted the brain, and forcing a second one after
+            // a failure just spends the turn on the same error.
+            if (!anyBrainToolCalled && response.ToolCalls.Any(t => IsBrainMcpTool(t.Name)))
+                anyBrainToolCalled = true;
+
             // ─── Provider-reported error (HTTP failure, unsupported backend) ───
             // Providers signal hard failures with StopReason="error" instead of throwing, so the
             // tool_use/tool_result bookkeeping above stays balanced. Surface it as a failed turn —
@@ -2255,6 +2336,71 @@ public class CodeAgentService
             // No tool calls = final response
             if (response.ToolCalls.Count == 0)
             {
+                // ─── Brain-first guard ───
+                // The sword exists; this is what makes it get drawn.
+                //
+                // 2026-08-05: two turns in a row ended `stop=end_turn toolCalls=0` with
+                // `recall 3/3 pinned` in the same log line — brain_search was on the menu
+                // and the model answered from its own head anyway. The brain-first rule
+                // in the system prompt is ADVICE; a weak model is free to ignore advice.
+                // tool_choice is a constraint, and a constraint is the only form of a rule
+                // that a 7B cannot decline. Same lesson as the schema-fit fix: a mandatory
+                // rule the model does not obey is worse than no rule.
+                //
+                // Fires at most once, and only where it is really warranted: the brain is
+                // up, a recall tool survived the context fit, auto-recall did NOT already
+                // put a <brainx_recall> block in front of the model, and the ask is not
+                // trivial. On the second refusal the answer stands — burning the whole
+                // budget arguing with the model is worse than a memoryless answer.
+                if (brainFirstGuards < 1
+                    && _brainSync?.IsBrainAvailable == true
+                    && !anyBrainToolCalled
+                    && !recallAlreadyInjected
+                    && LooksNonTrivialTask(userMessage)
+                    && iteration < iterationBudget - 1)
+                {
+                    var recallTool = toolSchemas.FirstOrDefault(t =>
+                        IsPinnedMcpTool(t.Name) && t.Name.EndsWith("brain_search", StringComparison.OrdinalIgnoreCase))
+                        ?? toolSchemas.FirstOrDefault(t => IsPinnedMcpTool(t.Name));
+                    if (recallTool != null)
+                    {
+                        brainFirstGuards++;
+                        _debugLog?.Warn("Agent", $"brain-first guard at step {iteration + 1}: finished with "
+                            + $"toolCalls=0 and no brain recall — forcing {recallTool.Name}");
+                        OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้ค้นสมอง — กำลังค้น..." : "Brain not consulted — searching...");
+                        result.Steps.Add(step);
+
+                        var bfAssistant = new Services.Providers.NativeMessage { Role = "assistant" };
+                        bfAssistant.Content.Add(new Services.Providers.ContentBlock
+                        {
+                            Type = "text",
+                            Text = string.IsNullOrWhiteSpace(response.TextContent) ? "(no answer yet)" : response.TextContent,
+                        });
+                        nativeMessages.Add(bfAssistant);
+                        nativeMessages.Add(new Services.Providers.NativeMessage
+                        {
+                            Role = "user",
+                            Content = { new Services.Providers.ContentBlock
+                            {
+                                Type = "text",
+                                // Last line = the task, for a small model. So the last line is
+                                // "then answer in full", never anything that reads as permission
+                                // to reply with a remark about having searched.
+                                Text = "You answered without consulting the brain. The owner's BrainX holds what was "
+                                     + "already learned on this machine — answering from memory alone is how a solved "
+                                     + "bug gets solved twice.\n"
+                                     + $"Call `{recallTool.Name}` now with 2-4 keywords from the question. "
+                                     + "Then answer the original question IN FULL using what comes back, naming any "
+                                     + "note you relied on.",
+                            }},
+                        });
+                        nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                        forceToolNextStep = recallTool.Name;
+                        wrapUpForced = false;
+                        continue;
+                    }
+                }
+
                 // ─── Red-build guard ───
                 // The single most important honesty rule: never let the turn end while the build the
                 // model itself ran is still failing. Without this the model watched run_build fail four
@@ -2924,6 +3070,47 @@ public class CodeAgentService
         };
         foreach (var v in verbs) if (m.Contains(v)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Is the user asking about the brain LINK itself ("เชื่อมสมองหรือยัง", "are you
+    /// connected to the brain?") rather than asking us to USE it ("ค้นสมองเรื่อง X")?
+    ///
+    /// Deliberately narrow, because a false positive is worse than a false negative:
+    /// answering a real task with a status line is a dead turn, while missing a status
+    /// question just falls through to the model — which now carries the same fact in
+    /// its prompt. Hence all four conditions: short, a brain word, a link word, and no
+    /// action verb anywhere.
+    /// </summary>
+    private static bool LooksLikeBrainStatusQuestion(string? userMessage)
+    {
+        if (string.IsNullOrWhiteSpace(userMessage)) return false;
+        string m = userMessage.Trim().ToLowerInvariant();
+        // A status question is a one-liner. Anything longer is carrying a task.
+        if (m.Length > 120) return false;
+
+        string[] brainWords = { "brainx", "brain", "สมอง", "obsidianx" };
+        if (!brainWords.Any(w => m.Contains(w, StringComparison.Ordinal))) return false;
+
+        string[] linkWords =
+        {
+            "connect", "connected", "connection", "reach", "online", "offline", "alive",
+            "status", "up?", "down", "hooked",
+            "เชื่อม", "ต่อ", "ติด", "สถานะ", "ออนไลน์", "ใช้ได้", "พร้อม",
+        };
+        if (!linkWords.Any(w => m.Contains(w, StringComparison.Ordinal))) return false;
+
+        // "search the brain", "save this to the brain" — a job, not a question about the
+        // wire. `brain_search` also lands here, which is correct: it names a tool to run.
+        string[] actionWords =
+        {
+            "search", "find", "look up", "save", "write", "note", "remember", "append", "create",
+            "fix", "debug", "implement", "add ", "_",
+            "ค้น", "หา", "บันทึก", "เขียน", "จำ", "สร้าง", "แก้", "เพิ่ม",
+        };
+        if (actionWords.Any(w => m.Contains(w, StringComparison.Ordinal))) return false;
+
+        return true;
     }
 
     /// <summary>Parse JSON input element to string dictionary for ToolCall args.</summary>

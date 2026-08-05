@@ -44,6 +44,33 @@ public class BrainSyncService
     }
 
     /// <summary>
+    /// The link's state as ONE checkable sentence — measured, never inferred.
+    ///
+    /// 2026-08-05: asked "เชื่อมสมองหรือยัง" the local model answered "ไม่ได้เชื่อมต่อ"
+    /// with `toolCalls=0`, while the server was Ready with 83 tools and the presence
+    /// heartbeat had been running for three minutes. It was not lying — the fact was
+    /// nowhere in its context and its only route to it was a tool call it declined to
+    /// make. A model cannot guess about something it has been told, so this goes into
+    /// the system prompt every turn, and answers the question directly when asked.
+    ///
+    /// Sourced from <see cref="McpServerManager"/> — the same fields behind the 🧠
+    /// chip — so the answer and the chip cannot disagree.
+    /// </summary>
+    public string LiveStatusLine
+    {
+        get
+        {
+            string? server = _mcp.BrainServerName;
+            if (server == null) return "brain: NOT CONFIGURED — no MCP server on this machine looks like a BrainX brain.";
+            string err = string.IsNullOrWhiteSpace(_mcp.BrainLastError)
+                ? "" : $" · last error: {_mcp.BrainLastError!.Replace("\n", " ").Trim()}";
+            return _mcp.IsBrainConnected
+                ? $"brain: CONNECTED · server `{server}` · {_mcp.BrainToolCount} tools available right now{err}"
+                : $"brain: NOT CONNECTED · server `{server}` is {_mcp.BrainStatusText}{err}";
+        }
+    }
+
+    /// <summary>
     /// Pick the first running MCP server whose name suggests it's an ObsidianX
     /// brain. We don't enforce a specific tool list here because querying
     /// every server's tool list is wasteful — the call will surface "tool
