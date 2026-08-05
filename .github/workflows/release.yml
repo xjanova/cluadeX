@@ -1,19 +1,37 @@
 name: Build & Release
 
+# Fires on main AND on the long-lived feature branch. The old workflow only
+# watched main, and main had not moved since 2026-04-04 while 77 commits piled
+# up on the feature branch — so for four months every push built nothing and
+# shipped nothing, and the app's own updater correctly reported "no update"
+# against a v2.2.26 release while running v3.0.5x. A release pipeline that only
+# fires on a branch nobody merges to is a pipeline that does not exist.
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/**']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# Two release builds racing would fight over the same tag. Newer pushes cancel
+# older in-flight runs so only the latest tip is ever published.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The build embeds `git rev-parse --short HEAD` into
+          # InformationalVersion (see CluadeX.csproj EmbedGitCommitHash), so the
+          # checkout needs real history, not a grafted shallow clone.
+          fetch-depth: 0
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -26,8 +44,11 @@ jobs:
         run: |
           $content = Get-Content "CluadeX/CluadeX.csproj" -Raw
           $ver = [regex]::Match($content, '<Version>(\d+\.\d+\.\d+)</Version>').Groups[1].Value
+          if (-not $ver) { throw "Could not read <Version> from CluadeX.csproj" }
           echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
           echo "TAG=v$ver" >> $env:GITHUB_OUTPUT
+          echo "## CluadeX $ver" >> $env:GITHUB_STEP_SUMMARY
+          echo "- commit: ``$(git rev-parse --short HEAD)``" >> $env:GITHUB_STEP_SUMMARY
 
       - name: Restore dependencies
         run: dotnet restore CluadeX.sln
@@ -35,21 +56,48 @@ jobs:
       - name: Build Release
         run: dotnet build CluadeX.sln -c Release --no-restore --nologo
 
-      - name: Publish
+      - name: Publish (win-x64, self-contained)
         run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo -p:ErrorOnDuplicatePublishOutputFiles=false
 
-      - name: Create zip
+      - name: Create portable zip
         shell: pwsh
         run: Compress-Archive -Path publish/* -DestinationPath CluadeX-win-x64.zip
+
+      - name: Velopack pack (self-update assets)
+        # Produces Releases/ — *-full.nupkg, *-delta.nupkg, CluadeX-win-Setup.exe
+        # and RELEASES. AutoUpdateService's UpdateManager(GithubSource) reads
+        # exactly these assets off the release to self-update.
+        #
+        # NOTE: only builds INSTALLED from Setup.exe can auto-update. Moving off
+        # the portable zip is a ONE-TIME manual install; every version after that
+        # arrives on its own, as a delta.
+        shell: pwsh
+        run: |
+          dotnet tool install -g vpk --version 1.1.1
+          vpk pack `
+            --packId CluadeX `
+            --packVersion ${{ steps.version.outputs.VERSION }} `
+            --packDir publish `
+            --mainExe CluadeX.exe `
+            --packTitle "CluadeX" `
+            --packAuthors "Xman Studio" `
+            --outputDir Releases
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CluadeX-x64
-          path: CluadeX-win-x64.zip
+          name: CluadeX-${{ steps.version.outputs.VERSION }}-x64
+          path: |
+            CluadeX-win-x64.zip
+            Releases/*
+          retention-days: 30
 
-      - name: Create Release (on merge to main)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Create Release
+        # Publishing is deliberately narrower than building. Every push to a feat/**
+        # branch BUILDS and uploads an artifact you can download from the run; only
+        # main — or an explicit "Run workflow" — mints a public tag and release.
+        # A PR (possibly from a fork) can never publish.
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
@@ -57,25 +105,22 @@ jobs:
           body: |
             ## CluadeX ${{ steps.version.outputs.TAG }}
 
-            AI Coding Assistant by Xman Studio
-            https://xman4289.com
+            AI Coding Assistant by Xman Studio — https://xman4289.com
 
-            ### Download
-            Download `CluadeX-win-x64.zip` below, extract, and run `CluadeX.exe`.
-
-            ### Features
-            - Beautiful Catppuccin Mocha dark theme with metallic UI
-            - Multiple AI providers: Local GGUF, OpenAI, Anthropic Claude, Google Gemini, Ollama
-            - Markdown rendering with syntax highlighting
-            - SQLite chat persistence with full-text search
-            - HuggingFace model downloads with progress
-            - Git integration, code execution, file system tools
-            - GPU auto-detection and optimization
+            ### Install
+            - **First time / switching from portable:** download **`CluadeX-win-Setup.exe`** and run it.
+              Installed builds update themselves from then on — new versions download in the
+              background as deltas and apply on restart.
+            - **Portable:** download `CluadeX-win-x64.zip`, extract, run `CluadeX.exe`.
+              Portable builds detect new releases but cannot self-update.
 
             ### Requirements
             - Windows 10 1809+ (x64)
-            - For local mode: [Ollama](https://ollama.com) or GGUF models
-          files: CluadeX-win-x64.zip
+            - Local mode: a GGUF model, or [Ollama](https://ollama.com)
+          files: |
+            CluadeX-win-x64.zip
+            Releases/*
           draft: false
           prerelease: false
           make_latest: true
+          fail_on_unmatched_files: true

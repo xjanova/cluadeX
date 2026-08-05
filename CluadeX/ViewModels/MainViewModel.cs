@@ -517,13 +517,48 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
+            // Whatever we are running now is the verdict on the last apply attempt.
+            // Must happen before any check so a package that already landed stops
+            // being counted as a failure.
+            _autoUpdate.NoteRunningVersion();
+
+            // A paused updater must SAY it is paused. Silence here reads as "you are
+            // up to date", which is the one message that is certainly wrong.
+            string? paused = _autoUpdate.PausedReason;
+            if (paused != null)
+            {
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = "⚠ " + paused;
+                    ShowUpdateBar = true;
+                    IsUpdating = false;
+                });
+            }
+
+            // Preferred path: a real Velopack install self-updates atomically.
+            string? staged = await _autoUpdate.VelopackCheckAndStageAsync();
+            if (staged != null)
+            {
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = $"🔔 Update v{staged} downloaded — click Install to restart and apply.";
+                    ShowUpdateBar = true;
+                    IsUpdating = false;
+                });
+                return;
+            }
+
+            // Fallback for portable / dev builds, which Velopack cannot update: still
+            // tell the user a newer release exists so they can install it by hand.
             var info = await _autoUpdate.CheckForUpdateAsync();
             if (info != null)
             {
                 _pendingUpdate = info;
                 App.Current?.Dispatcher.Invoke(() =>
                 {
-                    UpdateMessage = $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}";
+                    UpdateMessage = _autoUpdate.CanSelfUpdate
+                        ? $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}"
+                        : $"🔔 v{info.NewVersion} is out (running v{info.CurrentVersion}) — this is a portable build, install via Setup.exe once to enable self-update.";
                     ShowUpdateBar = true;
                     IsUpdating = false;
                 });
@@ -534,7 +569,25 @@ public class MainViewModel : ViewModelBase
 
     private async Task InstallUpdate()
     {
-        if (_pendingUpdate == null || IsUpdating) return;
+        if (IsUpdating) return;
+
+        // Velopack first: when a package is already staged this is an atomic swap
+        // plus a restart, not a download. The call does not return.
+        if (_autoUpdate.HasStagedUpdate)
+        {
+            IsUpdating = true;
+            UpdateMessage = $"Applying v{_autoUpdate.StagedVersion} — CluadeX will restart…";
+            UpdateProgress = 100;
+            await Task.Delay(600);
+            if (!_autoUpdate.VelopackApplyAndRestart())
+            {
+                UpdateMessage = "Could not apply the update — see the log. It will be retried on the next launch.";
+                IsUpdating = false;
+            }
+            return;
+        }
+
+        if (_pendingUpdate == null) return;
 
         IsUpdating = true;
         UpdateMessage = "Downloading update...";

@@ -2,6 +2,9 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <!-- Explicit entry point (Program.Main) so Velopack lifecycle hooks run
+         before any WPF init — see Program.cs. -->
+    <StartupObject>CluadeX.Program</StartupObject>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -9,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.52</Version>
+    <Version>3.0.53</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -73,6 +76,9 @@
     <PackageReference Include="Serilog" Version="4.1.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="System.Management" Version="9.0.0" />
+    <!-- Real self-update: delta packages, atomic swap, rollback. Same version the
+         BrainX client ships, so both apps behave identically under `vpk`. -->
+    <PackageReference Include="Velopack" Version="1.1.1" />
   </ItemGroup>
 
   <!--

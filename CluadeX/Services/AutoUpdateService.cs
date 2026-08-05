@@ -42,6 +42,106 @@ public class AutoUpdateService
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  Velopack — the real self-update path
+    //
+    //  The zip-download-and-swap path below it is what this app had before, and
+    //  it can only ever ask the user to restart into a batch script that
+    //  overwrites files under a running process. Velopack does the same job the
+    //  way BrainX does it: staged package, atomic directory swap, rollback, and
+    //  delta downloads instead of the whole 300 MB payload every time.
+    //
+    //  Velopack only works on a build INSTALLED via its Setup.exe. A dev or
+    //  portable run reports IsInstalled=false, and the zip path stays as the
+    //  fallback so those builds still learn a new version exists.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private Velopack.UpdateManager? _vpk;
+    private Velopack.UpdateInfo? _vpkPending;
+    private readonly UpdateAttemptLog _attempts =
+        UpdateAttemptLog.Load(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CluadeX"));
+
+    private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(
+        new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false));
+
+    /// <summary>True when this build can actually self-update (installed via Setup.exe).</summary>
+    public bool CanSelfUpdate
+    {
+        get { try { return Vpk.IsInstalled; } catch { return false; } }
+    }
+
+    /// <summary>A staged update is downloaded and waiting for a restart.</summary>
+    public bool HasStagedUpdate => _vpkPending != null;
+
+    /// <summary>Version of the staged update, or null.</summary>
+    public string? StagedVersion => _vpkPending?.TargetFullRelease?.Version?.ToString();
+
+    /// <summary>Why automatic updating is paused, or null when it isn't.</summary>
+    public string? PausedReason => _attempts.Describe();
+
+    /// <summary>
+    /// Call once at startup, before any check. Whatever version we are running now
+    /// is the verdict on the last attempt: if it is the one we were trying to reach
+    /// the update landed and the failure history is wiped; if not, the count stands.
+    /// </summary>
+    public void NoteRunningVersion() => _attempts.NoteRunningVersion(CurrentVersion);
+
+    /// <summary>
+    /// Check GitHub for a Velopack release and download it in the background.
+    /// Returns the staged version, or null when there is nothing to stage.
+    /// </summary>
+    public async Task<string?> VelopackCheckAndStageAsync(CancellationToken ct = default)
+    {
+        if (!CanSelfUpdate) { _log?.Info("Update", "Velopack: not an installed build — self-update unavailable (portable/dev)"); return null; }
+        try
+        {
+            var info = await Vpk.CheckForUpdatesAsync().ConfigureAwait(false);
+            if (info == null) { _log?.Info("Update", "Velopack: no newer release"); return null; }
+
+            string target = info.TargetFullRelease.Version.ToString();
+            // The circuit breaker. Without it a package that cannot be applied gets
+            // retried on every launch forever — which is exactly how BrainX ended up
+            // relaunching itself every 18 seconds.
+            if (_attempts.ShouldStopTrying(target))
+            {
+                _log?.Warn("Update", $"Velopack: v{target} already failed {UpdateAttemptLog.MaxConsecutiveFailures}× — automatic apply paused, waiting for a manual restart");
+                return null;
+            }
+
+            _log?.Info("Update", $"Velopack: downloading v{target}…");
+            await Vpk.DownloadUpdatesAsync(info, p => OnDownloadProgress?.Invoke(p, $"Downloading v{target}… {p}%")).ConfigureAwait(false);
+            _vpkPending = info;
+            _log?.Info("Update", $"Velopack: v{target} staged — ready to apply on restart");
+            OnUpdateStatus?.Invoke($"Update v{target} downloaded — restart to apply.");
+            return target;
+        }
+        catch (Exception ex) { _log?.Warn("Update", $"Velopack check/stage failed: {ex.Message}"); return null; }
+    }
+
+    /// <summary>
+    /// Apply the staged update and restart. Records the attempt FIRST — this call
+    /// does not return, so anything written afterwards would never be written.
+    /// </summary>
+    public bool VelopackApplyAndRestart()
+    {
+        if (_vpkPending == null) return false;
+        string target = _vpkPending.TargetFullRelease.Version.ToString();
+        try
+        {
+            _attempts.RecordAttempt(target);          // must be flushed BEFORE we hand over
+            _log?.Info("Update", $"Velopack: applying v{target} and restarting");
+            Vpk.ApplyUpdatesAndRestart(_vpkPending);
+            return true;                               // unreachable in practice
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Update", $"Velopack apply failed: {ex.Message}");
+            OnUpdateStatus?.Invoke($"Could not apply the update: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>Check xman API first, fallback to GitHub releases.</summary>
     public async Task<UpdateInfo?> CheckForUpdateAsync(CancellationToken ct = default)
     {
