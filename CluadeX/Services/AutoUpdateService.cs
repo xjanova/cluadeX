@@ -22,9 +22,12 @@ public class AutoUpdateService
     public event Action<double, string>? OnDownloadProgress; // percent, status
     public event Action<string>? OnUpdateStatus;
 
-    public AutoUpdateService(SettingsService settingsService)
+    private readonly DebugLogService? _log;
+
+    public AutoUpdateService(SettingsService settingsService, DebugLogService? log = null)
     {
         _settingsService = settingsService;
+        _log = log;
         _httpClient = new HttpClient();
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CluadeX/3.0");
         _httpClient.Timeout = TimeSpan.FromSeconds(30);
@@ -42,12 +45,27 @@ public class AutoUpdateService
     /// <summary>Check xman API first, fallback to GitHub releases.</summary>
     public async Task<UpdateInfo?> CheckForUpdateAsync(CancellationToken ct = default)
     {
-        // Try xman API
-        var info = await CheckXmanAsync(ct);
-        if (info != null) return info;
+        // Both checks below swallow every exception on purpose — an update probe must
+        // never break a launch. But swallowing the REASON is how this feature spent
+        // months looking like "there is no auto-update": xman returns 404 for this
+        // product and the newest GitHub release is 80+ versions behind the running
+        // build, so a healthy check and a completely dead pipeline are indistinguishable
+        // from the outside. One log line per attempt makes the difference visible.
+        _log?.Info("Update", $"check start · current=v{CurrentVersion}");
 
-        // Fallback: GitHub releases
-        return await CheckGitHubAsync(ct);
+        var info = await CheckXmanAsync(ct);
+        if (info != null)
+        {
+            _log?.Info("Update", $"xman API: update available v{info.NewVersion}");
+            return info;
+        }
+
+        info = await CheckGitHubAsync(ct);
+        if (info != null)
+            _log?.Info("Update", $"GitHub releases: update available v{info.NewVersion}");
+        else
+            _log?.Info("Update", $"no update offered — running v{CurrentVersion} is at or ahead of every published release");
+        return info;
     }
 
     private async Task<UpdateInfo?> CheckXmanAsync(CancellationToken ct)
@@ -82,8 +100,9 @@ public class AutoUpdateService
                 OnUpdateAvailable?.Invoke(info);
                 return info;
             }
+            _log?.Info("Update", $"xman API: no update (HTTP {(int)response.StatusCode})");
         }
-        catch { /* silently fail */ }
+        catch (Exception ex) { _log?.Warn("Update", $"xman API check failed: {ex.Message}"); }
         return null;
     }
 
@@ -148,8 +167,9 @@ public class AutoUpdateService
                 OnUpdateAvailable?.Invoke(info);
                 return info;
             }
+            _log?.Info("Update", $"GitHub: newest published release is v{version} — not newer than v{CurrentVersion}");
         }
-        catch { /* silently fail */ }
+        catch (Exception ex) { _log?.Warn("Update", $"GitHub release check failed: {ex.Message}"); }
         return null;
     }
 

@@ -187,7 +187,23 @@ public class CodeAgentService
             ? new List<Services.Providers.ToolSchema>()          // small ctx: core built-ins only
             : builtIns.Except(core).ToList();
 
-        int budget = Math.Max(600, ctxTokens - reservedTokens);
+        // Schemas may claim what is left over — but NEVER more than a third of the
+        // window, and never all of it.
+        //
+        // "ctx - reserved" is the space free at the START of the turn, and spending all
+        // of it is a trap that only springs once the model actually uses a tool: the
+        // results come back into the SAME window, on top of schemas that already filled
+        // it. Measured on the crash that produced this line — ctx=16384, schemas ~11,580
+        // tok, reserved 4,773, i.e. 16,353 of 16,384 committed (99.8%) before a single
+        // token was generated. The process died at `native loop start` with no error
+        // line at all; on an 8 GB card a 16k KV cache with a full prompt is also a
+        // CUDA-OOM away from taking llama-server with it.
+        //
+        // A third is not a tuned constant — it is "leave two thirds for the actual
+        // conversation", which is what the window is for. Raising ContextSize now buys
+        // MORE room for tool results instead of more schemas competing for the same air.
+        int freeAfterReserved = ctxTokens - reservedTokens;
+        int budget = Math.Max(600, Math.Min(freeAfterReserved, ctxTokens / 3));
         var kept = new List<Services.Providers.ToolSchema>();
         int keptMcp = 0, droppedMcp = 0;
 
@@ -998,6 +1014,14 @@ public class CodeAgentService
         // key-file dump measures ~3-4k tokens, which at 16384 would eat back everything
         // the compact base prompt just freed. A 16k local model gets the shallow tree +
         // small map below — the anti-hallucination floor — and pulls detail via tools.
+        //
+        // 32k is also past this machine's ceiling on purpose. Raising ContextSize from
+        // 12288 to 16384 killed the app TWICE mid-turn (2026-08-05): no managed
+        // exception, no Windows error event, no "stopped" line in mcp-host.log — the
+        // signature of a NATIVE abort, because LocalGgufProvider runs LLamaSharp
+        // in-process, so a CUDA OOM in the KV cache takes the whole WPF process with it.
+        // 16384 loaded fine when probed on an idle desktop and died under real load on
+        // the same 8 GB card. Prompt DIET is the way to buy room here, not more ctx.
         bool includeHeavyContext = !isLocalProvider || contextTokens >= 32000; // codebase map + tree + key files
 
         // ═══════════════════════════════════════════
@@ -2206,6 +2230,17 @@ public class CodeAgentService
             + $"sysPrompt~{CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)}tok");
         if (mcpDropped > 0)
             _debugLog?.Warn("Agent", $"{mcpDropped} MCP tool schema(s) did not fit ctx={localCtxTokens} — raise Context Size to offer the full set");
+        // The number that actually predicts a dead turn. Schemas + everything else must
+        // leave room for the tool RESULTS, which arrive later into the same window.
+        if (isLocal)
+        {
+            int committed = reservedTokens + toolSchemas.Sum(EstimateSchemaTokens);
+            int pct = localCtxTokens > 0 ? committed * 100 / localCtxTokens : 0;
+            if (pct >= 85)
+                _debugLog?.Warn("Agent", $"context {pct}% committed before generation ({committed}/{localCtxTokens}) — tool results may overflow this turn");
+            else
+                _debugLog?.Info("Agent", $"context {pct}% committed before generation ({committed}/{localCtxTokens})");
+        }
 
         // Build initial messages (with history compaction)
         var nativeMessages = new List<Services.Providers.NativeMessage>();
