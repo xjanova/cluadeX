@@ -305,6 +305,10 @@ public class CodeAgentService
     /// exists to remove. Cheap to recompute (property reads, no I/O), so it is the
     /// cache key rather than something to hope about.</summary>
     private string? _cachedBrainStatusLine;
+    /// <summary>Whether the prompt in the cache was built for native tool calling. Part of the key for the
+    /// same reason as the brain line: the local backend can change under it (llama-server ↔ in-process),
+    /// and a prompt for the other tool protocol leaves the model unable to call anything.</summary>
+    private bool _cachedNativeTools;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -313,13 +317,15 @@ public class CodeAgentService
     public async Task<string> GetSystemPromptAsync()
     {
         string? brainNow = _brainSync?.LiveStatusLine;
+        bool nativeNow = ActiveProviderHasNativeTools();
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
         // thing. A reconnect or a death inside the window rebuilds the prompt now.
         lock (_promptCacheLock)
         {
             if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry
-                && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal))
+                && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal)
+                && _cachedNativeTools == nativeNow)
                 return _cachedSystemPrompt;
         }
 
@@ -329,10 +335,19 @@ public class CodeAgentService
         {
             _cachedSystemPrompt = prompt;
             _cachedBrainStatusLine = brainNow;
+            _cachedNativeTools = nativeNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
         return prompt;
+    }
+
+    /// <summary>True when this turn will run the native tool_use loop — the very test ExecuteAgenticAsync
+    /// dispatches on, so the prompt and the loop can never disagree about the tool protocol.</summary>
+    private bool ActiveProviderHasNativeTools()
+    {
+        try { return _providerManager.ActiveProvider?.SupportsNativeToolUse ?? false; }
+        catch { return false; }
     }
 
     /// <summary>Invalidate the cached system prompt (e.g., when working directory changes).</summary>
@@ -1008,7 +1023,13 @@ public class CodeAgentService
         // use is on, schemas are sent via the API "tools" field (and rendered into the prompt by the
         // server's chat template) — including the text catalogue too DOUBLE-pays those tokens, which is
         // exactly what blew a ctx-8192 request up to ~13.7k and overflowed the window.
-        bool localNativeTools = isLocalProvider && _settingsService.Settings.LocalNativeToolUseEnabled;
+        //
+        // What the loop will actually do, not what the setting asks for. LocalGgufProvider has native tool
+        // calling only on its llama-server backend; when it runs in-process on LLamaSharp (no llama-server
+        // next to the exe, or it failed to start and fell back) ExecuteAgenticAsync takes the [ACTION:] loop.
+        // Keyed on the setting alone, that turn got a prompt with no [ACTION:] catalogue and a function-call
+        // few-shot: the model could only announce "I'll call read_file" and stop (observed with Qwen2.5-Coder).
+        bool localNativeTools = isLocalProvider && ActiveProviderHasNativeTools();
         bool includeToolDefs     = !isLocalProvider || (!localNativeTools && contextTokens >= 8000);
         // Heavy tier at ≥32k for local, not ≥16k: the full tree + 6k-char codebase map +
         // key-file dump measures ~3-4k tokens, which at 16384 would eat back everything
@@ -1181,11 +1202,32 @@ public class CodeAgentService
             // prose rules. Local-only + whenever tools are actually available (text catalogue OR native schemas).
             if (isLocalProvider && (includeToolDefs || localNativeTools) && builtInToolsAvailable)
             {
-                sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
-                sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
-                sb.AppendLine("  2. multi_edit(\"src/Calc.cs\", edits=[{find:\"return a - b;\", replace:\"return a + b;\"}]) — atomic find/replace.");
-                sb.AppendLine("  3. run_build — if it FAILS, read the error, fix with another edit, build again until green; then run_tests.");
-                sb.AppendLine("  4. Only after it's green do you say you're done.");
+                if (localNativeTools)
+                {
+                    sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
+                    sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
+                    sb.AppendLine("  2. multi_edit(\"src/Calc.cs\", edits=[{find:\"return a - b;\", replace:\"return a + b;\"}]) — atomic find/replace.");
+                    sb.AppendLine("  3. run_build — if it FAILS, read the error, fix with another edit, build again until green; then run_tests.");
+                    sb.AppendLine("  4. Only after it's green do you say you're done.");
+                }
+                else
+                {
+                    // The [ACTION:] loop only executes [ACTION:] blocks — a function-call-shaped example
+                    // here taught the model a syntax this loop cannot parse.
+                    sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time — WRITE the");
+                    sb.AppendLine("[ACTION] block itself, one step per reply; never just say which tool you will use):");
+                    sb.AppendLine("[ACTION: read_file]");
+                    sb.AppendLine("path: src/Calc.cs");
+                    sb.AppendLine("[/ACTION]");
+                    sb.AppendLine("  → after the result shows the real code:");
+                    sb.AppendLine("[ACTION: edit_file]");
+                    sb.AppendLine("path: src/Calc.cs");
+                    sb.AppendLine("find: return a - b;");
+                    sb.AppendLine("replace: return a + b;");
+                    sb.AppendLine("[/ACTION]");
+                    sb.AppendLine("  → then [ACTION: run_build][/ACTION] — if it FAILS, read the error, fix with another edit, build");
+                    sb.AppendLine("    again until green. Only after it's green do you say you're done.");
+                }
                 sb.AppendLine();
             }
 
