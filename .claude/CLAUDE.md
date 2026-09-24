@@ -134,6 +134,9 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
       two-file change is at its limit. Options: escalate-to-API on stall (`EscalationEnabled` has UI)
       or plan → per-file subtask decomposition in the agent loop.
 - [ ] Run full integration test with Anthropic API (real keys, multi-turn agentic session)
+- [ ] Re-verify a real local-model coding task on BOTH local backends — llama-server (native tool_use)
+      and in-process LLamaSharp ([ACTION:] loop) — since the prompt now follows the loaded backend's
+      real tool protocol. Before this fix the LLamaSharp path made zero tool calls. Ask + check VRAM first.
 
 ## Build & Run
 ```bash
@@ -149,14 +152,24 @@ dotnet build CluadeX/CluadeX.csproj -p:OutDir=/some/scratch/bld/
 
 ## Proving a feature actually works
 The house standard is a console harness that `<Reference>`s the **built `CluadeX.dll`** and asserts
-against real inputs — not mocks. See `scratchpad/navtest` (132 assertions covering search,
-navigation, rename, completion, diff, merge conflicts, and a live debugpy session).
-It has repeatedly caught bugs the compiler could not: loose subsequence matching in completion,
-a phantom deleted line when diffing a new file, a debugpy launch rejected for sending two spellings
-of the same field.
+against real inputs — not mocks. The coding-tool contract lives in the repo at `tests/tooltest`
+(96 checks: read/edit/write/glob/grep/shell/build/tests, editor Save, IDE rename, and that the tool
+descriptions match the behaviour). It drives the real `AgentToolService` through the same name
+resolver the native tool loop uses, phrasing every call the way a model does, in a throwaway git repo;
+`portable.txt` keeps it off the real `~/.cluadex`. Run: `dotnet build CluadeX/CluadeX.csproj`, then
+`cd tests/tooltest && dotnet run` (report: `bin/Debug/net8.0-windows/tool-report.md`).
+The older IDE harness `navtest` (132 assertions: search, navigation, rename, completion, diff, merge
+conflicts, live debugpy) lived in a session scratchpad and its source is gone — **harnesses belong in
+`tests/`, never in a scratchpad.** These harnesses have repeatedly caught bugs the compiler could not:
+loose subsequence matching in completion, a phantom deleted line when diffing a new file, grep that
+only ever searched the first 100 files, write_file adding a BOM to every file it touched.
 
-**`navtest` links the DLL and does NOT rebuild it — always rebuild CluadeX first**, or you will
+**The harness links the DLL and does NOT rebuild it — always rebuild CluadeX first**, or you will
 test a stale binary and believe a fix that isn't in it.
+
+**Never load a local model for a test without asking the owner first and checking free VRAM**
+(`nvidia-smi`): an E2E load of a 7B at ctx 12288 next to ~3.2 GB of desktop VRAM use restarted the
+whole PC (2026-09-24). The contract harness needs no model.
 
 Static checkers worth re-running after any XAML change (they catch what compiles but renders blank):
 every `{Binding}` path resolves to a real member, every `{StaticResource}` key exists, every
