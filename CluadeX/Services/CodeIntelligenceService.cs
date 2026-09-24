@@ -367,7 +367,11 @@ public sealed class CodeIntelligenceService
                 {
                     if (!File.Exists(group.FullPath)) { result.Skipped.Add($"{group.RelPath} (gone)"); continue; }
 
-                    string content = File.ReadAllText(group.FullPath);
+                    // Same encoding rules as every other writer: keep the BOM exactly as found, and never
+                    // rewrite a file that isn't UTF-8 (its non-ASCII text would be replaced by U+FFFD).
+                    var file = CluadeX.Helpers.TextFileCodec.Read(group.FullPath);
+                    if (!file.IsValidUtf8) { result.Skipped.Add($"{group.RelPath} (not UTF-8 — left untouched)"); continue; }
+                    string content = file.Text;
                     string updated = rx.Replace(content, plan.NewName);
                     if (string.Equals(content, updated, StringComparison.Ordinal))
                     {
@@ -375,7 +379,7 @@ public sealed class CodeIntelligenceService
                         continue;
                     }
 
-                    File.WriteAllText(group.FullPath, updated);
+                    CluadeX.Helpers.TextFileCodec.Write(group.FullPath, updated, file.HasBom);
                     result.FilesChanged++;
                     result.EditsApplied += group.Matches.Count;
                     result.ChangedPaths.Add(group.FullPath);

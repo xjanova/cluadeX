@@ -118,41 +118,38 @@ public class CodeWorkspaceService
         var fi = new FileInfo(fullPath);
         if (fi.Length > 2 * 1024 * 1024) return null;
 
-        string content;
+        CluadeX.Helpers.TextFileCodec.TextFile decoded;
         try
         {
-            // Detect binary by checking for NUL bytes in first 1 KB
-            byte[] sample = new byte[Math.Min(1024, (int)fi.Length)];
-            await using (var fs = File.Open(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                await fs.ReadAsync(sample, 0, sample.Length, ct);
-            }
-            for (int i = 0; i < sample.Length; i++)
-            {
-                if (sample[i] == 0)
-                {
-                    // Binary — refuse to open in text editor
-                    return null;
-                }
-            }
-            content = await File.ReadAllTextAsync(fullPath, Encoding.UTF8, ct);
+            byte[] bytes = await File.ReadAllBytesAsync(fullPath, ct);
+            // Detect binary by checking for NUL bytes in the first 1 KB — refuse to open it as text.
+            for (int i = 0; i < Math.Min(1024, bytes.Length); i++)
+                if (bytes[i] == 0) return null;
+            decoded = CluadeX.Helpers.TextFileCodec.Decode(bytes);
         }
         catch
         {
             return null;
         }
 
-        var tab = new OpenFileTab { FullPath = fullPath };
-        tab.MarkOpened(content);
+        var tab = new OpenFileTab { FullPath = fullPath, HasBom = decoded.HasBom, IsValidUtf8 = decoded.IsValidUtf8 };
+        tab.MarkOpened(decoded.Text);
         return tab;
     }
 
+    /// <summary>
+    /// Save a tab exactly as the file was encoded: a BOM only if it had one — Save used to write
+    /// Encoding.UTF8, which prepends a BOM to every file, so saving a shell script or package.json
+    /// from the editor broke it. A tab opened from a non-UTF-8 file is never saved (returns false):
+    /// its text holds replacement characters, and writing them would destroy the originals.
+    /// </summary>
     public async Task<bool> SaveTabAsync(OpenFileTab tab, CancellationToken ct = default)
     {
         if (tab == null || string.IsNullOrEmpty(tab.FullPath)) return false;
+        if (!tab.IsValidUtf8) return false;
         try
         {
-            await File.WriteAllTextAsync(tab.FullPath, tab.Content, Encoding.UTF8, ct);
+            await File.WriteAllTextAsync(tab.FullPath, tab.Content, new UTF8Encoding(tab.HasBom), ct);
             tab.MarkSaved();
             return true;
         }

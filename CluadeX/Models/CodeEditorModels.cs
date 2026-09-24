@@ -11,6 +11,14 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
     public string FullPath { get; set; } = "";
+
+    /// <summary>The file had a UTF-8 BOM when opened — Save writes one back, and only then.</summary>
+    public bool HasBom { get; set; }
+
+    /// <summary>False when the bytes on disk were not UTF-8 (a legacy encoding). The tab then shows
+    /// replacement characters, and saving it would write them over the real text — so Save refuses.</summary>
+    public bool IsValidUtf8 { get; set; } = true;
+
     public string FileName => Path.GetFileName(FullPath);
     public string Extension => Path.GetExtension(FullPath).TrimStart('.').ToLowerInvariant();
 

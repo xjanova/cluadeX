@@ -905,7 +905,10 @@ public class CodeEditorViewModel : ViewModelBase
     {
         if (_activeTab == null) return;
         bool ok = await _workspace.SaveTabAsync(_activeTab);
-        StatusMessage = ok ? $"Saved {_activeTab.FileName}" : $"Save failed for {_activeTab.FileName}";
+        StatusMessage = ok ? $"Saved {_activeTab.FileName}"
+            : !_activeTab.IsValidUtf8
+                ? $"Not saved: {_activeTab.FileName} isn't UTF-8 (legacy encoding) — saving would corrupt its non-ASCII characters"
+                : $"Save failed for {_activeTab.FileName}";
     }
 
     private async Task SaveAllAsync()
