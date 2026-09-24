@@ -153,7 +153,34 @@ public class AgentToolService : IDisposable
         _repoMap = repoMap;
         _embeddingService = embeddingService;
         _instinctService = instinctService;
+
+        // The shell's working directory belongs to the project it was set in.
+        _fileSystem.OnWorkingDirectoryChanged += () => _shellCwd = null;
     }
+
+    // ── Output budgets ──
+    // One size did not fit: a 12k-token local model and a 200k-token API model got the same
+    // 5,000-char shell cut and the same UNLIMITED file reads — too little for one, fatal for the other.
+
+    private bool IsLocalProvider =>
+        _settingsService.Settings.ActiveProvider is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+
+    /// <summary>Largest single read_file / grep result, in characters: about a quarter of a local
+    /// model's context window (≈4 chars per token), generous for API models.</summary>
+    private int ReadCharBudget()
+    {
+        if (!IsLocalProvider) return 100_000;
+        int ctx = (int)Math.Max(2048, _settingsService.Settings.ContextSize);
+        // ctx tokens × ~4 chars/token × 25% of the window = ctx characters.
+        return Math.Clamp(ctx, 6_000, 100_000);
+    }
+
+    /// <summary>Largest command output returned to the model.</summary>
+    private int ShellOutputBudget() => IsLocalProvider ? Math.Clamp(ReadCharBudget() / 2, 4_000, 12_000) : 30_000;
+
+    /// <summary>Where run_command's `cd` left the shell, carried between calls like a real terminal
+    /// (null = the project root). Always inside the project.</summary>
+    private volatile string? _shellCwd;
 
     /// <summary>Tear down long-lived child processes (python/node REPL sessions) on app shutdown.
     /// AgentToolService is a DI singleton, so the container calls this on exit — without it the REPL
@@ -555,31 +582,39 @@ public class AgentToolService : IDisposable
             return System.Text.Json.JsonDocument.Parse(json).RootElement.Clone();
         }
 
-        // File tools
-        schemas.Add(new() { Name = "read_file", Description = "Read a file. Omit offset/limit to read the whole file; pass them to read a line range (returns lines as 'N<tab>text', 1-based — handy for large files or referencing a specific error line).",
-            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true), ("offset", "string", "1-based first line to read (optional)", false), ("limit", "string", "Max lines to read (optional, default 2000)", false)) });
-        schemas.Add(new() { Name = "write_file", Description = "Create or overwrite a file",
-            InputSchema = MakeSchema(("path", "string", "File path", true), ("content", "string", "File content", true)) });
-        schemas.Add(new() { Name = "edit_file", Description = "Find and replace text in an existing file. 'find' is matched newline- and whitespace-tolerantly and must be UNIQUE unless replace_all=true.",
-            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Text to find", true), ("replace", "string", "Replacement text", true), ("replace_all", "string", "Set true to replace every occurrence; otherwise 'find' must match exactly once", false)) });
-        schemas.Add(new() { Name = "multi_edit", Description = "Apply MULTIPLE find/replace edits to ONE file in a single atomic step (all-or-nothing: if any edit fails to match, NOTHING is written). Prefer this over several edit_file calls. Each edit uses the same newline/whitespace-tolerant matching as edit_file.",
+        // File tools. A description is the model's entire manual for its tool, so it has to state what the
+        // executor really does — told "omit offset/limit to read the whole file", a model never pages on
+        // past the first 2,000 lines; told nothing about the shell, it writes POSIX into cmd.exe.
+        schemas.Add(new() { Name = "read_file", Description = "Read a text file. Lines are numbered 'N<tab>text' (the prefix is not file content). Large files come back a page at a time; the footer gives the offset to continue from.",
+            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true), ("offset", "string", "1-based line to start at (default 1)", false), ("limit", "string", "Max lines to return (default 2000)", false)) });
+        schemas.Add(new() { Name = "write_file", Description = "Create a file, or replace one ENTIRELY. 'content' must be the complete file — '// ... rest unchanged' placeholders are refused. For partial changes use edit_file / multi_edit.",
+            InputSchema = MakeSchema(("path", "string", "File path relative to project root", true), ("content", "string", "The complete file content", true)) });
+        schemas.Add(new() { Name = "edit_file", Description = "Replace text in a file. 'find' must match the current text exactly once (add surrounding lines, or set replace_all=true). Indentation / line-ending differences and read_file line-number prefixes are tolerated.",
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Current text to replace", true), ("replace", "string", "Replacement text", true), ("replace_all", "string", "true to replace every occurrence; otherwise 'find' must match exactly once", false)) });
+        schemas.Add(new() { Name = "multi_edit", Description = "Apply several find/replace edits to ONE file atomically: in order, and nothing is written if any edit fails to match. Prefer it over repeated edit_file calls. Matching as in edit_file.",
             InputSchema = MakeSchema(("path", "string", "File path", true), ("edits", "string", "A JSON array of edits, e.g. [{\"find\":\"old\",\"replace\":\"new\"},{\"find\":\"a\",\"replace\":\"b\",\"replace_all\":true}]", true)) });
-        schemas.Add(new() { Name = "list_files", Description = "List files and directories",
-            InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
-        schemas.Add(new() { Name = "search_files", Description = "Find files matching a pattern",
-            InputSchema = MakeSchema(("pattern", "string", "File glob pattern", true), ("path", "string", "Search directory", false)) });
-        schemas.Add(new() { Name = "search_content", Description = "Search for text in file contents",
-            InputSchema = MakeSchema(("query", "string", "Search text", true), ("path", "string", "Search directory", false), ("pattern", "string", "File pattern filter", false)) });
-        schemas.Add(new() { Name = "run_command", Description = "Execute a shell command",
-            InputSchema = MakeSchema(("command", "string", "Shell command to run", true), ("timeout_ms", "string", "Optional timeout in ms (default 30000, max 600000) — raise it for slow builds/tests", false)) });
+        schemas.Add(new() { Name = "list_files", Description = "List a directory two levels deep (skips hidden folders, bin, obj, node_modules).",
+            InputSchema = MakeSchema(("path", "string", "Directory path ('.' for the project root)", true)) });
+        schemas.Add(new() { Name = "search_files", Description = "Find files by glob (*.cs, src/**/*.ts, *.{cs,xaml}; no '/' = any depth). Honors .gitignore, skips bin/obj; newest first, max 100.",
+            InputSchema = MakeSchema(("pattern", "string", "Glob pattern", true), ("path", "string", "Folder to search (default: project root)", false)) });
+        schemas.Add(new() { Name = "search_content", Description = "Find a plain-text string (not a regex) in files; returns 'path:line:text', max 100. An all-lowercase query ignores case. Honors .gitignore, skips bin/obj and binaries.",
+            InputSchema = MakeSchema(("query", "string", "Exact text to find", true), ("path", "string", "File or folder to search (default: project root)", false), ("pattern", "string", "Only files matching this glob, e.g. *.cs", false)) });
+        // The shell's dialect is part of the contract: models write POSIX by default, and cmd.exe answers
+        // `mkdir -p a/b` with a folder literally named "-p". Say which shell they are really getting.
+        bool bashShell = ShellRunner.DefaultShell == ShellRunner.Shell.Bash;
+        schemas.Add(new() { Name = "run_command", Description = (bashShell
+                ? "Run a command with Git Bash (POSIX sh, forward slashes). A `cd` persists between calls but stays inside the project (bare `cd` = root)."
+                : "Run a command in the project root with cmd.exe — no Git Bash here, so ls / cat / mkdir -p do NOT work (use dir, type, mkdir).")
+                + " Stdin is closed: pass -y to anything that prompts. Long output keeps its start and end. Default timeout 120 s.",
+            InputSchema = MakeSchema(("command", "string", "Command to run", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000) — raise it for slow builds/tests", false)) });
         schemas.Add(new() { Name = "create_directory", Description = "Create a directory",
             InputSchema = MakeSchema(("path", "string", "Directory path", true)) });
 
         // Glob + Grep
-        schemas.Add(new() { Name = "glob", Description = "Find files matching glob patterns (e.g., **/*.cs)",
-            InputSchema = MakeSchema(("pattern", "string", "Glob pattern", true), ("path", "string", "Base directory", false)) });
-        schemas.Add(new() { Name = "grep_search", Description = "Regex content search with context lines",
-            InputSchema = MakeSchema(("pattern", "string", "Regex pattern", true), ("path", "string", "Search directory", false), ("glob", "string", "File filter", false), ("output_mode", "string", "content|files_with_matches|count", false), ("context", "string", "Context lines", false)) });
+        schemas.Add(new() { Name = "glob", Description = "Find files by glob pattern, e.g. **/*.cs or src/**/*.{ts,tsx} — a pattern without '/' matches at any depth. Respects .gitignore and skips bin/obj/node_modules. Newest first, up to 100 results.",
+            InputSchema = MakeSchema(("pattern", "string", "Glob pattern", true), ("path", "string", "Folder to search (default: project root)", false)) });
+        schemas.Add(new() { Name = "grep_search", Description = "Search file contents with a regular expression. output_mode: files_with_matches (default — file paths only), content ('path:line:text' lines) or count. Case-insensitive when the pattern has no capital letters. Respects .gitignore; skips bin/obj and binary files. Escape ( ) [ ] { } . * + ? | with a backslash to match them literally.",
+            InputSchema = MakeSchema(("pattern", "string", "Regular expression", true), ("path", "string", "File or folder to search (default: project root)", false), ("glob", "string", "Only files matching this glob, e.g. *.cs or *.{ts,tsx}", false), ("type", "string", "Only this language: cs, py, js, ts, go, rs, java, cpp, xaml, json, md …", false), ("output_mode", "string", "files_with_matches (default) | content | count", false), ("context", "string", "Lines of context around each match (implies content mode)", false), ("ignore_case", "string", "true or false — overrides the automatic case rule", false), ("head_limit", "string", "Max lines (content) or files (other modes) to return (default 200)", false)) });
 
         // Git tools
         if (gitEnabled)
@@ -642,7 +677,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("action", "string", "add|complete|list|clear (default add)", false), ("content", "string", "Todo item text (required for add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
-        schemas.Add(new() { Name = "powershell", Description = "Execute a PowerShell command", InputSchema = MakeSchema(("command", "string", "PowerShell command", true)) });
+        schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
         schemas.Add(new() { Name = "agent_spawn", Description = "Spawn a sub-agent for a complex sub-task", InputSchema = MakeSchema(("task", "string", "Task description", true), ("context", "string", "Additional context", false)) });
@@ -664,7 +699,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "lsp_diagnostics", Description = "Check a source file for errors/warnings via its language server (OmniSharp/pylsp/tsserver/rust-analyzer/gopls, if installed). Use after editing to verify your change compiles. Returns a hint if no server is installed.", InputSchema = MakeSchema(("path", "string", "Path to the source file to check", true)) });
         schemas.Add(new() { Name = "list_symbols", Description = "Outline a source file — its classes/methods/functions with line numbers — WITHOUT reading the whole file. Use it to navigate a file cheaply before read_file/edit_file.", InputSchema = MakeSchema(("path", "string", "Path to the source file", true)) });
         schemas.Add(new() { Name = "find_symbol", Description = "Find where a symbol (class/method/function/type) is DEFINED across the project, by NAME — a lightweight 'go to definition' that needs no language server. Returns file:line for each likely definition. Use this instead of blind-grepping to locate where to edit.", InputSchema = MakeSchema(("name", "string", "The symbol name to locate (e.g. a class or method name)", true)) });
-        schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false)) });
+        schemas.Add(new() { Name = "run_build", Description = "Build / type-check the project to verify your changes compile. Auto-detects the command from the project (dotnet/cargo/go/npm/tsc/maven/gradle/make/cmake, also in subfolders). Call this after editing, before saying you're done — read the errors and fix them. Pass 'command' to override the auto-detected one.", InputSchema = MakeSchema(("command", "string", "Optional explicit build command (otherwise auto-detected)", false)) });
         schemas.Add(new() { Name = "run_tests", Description = "Run the project's test suite and get a DISTILLED result: a pass/fail summary plus only the failing tests + their assertions (not a giant stdout blob). Auto-detects the runner (dotnet test/cargo test/go test/pytest/npm test/maven/gradle). Use it to verify behavior after a change. Pass 'command' to override.", InputSchema = MakeSchema(("command", "string", "Optional explicit test command (otherwise auto-detected)", false)) });
         schemas.Add(new() { Name = "codebase_search", Description = "Find the most relevant files/lines for a natural-language query across the whole repo, ranked by filename + symbol + content relevance (smarter than raw grep for 'where is X handled?'). Then read_file the top hits.", InputSchema = MakeSchema(("query", "string", "What you're looking for (keywords or a question)", true), ("limit", "string", "Max results (default 12)", false)) });
         schemas.Add(new() { Name = "instinct_evolve", Description = "Housekeeping: merge near-duplicate learned instincts via embedding similarity (preserves occurrence/accept counts, deletes redundant copies). Needs an Ollama embedding model; no-ops gracefully without one.", InputSchema = MakeSchema() });
@@ -768,8 +803,13 @@ public class AgentToolService : IDisposable
         bool gitEnabled = features.GitIntegration && _activationService.IsFeatureUnlocked("feature.git");
         bool githubEnabled = features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github");
 
+        // Same contract as the native schemas — see the note there; the shell line is computed for the same reason.
+        string shellNote = ShellRunner.DefaultShell == ShellRunner.Shell.Bash
+            ? "Runs in Git Bash (POSIX sh: ls, cat, mkdir -p, &&, forward slashes). A `cd` persists between\n   calls but never leaves the project; a bare `cd` returns to the root."
+            : "Runs in cmd.exe — Git Bash was not found, so ls/cat/mkdir -p do NOT work (use dir, type, mkdir).";
+
         var sb = new StringBuilder();
-        sb.AppendLine("""
+        sb.AppendLine($$"""
             AVAILABLE TOOLS:
             You can use tools to interact with the user's file system and project.
             To use a tool, write a tool call block in this exact format:
@@ -780,44 +820,51 @@ public class AgentToolService : IDisposable
 
             Available tools:
 
-            1. read_file - Read the contents of a file
+            1. read_file - Read a text file. Lines come back numbered "N<tab>text" (the number is not part
+               of the file). A large file comes back a page at a time — the footer says the offset to continue from.
                [ACTION: read_file]
                path: relative/path/to/file.ext
+               offset: 1
+               limit: 2000
                [/ACTION]
 
-            2. write_file - Create or overwrite a file with new content
+            2. write_file - Create a file, or replace an existing file ENTIRELY. The content must be the
+               complete file: "// ... rest unchanged" placeholders are refused. To change part of a file, use edit_file.
                [ACTION: write_file]
                path: relative/path/to/file.ext
                content:
                (file content here, everything after "content:" until [/ACTION])
                [/ACTION]
 
-            3. edit_file - Find and replace text in an existing file
+            3. edit_file - Replace text in an existing file. "find" must match the current text exactly once
+               (include surrounding lines to make it unique); indentation and line-ending differences are tolerated.
                [ACTION: edit_file]
                path: relative/path/to/file.ext
-               find: (exact text to find)
+               find: (current text to replace)
                replace: (replacement text)
                [/ACTION]
 
-            4. list_files - List files and directories
+            4. list_files - List a directory's files and subfolders (two levels deep)
                [ACTION: list_files]
                path: .
                [/ACTION]
 
-            5. search_files - Find files matching a glob pattern
+            5. search_files - Find files by name with a glob (*.cs, src/**/*.ts, *.{cs,xaml}); skips
+               .gitignored files and bin/obj/node_modules; newest first
                [ACTION: search_files]
                pattern: *.cs
                path: .
                [/ACTION]
 
-            6. search_content - Search for text in file contents (like grep)
+            6. search_content - Find a plain-text string in file contents; returns path:line:text per match
                [ACTION: search_content]
                query: search text
                path: .
                pattern: *.cs
                [/ACTION]
 
-            7. run_command - Execute a shell command
+            7. run_command - Run a shell command in the project. {{shellNote}}
+               Stdin is closed (pass -y to anything that prompts). Default timeout 120 s (timeout_ms raises it).
                [ACTION: run_command]
                command: dotnet build
                [/ACTION]
@@ -1038,22 +1085,23 @@ public class AgentToolService : IDisposable
         // Phase 3: New tools
         sb.AppendLine("""
 
-            38. glob - Find files matching glob patterns (faster than search_files for patterns)
+            38. glob - Find files by glob pattern; respects .gitignore, skips bin/obj/node_modules, newest first
                 [ACTION: glob]
                 pattern: **/*.cs
                 path: src
                 [/ACTION]
 
-            39. grep_search - Regex-based content search with context lines
+            39. grep_search - Regular-expression search in file contents (respects .gitignore)
                 [ACTION: grep_search]
                 pattern: class\s+\w+Service
                 path: .
-                glob: *.cs
+                type: cs
                 output_mode: content
                 context: 2
-                ignore_case: true
                 [/ACTION]
-                output_mode options: content (shows matching lines), files_with_matches (file paths only), count
+                output_mode: files_with_matches (DEFAULT — file paths only), content (path:line:text), count.
+                Case-insensitive when the pattern has no capital letters (ignore_case: true/false overrides).
+                Other keys: glob (*.cs, *.{ts,tsx}), head_limit (max lines/files, default 200).
 
             40. ask_user - Ask the user a question when you need clarification
                 [ACTION: ask_user]
@@ -1077,10 +1125,10 @@ public class AgentToolService : IDisposable
                 [/ACTION]
                 edit_mode options: replace, insert, delete
 
-            43. powershell - Execute PowerShell commands (Windows)
+            43. powershell - Run a Windows PowerShell 5.1 script (Windows-specific work; use run_command otherwise)
                 [ACTION: powershell]
                 command: Get-Process | Sort-Object CPU -Descending | Select-Object -First 5
-                timeout: 30000
+                timeout_ms: 30000
                 [/ACTION]
 
             44. memory_save - Save persistent memory (survives across sessions)
@@ -1144,7 +1192,8 @@ public class AgentToolService : IDisposable
                 edits: [{"find": "old code", "replace": "new code"}, {"find": "a", "replace": "b"}]
                 [/ACTION]
 
-            51. run_build - Build the project and return compiler errors
+            51. run_build - Build the project (auto-detected, even in a subfolder) and return just the
+                compiler errors as file(line,col): message. Run it after editing, before saying you're done.
                 [ACTION: run_build][/ACTION]
 
             52. run_tests - Run the test suite and return failures
@@ -1341,37 +1390,51 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
-        // Ranged read (offset/limit) → numbered lines, so the agent can page big files / cite line numbers.
-        string offStr = call.GetArg("offset");
-        string limStr = call.GetArg("limit");
-        if (!string.IsNullOrEmpty(offStr) || !string.IsNullOrEmpty(limStr))
+        // Every read is numbered ("N\t…") so a compiler error at Program.cs(8,9) can be matched to the
+        // code, and every read fits a budget — the whole-file read used to return the entire file, and a
+        // 5,000-line file was more than a local model's whole context in one call.
+        int off = int.TryParse(call.GetArg("offset"), out var o) && o > 0 ? o : 1;
+        int lim = int.TryParse(call.GetArg("limit"), out var l) && l > 0 ? Math.Min(l, 5000) : 2000;
+
+        FileSystemService.AgentRead read;
+        try { read = _fileSystem.ReadForAgent(path, off, lim, ReadCharBudget()); }
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or UnauthorizedAccessException)
         {
-            int off = int.TryParse(offStr, out var o) && o > 0 ? o : 1;
-            int lim = int.TryParse(limStr, out var l) && l > 0 ? l : 2000;
-            var (text, total) = _fileSystem.ReadLines(path, off, lim);
-            _fileSystem.MarkKnown(path);
-            int end = Math.Min(off + lim - 1, total);
-            return new ToolResult
-            {
-                Type = call.Type,
-                ToolName = call.ToolName,
-                Success = true,
-                Output = text,
-                Summary = $"Read {path} lines {off}-{end} of {total}",
-            };
+            return Fail(call, ex.Message);
         }
 
-        string content = _fileSystem.ReadFile(path);
+        if (read.IsBinary)
+            return Fail(call, $"'{path}' is a binary file ({FormatSize(read.SizeBytes)}) — read_file only shows text. " +
+                              "Use hex_info / hex_read to inspect its bytes.");
+
         _fileSystem.MarkKnown(path);
-        int lineCount = content.Split('\n').Length;
+
+        var sb = new StringBuilder();
+        if (!read.IsValidUtf8)
+            sb.Append("[Note: this file is not valid UTF-8 (legacy encoding) — non-ASCII characters show as �. ")
+              .Append("Do not rewrite it with write_file/edit_file; that would destroy them.]\n");
+        sb.Append(read.Text);
+
+        bool complete = read.FromLine <= 1 && read.ToLine >= read.TotalLines;
+        if (!complete && read.TotalLines > 0)
+        {
+            string why = read.CutByBudget ? "size limit reached" : $"limit={lim}";
+            sb.Append($"[Lines {read.FromLine}–{read.ToLine} of {read.TotalLines} ({why}). ");
+            if (read.ToLine < read.TotalLines)
+                sb.Append($"Continue with read_file(path=\"{path}\", offset={read.ToLine + 1}), or grep_search to jump to what you need.]");
+            else
+                sb.Append("End of file.]");
+        }
 
         return new ToolResult
         {
             Type = call.Type,
             ToolName = call.ToolName,
             Success = true,
-            Output = content,
-            Summary = $"Read {path} ({lineCount} lines)",
+            Output = sb.ToString(),
+            Summary = complete
+                ? $"Read {path} ({read.TotalLines} lines)"
+                : $"Read {path} lines {read.FromLine}-{read.ToLine} of {read.TotalLines}",
         };
     }
 
@@ -1432,10 +1495,59 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
 
+        // Captured BEFORE CheckReadBeforeEdit, which auto-snapshots a never-read file.
+        bool seenBefore = _fileSystem.HasSeen(path);
+
         var rbe = CheckReadBeforeEdit(call, path);
         if (rbe != null) return rbe;
 
-        string? beforeWrite = _fileSystem.TryReadRaw(path);
+        // The file as it is on disk now, read whole however large it is. This used to go through
+        // TryReadRaw, whose 1 MB cap made a big existing file look absent: it was overwritten with no
+        // placeholder check and no backup, and reported as "Created".
+        CluadeX.Helpers.TextFileCodec.TextFile? before;
+        try
+        {
+            string full = _fileSystem.ResolveSafePath(path);
+            before = File.Exists(full) ? CluadeX.Helpers.TextFileCodec.Read(full) : null;
+        }
+        catch (Exception ex) { return Fail(call, ex.Message); }
+        string? beforeWrite = before?.Text;
+
+        // A legacy-encoded file (TIS-620 …) reads back with U+FFFD where its non-ASCII text was, and
+        // read_file shows it that way. Content still carrying those came from that lossy read — writing it
+        // destroys the originals for good. A genuine rewrite (no U+FFFD) is allowed, with a backup below.
+        if (before is { IsValidUtf8: false } && content.Contains('�'))
+            return Fail(call,
+                $"write_file refused: {path} is not UTF-8 (a legacy encoding such as TIS-620), and the new content " +
+                "contains � characters copied from reading it — writing them would permanently destroy the original " +
+                "non-ASCII text. Ask the user to convert the file to UTF-8 first.");
+
+        // write_file replaces the WHOLE file, so a "// ... existing code ..." line deletes everything it
+        // stands for. It is the most destructive thing a weak model does, and it does it often. Refuse —
+        // but only for placeholder lines the file does not already contain.
+        if (beforeWrite != null)
+        {
+            string? placeholder = FindLazyPlaceholder(content, beforeWrite);
+            if (placeholder != null)
+                return Fail(call,
+                    $"write_file refused: the new content contains the placeholder \"{placeholder.Trim()}\". " +
+                    $"write_file replaces the ENTIRE file, so that line would delete the code it stands for. " +
+                    $"To change part of {path}, use edit_file (or multi_edit) with the exact text to replace; " +
+                    "to rewrite it, send the complete file with no placeholders.");
+        }
+
+        // A blind overwrite of a file the agent never looked at keeps a copy, so the user can get it back —
+        // as does re-encoding a legacy file to UTF-8, which can't be undone from the new text.
+        string backupNote = "";
+        if (before != null && ((!seenBefore && beforeWrite != content) || !before.Value.IsValidUtf8))
+        {
+            string? backup = BackupFile(path);
+            if (backup != null)
+                backupNote = before.Value.IsValidUtf8
+                    ? $" — the previous version (not read before this write) was saved to {backup}"
+                    : $" — it was not UTF-8 and is now; the original bytes were saved to {backup}";
+        }
+
         _fileSystem.WriteFile(path, content);
         _fileSystem.MarkKnown(path);
         var writeDiff = CluadeX.Helpers.DiffUtil.Compute(beforeWrite ?? "", content);
@@ -1445,11 +1557,75 @@ public class AgentToolService : IDisposable
             Type = call.Type,
             ToolName = call.ToolName,
             Success = true,
-            Output = $"File written: {path} ({content.Length} bytes)",
+            Output = beforeWrite == null
+                ? $"Created {path} ({content.Replace("\r\n", "\n").Split('\n').Length} lines)"
+                : $"Overwrote {path} ({content.Replace("\r\n", "\n").Split('\n').Length} lines){backupNote}",
             Summary = $"Wrote {path}",
             Diff = writeDiff,
             FilePath = path,
         };
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex CommentLine = new(
+        @"^(?://+|#+|/\*+|\*+|<!--|--|;+|')\s*(?<body>.*?)\s*(?:\*/|-->)?$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex OmittedThing = new(
+        @"\b(existing|previous|original|remaining|other|old)\s+(code|implementation|methods?|functions?|content|members?|logic|properties|tests?|imports?)\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex StaysTheSame = new(
+        @"\b(unchanged|remains?|stays?|same|here|as (is|before)|omitted|not shown|goes here|kept|keep)\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// The first COMMENT line that stands in for omitted code — "// ... existing code ...",
+    /// "# rest of the file unchanged", "// other methods remain the same" — and is not already in the
+    /// file, or null. A comment that merely mentions existing code ("// validate existing code paths")
+    /// does not count: it needs the omission wording too.
+    /// </summary>
+    internal static string? FindLazyPlaceholder(string newContent, string existing)
+    {
+        var existingLines = new HashSet<string>(existing.Replace("\r\n", "\n").Split('\n').Select(l => l.Trim()), StringComparer.Ordinal);
+        foreach (var raw in newContent.Replace("\r\n", "\n").Split('\n'))
+        {
+            string t = raw.Trim();
+            if (t.Length < 4 || existingLines.Contains(t)) continue;
+            var m = CommentLine.Match(t);
+            if (!m.Success) continue;
+            string body = m.Groups["body"].Value.Trim().ToLowerInvariant();
+            if (body.Length > 90) continue;
+
+            bool ellipsis = body.StartsWith("...") || body.StartsWith("…") || body.StartsWith("[...]") || body.StartsWith("(...");
+            bool restOf = body.StartsWith("rest of") || body.StartsWith("(rest of") || body.Contains("rest of the file") || body.Contains("rest of the code");
+            bool omitted = OmittedThing.IsMatch(body) && StaysTheSame.IsMatch(body);
+            if (ellipsis || restOf || omitted) return raw;
+        }
+        return null;
+    }
+
+    private const int MaxFileBackups = 200;
+
+    /// <summary>
+    /// Copy a file's bytes, as they are on disk, to &lt;DataRoot&gt;/file-backups before it is overwritten;
+    /// the newest <see cref="MaxFileBackups"/> are kept. Bytes rather than decoded text, so a legacy-encoded
+    /// original survives intact. The name's timestamp is invariant-culture: on a Thai-locale machine
+    /// "yyyy" is the Buddhist year (2569), which broke both the reading and the ordering of the names.
+    /// </summary>
+    private string? BackupFile(string relativePath)
+    {
+        try
+        {
+            string dir = Path.Combine(_settingsService.DataRoot, "file-backups");
+            Directory.CreateDirectory(dir);
+            string safeName = string.Concat(relativePath.Replace('\\', '/').Replace('/', '_')
+                .Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture);
+            string target = Path.Combine(dir, $"{stamp}-{safeName}");
+            File.Copy(_fileSystem.ResolveSafePath(relativePath), target, overwrite: true);
+
+            foreach (var old in new DirectoryInfo(dir).GetFiles().OrderByDescending(f => f.CreationTimeUtc).Skip(MaxFileBackups))
+                try { old.Delete(); } catch { /* in use — next time */ }
+            return target;
+        }
+        catch { return null; }
     }
 
     private ToolResult ExecuteEditFile(ToolCall call)
@@ -1523,6 +1699,10 @@ public class AgentToolService : IDisposable
 
         if (string.IsNullOrEmpty(find))
             return Fail(call, "Missing 'find' argument");
+
+        // Reporting "1 replacement made" for a no-op tells the model its change landed when nothing did.
+        if (string.Equals(find.Replace("\r\n", "\n"), replace.Replace("\r\n", "\n"), StringComparison.Ordinal))
+            return Fail(call, "'find' and 'replace' are identical, so this edit would change nothing. Put the NEW text in 'replace'.");
 
         var rbe = CheckReadBeforeEdit(call, path);
         if (rbe != null) return rbe;
@@ -1602,7 +1782,7 @@ public class AgentToolService : IDisposable
         string? before = _fileSystem.TryReadRaw(path);
         bool ok; int applied; string message;
         try { (ok, applied, message) = _fileSystem.MultiEdit(path, edits); }
-        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException) { return Fail(call, ex.Message); }
+        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException or InvalidOperationException) { return Fail(call, ex.Message); }
 
         if (!ok)
         {
@@ -1717,49 +1897,75 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult> ExecuteRunBuildAsync(ToolCall call, CancellationToken ct)
     {
         string cmd = call.GetArg("command");
-        if (string.IsNullOrEmpty(cmd)) cmd = _fileSystem.DetectBuildCommand() ?? "";
+        string foundIn = "";
         if (string.IsNullOrEmpty(cmd))
-            return Fail(call, "run_build: couldn't detect a build system in the project root (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
-
-        // Reuse the hardened command runner (dangerous-command blocklist, timeout, output budget, cwd).
-        var inner = new ToolCall
         {
-            Type = ToolType.RunCommand,
-            ToolName = "run_command",
-            Arguments = new Dictionary<string, string> { ["command"] = cmd, ["timeout_ms"] = "180000" },
+            var detected = _fileSystem.DetectProjectCommand(test: false);
+            if (detected != null) { cmd = detected.Command; foundIn = detected.FoundIn; }
+        }
+        if (string.IsNullOrEmpty(cmd))
+            return Fail(call, "run_build: couldn't detect a build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
+
+        var danger = CheckDangerousCommand(cmd);
+        if (danger != null) return Fail(call, danger);
+
+        // Always from the project root: detected commands are root-relative, whatever `cd` the model did.
+        var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
+        if (run.Error != null) return Fail(call, run.Error);
+        var r = run.Result!;
+
+        bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
+        string body = r.TimedOut
+            ? "Build timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
+            : CluadeX.Helpers.BuildOutputDistiller.Distill(r.Output, ok, _fileSystem.WorkingDirectory, ShellOutputBudget());
+
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = ok,
+            Output = $"$ {cmd}{(foundIn.Length > 0 ? $"   (detected: {foundIn})" : "")}\n{body}",
+            Error = ok ? "" : (r.TimedOut ? "Build timed out" : $"Build failed (exit code {r.ExitCode})"),
+            Summary = ok ? $"Build OK ({cmd})" : $"Build FAILED ({cmd}) — read the errors and fix them",
         };
-        var result = await ExecuteRunCommandAsync(inner, ct);
-        result.Type = call.Type;
-        result.ToolName = call.ToolName;
-        result.Summary = result.Success ? $"Build OK ({cmd})" : $"Build FAILED ({cmd}) — read the errors and fix them";
-        return result;
     }
 
     private async Task<ToolResult> ExecuteRunTestsAsync(ToolCall call, CancellationToken ct)
     {
         string cmd = call.GetArg("command");
-        if (string.IsNullOrEmpty(cmd)) cmd = _fileSystem.DetectTestCommand() ?? "";
+        string foundIn = "";
         if (string.IsNullOrEmpty(cmd))
-            return Fail(call, "run_tests: couldn't detect a test runner in the project root (no .csproj/Cargo.toml/go.mod/pyproject/package.json/pom.xml/…). Pass an explicit 'command', or use run_command.");
-
-        // Reuse the hardened command runner (blocklist, timeout, output budget, cwd). Tests can be slow → 5 min.
-        var inner = new ToolCall
         {
-            Type = ToolType.RunCommand,
-            ToolName = "run_command",
-            Arguments = new Dictionary<string, string> { ["command"] = cmd, ["timeout_ms"] = "300000" },
-        };
-        var result = await ExecuteRunCommandAsync(inner, ct);
+            var detected = _fileSystem.DetectProjectCommand(test: true);
+            if (detected != null) { cmd = detected.Command; foundIn = detected.FoundIn; }
+        }
+        if (string.IsNullOrEmpty(cmd))
+            return Fail(call, "run_tests: couldn't detect a test runner in the project or the folders below it (no test project, Cargo.toml, go.mod, pyproject, package.json, pom.xml…). Pass an explicit 'command', or use run_command.");
+
+        var danger = CheckDangerousCommand(cmd);
+        if (danger != null) return Fail(call, danger);
+
+        var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
+        if (run.Error != null) return Fail(call, run.Error);
+        var r = run.Result!;
 
         // Success comes from the runner's EXIT CODE (reliable across runners). The distiller only shapes the
         // text into a pass/fail summary + failing tests so a weak model gets an actionable signal.
-        string distilled = CluadeX.Helpers.TestOutputDistiller.Distill(result.Output ?? "", result.Error ?? "", cmd);
-        result.Type = call.Type;
-        result.ToolName = call.ToolName;
-        result.Output = distilled;
-        if (result.Success) result.Error = "";
-        result.Summary = result.Success ? $"Tests passed ({cmd})" : $"Tests FAILED ({cmd}) — read the failures and fix them";
-        return result;
+        bool ok = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
+        string distilled = r.TimedOut
+            ? "Tests timed out after 300 s. Last output:\n" + CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.TrimEnd(), ShellOutputBudget())
+            : CluadeX.Helpers.OutputBudget.HeadAndTail(
+                CluadeX.Helpers.TestOutputDistiller.Distill(r.Output, ok ? "" : $"Exit code: {r.ExitCode}", cmd), ShellOutputBudget());
+
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = ok,
+            Output = $"$ {cmd}{(foundIn.Length > 0 ? $"   (detected: {foundIn})" : "")}\n{distilled}",
+            Error = ok ? "" : (r.TimedOut ? "Tests timed out" : $"Tests failed (exit code {r.ExitCode})"),
+            Summary = ok ? $"Tests passed ({cmd})" : $"Tests FAILED ({cmd}) — read the failures and fix them",
+        };
     }
 
     /// <summary>Run the project's detected/configured build for an automatic verify-after-edit. System-initiated,
@@ -1798,54 +2004,24 @@ public class AgentToolService : IDisposable
         };
     }
 
+    // search_files / search_content are older, simpler spellings of glob / grep_search. They share the
+    // same engines now instead of running their own capped copies (both stopped at 100 files).
     private ToolResult ExecuteSearchFiles(ToolCall call)
-    {
-        string pattern = call.GetArg("pattern", "*.*");
-        string path = call.GetArg("path", ".");
-
-        var results = _fileSystem.SearchFiles(pattern, path);
-
-        var sb = new StringBuilder();
-        foreach (var r in results)
-            sb.AppendLine($"  {r}");
-
-        return new ToolResult
-        {
-            Type = call.Type,
-            ToolName = call.ToolName,
-            Success = true,
-            Output = results.Count > 0
-                ? sb.ToString().TrimEnd()
-                : "No files found matching pattern.",
-            Summary = $"Found {results.Count} files matching '{pattern}'",
-        };
-    }
+        => RunGlob(call, call.GetArg("pattern", "*"), call.GetArg("path", "."));
 
     private ToolResult ExecuteSearchContent(ToolCall call)
     {
         string query = call.GetArg("query");
-        string path = call.GetArg("path", ".");
-        string filePattern = call.GetArg("pattern", "*.*");
-
         if (string.IsNullOrEmpty(query))
             return Fail(call, "Missing 'query' argument");
-
-        var results = _fileSystem.SearchContent(query, path, filePattern);
-
-        var sb = new StringBuilder();
-        foreach (var r in results)
-            sb.AppendLine($"  {r.FilePath}:{r.LineNumber}: {r.LineContent}");
-
-        return new ToolResult
-        {
-            Type = call.Type,
-            ToolName = call.ToolName,
-            Success = true,
-            Output = results.Count > 0
-                ? sb.ToString().TrimEnd()
-                : "No matches found.",
-            Summary = $"Found {results.Count} matches for '{query}'",
-        };
+        return RunGrep(call, query, literal: true,
+            path: call.GetArg("path", "."),
+            globs: call.GetArg("pattern"),
+            type: "",
+            mode: "content",
+            before: 0, after: 0,
+            headLimit: 100,
+            ignoreCase: null);
     }
 
     private async Task<ToolResult> ExecuteRunCommandAsync(ToolCall call, CancellationToken ct)
@@ -1860,84 +2036,105 @@ public class AgentToolService : IDisposable
         if (dangerReason != null)
             return Fail(call, dangerReason);
 
-        try
+        int timeoutMs = ParseTimeout(call, defaultMs: 120_000);
+        string? ranIn = _shellCwd is { } before && _fileSystem.HasWorkingDirectory
+            ? Path.GetRelativePath(_fileSystem.WorkingDirectory, before).Replace('\\', '/') : null;
+        var run = await RunShellAsync(command, timeoutMs, useSessionCwd: true, ct);
+        if (run.Error != null) return Fail(call, run.Error);
+
+        var result = FormatShellResult(call, command, run.Result!, run.CwdNote, timeoutMs);
+        // The classic trap of a persistent shell: an earlier `cd` is still in effect and a root-relative
+        // path now points nowhere. Say so on the failure itself, where the model is looking.
+        if (!result.Success && !run.Result!.TimedOut && ranIn != null)
+            result.Output += $"\n[This ran in {ranIn}/ (an earlier `cd` persists), not the project root. " +
+                             "Use paths relative to it, or run `cd` with no arguments to return to the project root.]";
+        return result;
+    }
+
+    /// <summary>timeout_ms (or timeout), default <paramref name="defaultMs"/>, capped at 10 minutes.</summary>
+    private static int ParseTimeout(ToolCall call, int defaultMs)
+    {
+        string raw = call.GetArg("timeout_ms", call.GetArg("timeout"));
+        return int.TryParse(raw, out var ms) && ms > 0 ? Math.Min(ms, 600_000) : defaultMs;
+    }
+
+    /// <summary>
+    /// Run a shell command in the project. <paramref name="useSessionCwd"/>: start where the last
+    /// run_command's `cd` left off, and remember where this one ends — like a terminal. The directory
+    /// never leaves the project; if a command cd's out, it is reset to the root and the model is told.
+    /// </summary>
+    private async Task<(ShellRunner.Result? Result, string? CwdNote, string? Error)> RunShellAsync(
+        string command, int timeoutMs, bool useSessionCwd, CancellationToken ct)
+    {
+        if (!_fileSystem.HasWorkingDirectory)
+            return (null, null, "No project folder is open — open one first so commands have a working directory.");
+
+        string root = _fileSystem.WorkingDirectory;
+        string cwd = root;
+        if (useSessionCwd && _shellCwd is { } sc && Directory.Exists(sc) && IsUnder(root, sc)) cwd = sc;
+
+        ShellRunner.Result r;
+        try { r = await ShellRunner.RunAsync(ShellRunner.DefaultShell, command, cwd, timeoutMs, ct); }
+        catch (Exception ex) { return (null, null, $"Failed to start the shell: {ex.Message}"); }
+
+        string? note = null;
+        if (useSessionCwd && r.NewCwd != null)
         {
-            string fileName, arguments;
-            if (OperatingSystem.IsWindows())
-            {
-                fileName = "cmd.exe";
-                arguments = $"/c {command}";
-            }
+            string newCwd;
+            try { newCwd = Path.GetFullPath(r.NewCwd.Replace('/', Path.DirectorySeparatorChar)); }
+            catch { newCwd = root; }
+            if (IsUnder(root, newCwd))
+                _shellCwd = string.Equals(newCwd.TrimEnd('\\', '/'), root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ? null : newCwd;
             else
             {
-                fileName = "/bin/bash";
-                arguments = $"-c \"{command.Replace("\"", "\\\"")}\"";
+                // Also the escape hatch: a bare `cd` goes to $HOME, which is outside — back to the root.
+                _shellCwd = null;
+                note = "[cwd: project root — the shell cannot leave the project folder, so it was put back at the root.]";
             }
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                WorkingDirectory = _fileSystem.WorkingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            using var process = Process.Start(psi);
-            if (process == null)
-                return Fail(call, "Failed to start process");
-
-            // Default 30s; callers (e.g. run_build) can pass a longer budget for slow builds/tests.
-            int timeoutMs = int.TryParse(call.GetArg("timeout_ms"), out var tms) && tms > 0 ? Math.Min(tms, 600000) : 30000;
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeoutMs);
-
-            string stdout, stderr;
-            try
-            {
-                // Start BOTH pipe reads before waiting for exit. Waiting first deadlocks any verbose
-                // command: the child blocks writing into a full 4KB pipe buffer while we block in
-                // WaitForExitAsync — neither side progresses until the timeout kills the process.
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-                var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
-                await process.WaitForExitAsync(cts.Token);
-                stdout = await stdoutTask;
-                stderr = await stderrTask;
-            }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(true); } catch { }
-                return Fail(call, $"Command timed out ({timeoutMs / 1000}s limit)");
-            }
-
-            string output = stdout;
-            if (!string.IsNullOrEmpty(stderr))
-                output += (string.IsNullOrEmpty(output) ? "" : "\n") + stderr;
-
-            // Truncate long output
-            if (output.Length > 5000)
-                output = output[..5000] + "\n... (truncated)";
-
-            bool success = process.ExitCode == 0;
-
-            return new ToolResult
-            {
-                Type = call.Type,
-                ToolName = call.ToolName,
-                Success = success,
-                Output = output,
-                Error = success ? "" : $"Exit code: {process.ExitCode}",
-                Summary = success
-                    ? $"Command OK: {command}"
-                    : $"Command failed (exit {process.ExitCode}): {command}",
-            };
         }
-        catch (Exception ex)
+        if (note == null && useSessionCwd && _shellCwd != null)
+            note = $"[cwd: {Path.GetRelativePath(root, _shellCwd).Replace('\\', '/')}]";
+        return (r, note, null);
+    }
+
+    private static bool IsUnder(string root, string path)
+    {
+        try
         {
-            return Fail(call, $"Failed to execute: {ex.Message}");
+            string r = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            string p = Path.GetFullPath(path).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            return p.StartsWith(r, StringComparison.OrdinalIgnoreCase);
         }
+        catch { return false; }
+    }
+
+    /// <summary>Shape a shell result for the model: head AND tail within budget (errors land at the end),
+    /// the exit code, and — on a timeout — the output it produced instead of nothing.</summary>
+    private ToolResult FormatShellResult(ToolCall call, string command, ShellRunner.Result r, string? cwdNote, int timeoutMs)
+    {
+        string body = CluadeX.Helpers.OutputBudget.HeadAndTail(r.Output.Trim('\n', '\r'), ShellOutputBudget());
+        bool success = r.ExitCode == 0 && !r.TimedOut && !r.Cancelled;
+
+        var sb = new StringBuilder();
+        if (cwdNote != null) sb.Append(cwdNote).Append('\n');
+        sb.Append(body.Length > 0 ? body : success ? "(the command succeeded and printed nothing)" : "(no output)");
+        if (r.TimedOut)
+            sb.Append($"\n[Timed out after {timeoutMs / 1000} s and was stopped — the output above is what it printed before that. " +
+                      "If it legitimately needs longer, pass a larger timeout_ms (max 600000). Servers/watchers never exit — don't run them here.]");
+        else if (r.Cancelled)
+            sb.Append("\n[Cancelled.]");
+        else if (!success)
+            sb.Append($"\n[exit code {r.ExitCode}]");
+
+        return new ToolResult
+        {
+            Type = call.Type,
+            ToolName = call.ToolName,
+            Success = success,
+            Output = sb.ToString(),
+            Error = success ? "" : r.TimedOut ? $"Command timed out ({timeoutMs / 1000}s limit)" : r.Cancelled ? "Command cancelled" : $"Exit code: {r.ExitCode}",
+            Summary = success ? $"Command OK: {command}" : $"Command failed ({(r.TimedOut ? "timeout" : "exit " + r.ExitCode)}): {command}",
+        };
     }
 
     private ToolResult ExecuteCreateDirectory(ToolCall call)
@@ -3490,55 +3687,64 @@ public class AgentToolService : IDisposable
     {
         string pattern = call.GetArg("pattern");
         if (string.IsNullOrEmpty(pattern))
-            return Fail(call, "Missing 'pattern' argument (e.g., **/*.cs, src/**/*.ts)");
+            return Fail(call, "Missing 'pattern' argument (e.g. **/*.cs, src/**/*.ts, *.{cs,xaml})");
+        return RunGlob(call, pattern, call.GetArg("path", "."));
+    }
 
-        string path = call.GetArg("path", ".");
-        string fullPath = _fileSystem.ResolveSafePath(path);
+    /// <summary>
+    /// Files matching a glob, newest first. The list comes from <see cref="WorkspaceFiles"/> — .gitignore
+    /// honoured, bin/obj/node_modules never listed. The old implementation globbed the raw directory tree,
+    /// so "**/*.cs" in any .NET repo came back full of obj/…/GlobalUsings.g.cs and bin/ copies that a
+    /// model would then happily edit.
+    /// </summary>
+    private ToolResult RunGlob(ToolCall call, string pattern, string path)
+    {
+        if (!_fileSystem.HasWorkingDirectory) return Fail(call, "No project folder is open.");
+        string root = _fileSystem.WorkingDirectory;
+        string searchRoot;
+        try { searchRoot = _fileSystem.ResolveSafePath(string.IsNullOrWhiteSpace(path) ? "." : path); }
+        catch (Exception ex) { return Fail(call, ex.Message); }
+        if (!Directory.Exists(searchRoot))
+            return Fail(call, File.Exists(searchRoot) ? $"'{path}' is a file — glob's path must be a folder." : $"Folder not found: {path}");
 
-        try
+        var filter = CluadeX.Helpers.GlobPattern.Parse(pattern);
+        var listing = WorkspaceFiles.List(root, searchRoot);
+        var matches = new List<(string rel, DateTime mtime)>();
+        foreach (var rel in listing.Files)
         {
-            var matcher = new Microsoft.Extensions.FileSystemGlobbing.Matcher();
-            matcher.AddInclude(pattern);
-            var result = matcher.Execute(
-                new Microsoft.Extensions.FileSystemGlobbing.Abstractions.DirectoryInfoWrapper(
-                    new DirectoryInfo(fullPath)));
+            string full = Path.Combine(root, rel);
+            string relToSearch = Path.GetRelativePath(searchRoot, full).Replace('\\', '/');
+            if (!filter.Matches(relToSearch)) continue;
+            DateTime m;
+            try { if (!File.Exists(full)) continue; m = File.GetLastWriteTimeUtc(full); } catch { continue; }
+            matches.Add((rel, m));
+        }
 
-            var files = result.Files
-                .Select(f => f.Path)
-                .OrderByDescending(f =>
-                {
-                    try { return File.GetLastWriteTime(Path.Combine(fullPath, f)); }
-                    catch { return DateTime.MinValue; }
-                })
-                .Take(100)
-                .ToList();
-
-            if (files.Count == 0)
-                return new ToolResult
-                {
-                    Type = call.Type, ToolName = call.ToolName, Success = true,
-                    Output = $"No files matched pattern '{pattern}' in {path}",
-                    Summary = "Glob: 0 matches",
-                };
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"Found {files.Count} file(s) matching '{pattern}':");
-            foreach (var f in files)
-                sb.AppendLine(f);
-            if (result.Files.Count() > 100)
-                sb.AppendLine($"... ({result.Files.Count() - 100} more files not shown)");
-
+        const int cap = 100;
+        string scope = listing.Source == "git" ? " (.gitignore respected)" : "";
+        if (matches.Count == 0)
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = sb.ToString(),
-                Summary = $"Glob: {files.Count} match(es) for '{pattern}'",
+                Output = $"No files match '{pattern}' under {(path is "." or "" ? "the project" : path)}{scope}.",
+                Summary = "Glob: 0 matches",
             };
-        }
-        catch (Exception ex)
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"{matches.Count} file(s) match '{pattern}' — most recently modified first{scope}:");
+        foreach (var (rel, _) in matches.OrderByDescending(x => x.mtime).Take(cap))
+            sb.AppendLine(rel);
+        if (matches.Count > cap)
+            sb.AppendLine($"[… {matches.Count - cap} more not shown — use a narrower pattern or path.]");
+        if (listing.Truncated)
+            sb.AppendLine($"[Only the first {WorkspaceFiles.DefaultMaxFiles:N0} files of this tree were considered — narrow 'path'.]");
+
+        return new ToolResult
         {
-            return Fail(call, $"Glob search failed: {ex.Message}");
-        }
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = sb.ToString().TrimEnd(),
+            Summary = $"Glob: {matches.Count} match(es) for '{pattern}'",
+        };
     }
 
     // ════════════════════════════════════════════
@@ -3549,107 +3755,227 @@ public class AgentToolService : IDisposable
     {
         string pattern = call.GetArg("pattern");
         if (string.IsNullOrEmpty(pattern))
-            return Fail(call, "Missing 'pattern' argument (regex pattern to search for)");
+            return Fail(call, "Missing 'pattern' argument (a regular expression to search for).");
 
-        string path = call.GetArg("path", ".");
-        string glob = call.GetArg("glob", "*");
-        string outputMode = call.GetArg("output_mode", "files_with_matches");
-        int context = int.TryParse(call.GetArg("context", "0"), out int c) ? c : 0;
-        int headLimit = int.TryParse(call.GetArg("head_limit", "250"), out int h) ? h : 250;
-        bool ignoreCase = call.GetArg("ignore_case", "true") == "true";
+        // Accept the spellings models trained on Claude Code / ripgrep actually send.
+        string Arg(params string[] keys) => keys.Select(k => call.GetArg(k)).FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? "";
+        int? Int(params string[] keys) => int.TryParse(Arg(keys), out var n) && n >= 0 ? n : null;
+        bool? Bool(params string[] keys) { var v = Arg(keys); return v.Length == 0 ? null : v is "true" or "1" or "yes"; }
 
-        string fullPath = _fileSystem.ResolveSafePath(path);
+        int? context = Int("context", "-C", "C");
+        int before = Int("-B", "B", "before") ?? context ?? 0;
+        int after = Int("-A", "A", "after") ?? context ?? 0;
+        string mode = Arg("output_mode", "mode").ToLowerInvariant();
+        // Asking for context lines only makes sense with matching lines; don't silently drop the request.
+        if (mode.Length == 0) mode = before > 0 || after > 0 ? "content" : "files_with_matches";
 
+        bool? ignoreCase = Bool("-i", "ignore_case", "case_insensitive");
+        bool? caseSensitive = Bool("case_sensitive");
+        if (ignoreCase == null && caseSensitive != null) ignoreCase = !caseSensitive;
+
+        return RunGrep(call, pattern, literal: false,
+            path: Arg("path"),
+            globs: Arg("glob", "include", "file_pattern"),
+            type: Arg("type"),
+            mode: mode,
+            before: Math.Min(before, 20), after: Math.Min(after, 20),
+            headLimit: Int("head_limit", "max_results", "limit"),
+            ignoreCase: ignoreCase);
+    }
+
+    private static readonly Dictionary<string, string[]> GrepTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["cs"] = new[] { ".cs" }, ["csharp"] = new[] { ".cs" }, ["fs"] = new[] { ".fs", ".fsx", ".fsi" }, ["vb"] = new[] { ".vb" },
+        ["xaml"] = new[] { ".xaml" }, ["razor"] = new[] { ".razor", ".cshtml" },
+        ["py"] = new[] { ".py", ".pyi" }, ["python"] = new[] { ".py", ".pyi" },
+        ["js"] = new[] { ".js", ".jsx", ".mjs", ".cjs" }, ["javascript"] = new[] { ".js", ".jsx", ".mjs", ".cjs" },
+        ["ts"] = new[] { ".ts", ".tsx", ".mts", ".cts" }, ["typescript"] = new[] { ".ts", ".tsx", ".mts", ".cts" },
+        ["java"] = new[] { ".java" }, ["kt"] = new[] { ".kt", ".kts" }, ["kotlin"] = new[] { ".kt", ".kts" },
+        ["go"] = new[] { ".go" }, ["rs"] = new[] { ".rs" }, ["rust"] = new[] { ".rs" },
+        ["c"] = new[] { ".c", ".h" }, ["cpp"] = new[] { ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".h" },
+        ["swift"] = new[] { ".swift" }, ["rb"] = new[] { ".rb" }, ["ruby"] = new[] { ".rb" }, ["php"] = new[] { ".php" },
+        ["dart"] = new[] { ".dart" }, ["scala"] = new[] { ".scala" }, ["lua"] = new[] { ".lua" },
+        ["html"] = new[] { ".html", ".htm" }, ["css"] = new[] { ".css", ".scss", ".sass", ".less" },
+        ["json"] = new[] { ".json" }, ["yaml"] = new[] { ".yml", ".yaml" }, ["yml"] = new[] { ".yml", ".yaml" },
+        ["xml"] = new[] { ".xml", ".csproj", ".props", ".targets", ".config", ".resx" },
+        ["md"] = new[] { ".md", ".markdown" }, ["markdown"] = new[] { ".md", ".markdown" },
+        ["sql"] = new[] { ".sql" }, ["sh"] = new[] { ".sh", ".bash" }, ["bash"] = new[] { ".sh", ".bash" },
+        ["ps1"] = new[] { ".ps1", ".psm1", ".psd1" }, ["powershell"] = new[] { ".ps1", ".psm1", ".psd1" }, ["toml"] = new[] { ".toml" },
+    };
+
+    /// <summary>
+    /// The one content-search engine behind grep_search and search_content.
+    ///
+    /// It replaced a search that only ever looked at the first 100 files it enumerated — and those were
+    /// mostly git objects — so on any real repository it silently missed most matches and then said
+    /// "No matches found". Here every candidate file is searched (within a time budget), every cap that
+    /// bites is stated, and "no matches" says how many files were actually searched, so the model can
+    /// trust a negative.
+    /// </summary>
+    private ToolResult RunGrep(ToolCall call, string pattern, bool literal, string path, string globs, string type,
+        string mode, int before, int after, int? headLimit, bool? ignoreCase)
+    {
+        if (!_fileSystem.HasWorkingDirectory) return Fail(call, "No project folder is open.");
+        if (mode is not ("content" or "files_with_matches" or "count"))
+            return Fail(call, $"Unknown output_mode '{mode}'. Use content, files_with_matches or count.");
+
+        string root = _fileSystem.WorkingDirectory;
+        string searchRoot;
+        try { searchRoot = _fileSystem.ResolveSafePath(string.IsNullOrWhiteSpace(path) ? "." : path); }
+        catch (Exception ex) { return Fail(call, ex.Message); }
+
+        string[]? exts = null;
+        if (!string.IsNullOrWhiteSpace(type) && !GrepTypes.TryGetValue(type.Trim().TrimStart('.'), out exts))
+            return Fail(call, $"Unknown type '{type}'. Known: {string.Join(", ", GrepTypes.Keys.Take(24))}… — or use glob (e.g. \"*.{type.Trim().TrimStart('.')}\").");
+
+        // Smart case (ripgrep's): an all-lowercase pattern ignores case, any capital makes it exact.
+        bool ic = ignoreCase ?? !pattern.Any(char.IsUpper);
+        Regex rx;
         try
         {
-            var regex = new Regex(pattern,
-                (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None) | RegexOptions.Compiled);
+            rx = new Regex(literal ? Regex.Escape(pattern) : pattern,
+                (ic ? RegexOptions.IgnoreCase : RegexOptions.None) | RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(250));
+        }
+        catch (ArgumentException ex)
+        {
+            return Fail(call, $"Invalid regular expression: {ex.Message.Split('\n')[0]} — escape ( ) [ ] {{ }} . * + ? | with a backslash, or use search_content for a plain-text search.");
+        }
 
-            var allFiles = _fileSystem.SearchFiles(glob, path);
-            var sb = new StringBuilder();
-            int matchCount = 0;
-            int fileMatchCount = 0;
+        List<string> candidates;
+        string source;
+        bool listTruncated = false;
+        bool singleFile = File.Exists(searchRoot);
+        if (singleFile)
+        {
+            candidates = new List<string> { Path.GetRelativePath(root, searchRoot).Replace('\\', '/') };
+            source = "file";
+        }
+        else if (Directory.Exists(searchRoot))
+        {
+            var listing = WorkspaceFiles.List(root, searchRoot);
+            candidates = listing.Files;
+            source = listing.Source;
+            listTruncated = listing.Truncated;
+        }
+        else return Fail(call, $"Path not found: {path}");
 
-            foreach (var filePath in allFiles)
+        var globFilter = CluadeX.Helpers.GlobPattern.Parse(globs);
+        int budget = ReadCharBudget();
+        int lineCap = headLimit ?? 200;
+        var sw = Stopwatch.StartNew();
+        int filesSearched = 0, skippedLarge = 0, totalMatches = 0, linesOut = 0;
+        bool outputCapped = false, hitTimeBudget = false, regexTimedOut = false;
+        var hits = new List<(string rel, int count, DateTime mtime)>();
+        var sb = new StringBuilder();
+
+        bool SafeMatch(string line)
+        {
+            try { return rx.IsMatch(line); }
+            catch (RegexMatchTimeoutException) { regexTimedOut = true; return false; }
+        }
+
+        foreach (var rel in candidates)
+        {
+            if (sw.Elapsed > TimeSpan.FromSeconds(20)) { hitTimeBudget = true; break; }
+            string full = Path.Combine(root, rel);
+            if (!singleFile)
             {
-                if (matchCount >= headLimit) break;
-
-                try
-                {
-                    string resolvedFile = _fileSystem.ResolveSafePath(filePath);
-                    // Skip binary files
-                    if (IsBinaryFile(resolvedFile)) continue;
-
-                    string content = File.ReadAllText(resolvedFile);
-                    var lines = content.Split('\n');
-                    bool fileHasMatch = false;
-
-                    for (int i = 0; i < lines.Length && matchCount < headLimit; i++)
-                    {
-                        if (regex.IsMatch(lines[i]))
-                        {
-                            if (!fileHasMatch)
-                            {
-                                fileHasMatch = true;
-                                fileMatchCount++;
-                                if (outputMode == "files_with_matches")
-                                {
-                                    sb.AppendLine(filePath);
-                                    matchCount++;
-                                    break;
-                                }
-                            }
-
-                            if (outputMode == "content")
-                            {
-                                // Show context lines
-                                int start = Math.Max(0, i - context);
-                                int end = Math.Min(lines.Length - 1, i + context);
-                                if (matchCount > 0) sb.AppendLine("--");
-                                sb.AppendLine($"{filePath}:");
-                                for (int j = start; j <= end; j++)
-                                {
-                                    string prefix = j == i ? ">" : " ";
-                                    sb.AppendLine($"{prefix}{j + 1}: {lines[j]}");
-                                }
-                                matchCount++;
-                            }
-                            else if (outputMode == "count")
-                            {
-                                matchCount++;
-                            }
-                        }
-                    }
-                }
-                catch { /* skip unreadable files */ }
+                string relToSearch = Path.GetRelativePath(searchRoot, full).Replace('\\', '/');
+                if (!globFilter.Matches(relToSearch)) continue;
+                if (exts != null && !exts.Contains(Path.GetExtension(rel), StringComparer.OrdinalIgnoreCase)) continue;
             }
 
-            if (outputMode == "count")
-                sb.AppendLine($"Found {matchCount} match(es) in {fileMatchCount} file(s)");
+            FileInfo fi;
+            try { fi = new FileInfo(full); if (!fi.Exists) continue; } catch { continue; }
+            if (fi.Length > 2 * 1024 * 1024) { skippedLarge++; continue; }
+            if (CluadeX.Helpers.TextFileCodec.LooksBinary(full)) continue;
 
-            if (matchCount == 0)
-                return new ToolResult
+            string text;
+            try { text = CluadeX.Helpers.TextFileCodec.Read(full).Text; } catch { continue; }
+            filesSearched++;
+
+            var lines = text.Replace("\r\n", "\n").Split('\n');
+            int fileMatches = 0, lastPrinted = -1;
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (!SafeMatch(lines[i])) continue;
+                fileMatches++;
+                totalMatches++;
+                if (mode != "content" || outputCapped) continue;
+
+                int start = Math.Max(0, i - before), end = Math.Min(lines.Length - 1, i + after);
+                if (lastPrinted >= 0 && start > lastPrinted + 1) sb.Append("--\n");
+                else if (lastPrinted < 0 && sb.Length > 0 && (before > 0 || after > 0)) sb.Append("--\n");
+                for (int j = Math.Max(start, lastPrinted + 1); j <= end; j++)
                 {
-                    Type = call.Type, ToolName = call.ToolName, Success = true,
-                    Output = $"No matches found for pattern '{pattern}'",
-                    Summary = "Grep: 0 matches",
-                };
+                    char sep = j == i || (j > i && SafeMatch(lines[j])) ? ':' : '-';
+                    string row = $"{rel}{sep}{j + 1}{sep}{ClipAroundMatch(lines[j], rx)}\n";
+                    if (linesOut >= lineCap || sb.Length + row.Length > budget) { outputCapped = true; break; }
+                    sb.Append(row);
+                    linesOut++;
+                    lastPrinted = j;
+                }
+            }
+            if (fileMatches > 0) hits.Add((rel, fileMatches, fi.LastWriteTimeUtc));
+        }
 
+        string where = singleFile ? path : (string.IsNullOrWhiteSpace(path) || path == "." ? "the project" : path);
+        string scope = source == "git" ? " (.gitignore respected)" : "";
+        var notes = new StringBuilder();
+        if (listTruncated) notes.Append($"\n[Only the first {WorkspaceFiles.DefaultMaxFiles:N0} files were considered — narrow 'path'.]");
+        if (hitTimeBudget) notes.Append($"\n[Search stopped after 20 s having searched {filesSearched:N0} files — narrow 'path', 'glob' or 'type'.]");
+        if (regexTimedOut) notes.Append("\n[The pattern was too slow on some lines (catastrophic backtracking?) and they were skipped — simplify it.]");
+        if (skippedLarge > 0) notes.Append($"\n[{skippedLarge} file(s) over 2 MB were not searched.]");
+
+        if (totalMatches == 0)
             return new ToolResult
             {
                 Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = sb.ToString(),
-                Summary = $"Grep: {matchCount} match(es) for '{pattern}'",
+                Output = $"No matches for /{pattern}/{(ic ? "i" : "")} in {filesSearched:N0} file(s) searched under {where}{scope}." + notes,
+                Summary = "Grep: 0 matches",
             };
-        }
-        catch (RegexParseException ex)
+
+        var output = new StringBuilder();
+        int fileCap = headLimit ?? 200;
+        switch (mode)
         {
-            return Fail(call, $"Invalid regex pattern: {ex.Message}");
+            case "content":
+                output.Append(sb);
+                if (outputCapped)
+                    output.Append($"[Output capped at {linesOut} lines ({totalMatches:N0} matches in {hits.Count:N0} files) — narrow with path/glob/type, or use output_mode=files_with_matches.]\n");
+                break;
+            case "count":
+                foreach (var h in hits.OrderByDescending(h => h.count).Take(fileCap)) output.Append($"{h.rel}:{h.count}\n");
+                if (hits.Count > fileCap) output.Append($"[… {hits.Count - fileCap} more files]\n");
+                output.Append($"Total: {totalMatches:N0} match(es) in {hits.Count:N0} file(s).\n");
+                break;
+            default:
+                foreach (var h in hits.OrderByDescending(h => h.mtime).Take(fileCap)) output.Append(h.rel).Append('\n');
+                if (hits.Count > fileCap) output.Append($"[… {hits.Count - fileCap} more files — narrow the search.]\n");
+                output.Append($"({hits.Count:N0} file(s), most recently modified first. Use output_mode=\"content\" to see the matching lines.)\n");
+                break;
         }
-        catch (Exception ex)
+        output.Append(notes);
+
+        return new ToolResult
         {
-            return Fail(call, $"Grep search failed: {ex.Message}");
-        }
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = output.ToString().TrimEnd(),
+            Summary = $"Grep: {totalMatches} match(es) in {hits.Count} file(s)",
+        };
+    }
+
+    /// <summary>A long (e.g. minified) line cut to a window around its first match.</summary>
+    private static string ClipAroundMatch(string line, Regex rx)
+    {
+        const int max = 300;
+        if (line.Length <= max) return line;
+        int at = 0;
+        try { var m = rx.Match(line); if (m.Success) at = m.Index; } catch { }
+        int start = Math.Max(0, at - 80);
+        int len = Math.Min(max, line.Length - start);
+        return (start > 0 ? "…" : "") + line.Substring(start, len) + (start + len < line.Length ? $"… [+{line.Length - start - len:N0} chars]" : "");
     }
 
     private static bool IsBinaryFile(string filePath)
@@ -3934,73 +4260,19 @@ public class AgentToolService : IDisposable
         if (psDanger != null)
             return Fail(call, psDanger);
 
-        int timeoutMs = int.TryParse(call.GetArg("timeout", "30000"), out int t) ? t : 30000;
-        timeoutMs = Math.Min(timeoutMs, 120000); // Cap at 2 minutes
+        int timeoutMs = ParseTimeout(call, defaultMs: 120_000);
+        string cwd = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory;
 
-        System.Diagnostics.Process? proc = null;
-        try
-        {
-            // Find PowerShell executable
-            string psExe = File.Exists(@"C:\Program Files\PowerShell\7\pwsh.exe")
-                ? @"C:\Program Files\PowerShell\7\pwsh.exe"
-                : "powershell.exe";
+        // The script travels as -EncodedCommand (Base64 UTF-16LE) inside ShellRunner — injection-proof,
+        // unlike inlining into -Command "..." — with output forced to UTF-8 and progress records off,
+        // which used to arrive on stderr as a CLIXML blob and turned Thai text into mojibake.
+        ShellRunner.Result r;
+        try { r = await ShellRunner.RunAsync(ShellRunner.Shell.PowerShell, command, cwd, timeoutMs, ct); }
+        catch (Exception ex) { return Fail(call, $"PowerShell failed to start: {ex.Message}"); }
 
-            // Pass the script via -EncodedCommand (Base64 UTF-16LE). Inlining into -Command "..." with
-            // cmd-style \" escaping is WRONG for PowerShell (it uses backtick / doubled quotes), which
-            // broke legit quoted scripts AND allowed argument breakout. EncodedCommand is injection-proof.
-            string encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
-            var psi = new System.Diagnostics.ProcessStartInfo(psExe, $"-NoProfile -NonInteractive -EncodedCommand {encodedCommand}")
-            {
-                WorkingDirectory = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-
-            proc = System.Diagnostics.Process.Start(psi);
-            if (proc == null)
-                return Fail(call, "Failed to start PowerShell process");
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeoutMs);
-
-            // Read stdout/stderr concurrently to avoid pipe deadlock
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
-            var stderrTask = proc.StandardError.ReadToEndAsync(cts.Token);
-            await proc.WaitForExitAsync(cts.Token);
-            string stdout = await stdoutTask;
-            string stderr = await stderrTask;
-
-            string output = stdout;
-            if (!string.IsNullOrWhiteSpace(stderr))
-                output += $"\n[stderr]: {stderr}";
-
-            if (output.Length > 5000)
-                output = output[..5000] + "\n... (truncated)";
-
-            return new ToolResult
-            {
-                Type = call.Type, ToolName = call.ToolName,
-                Success = proc.ExitCode == 0,
-                Output = output,
-                Error = proc.ExitCode != 0 ? $"Exit code: {proc.ExitCode}" : "",
-                Summary = $"PowerShell: {command[..Math.Min(60, command.Length)]}",
-            };
-        }
-        catch (OperationCanceledException)
-        {
-            try { proc?.Kill(true); } catch { }
-            return Fail(call, $"PowerShell timed out after {timeoutMs}ms");
-        }
-        catch (Exception ex)
-        {
-            return Fail(call, $"PowerShell failed: {ex.Message}");
-        }
-        finally
-        {
-            proc?.Dispose();
-        }
+        var result = FormatShellResult(call, command, r, null, timeoutMs);
+        result.Summary = $"PowerShell: {command[..Math.Min(60, command.Length)]}";
+        return result;
     }
 
     // ════════════════════════════════════════════════════════════════════
