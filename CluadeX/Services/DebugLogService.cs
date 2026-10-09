@@ -93,7 +93,8 @@ public class DebugLogService
     public string DumpAsText()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"# CluadeX debug log dump · {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"# CluadeX debug log dump · {DateTime.Now:yyyy-MM-dd HH:mm:ss}"));
         sb.AppendLine($"# Process started · ring buffer = {_ring.Count} entries");
         sb.AppendLine($"# Warnings={WarningCount} · Errors={ErrorCount} · Criticals={CriticalCount}");
         sb.AppendLine();

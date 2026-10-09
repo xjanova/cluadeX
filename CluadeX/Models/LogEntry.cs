@@ -46,7 +46,9 @@ public class LogEntry
     /// <summary>Compact one-line render for "Copy all" / clipboard.</summary>
     public string ToFlatString()
     {
-        var line = $"{Timestamp:yyyy-MM-dd HH:mm:ss.fff}  [{LevelDisplay,-8}] [{Category,-8}] {Message}";
+        // Invariant: on a Thai-culture PC the default calendar is Buddhist and the log said 2569-10-09.
+        var line = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{Timestamp:yyyy-MM-dd HH:mm:ss.fff}  [{LevelDisplay,-8}] [{Category,-8}] {Message}");
         return Exception == null ? line : line + "\n" + Exception;
     }
 }

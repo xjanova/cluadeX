@@ -658,7 +658,7 @@ public class MainViewModel : ViewModelBase
             {
                 App.Current?.Dispatcher.Invoke(() =>
                 {
-                    UpdateMessage = $"🔔 Update v{staged} downloaded — click Install to restart and apply.";
+                    UpdateMessage = "🔔 " + string.Format(L("update.staged"), staged);
                     CanInstallUpdate = true;
                     ShowUpdateBar = true;
                     IsUpdating = false;
@@ -715,12 +715,12 @@ public class MainViewModel : ViewModelBase
         if (_autoUpdate.HasStagedUpdate)
         {
             IsUpdating = true;
-            UpdateMessage = $"Applying v{_autoUpdate.StagedVersion} — CluadeX will restart…";
+            UpdateMessage = string.Format(L("update.applying"), _autoUpdate.StagedVersion);
             UpdateProgress = 100;
             await Task.Delay(600);
             if (!_autoUpdate.VelopackApplyAndRestart())
             {
-                UpdateMessage = "Could not apply the update — see the log. It will be retried on the next launch.";
+                UpdateMessage = L("update.applyFailed");
                 IsUpdating = false;
             }
             return;
@@ -729,13 +729,13 @@ public class MainViewModel : ViewModelBase
         if (_pendingUpdate == null) return;
 
         IsUpdating = true;
-        UpdateMessage = "Downloading update...";
+        UpdateMessage = L("update.downloading");
         UpdateProgress = 0;
 
         string? zipPath = await _autoUpdate.DownloadUpdateAsync(_pendingUpdate);
         if (zipPath != null)
         {
-            UpdateMessage = "Installing update... App will restart.";
+            UpdateMessage = L("update.installing");
             UpdateProgress = 100;
 
             // Small delay to show the message
@@ -745,7 +745,7 @@ public class MainViewModel : ViewModelBase
         }
         else
         {
-            UpdateMessage = "Download failed. Try again later.";
+            UpdateMessage = L("update.downloadFailed");
             IsUpdating = false;
         }
     }
