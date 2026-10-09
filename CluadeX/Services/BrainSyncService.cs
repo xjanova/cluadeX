@@ -147,15 +147,14 @@ public class BrainSyncService
                 }
             }
 
-            // Create a fresh note.
-            // FIX (audit CRITICAL #4): tags must reach brain as a real JSON
-            // array, not a quoted string. Use the object-typed overload so
-            // `BuildTags(instinct)` (a List<string>) serialises natively.
+            // Create a fresh note. brain_create_note declares tags as ONE comma-separated string
+            // ({"type":"string"} — read off the live server's schema 2026-10-09); a JSON array here
+            // failed every instinct sync.
             var createArgs = new Dictionary<string, object>
             {
                 ["title"] = BuildTitle(instinct),
                 ["folder"] = "Notes/Coding-Lessons",
-                ["tags"] = BuildTags(instinct),
+                ["tags"] = string.Join(",", BuildTags(instinct)),
                 ["content"] = BuildNoteBody(instinct),
             };
             _log.Debug("BrainSync", $"Creating new brain note for '{instinct.Pattern}'");

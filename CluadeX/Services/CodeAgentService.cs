@@ -108,6 +108,22 @@ public class CodeAgentService
         return Services.Mcp.McpServerManager.LooksLikeBrain(server);
     }
 
+    /// <summary>Tool definitions one OpenAI / Gemini request may carry.</summary>
+    private const int MaxApiToolSchemas = 128;
+
+    /// <summary>At most <paramref name="max"/> schemas: all built-ins first (original order), then pinned MCP
+    /// recall tools, then the remaining MCP tools in order.</summary>
+    public static List<Services.Providers.ToolSchema> CapToolSchemas(
+        List<Services.Providers.ToolSchema> schemas, int max, out int dropped)
+    {
+        var ordered = schemas.Where(t => !IsMcpToolName(t.Name))
+            .Concat(schemas.Where(t => IsMcpToolName(t.Name) && IsPinnedMcpTool(t.Name)))
+            .Concat(schemas.Where(t => IsMcpToolName(t.Name) && !IsPinnedMcpTool(t.Name)))
+            .Take(max).ToHashSet();
+        dropped = schemas.Count - ordered.Count;
+        return schemas.Where(ordered.Contains).ToList();   // original order for the ones that stay
+    }
+
     private static bool IsPinnedMcpTool(string qualifiedName)
     {
         if (!IsMcpToolName(qualifiedName)) return false;
@@ -2266,6 +2282,14 @@ public class CodeAgentService
                 + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
             toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped);
         }
+        else if (loopProvider.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
+        {
+            // OpenAI documents 128 functions per request; built-ins (~70) plus the brain's 128 tools blow past
+            // it and the first native request would be rejected. Keep every built-in, then the brain's recall
+            // tools, then the rest of the MCP tools in order.
+            toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out mcpDropped);
+            _debugLog?.Warn("Agent", $"{loopProvider.ProviderId}: {mcpDropped} MCP tool schema(s) left out (limit {MaxApiToolSchemas} per request)");
+        }
 
         _debugLog?.Info("Agent", $"native loop start · provider={loopProvider.ProviderId} ctx={_settingsService.Settings.ContextSize} "
             + $"schemas={toolSchemas.Count}{(isLocal ? $" (fitted · mcp {mcpKept} kept/{mcpDropped} dropped · recall {toolSchemas.Count(t => IsPinnedMcpTool(t.Name))}/{recallOffered} pinned · ~{toolSchemas.Sum(EstimateSchemaTokens)}tok · reserved {reservedTokens}tok)" : " (full)")} "
@@ -2468,7 +2492,10 @@ public class CodeAgentService
             // Recorded from what the model ASKED for, not from what succeeded: a brain call
             // that errored still means it consulted the brain, and forcing a second one after
             // a failure just spends the turn on the same error.
-            if (!anyBrainToolCalled && response.ToolCalls.Any(t => IsBrainMcpTool(t.Name)))
+            // The built-in brain_recall searches the brain too — counting only mcp__ names made the brain-first
+            // guard force a second search right after a turn that had already used it.
+            if (!anyBrainToolCalled && response.ToolCalls.Any(t => IsBrainMcpTool(t.Name)
+                    || _agentToolService.ResolveToolTypePublic(t.Name) == ToolType.BrainRecall))
                 anyBrainToolCalled = true;
 
             // ─── Provider-reported error (HTTP failure, unsupported backend) ───

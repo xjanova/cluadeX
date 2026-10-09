@@ -547,10 +547,24 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         // Without the array/object branch below the server received a quoted string like
         // "[\"a\",\"b\"]" where it expected a real array, and rejected the call — which made every
         // MCP tool with a non-scalar parameter unusable from the agent.
+        // The tool's own schema decides first: a property declared "string" stays a string, so a search
+        // for "2026" or "true" is not sent as a number / bool that the server rejects.
+        JsonElement? props = null;
+        var tool = _toolRegistry.ResolveTool(toolName);
+        if (tool?.ServerName == serverName && tool.InputSchema is { ValueKind: JsonValueKind.Object } schema
+            && schema.TryGetProperty("properties", out var p) && p.ValueKind == JsonValueKind.Object)
+            props = p;
+
         var argsDict = new Dictionary<string, object>();
         foreach (var (key, value) in arguments)
         {
             string v = value ?? "";
+            if (props is { } pp && pp.TryGetProperty(key, out var decl)
+                && decl.TryGetProperty("type", out var dt) && dt.ValueKind == JsonValueKind.String && dt.GetString() == "string")
+            {
+                argsDict[key] = v;
+                continue;
+            }
             string t = v.TrimStart();
             if (t.Length > 0 && (t[0] == '[' || t[0] == '{'))
             {

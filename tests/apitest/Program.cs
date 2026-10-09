@@ -106,6 +106,58 @@ internal static class Program
 
         await Offline();
 
+        // --brain: connect BrainX exactly the way the app does (the real McpServerManager + the user's own
+        // mcp_servers.json, copied into the portable data folder) and run real searches through it.
+        if (args.Contains("--brain"))
+        {
+            Section("BrainX through CluadeX's own MCP client");
+            var svc = new SettingsService();
+            Directory.CreateDirectory(svc.DataRoot);
+            string userCfg = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "mcp_servers.json");
+            File.Copy(userCfg, Path.Combine(svc.DataRoot, "mcp_servers.json"), overwrite: true);
+            using var mcp = new CluadeX.Services.Mcp.McpServerManager(svc);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await mcp.InitializeAsync();
+            string brain = mcp.BrainServerName;
+            Check("brain", "connects and lists its tools", mcp.IsBrainConnected && mcp.BrainToolCount > 0,
+                $"server={brain} tools={mcp.BrainToolCount} in {sw.ElapsedMilliseconds} ms · {mcp.BrainStatusText}");
+            if (mcp.IsBrainConnected)
+            {
+                var names = mcp.ToolRegistry.GetAllTools().Where(t => t.ServerName == brain).Select(t => t.Name).ToHashSet();
+                foreach (var need in new[] { "brain_search", "brain_recall", "brain_semantic_search", "brain_get_note", "brain_create_note", "brain_remember" })
+                    Check("brain", $"tool offered: {need}", names.Contains(need), "");
+                // What the instinct sync sends must match what brain_create_note declares.
+                var create = mcp.ToolRegistry.GetAllTools().First(t => t.ServerName == brain && t.Name == "brain_create_note");
+                string tagsSchema = create.InputSchema is { } cs && cs.TryGetProperty("properties", out var props)
+                    && props.TryGetProperty("tags", out var tg) ? tg.GetRawText() : "(none)";
+                Console.WriteLine($"  info brain_create_note.tags schema: {Trunc(tagsSchema, 300)}");
+                foreach (var tn in new[] { "brain_create_note", "brain_append_note" })
+                {
+                    var tdef = mcp.ToolRegistry.GetAllTools().FirstOrDefault(t => t.ServerName == brain && t.Name == tn);
+                    if (tdef?.InputSchema is { } sch)
+                        Console.WriteLine($"  info {tn} schema: {Trunc(sch.GetRawText(), 900)}");
+                }
+                // The agent dispatch path flattens arguments to strings; a numeric-looking query must stay a string.
+                var numericQuery = await mcp.CallToolAsync(brain, "brain_search", new Dictionary<string, string> { ["query"] = "2026" });
+                Check("brain", "query \"2026\" goes out as a string (agent dispatch path)", !numericQuery.IsError,
+                    Trunc(numericQuery.GetTextOutput().Replace('\n', ' '), 200));
+                foreach (var (tool, argsObj) in new (string, Dictionary<string, object>)[]
+                {
+                    ("brain_search", new() { ["query"] = "CluadeX workspace API key" }),
+                    ("brain_recall", new() { ["query"] = "CluadeX settings save loop" }),
+                    ("brain_semantic_search", new() { ["query"] = "how does CluadeX connect to Anthropic" }),
+                })
+                {
+                    sw.Restart();
+                    var res = await mcp.CallToolWithObjectArgsAsync(brain, tool, argsObj);
+                    string text = res.GetTextOutput();
+                    Check("brain", $"{tool} returns results", !res.IsError && text.Length > 50,
+                        $"{sw.ElapsedMilliseconds} ms · {Trunc(text.Replace('\n', ' '), 220)}");
+                }
+            }
+            return Finish();
+        }
+
         // --db-health <codex.db>: open a COPY of a chat database through the real DatabaseService and prove the
         // automatic cleanup refuses to delete anything when the file fails its integrity check.
         int dbi = Array.IndexOf(args, "--db-health");
@@ -414,6 +466,18 @@ internal static class Program
         Check("usage", "OpenAI: 75% left, reset parsed from 6m0s", osnap?.PercentLeft is double op && Math.Abs(op - 75) < 0.01
             && osnap.Reset is { } rs && (rs - DateTimeOffset.Now).TotalMinutes is > 5.9 and < 6.1, osnap == null ? "null" : $"{osnap.PercentLeft}%");
         Check("usage", "no headers → no gauge", UsageMeter.FromAnthropic(new HttpResponseMessage(), "m") == null, "");
+
+        Section("offline · tool cap for OpenAI / Gemini (128 per request)");
+        JsonElement emptySchema = JsonDocument.Parse("{\"type\":\"object\"}").RootElement.Clone();
+        var many = Enumerable.Range(0, 70).Select(i => new ToolSchema { Name = $"builtin_{i}", InputSchema = emptySchema })
+            .Concat(Enumerable.Range(0, 125).Select(i => new ToolSchema { Name = $"mcp__brainx-brain__tool_{i}", InputSchema = emptySchema }))
+            .Concat(new[] { "brain_search", "brain_semantic_search", "brain_get_note" }.Select(n => new ToolSchema { Name = $"mcp__brainx-brain__{n}", InputSchema = emptySchema }))
+            .ToList();
+        var capped = CodeAgentService.CapToolSchemas(many, 128, out int droppedTools);
+        Check("cap", "198 tools → 128, every built-in kept", capped.Count == 128 && capped.Count(t => t.Name.StartsWith("builtin_")) == 70 && droppedTools == 70,
+            $"kept={capped.Count} dropped={droppedTools}");
+        Check("cap", "brain recall tools survive the cut", capped.Any(t => t.Name.EndsWith("__brain_search")) && capped.Any(t => t.Name.EndsWith("__brain_get_note")), "");
+        Check("cap", "original order kept", capped.Select(t => many.IndexOf(t)).SequenceEqual(capped.Select(t => many.IndexOf(t)).OrderBy(i => i)), "");
 
         await MockProviders.Run(Check, Section);
 
