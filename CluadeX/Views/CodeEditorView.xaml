@@ -561,8 +561,14 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets" FontSize="9"
                                                Foreground="{StaticResource NeonAmberBrush}" Margin="2,0,2,0" VerticalAlignment="Center"/>
+                                    <!-- Explicit: arrowing through the list must not check anything out. The
+                                         choice is committed when the dropdown closes or Enter is pressed
+                                         (and then still confirmed by the VM). -->
                                     <ComboBox ItemsSource="{Binding GitBranches}"
-                                              SelectedItem="{Binding SelectedBranch}"
+                                              SelectedItem="{Binding SelectedBranch, UpdateSourceTrigger=Explicit}"
+                                              DropDownClosed="OnBranchDropDownClosed"
+                                              KeyDown="OnBranchKeyDown"
+                                              LostKeyboardFocus="OnBranchLostFocus"
                                               FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
                                               Foreground="{StaticResource NeonAmberBrush}"
                                               Background="Transparent" BorderThickness="0"
@@ -679,12 +685,23 @@
                                     ToolTip="{services:Loc editor.stageAndCommit}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
                                                 BorderBrush="{TemplateBinding BorderBrush}"
                                                 BorderThickness="{TemplateBinding BorderThickness}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter/>
                                         </Border>
+                                        <!-- A disabled button must LOOK disabled: these templates drew the
+                                             same box whether or not a click would do anything. -->
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                                 <StackPanel Orientation="Horizontal">
@@ -699,15 +716,25 @@
                             <Button Command="{Binding SaveActiveCommand}" Cursor="Hand"
                                     Padding="8,4" Margin="0,0,4,0"
                                     Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10">
+                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10"
+                                    ToolTip="{services:Loc ide.saveTip}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
                                                 BorderBrush="{TemplateBinding BorderBrush}"
                                                 BorderThickness="{TemplateBinding BorderThickness}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter/>
                                         </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#5528326E"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                                 <StackPanel Orientation="Horizontal">
@@ -718,15 +745,25 @@
                             <Button Command="{Binding SaveAllCommand}" Cursor="Hand"
                                     Padding="8,4"
                                     Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10">
+                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10"
+                                    ToolTip="{services:Loc ide.saveAllTip}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
                                                 BorderBrush="{TemplateBinding BorderBrush}"
                                                 BorderThickness="{TemplateBinding BorderThickness}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter/>
                                         </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#5528326E"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                                 <StackPanel Orientation="Horizontal">
@@ -1160,6 +1197,12 @@
                                 ToolTip="{services:Loc editor.stepOut}">
                             <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                        Foreground="{StaticResource NeonCyanBrush}"/>
+                        </Button>
+                        <Button Command="{Binding PauseDebugCommand}" IsEnabled="{Binding CanPauseDebug}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc ide.pauseDebug}">
+                            <TextBlock Text="&#xE769;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonAmberBrush}"/>
                         </Button>
                         <Button Command="{Binding StopDebugCommand}"
                                 Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
@@ -1846,6 +1889,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="&gt;" FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
                                        Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center" Margin="4,0,6,0"/>
@@ -1856,8 +1900,31 @@
                                          Foreground="{StaticResource NeonInk0Brush}"
                                          CaretBrush="{StaticResource NeonAmberBrush}"
                                          FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
-                                         KeyDown="OnTerminalInputKeyDown"/>
+                                         KeyDown="OnTerminalInputKeyDown"
+                                         PreviewKeyDown="OnTerminalInputPreviewKeyDown"/>
                             </Border>
+                            <Button Grid.Column="2" Command="{Binding InterruptTerminalCommand}" Cursor="Hand"
+                                    Margin="6,0,0,0" Padding="8,3" Background="Transparent" BorderThickness="1"
+                                    BorderBrush="{StaticResource NeonLineHiBrush}"
+                                    ToolTip="{services:Loc ide.stopTerminalTip}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="#33FF6E6E"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{StaticResource NeonMagentaBrush}"/>
+                            </Button>
                         </Grid>
                     </Grid>
                 </StackPanel>

@@ -11,9 +11,9 @@ namespace CluadeX.Services;
 /// the AI agent tool surface (hex_open / hex_read / hex_search / hex_patch).
 ///
 /// Memory model: small/medium files (&lt; 64 MB) are held in memory verbatim.
-/// Larger files load only the first 64 MB and warn the user — full-file
-/// edit-and-save for huge binaries is out of scope (chunked editing is
-/// available via the AI tools for surgical patches).
+/// Larger files load only the first 64 MB (<see cref="IsTruncated"/>). Saving such a file patches the
+/// loaded window IN PLACE and leaves every byte after it untouched — the old save re-created the file
+/// from the 64 MB buffer, so "Save" on a 200 MB binary silently cut it to 64 MB.
 /// </summary>
 public class HexEditorService
 {
@@ -25,6 +25,7 @@ public class HexEditorService
     private string? _path;
     private bool _isDirty;
     private bool _isReadOnly;
+    private long _fileLength;   // length on disk when opened — larger than _data when truncated
 
     public event Action? Changed;
     public event Action<long, int>? BytesPatched;    // (offset, length)
@@ -43,15 +44,39 @@ public class HexEditorService
     public int UndoCount => _undo.Count;
     public HexFileInfo? CurrentFileInfo { get; private set; }
 
+    /// <summary>Largest file held fully in memory; bigger files show (and save) only this many leading bytes.</summary>
+    public static long InMemoryLimit => MaxInMemoryBytes;
+
+    /// <summary>True when the file on disk is larger than what was loaded (only the first 64 MB is editable).</summary>
+    public bool IsTruncated => _data != null && _fileLength > _data.LongLength;
+
+    /// <summary>Length of the file on disk at open time (Size is only the loaded part).</summary>
+    public long FileLength => _fileLength;
+
+    /// <summary>
+    /// Asked before an open would throw away unsaved edits: (pathWithEdits, pathBeingOpened) → true to discard.
+    /// The service is shared by the Hex Editor page AND the agent's hex_* tools, so an agent hex_open used to
+    /// replace the buffer under the user's unsaved patches without a word. No handler = never discard.
+    /// </summary>
+    public Func<string, string, Task<bool>>? ConfirmDiscardChanges { get; set; }
+
     // ═══════════════════════════════════════════
     // File open / save
     // ═══════════════════════════════════════════
 
-    /// <summary>Open a file fully into memory. Truncated to 64 MB for huge files.</summary>
+    /// <summary>Open a file fully into memory. Huge files load only the first 64 MB (see IsTruncated).</summary>
+    /// <exception cref="HexUnsavedChangesException">the current file has unsaved edits and discarding them was declined.</exception>
     public async Task<HexFileInfo> OpenAsync(string path, bool readOnly = false, CancellationToken ct = default)
     {
         if (!File.Exists(path))
             throw new FileNotFoundException("File not found.", path);
+
+        if (_isDirty && _data != null && _path != null)
+        {
+            var ask = ConfirmDiscardChanges;
+            bool discard = ask != null && await ask(_path, path);
+            if (!discard) throw new HexUnsavedChangesException(_path);
+        }
 
         var fi = new FileInfo(path);
         long actual = fi.Length;
@@ -68,45 +93,57 @@ public class HexEditorService
                 total += read;
             }
         }
+        var info = HexFileInfo.From(path, buffer.AsSpan(0, Math.Min(64, buffer.Length)).ToArray(), actual);
+        if (actual > toLoad)
+        {
+            // Hash the whole file from disk: a hash of only the loaded 64 MB, shown as "SHA-256", would not
+            // match what any other tool reports for this file.
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            await using var whole = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            info.Sha256 = Convert.ToHexString(await sha.ComputeHashAsync(whole, ct)).ToLowerInvariant();
+        }
+        else
+        {
+            await using var s = new MemoryStream(buffer);
+            info.ComputeSha256(s);
+        }
+
         _data = buffer;
         _path = path;
+        _fileLength = actual;
         _isDirty = false;
         _isReadOnly = readOnly || (fi.Attributes & FileAttributes.ReadOnly) != 0;
         _undo.Clear();
         _redo.Clear();
-
-        var info = HexFileInfo.From(path, buffer.AsSpan(0, Math.Min(64, buffer.Length)).ToArray(), actual);
-        // SHA-256 of what's loaded (not full file when truncated)
-        await using (var s = new MemoryStream(buffer))
-        {
-            info.ComputeSha256(s);
-        }
         CurrentFileInfo = info;
         FileLoaded?.Invoke(info);
         Changed?.Invoke();
         return info;
     }
 
-    /// <summary>Save changes back to the original path. Optionally writes a `.bak` first.</summary>
+    /// <summary>
+    /// Save changes back to the original path. With <paramref name="createBackup"/> a `.bak` copy is written
+    /// first and the save is ABORTED if that copy fails — callers report "saved (.bak written)", and the old
+    /// best-effort backup could fail silently right before an overwrite, making that message a lie.
+    /// </summary>
+    /// <exception cref="HexBackupFailedException">the .bak copy could not be written; nothing was saved.</exception>
     public async Task<bool> SaveAsync(bool createBackup = true, CancellationToken ct = default)
     {
         if (_data == null || _path == null) return false;
         if (_isReadOnly) throw new InvalidOperationException("File is read-only.");
 
+        string path = _path;
         if (createBackup)
         {
-            try
+            string bak = path + ".bak";
+            try { await Task.Run(() => File.Copy(path, bak, overwrite: true), ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                string bak = _path + ".bak";
-                File.Copy(_path, bak, overwrite: true);
+                throw new HexBackupFailedException(bak, ex);
             }
-            catch { /* best-effort */ }
         }
 
-        await using (var fs = File.Open(_path, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            await fs.WriteAsync(_data, ct);
-        }
+        await WriteBufferAsync(path, ct);
         _isDirty = false;
         Changed?.Invoke();
         return true;
@@ -115,16 +152,53 @@ public class HexEditorService
     /// <summary>Save to a different path (does not change CurrentPath).</summary>
     public async Task<bool> SaveAsAsync(string newPath, CancellationToken ct = default)
     {
-        if (_data == null) return false;
-        await using var fs = File.Open(newPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await fs.WriteAsync(_data, ct);
+        if (_data == null || _path == null) return false;
+        if (string.Equals(Path.GetFullPath(newPath), Path.GetFullPath(_path), StringComparison.OrdinalIgnoreCase))
+            return await SaveAsync(createBackup: true, ct);
+
+        if (IsTruncated)
+        {
+            // The buffer is only the first 64 MB: start the new file as a full copy of the original, then patch
+            // the edited window over it — writing just the buffer would produce a 64 MB stub of the file.
+            string src = _path;
+            await Task.Run(() => File.Copy(src, newPath, overwrite: true), ct);
+            await WriteBufferAsync(newPath, ct);
+        }
+        else
+        {
+            await using var fs = File.Open(newPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            await fs.WriteAsync(_data, ct);
+        }
         return true;
+    }
+
+    /// <summary>
+    /// Write the in-memory buffer to <paramref name="path"/>. A fully-loaded file is rewritten to the buffer;
+    /// a truncated one is patched in place from offset 0 and keeps every byte past the buffer.
+    /// </summary>
+    private async Task WriteBufferAsync(string path, CancellationToken ct)
+    {
+        byte[] data = _data!;
+        if (IsTruncated)
+        {
+            await using var fs = File.Open(path, FileMode.Open, FileAccess.Write, FileShare.None);
+            if (fs.Length < data.LongLength)
+                throw new IOException("The file on disk is now smaller than the part loaded into the editor — reopen it before saving.");
+            fs.Position = 0;
+            await fs.WriteAsync(data, ct);
+        }
+        else
+        {
+            await using var fs = File.Open(path, FileMode.Create, FileAccess.Write, FileShare.None);
+            await fs.WriteAsync(data, ct);
+        }
     }
 
     public void Close()
     {
         _data = null;
         _path = null;
+        _fileLength = 0;
         _isDirty = false;
         _undo.Clear();
         _redo.Clear();
@@ -411,4 +485,22 @@ public class HexEditorService
         }
         return (hex.ToString(), ascii.ToString());
     }
+}
+
+/// <summary>Open refused: the current file has unsaved edits and the user did not agree to discard them.</summary>
+public sealed class HexUnsavedChangesException : InvalidOperationException
+{
+    public string PathWithEdits { get; }
+    public HexUnsavedChangesException(string pathWithEdits)
+        : base($"The Hex Editor has unsaved edits in {pathWithEdits} — save or discard them in the Hex Editor first.")
+        => PathWithEdits = pathWithEdits;
+}
+
+/// <summary>Save aborted before touching the file because the .bak copy could not be written.</summary>
+public sealed class HexBackupFailedException : IOException
+{
+    public string BackupPath { get; }
+    public HexBackupFailedException(string backupPath, Exception inner)
+        : base($"Could not write the backup {backupPath} ({inner.Message}) — nothing was saved.", inner)
+        => BackupPath = backupPath;
 }

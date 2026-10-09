@@ -50,9 +50,14 @@ public class CommandPaletteViewModel : ViewModelBase
 
     public bool HasResults => Results.Count > 0;
 
-    public string ResultSummary => Results.Count == 0
-        ? "No matches"
-        : $"{Results.Count} result{(Results.Count == 1 ? "" : "s")}";
+    private static string L(string key) => CluadeX.Services.LocalizedResources.Instance[key];
+
+    public string ResultSummary => Results.Count switch
+    {
+        0 => L("palette.noMatches"),
+        1 => L("palette.oneResult"),
+        _ => string.Format(L("palette.results"), Results.Count),
+    };
 
     public CommandPaletteViewModel(Func<IEnumerable<PaletteItem>> sourceProvider)
     {
@@ -156,6 +161,51 @@ public class CommandPaletteViewModel : ViewModelBase
     }
 
     // ── Source builders ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The app's core commands. The palette's search box promises "files, symbols &amp; commands" but listed only
+    /// pages, skills and files. Every row runs an existing command, so there is nothing here that can drift from
+    /// the buttons it mirrors (Clear chat still asks first, New chat still stops a running reply first).
+    /// MainViewModel.BuildPaletteItems adds these:
+    /// <c>items.AddRange(CommandPaletteViewModel.BuildCoreCommandItems(ChatVM, NavigateTo, CheckUpdateCommand, OpenLicenseCommand));</c>
+    /// </summary>
+    public static IEnumerable<PaletteItem> BuildCoreCommandItems(
+        ChatViewModel chat, Action<string> navigate, System.Windows.Input.ICommand? checkForUpdates, System.Windows.Input.ICommand? openLicense)
+    {
+        PaletteItem Item(string glyph, string titleKey, string subKey, string extraWords, Action run)
+        {
+            string title = L(titleKey), sub = L(subKey);
+            return new PaletteItem
+            {
+                Icon = glyph, Title = title, Subtitle = sub, Kind = L("palette.kind.command"), KindColor = "#FFD166",
+                // English words stay in the haystack so "new chat" also finds the row in the Thai UI.
+                Haystack = (title + " " + sub + " " + extraWords).ToLowerInvariant(),
+                Run = run,
+            };
+        }
+
+        static void Exec(System.Windows.Input.ICommand? cmd)
+        {
+            if (cmd != null && cmd.CanExecute(null)) cmd.Execute(null);
+        }
+
+        yield return Item("", "palette.cmd.newChat", "palette.cmd.newChatSub", "new chat session",
+            () => Exec(chat.NewChatAndShowCommand));
+        yield return Item("", "palette.cmd.openFolder", "palette.cmd.openFolderSub", "open folder project",
+            () => Exec(chat.OpenFolderCommand));
+        yield return Item("", "palette.cmd.clearChat", "palette.cmd.clearChatSub", "clear chat",
+            () => { navigate("Chat"); Exec(chat.ClearChatCommand); });
+        yield return Item("", "palette.cmd.compact", "palette.cmd.compactSub", "compact context",
+            () => { navigate("Chat"); Exec(chat.CompactCommand); });
+        if (checkForUpdates != null)
+            yield return Item("", "palette.cmd.updates", "palette.cmd.updatesSub", "check for updates update",
+                () => Exec(checkForUpdates));
+        yield return Item("", "palette.cmd.settings", "palette.cmd.settingsSub", "settings preferences",
+            () => navigate("Settings"));
+        if (openLicense != null)
+            yield return Item("", "palette.cmd.license", "palette.cmd.licenseSub", "license key activate",
+                () => Exec(openLicense));
+    }
 
     /// <summary>Enumerate project files for the palette, skipping noise folders and capping cost.</summary>
     public static IEnumerable<PaletteItem> BuildFileItems(string workingDir, Action<string> openFile, int max = 600)

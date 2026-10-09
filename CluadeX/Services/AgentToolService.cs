@@ -377,7 +377,8 @@ public class AgentToolService : IDisposable
                 }
                 else
                 {
-                    string resource = call.GetArg("path", call.GetArg("command", call.ToolName));
+                    // web_fetch carries a url — without it a URL-pattern rule could never match.
+                    string resource = call.GetArg("path", call.GetArg("command", call.GetArg("url", call.ToolName)));
                     string scope = call.Type switch
                     {
                         ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory => "write",
@@ -2760,6 +2761,12 @@ public class AgentToolService : IDisposable
         string command = call.GetArg("command");
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
+
+        // Same blocklist as run_command — a background task is still a shell command, and without this check
+        // switching from run_command to task_create walked straight past it.
+        var dangerReason = CheckDangerousCommand(command);
+        if (dangerReason != null)
+            return Fail(call, dangerReason);
 
         int taskId = _taskManager.CreateTask(name, command);
         return new ToolResult

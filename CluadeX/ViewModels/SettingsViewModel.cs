@@ -14,6 +14,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly LocalizationService _localizationService;
     private readonly MemoryService _memoryService;
     private readonly ActivationService _activationService;
+    private readonly DebugLogService? _log;
     private readonly System.Windows.Threading.DispatcherTimer _autoSaveDebounce;
 
     private string T(string key) => _localizationService.T(key);
@@ -230,6 +231,9 @@ public class SettingsViewModel : ViewModelBase
     public string GpuInfoDisplay { get => _gpuInfoDisplay; set => SetProperty(ref _gpuInfoDisplay, value); }
     public string VramRecommendation { get => _vramRecommendation; set => SetProperty(ref _vramRecommendation, value); }
     public string SaveStatus { get => _saveStatus; set => SetProperty(ref _saveStatus, value); }
+    private bool _saveStatusIsError;
+    /// <summary>The status line shows a problem (red) rather than "Saved ✓" (green).</summary>
+    public bool SaveStatusIsError { get => _saveStatusIsError; set => SetProperty(ref _saveStatusIsError, value); }
 
     public List<string> BackendOptions { get; } = ["Auto", "CUDA12", "CPU"];
     public List<int> BatchSizeOptions { get; } = [128, 256, 512, 1024, 2048];
@@ -363,7 +367,8 @@ public class SettingsViewModel : ViewModelBase
         AiProviderManager providerManager,
         LocalizationService localizationService,
         MemoryService memoryService,
-        ActivationService activationService)
+        ActivationService activationService,
+        DebugLogService? log = null)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
@@ -371,6 +376,7 @@ public class SettingsViewModel : ViewModelBase
         _localizationService = localizationService;
         _memoryService = memoryService;
         _activationService = activationService;
+        _log = log;
 
         BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.modelStorageDir"), ModelDirectory); if (p != null) ModelDirectory = p; });
         BrowseTempDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.tempDir"), TempDirectory); if (p != null) TempDirectory = p; });
@@ -411,6 +417,7 @@ public class SettingsViewModel : ViewModelBase
         });
         _providerManager.OnProviderChanged += _ =>
             App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(ActiveProviderName)));
+        _localizationService.LanguageChanged += () => OnPropertyChanged(nameof(SecretsNotice));
 
         LoadPageValues(_settingsService.Settings);
         _uiLanguage = _settingsService.Settings.Language == "th" ? "ไทย" : "English";
@@ -499,17 +506,69 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Folder settings that are validated before they are written.</summary>
+    private static readonly string[] PathFields = [nameof(ModelDirectory), nameof(TempDirectory)];
+
+    private string PathValue(string field) => field switch
+    {
+        nameof(ModelDirectory) => ModelDirectory,
+        nameof(TempDirectory) => TempDirectory,
+        _ => "",
+    };
+
+    /// <summary>
+    /// A folder path is accepted when it is a full path (drive or UNC) with legal characters on a drive that
+    /// exists. It does not have to exist yet — the folder is created when it is first used, never by Save
+    /// (the page saves on its own, and creating each typed value left folders like "D:\Mod" behind).
+    /// Returns a localized problem description, or null when the path is fine.
+    /// </summary>
+    public string? ValidateFolderPath(string? path, bool allowEmpty)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return allowEmpty ? null : T("settingsm.pathEmpty");
+        string p = path.Trim();
+        if (p.IndexOfAny(System.IO.Path.GetInvalidPathChars()) >= 0 || p.IndexOfAny(['*', '?', '"', '<', '>', '|']) >= 0)
+            return string.Format(T("settingsm.pathInvalidChars"), p);
+        if (!System.IO.Path.IsPathFullyQualified(p))
+            return string.Format(T("settingsm.pathNotFull"), p);
+        try
+        {
+            string? root = System.IO.Path.GetPathRoot(p);
+            if (string.IsNullOrEmpty(root) || (!root.StartsWith(@"\\") && !System.IO.Directory.Exists(root)))
+                return string.Format(T("settingsm.pathNoDrive"), root ?? p);
+            if (System.IO.File.Exists(p)) return string.Format(T("settingsm.pathIsFile"), p);
+        }
+        catch { return string.Format(T("settingsm.pathInvalidChars"), p); }
+        return null;
+    }
+
     private void Save()
     {
         if (_dirty.Count == 0) return;
         var changed = _dirty.ToList();
         _dirty.Clear();
+
+        // Folder fields: a path that isn't usable is NOT written; the page keeps showing it with the reason.
+        string? pathProblem = null;
+        foreach (var field in PathFields)
+        {
+            if (!changed.Contains(field)) continue;
+            string? problem = ValidateFolderPath(PathValue(field), allowEmpty: false);
+            if (problem == null) continue;
+            changed.Remove(field);
+            pathProblem ??= problem;
+        }
+        if (changed.Count == 0)
+        {
+            if (pathProblem != null) { SaveStatusIsError = true; SaveStatus = pathProblem; }
+            return;
+        }
         bool providerChanged = changed.Any(ProviderFields.Contains);
 
+        bool ok;
         _saving = true;
         try
         {
-            _settingsService.UpdateSettings(s =>
+            ok = _settingsService.UpdateSettings(s =>
             {
                 foreach (var name in changed)
                     if (Writers.TryGetValue(name, out var write)) write(this, s);
@@ -519,13 +578,35 @@ public class SettingsViewModel : ViewModelBase
         }
         finally { _saving = false; }
 
+        if (!ok)
+        {
+            // Keep the edits pending so the next change (or reopening the page) tries again — and say so instead
+            // of the "Saved ✓" this used to show for a write that never happened.
+            foreach (var name in changed) _dirty.Add(name);
+            _log?.Error("Settings", $"Saving settings.json failed: {_settingsService.LastSaveError}");
+            SaveStatusIsError = true;
+            SaveStatus = T("settingsm.saveFailed");
+            return;
+        }
+
+        if (pathProblem != null) { SaveStatusIsError = true; SaveStatus = pathProblem; return; }
+        SaveStatusIsError = false;
         SaveStatus = T("settings.savedTick");
         _ = Task.Delay(1500).ContinueWith(_ =>
         {
-            try { App.Current?.Dispatcher.BeginInvoke(() => SaveStatus = ""); }
+            try { App.Current?.Dispatcher.BeginInvoke(() => { if (SaveStatus == T("settings.savedTick")) SaveStatus = ""; }); }
             catch { /* app may be shutting down */ }
         });
     }
+
+    /// <summary>
+    /// Shown on the provider card when stored API keys could not be decrypted on this PC (portable copy moved
+    /// to another computer / Windows account). The encrypted values are kept unchanged until a new key is typed.
+    /// </summary>
+    public string SecretsNotice => _settingsService.UndecryptableSecrets.Count == 0
+        ? ""
+        : string.Format(T("settingsm.secretsUnreadable"), string.Join(", ",
+            _settingsService.UndecryptableSecrets.Select(s => s.StartsWith("Provider:") ? s["Provider:".Length..] : "Hugging Face")));
 
     private void ResetDefaults()
     {
@@ -538,7 +619,7 @@ public class SettingsViewModel : ViewModelBase
         ApplyPageValues(new AppSettings(), includeStorage: false);
         _autoSaveDebounce.Stop();
         Save();
-        SaveStatus = T("settings.resetDone");
+        if (!SaveStatusIsError) SaveStatus = T("settings.resetDone");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -649,13 +730,24 @@ public class SettingsViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            ConnectionTestResult = $"{T("settings.failedPrefix")}: {ex.Message}";
+            _log?.Error("Settings", $"Test connection ({SelectedProvider}) threw", ex);
+            ConnectionTestResult = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
         }
         finally
         {
             IsTestingConnection = false;
         }
     }
+
+    /// <summary>A short localized reason for an exception (details go to the Debug Log, never the page).</summary>
+    private string DescribeFailure(Exception ex) => ex switch
+    {
+        System.Net.Http.HttpRequestException or System.Net.Sockets.SocketException => T("settingsm.errNetwork"),
+        TaskCanceledException or TimeoutException => T("settingsm.errTimeout"),
+        UnauthorizedAccessException => T("settingsm.errAccess"),
+        System.IO.IOException => T("settingsm.errIo"),
+        _ => T("settingsm.errGeneric"),
+    };
 
     private async Task ApplyProvider()
     {
@@ -687,7 +779,8 @@ public class SettingsViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            ConnectionTestResult = $"{T("settings.failedPrefix")}: {ex.Message}";
+            _log?.Error("Settings", $"Switching to {SelectedProvider} threw", ex);
+            ConnectionTestResult = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
         }
     }
 
@@ -735,7 +828,8 @@ public class SettingsViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            ConnectionTestResult = $"{T("settings.failedPrefix")}: {ex.Message}";
+            _log?.Warn("Settings", "Listing Ollama models failed", ex);
+            ConnectionTestResult = $"{T("settings.failedPrefix")}: {T("settingsm.ollamaNotDetected")}";
         }
     }
 
@@ -756,7 +850,7 @@ public class SettingsViewModel : ViewModelBase
                 finally { _loading = wasLoading; }
                 ConnectionTestResult = models.Count > 0
                     ? string.Format(T("settings.modelsFound"), models.Count)
-                    : "Ollama is running but has no models — run: ollama pull qwen2.5-coder";
+                    : T("settingsm.ollamaNoModels");
             });
         }
         catch
@@ -764,7 +858,7 @@ public class SettingsViewModel : ViewModelBase
             App.Current?.Dispatcher.Invoke(() =>
             {
                 if (SelectedProvider == AiProviderType.Ollama)
-                    ConnectionTestResult = "Ollama not detected — install it from ollama.com and run 'ollama serve'.";
+                    ConnectionTestResult = T("settingsm.ollamaNotDetected");
             });
         }
     }
@@ -832,7 +926,8 @@ public class SettingsViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            MemoryStatusText = $"{T("settings.failedPrefix")}: {ex.Message}";
+            _log?.Error("Settings", "Listing memories failed", ex);
+            MemoryStatusText = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
         }
     }
 
@@ -867,7 +962,8 @@ public class SettingsViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            MemoryStatusText = $"{T("settings.failedPrefix")}: {ex.Message}";
+            _log?.Error("Settings", $"Deleting memory {mem.Name} failed", ex);
+            MemoryStatusText = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
         }
     }
 }

@@ -250,13 +250,15 @@
                     </Grid.ColumnDefinitions>
 
                     <ComboBox Grid.Column="0" ItemsSource="{Binding SeverityChoices}"
-                              SelectedItem="{Binding SeverityFilter}"
-                              Width="110" Height="28" Margin="0,0,10,0"
+                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                              SelectedValue="{Binding SeverityFilter}"
+                              Width="150" Height="28" Margin="0,0,10,0"
                               FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                               Background="#7011152E" Foreground="{StaticResource NeonInk0Brush}"
                               BorderBrush="{StaticResource NeonLineHiBrush}" VerticalContentAlignment="Center"/>
                     <ComboBox Grid.Column="1" ItemsSource="{Binding CategoryChoices}"
-                              SelectedItem="{Binding CategoryFilter}"
+                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                              SelectedValue="{Binding CategoryFilter}"
                               Width="140" Height="28" Margin="0,0,10,0"
                               FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                               Background="#7011152E" Foreground="{StaticResource NeonInk0Brush}"
@@ -273,7 +275,7 @@
                                        Foreground="{StaticResource NeonMagentaBrush}">
                                 <Run Text="🔥 "/>
                                 <Run Text="{Binding CriticalCount, Mode=OneWay}"/>
-                                <Run Text=" CRIT"/>
+                                <Run Text="{services:Loc shieldx.chipCrit}"/>
                             </TextBlock>
                         </Border>
                         <Border Padding="8,3" CornerRadius="4" Margin="0,0,6,0"
@@ -282,7 +284,7 @@
                                        Foreground="{StaticResource NeonRedBrush}">
                                 <Run Text="✗ "/>
                                 <Run Text="{Binding HighCount, Mode=OneWay}"/>
-                                <Run Text=" HIGH"/>
+                                <Run Text="{services:Loc shieldx.chipHigh}"/>
                             </TextBlock>
                         </Border>
                         <Border Padding="8,3" CornerRadius="4" Margin="0,0,6,0"
@@ -291,7 +293,7 @@
                                        Foreground="{StaticResource NeonAmberBrush}">
                                 <Run Text="⚠ "/>
                                 <Run Text="{Binding MediumCount, Mode=OneWay}"/>
-                                <Run Text=" MED"/>
+                                <Run Text="{services:Loc shieldx.chipMed}"/>
                             </TextBlock>
                         </Border>
                         <Border Padding="8,3" CornerRadius="4"
@@ -300,7 +302,7 @@
                                        Foreground="{StaticResource NeonCyanBrush}">
                                 <Run Text="ℹ "/>
                                 <Run Text="{Binding LowCount, Mode=OneWay}"/>
-                                <Run Text=" LOW"/>
+                                <Run Text="{services:Loc shieldx.chipLow}"/>
                             </TextBlock>
                         </Border>
                     </StackPanel>
@@ -445,13 +447,20 @@
                                 </StackPanel>
                             </Border>
 
-                            <Button Command="{Binding OpenFileCommand}" Style="{StaticResource NeonAction}"
-                                    HorizontalAlignment="Left">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE8E5;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
-                                    <TextBlock Text="{services:Loc shield.openInEditor}"/>
-                                </StackPanel>
-                            </Button>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                                <Button Command="{Binding OpenFileCommand}" Style="{StaticResource NeonAction}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8E5;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{services:Loc shield.openInEditor}"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Command="{Binding RevealFileCommand}" Style="{StaticResource NeonAction}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{services:Loc shieldx.revealInExplorer}"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </Border>

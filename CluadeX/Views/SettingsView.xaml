@@ -129,8 +129,19 @@
                 <TextBlock Text="{services:Loc settings.subtitle}" Foreground="{StaticResource Subtext0Brush}"
                            FontSize="13" Margin="0,2,0,0"/>
             </StackPanel>
-            <TextBlock Text="{Binding SaveStatus}" Foreground="{StaticResource GreenBrush}" FontSize="12"
-                       FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding SaveStatus}" FontSize="12" MaxWidth="460" TextWrapping="Wrap"
+                       FontWeight="SemiBold" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding SaveStatusIsError}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
         </Grid>
 
         <Grid Grid.Row="1">
@@ -256,6 +267,10 @@
                                             </TextBlock>
                                         </ToggleButton>
                                     </Grid>
+                                    <!-- Keys saved on another PC / Windows account (portable copy): DPAPI can't read them here. -->
+                                    <TextBlock Text="{Binding SecretsNotice}" Foreground="{StaticResource YellowBrush}"
+                                               FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0"
+                                               Visibility="{Binding SecretsNotice, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
 
                                 <!-- Workspace ID (Anthropic) — keys not scoped to one workspace must name it per request -->
@@ -820,7 +835,7 @@
                                 <TextBlock Text="{services:Loc settings.modelStorageDirDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
                                 <Grid Margin="0,0,0,16">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBox Text="{Binding ModelDirectory, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
+                                    <TextBox Text="{Binding ModelDirectory, UpdateSourceTrigger=LostFocus}" Style="{StaticResource WideBox}"/>
                                     <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
                                             Command="{Binding BrowseModelDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
                                     <Button Grid.Column="2" Content="&#xE838;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
@@ -915,7 +930,7 @@
                                 <TextBlock Text="{services:Loc settings.tempDirDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBox Text="{Binding TempDirectory, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"/>
+                                    <TextBox Text="{Binding TempDirectory, UpdateSourceTrigger=LostFocus}" Style="{StaticResource WideBox}"/>
                                     <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
                                             Command="{Binding BrowseTempDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
                                 </Grid>

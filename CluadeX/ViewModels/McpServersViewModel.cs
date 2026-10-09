@@ -12,6 +12,15 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     private readonly McpServerManager _mcpManager;
     private bool _disposed;
     private readonly LocalizationService _loc;
+    private readonly DebugLogService? _log;
+    private readonly Action<string, McpServerState> _stateHandler;
+
+    /// <summary>
+    /// Per-server log text, owned here rather than by the list item. Items used to be rebuilt on every state
+    /// change, which wiped the log — including the start-failure lines that explain why a server is red.
+    /// </summary>
+    private readonly Dictionary<string, string> _logBuffers = new(StringComparer.Ordinal);
+    private const int LogKeepChars = 10240;
 
     private McpServerDisplayItem? _selectedServer;
     private string _newServerName = "";
@@ -21,11 +30,6 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     private bool _isEditing;
     private string _statusText = "";
 
-    // Editing backup
-    private string _editCommand = "";
-    private string _editArgs = "";
-    private string _editEnv = "";
-
     public ObservableCollection<McpServerDisplayItem> Servers { get; } = new();
     public ObservableCollection<McpTool> SelectedServerTools { get; } = new();
 
@@ -34,10 +38,15 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         get => _selectedServer;
         set
         {
+            var previous = _selectedServer;
             if (SetProperty(ref _selectedServer, value))
             {
+                // Leaving a server mid-edit: put its fields back to the saved config, so the list never shows
+                // values that were not saved.
+                if (IsEditing && previous != null) previous.LoadFrom(previous.Original);
                 IsEditing = false;
                 RefreshSelectedTools();
+                CommandManager.InvalidateRequerySuggested();
             }
         }
     }
@@ -67,20 +76,25 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     public ICommand RefreshCommand { get; }
     public ICommand StartAllCommand { get; }
 
-    public McpServersViewModel(McpServerManager mcpManager, LocalizationService loc)
+    public McpServersViewModel(McpServerManager mcpManager, LocalizationService loc, DebugLogService? log = null)
     {
         _mcpManager = mcpManager;
         _loc = loc;
+        _log = log;
 
-        StartServerCommand = new AsyncRelayCommand(StartSelectedServer);
-        StopServerCommand = new AsyncRelayCommand(StopSelectedServer);
-        RestartServerCommand = new AsyncRelayCommand(RestartSelectedServer);
-        AddServerCommand = new RelayCommand(AddServer);
-        RemoveServerCommand = new RelayCommand(RemoveServer);
-        ToggleEnabledCommand = new RelayCommand(ToggleEnabled);
-        BeginEditCommand = new RelayCommand(BeginEdit);
-        SaveEditCommand = new RelayCommand(SaveEdit);
-        CancelEditCommand = new RelayCommand(CancelEdit);
+        bool HasSel() => SelectedServer != null;
+        StartServerCommand = new AsyncRelayCommand(StartSelectedServer,
+            () => HasSel() && SelectedServer!.Status is not ("running" or "starting"));
+        StopServerCommand = new AsyncRelayCommand(StopSelectedServer,
+            () => HasSel() && (SelectedServer!.Status is "running" or "starting" or "reconnecting"));
+        RestartServerCommand = new AsyncRelayCommand(RestartSelectedServer, HasSel);
+        AddServerCommand = new RelayCommand(AddServer,
+            () => !string.IsNullOrWhiteSpace(NewServerName) && !string.IsNullOrWhiteSpace(NewServerCommand));
+        RemoveServerCommand = new AsyncRelayCommand(RemoveServer, HasSel);
+        ToggleEnabledCommand = new RelayCommand(ToggleEnabled, HasSel);
+        BeginEditCommand = new RelayCommand(BeginEdit, () => HasSel() && !IsEditing);
+        SaveEditCommand = new RelayCommand(SaveEdit, () => HasSel() && IsEditing);
+        CancelEditCommand = new RelayCommand(CancelEdit, () => IsEditing);
         ShowAddFormCommand = new RelayCommand(() => IsAddingServer = !IsAddingServer);
         RefreshCommand = new RelayCommand(Refresh);
         StartAllCommand = new AsyncRelayCommand(StartAllServers);
@@ -93,38 +107,101 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         // BeginInvoke, NOT Invoke: this fires from the Process.Exited callback
         // thread. A blocking hop to the UI thread from there is the same deadlock
         // shape already documented in InstinctsViewModel — the exit thread waits
-        // on the UI thread while the UI thread is inside Refresh() reading the
+        // on the UI thread while the UI thread is inside a refresh reading the
         // tool registry the exit path is mutating.
-        _mcpManager.OnServerStateChanged += (_, _) =>
-            Application.Current?.Dispatcher.BeginInvoke(new Action(Refresh));
+        // It updates the one item IN PLACE: rebuilding the list here is what used to wipe the log, overwrite
+        // the error state and throw away an edit in progress every time any server changed state.
+        _stateHandler = (name, _) =>
+            Application.Current?.Dispatcher.BeginInvoke(new Action(() => OnServerStateChanged(name)));
+        _mcpManager.OnServerStateChanged += _stateHandler;
         _loc.LanguageChanged += () =>
         {
             OnPropertyChanged(nameof(PageTitle));
             OnPropertyChanged(nameof(PageSubtitle));
+            foreach (var s in Servers) ApplyState(s);
         };
 
-        Refresh();
+        SyncServers();
+        StatusText = Summary();
     }
 
-    // ─── Refresh ───
+    // ─── Sync (in place) ───
 
+    private string Summary() => _loc.T("mcpm.summary", Servers.Count, _mcpManager.GetRunningServers().Count);
+
+    /// <summary>Explicit Refresh: re-sync and show the summary line.</summary>
     private void Refresh()
     {
-        string? selectedName = SelectedServer?.Name;
-        Servers.Clear();
+        SyncServers();
+        RefreshSelectedTools();
+        StatusText = Summary();
+    }
 
-        foreach (var (name, config) in _mcpManager.Configs)
+    /// <summary>
+    /// Bring the list in line with the manager's configs WITHOUT recreating items: new servers are added,
+    /// removed ones dropped, and existing items keep their log, their selection and any edit in progress.
+    /// </summary>
+    private void SyncServers()
+    {
+        var configs = _mcpManager.Configs.ToList();
+        var names = new HashSet<string>(configs.Select(c => c.Key), StringComparer.Ordinal);
+
+        foreach (var gone in Servers.Where(s => !names.Contains(s.Name)).ToList())
         {
-            bool running = _mcpManager.IsServerRunning(name);
-            int toolCount = _mcpManager.ToolRegistry.GetToolsForServer(name).Count;
-            var item = McpServerDisplayItem.FromConfig(name, config, running, toolCount);
-            Servers.Add(item);
+            if (ReferenceEquals(gone, SelectedServer)) SelectedServer = null;
+            Servers.Remove(gone);
         }
 
-        if (selectedName != null)
-            SelectedServer = Servers.FirstOrDefault(s => s.Name == selectedName);
+        foreach (var (name, config) in configs)
+        {
+            var item = Servers.FirstOrDefault(s => s.Name == name);
+            if (item == null)
+            {
+                item = McpServerDisplayItem.FromConfig(name, config, false, 0);
+                item.LogOutput = _logBuffers.TryGetValue(name, out var buf) ? buf : "";
+                Servers.Add(item);
+            }
+            else if (!(IsEditing && ReferenceEquals(item, SelectedServer)) && !ReferenceEquals(item.Original, config))
+            {
+                item.LoadFrom(config);
+            }
+            item.Enabled = config.Enabled;
+            ApplyState(item);
+        }
+    }
 
-        StatusText = $"{Servers.Count} server(s), {_mcpManager.GetRunningServers().Count} running";
+    /// <summary>Copy the manager's live state for one server onto its item (status, tools, localized labels).</summary>
+    private void ApplyState(McpServerDisplayItem item)
+    {
+        var state = _mcpManager.GetServerState(item.Name);
+        item.Status = state switch
+        {
+            McpServerState.Ready => "running",
+            McpServerState.Starting => "starting",
+            McpServerState.Reconnecting => "reconnecting",
+            McpServerState.Failed => "error",
+            _ => _mcpManager.IsServerRunning(item.Name) ? "running" : "stopped",
+        };
+        item.StatusLabel = item.Status switch
+        {
+            "running" => _loc.T("mcpm.statusRunning"),
+            "starting" => _loc.T("mcpm.statusStarting"),
+            "reconnecting" => _loc.T("mcpm.statusReconnecting"),
+            "error" => _loc.T("mcpm.statusError"),
+            _ => _loc.T("mcpm.statusStopped"),
+        };
+        item.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(item.Name).Count;
+        item.ToolCountText = _loc.T("mcpm.toolCount", item.ToolCount);
+        item.EnabledLabel = item.Enabled ? _loc.T("mcpm.enabledBadge") : _loc.T("mcpm.disabledBadge");
+    }
+
+    private void OnServerStateChanged(string name)
+    {
+        var item = Servers.FirstOrDefault(s => s.Name == name);
+        if (item == null) SyncServers();
+        else ApplyState(item);
+        if (ReferenceEquals(item, SelectedServer)) RefreshSelectedTools();
+        CommandManager.InvalidateRequerySuggested();
     }
 
     private void RefreshSelectedTools()
@@ -141,69 +218,55 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
     private async Task StartSelectedServer()
     {
-        if (SelectedServer == null) return;
-        SelectedServer.Status = "starting";
-        StatusText = $"Starting {SelectedServer.Name}...";
+        var item = SelectedServer;
+        if (item == null) return;
+        string name = item.Name;
+        item.Status = "starting";
+        item.StatusLabel = _loc.T("mcpm.statusStarting");
+        StatusText = _loc.T("mcpm.starting", name);
 
         try
         {
-            bool ok = await _mcpManager.StartServerAsync(SelectedServer.Name);
-            SelectedServer.Status = ok ? "running" : "error";
-            SelectedServer.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(SelectedServer.Name).Count;
-            RefreshSelectedTools();
-
-            if (ok)
-            {
-                StatusText = $"{SelectedServer.Name} started ({SelectedServer.ToolCount} tools)";
-            }
-            else
-            {
-                // Extract last error from log for display in status bar
-                string lastError = ExtractLastError(SelectedServer.LogOutput);
-                StatusText = !string.IsNullOrEmpty(lastError)
-                    ? $"Failed: {lastError}"
-                    : $"{SelectedServer.Name} failed to start — check logs";
-            }
+            bool ok = await _mcpManager.StartServerAsync(name);
+            ApplyState(item);
+            if (ReferenceEquals(item, SelectedServer)) RefreshSelectedTools();
+            // The reason for a failure is already in the server log on this page (the manager writes it there);
+            // the status line stays a short localized sentence instead of a raw exception message.
+            StatusText = ok
+                ? _loc.T("mcpm.started", name, item.ToolCount)
+                : _loc.T("mcpm.startFailed", name);
         }
         catch (Exception ex)
         {
-            SelectedServer.Status = "error";
-            StatusText = $"Error: {ex.Message}";
+            _log?.Error("MCP", $"[{name}] start threw", ex);
+            AppendLog(name, $"Start failed: {ex.Message}");
+            item.Status = "error";
+            item.StatusLabel = _loc.T("mcpm.statusError");
+            StatusText = _loc.T("mcpm.startFailed", name);
         }
-    }
-
-    /// <summary>Extract the last meaningful error message from the server log.</summary>
-    private static string ExtractLastError(string logOutput)
-    {
-        if (string.IsNullOrEmpty(logOutput)) return "";
-        var lines = logOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = lines.Length - 1; i >= 0; i--)
-        {
-            string line = lines[i].Trim();
-            // Skip timestamp prefix: "[12:34:56] "
-            int bracketEnd = line.IndexOf(']');
-            if (bracketEnd > 0 && bracketEnd < line.Length - 1)
-                line = line[(bracketEnd + 1)..].Trim();
-
-            if (line.Contains("Failed") || line.Contains("failed") ||
-                line.Contains("Error") || line.Contains("error") ||
-                line.Contains("timed out") || line.Contains("died") ||
-                line.Contains("[stderr]"))
-                return line.Length > 120 ? line[..120] + "..." : line;
-        }
-        return "";
+        finally { CommandManager.InvalidateRequerySuggested(); }
     }
 
     private async Task StopSelectedServer()
     {
-        if (SelectedServer == null) return;
-        StatusText = $"Stopping {SelectedServer.Name}...";
-
-        await _mcpManager.StopServerAsync(SelectedServer.Name);
-        SelectedServer.Status = "stopped";
-        SelectedServer.ToolCount = 0;
-        RefreshSelectedTools();
-        StatusText = $"{SelectedServer.Name} stopped";
+        var item = SelectedServer;
+        if (item == null) return;
+        string name = item.Name;
+        StatusText = _loc.T("mcpm.stopping", name);
+        try
+        {
+            await _mcpManager.StopServerAsync(name);
+            ApplyState(item);
+            if (ReferenceEquals(item, SelectedServer)) RefreshSelectedTools();
+            StatusText = _loc.T("mcpm.stopped", name);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("MCP", $"[{name}] stop threw", ex);
+            AppendLog(name, $"Stop failed: {ex.Message}");
+            StatusText = _loc.T("mcpm.stopFailed", name);
+        }
+        finally { CommandManager.InvalidateRequerySuggested(); }
     }
 
     private async Task RestartSelectedServer()
@@ -215,9 +278,19 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
     private async Task StartAllServers()
     {
-        StatusText = "Starting all enabled servers...";
-        await _mcpManager.StartAllEnabledAsync();
-        Refresh();
+        StatusText = _loc.T("mcpm.startingAll");
+        try
+        {
+            await _mcpManager.StartAllEnabledAsync();
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("MCP", "Start all threw", ex);
+        }
+        SyncServers();
+        RefreshSelectedTools();
+        StatusText = Summary();
+        CommandManager.InvalidateRequerySuggested();
     }
 
     // ─── Add / Remove ───
@@ -228,13 +301,19 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         string command = NewServerCommand.Trim();
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(command)) return;
 
+        // Adding under an existing name used to silently replace that server's command, args and env.
+        if (_mcpManager.Configs.ContainsKey(name))
+        {
+            StatusText = _loc.T("mcpm.nameTaken", name);
+            return;
+        }
+
         var config = new McpServerConfig
         {
             Name = name,
             Command = command,
-            Args = string.IsNullOrWhiteSpace(NewServerArgs)
-                ? new List<string>()
-                : NewServerArgs.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList(),
+            // The Add box is one line: split like a command line, "quotes" keep an argument with spaces whole.
+            Args = McpServerDisplayItem.ParseArgsLine(NewServerArgs),
             Enabled = true,
         };
 
@@ -246,36 +325,58 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         NewServerArgs = "";
         IsAddingServer = false;
 
-        Refresh();
+        SyncServers();
         SelectedServer = Servers.FirstOrDefault(s => s.Name == name);
-        StatusText = $"Added server: {name}";
+        StatusText = _loc.T("mcpm.added", name);
     }
 
-    private async void RemoveServer()
+    private async Task RemoveServer()
     {
-        if (SelectedServer == null) return;
-        string name = SelectedServer.Name;
+        var item = SelectedServer;
+        if (item == null) return;
+        string name = item.Name;
 
-        if (_mcpManager.IsServerRunning(name))
-            await _mcpManager.StopServerAsync(name);
+        // The server's env block usually holds API keys the user pasted once — removal loses them for good.
+        var answer = MessageBox.Show(_loc.T("mcpm.removeConfirm", name), "CluadeX",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
 
-        _mcpManager.RemoveConfig(name);
-        _mcpManager.SaveConfig();
-        Refresh();
-        StatusText = $"Removed server: {name}";
+        try
+        {
+            if (_mcpManager.IsServerRunning(name))
+                await _mcpManager.StopServerAsync(name);
+
+            _mcpManager.RemoveConfig(name);
+            _mcpManager.SaveConfig();
+            _logBuffers.Remove(name);
+            IsEditing = false;
+            SyncServers();
+            StatusText = _loc.T("mcpm.removed", name);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("MCP", $"[{name}] remove failed", ex);
+            StatusText = _loc.T("mcpm.removeFailed", name);
+        }
     }
 
     // ─── Toggle Enabled ───
 
+    /// <summary>
+    /// Flip Enabled on the existing config object and nothing else. It used to rebuild the config from the
+    /// display item — re-splitting the args on spaces — so pressing Toggle alone corrupted mcp_servers.json.
+    /// </summary>
     private void ToggleEnabled()
     {
-        if (SelectedServer == null) return;
-        SelectedServer.Enabled = !SelectedServer.Enabled;
+        var item = SelectedServer;
+        if (item == null) return;
+        if (!_mcpManager.Configs.TryGetValue(item.Name, out var config)) return;
 
-        var config = SelectedServer.ToConfig();
-        _mcpManager.SetConfig(SelectedServer.Name, config);
+        config.Enabled = !config.Enabled;
         _mcpManager.SaveConfig();
-        StatusText = $"{SelectedServer.Name}: {(SelectedServer.Enabled ? "enabled" : "disabled")}";
+        item.Enabled = config.Enabled;
+        ApplyState(item);
+        StatusText = _loc.T(config.Enabled ? "mcpm.enabledMsg" : "mcpm.disabledMsg", item.Name);
     }
 
     // ─── Edit ───
@@ -283,50 +384,55 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     private void BeginEdit()
     {
         if (SelectedServer == null) return;
-        _editCommand = SelectedServer.Command;
-        _editArgs = SelectedServer.ArgsString;
-        _editEnv = SelectedServer.EnvString;
+        SelectedServer.LoadFrom(_mcpManager.Configs.TryGetValue(SelectedServer.Name, out var c) ? c : SelectedServer.Original);
         IsEditing = true;
     }
 
     private void SaveEdit()
     {
-        if (SelectedServer == null) return;
-        var config = SelectedServer.ToConfig();
-        _mcpManager.SetConfig(SelectedServer.Name, config);
+        var item = SelectedServer;
+        if (item == null) return;
+        var config = item.ToConfig();
+        if (string.IsNullOrWhiteSpace(config.Command))
+        {
+            StatusText = _loc.T("mcpm.commandRequired");
+            return;
+        }
+        _mcpManager.SetConfig(item.Name, config);
         _mcpManager.SaveConfig();
+        item.LoadFrom(config);
         IsEditing = false;
-        StatusText = $"Saved config: {SelectedServer.Name}";
+        StatusText = _mcpManager.IsServerRunning(item.Name)
+            ? _loc.T("mcpm.savedRestart", item.Name)
+            : _loc.T("mcpm.saved", item.Name);
     }
 
     private void CancelEdit()
     {
-        if (SelectedServer == null) return;
-        SelectedServer.Command = _editCommand;
-        SelectedServer.ArgsString = _editArgs;
-        SelectedServer.EnvString = _editEnv;
+        if (SelectedServer != null) SelectedServer.LoadFrom(SelectedServer.Original);
         IsEditing = false;
     }
 
     // ─── Events ───
 
-    // Both of these are now raised from the Process.Exited callback thread as well
+    private void AppendLog(string serverName, string message)
+    {
+        string ts = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        string text = (_logBuffers.TryGetValue(serverName, out var cur) ? cur : "") + $"[{ts}] {message}\n";
+        // Bounded: keep the newest ~8 KB once past 10 KB.
+        if (text.Length > LogKeepChars)
+            text = "… (trimmed)\n" + text[^8192..];
+        _logBuffers[serverName] = text;
+        var item = Servers.FirstOrDefault(s => s.Name == serverName);
+        if (item != null) item.LogOutput = text;
+    }
+
+    // Both of these are raised from the Process.Exited callback thread as well
     // as from the UI thread, so neither may block on the dispatcher — see the
     // OnServerStateChanged subscription above.
     private void OnServerLog(string serverName, string message)
     {
-        Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            var item = Servers.FirstOrDefault(s => s.Name == serverName);
-            if (item != null)
-            {
-                string ts = DateTime.Now.ToString("HH:mm:ss");
-                item.LogOutput += $"[{ts}] {message}\n";
-                // Trim log to last 10KB to prevent unbounded growth
-                if (item.LogOutput.Length > 10240)
-                    item.LogOutput = "... (trimmed)\n" + item.LogOutput[^8192..];
-            }
-        });
+        Application.Current?.Dispatcher.BeginInvoke(() => AppendLog(serverName, message));
     }
 
     private void OnToolsChanged()
@@ -334,7 +440,10 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             foreach (var s in Servers)
+            {
                 s.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(s.Name).Count;
+                s.ToolCountText = _loc.T("mcpm.toolCount", s.ToolCount);
+            }
             RefreshSelectedTools();
         });
     }
@@ -345,5 +454,6 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         _disposed = true;
         _mcpManager.OnServerLog -= OnServerLog;
         _mcpManager.OnToolsChanged -= OnToolsChanged;
+        _mcpManager.OnServerStateChanged -= _stateHandler;
     }
 }

@@ -55,9 +55,24 @@ public class HookBundleService
         {
             // Hydrate IsEnabled from state for the UI
             foreach (var b in _catalog)
+            {
                 b.IsEnabled = _state.EnabledById.TryGetValue(b.Id, out var v) ? v : b.DefaultEnabled;
+                // Name/description in the UI language, re-read on every call so a language switch
+                // shows on the next refresh. The English text in BuildCatalog stays the fallback.
+                if (!_english.TryGetValue(b.Id, out var en)) _english[b.Id] = en = (b.Name, b.Description);
+                b.Name = Localized($"hookb.{b.Id}.name", en.Name);
+                b.Description = Localized($"hookb.{b.Id}.desc", en.Description);
+            }
             return _catalog.ToList();
         }
+    }
+
+    private readonly Dictionary<string, (string Name, string Description)> _english = new();
+
+    private static string Localized(string key, string fallback)
+    {
+        string s = LocalizedResources.Instance[key];
+        return s == key ? fallback : s;
     }
 
     public string BundleDir => _bundleDir;
@@ -83,9 +98,9 @@ public class HookBundleService
         try
         {
             string path = Path.Combine(_bundleDir, bundle.ScriptFile);
-            return File.Exists(path) ? File.ReadAllText(path) : "(not deployed yet)";
+            return File.Exists(path) ? File.ReadAllText(path) : LocalizedResources.Instance["hooklib.notDeployed"];
         }
-        catch (Exception ex) { return $"(error reading: {ex.Message})"; }
+        catch { return LocalizedResources.Instance["hooklib.readFailed"]; }
     }
 
     // ── State persistence ───────────────────────────────────────────────
@@ -175,7 +190,17 @@ public class HookBundleService
         catch { /* projection failure shouldn't crash */ }
     }
 
-    private static string BuildShellCommand(string scriptPath, HookBundle bundle)
+    /// <summary>Tokens the hook process already receives exactly through the environment
+    /// (CLUADEX_HOOK_* — see HookService). They are NOT put on the command line: the payload is
+    /// unbounded (a write_file's whole content in {arguments} overflowed cmd.exe's 8,191-char limit
+    /// and blocked every large write), and a path or command squeezed through cmd quoting arrives
+    /// altered ($ and % stripped, "R&amp;D" mangled).</summary>
+    private static readonly HashSet<string> EnvironmentTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "{tool}", "{path}", "{command}", "{arguments}", "{cwd}",
+    };
+
+    public static string BuildShellCommand(string scriptPath, HookBundle bundle)
     {
         // Build: powershell -NoProfile -ExecutionPolicy Bypass -File "<script>" <token args>
         var sb = new System.Text.StringBuilder();
@@ -183,10 +208,11 @@ public class HookBundleService
         sb.Append(scriptPath);
         sb.Append('"');
 
-        // Forward whatever tokens the bundle declares as named params.
+        // Forward the remaining (small, numeric/name) tokens as named params.
         // The script's param() block must match the casing here.
         foreach (var tok in bundle.SubstitutionTokens)
         {
+            if (EnvironmentTokens.Contains(tok)) continue;
             // strip braces for the param name; the value remains substituted by HookService
             string param = tok.Trim('{', '}');
             sb.Append(' ').Append('-').Append(Capitalize(param)).Append(' ').Append('"').Append(tok).Append('"');
@@ -198,6 +224,11 @@ public class HookBundleService
 
     private static string Capitalize(string s) =>
         string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s[1..];
+
+    /// <summary>Every tool that writes file content. The file hooks used to match write_file alone,
+    /// so an agent that edited instead of rewrote (the usual case) skipped the secret scan,
+    /// prettier and the console.log check entirely. HookService understands "a|b" matchers.</summary>
+    public const string FileWriteTools = "write_file|edit_file|multi_edit";
 
     // ── Catalog — the 15 Sprint-3-#2 bundles ───────────────────────────
 
@@ -229,7 +260,7 @@ public class HookBundleService
             Id = "pretool-secret-scan",
             Name = "Secret Scan",
             Description = "Scans the content being written/edited for API keys, private keys, JWTs, AWS credentials before allowing the write to proceed.",
-            Phase = "PreToolUse", Matcher = "write_file",
+            Phase = "PreToolUse", Matcher = FileWriteTools,
             ScriptFile = "pretool-secret-scan.ps1",
             SubstitutionTokens = new() { "{path}", "{arguments}" },
             Category = "safety", Risk = "high", TimeoutMs = 8000,
@@ -262,8 +293,8 @@ public class HookBundleService
         {
             Id = "posttool-prettier-format",
             Name = "Prettier Format",
-            Description = "After write_file or edit_file on JS/TS/CSS/JSON/MD, runs prettier --write if installed.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After write_file / edit_file / multi_edit on JS/TS/CSS/JSON/MD, runs prettier --write if installed.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-prettier-format.ps1",
             SubstitutionTokens = new() { "{path}" },
             Category = "quality", Risk = "low", TimeoutMs = 10000,
@@ -272,8 +303,8 @@ public class HookBundleService
         {
             Id = "posttool-typescript-check",
             Name = "TypeScript Type Check",
-            Description = "After write_file on a .ts/.tsx file, runs tsc --noEmit on it and reports errors to the debug log.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After write_file / edit_file / multi_edit on a .ts/.tsx file, runs tsc --noEmit on it and reports errors to the debug log.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-typescript-check.ps1",
             SubstitutionTokens = new() { "{path}" },
             Category = "quality", Risk = "low", TimeoutMs = 20000,
@@ -282,8 +313,8 @@ public class HookBundleService
         {
             Id = "posttool-console-log-warn",
             Name = "console.log Linter",
-            Description = "After write_file/edit_file on .js/.ts, greps for forgotten console.log statements and prints a warning.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After write_file / edit_file / multi_edit on .js/.ts, greps for forgotten console.log statements and prints a warning.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-console-log-warn.ps1",
             SubstitutionTokens = new() { "{path}" },
             Category = "quality", Risk = "low", TimeoutMs = 5000,
@@ -302,8 +333,8 @@ public class HookBundleService
         {
             Id = "posttool-quality-gate",
             Name = "Quality Gate (build + test)",
-            Description = "After any *.cs / *.csproj write, runs dotnet build --no-restore -nologo. Logs result to debug log.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After any *.cs / *.csproj write or edit, runs dotnet build --no-restore -nologo. Logs result to debug log.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-quality-gate.ps1",
             SubstitutionTokens = new() { "{path}", "{cwd}" },
             Category = "quality", Risk = "low", TimeoutMs = 60000,

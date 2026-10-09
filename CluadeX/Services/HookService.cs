@@ -31,11 +31,26 @@ namespace CluadeX.Services;
 ///   }
 /// }
 ///
-/// Available substitution tokens (sanitized to prevent shell injection):
+/// Every hook process gets these environment variables (the preferred, exact interface — no
+/// command-line quoting, no length limit):
+///   - CLUADEX_HOOK_TOOL          tool name ("" outside tool phases)
+///   - CLUADEX_HOOK_PATH          the call's "path" argument ("" when it has none)
+///   - CLUADEX_HOOK_CWD           the project folder
+///   - CLUADEX_HOOK_PAYLOAD_FILE  a temp UTF-8 JSON file holding ALL the tool arguments; deleted
+///                                once the hook exits ("" outside tool phases)
+///   - CLUADEX_HOOK_PHASE         PreToolUse / PostToolUse / Stop / SessionStart / PreCompact
+///
+/// Substitution tokens still work for existing hooks.json files (sanitized to prevent shell injection):
 ///   - {tool} {path} {command} {arguments}          — PreToolUse / PostToolUse
 ///   - {model} {cost} {tokens} {turn_count}         — Stop
 ///   - {cwd}                                        — SessionStart / any
 ///   - {message_count} {token_estimate}             — PreCompact
+/// {arguments} longer than <see cref="MaxInlineArgumentsChars"/> becomes "{}" — read the payload file
+/// instead. It used to inline the whole JSON (a write_file's entire file content): past cmd.exe's
+/// 8,191-char limit the hook died with "The command line is too long." (exit 1 = "blocked"), so every
+/// write over ~8 KB was refused by the Secret Scan hook.
+///
+/// Matchers: "*", an exact tool name, a wildcard ("git_*"), or alternatives "write_file|edit_file".
 /// </summary>
 public class HookService
 {
@@ -136,7 +151,7 @@ public class HookService
     /// <summary>Execute pre-tool hooks. Returns false if any hook blocks execution.</summary>
     public async Task<HookResult> ExecutePreToolHooksAsync(ToolCall call, CancellationToken ct = default)
     {
-        var hooks = GetHooksForPhase("PreToolUse", call.ToolName);
+        var hooks = GetHooksForPhase("PreToolUse", call);
         foreach (var hook in hooks)
         {
             var result = await RunHookAsync(hook, BuildToolContext(call), ct);
@@ -149,7 +164,7 @@ public class HookService
     /// <summary>Execute post-tool hooks (informational, doesn't block).</summary>
     public async Task ExecutePostToolHooksAsync(ToolCall call, ToolResult result, CancellationToken ct = default)
     {
-        var hooks = GetHooksForPhase("PostToolUse", call.ToolName);
+        var hooks = GetHooksForPhase("PostToolUse", call);
         foreach (var hook in hooks)
         {
             try
@@ -202,6 +217,17 @@ public class HookService
         return ctx;
     }
 
+    /// <summary>Get hooks matching a phase and tool call.</summary>
+    private List<HookDefinition> GetHooksForPhase(string phase, ToolCall call)
+    {
+        string canonical = CanonicalToolName(call);
+        return LoadHooks()
+            .Where(h => h.Phase.Equals(phase, StringComparison.OrdinalIgnoreCase))
+            .Where(h => MatchesToolName(h.Matcher, call.ToolName)
+                        || (canonical.Length > 0 && MatchesToolName(h.Matcher, canonical)))
+            .ToList();
+    }
+
     /// <summary>Get hooks matching a phase and tool name.</summary>
     private List<HookDefinition> GetHooksForPhase(string phase, string toolName)
     {
@@ -211,18 +237,44 @@ public class HookService
             .ToList();
     }
 
-    /// <summary>Check if a hook matcher matches the tool name. Supports wildcards.</summary>
-    private static bool MatchesToolName(string matcher, string toolName)
+    /// <summary>
+    /// The snake_case name of the built-in tool behind a call (WriteFile → "write_file"). The text
+    /// protocol accepts aliases ("writefile", "apply_edits") and keeps the alias as ToolName, so a
+    /// matcher written against the documented name used to miss those calls entirely.
+    /// </summary>
+    private static string CanonicalToolName(ToolCall call)
+    {
+        if (call.Type == ToolType.McpTool) return "";
+        string name = call.Type.ToString();
+        var sb = new System.Text.StringBuilder(name.Length + 4);
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(name[i])) sb.Append('_');
+            sb.Append(char.ToLowerInvariant(name[i]));
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Check if a hook matcher matches the tool name. Supports wildcards and "a|b"
+    /// alternatives (the Claude Code form, e.g. "write_file|edit_file|multi_edit").</summary>
+    public static bool MatchesToolName(string matcher, string toolName)
     {
         if (string.IsNullOrEmpty(matcher) || matcher == "*") return true;
+
+        if (matcher.Contains('|'))
+        {
+            foreach (var alt in matcher.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                if (MatchesToolName(alt, toolName)) return true;
+            return false;
+        }
 
         // Exact match
         if (matcher.Equals(toolName, StringComparison.OrdinalIgnoreCase)) return true;
 
-        // Wildcard match: "run_command:npm*" matches "run_command" when args start with npm
+        // Wildcard match: "git_*" matches every git tool
         if (matcher.Contains('*'))
         {
-            string pattern = matcher.Replace("*", ".*");
+            string pattern = System.Text.RegularExpressions.Regex.Escape(matcher).Replace("\\*", ".*");
             return System.Text.RegularExpressions.Regex.IsMatch(
                 toolName, $"^{pattern}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
@@ -230,27 +282,40 @@ public class HookService
         return false;
     }
 
-    /// <summary>Run a hook command and return result.</summary>
-    private async Task<HookResult> RunHookAsync(HookDefinition hook, HookSessionContext context, CancellationToken ct)
+    /// <summary>{arguments} larger than this is not put on the command line (see class summary).</summary>
+    public const int MaxInlineArgumentsChars = 2000;
+
+    /// <summary>cmd.exe refuses a longer line ("The command line is too long."), and that refusal
+    /// arrives as exit code 1 — indistinguishable from a hook deliberately blocking.</summary>
+    private const int MaxCmdLineChars = 8000;
+
+    /// <summary>Run one hook definition and return its result. Public so the Hook Library and the
+    /// contract harness can exercise the exact code path the agent uses.</summary>
+    public async Task<HookResult> RunHookAsync(HookDefinition hook, HookSessionContext context, CancellationToken ct)
     {
         string command = hook.Command;
         var call = context.ToolCall;
+        string cwd = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : Environment.CurrentDirectory;
 
         // ── Tool-context substitutions (PreToolUse / PostToolUse) ───────
+        string argsJson = "{}";
         if (call != null)
         {
-            command = command.Replace("{tool}", SanitizeShellArg(call.ToolName));
-            command = command.Replace("{path}", SanitizeShellArg(call.GetArg("path", "")));
-            command = command.Replace("{command}", SanitizeShellArg(call.GetArg("command", "")));
-            if (command.Contains("{arguments}"))
+            try
             {
-                try
+                argsJson = JsonSerializer.Serialize(call.Arguments, new JsonSerializerOptions
                 {
-                    string argsJson = System.Text.Json.JsonSerializer.Serialize(call.Arguments);
-                    command = command.Replace("{arguments}", SanitizeShellArg(argsJson));
-                }
-                catch { command = command.Replace("{arguments}", "{}"); }
+                    // Thai / emoji stay readable for a hook that greps the payload.
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                });
             }
+            catch { argsJson = "{}"; }
+
+            command = SubstituteToken(command, "{tool}", call.ToolName);
+            command = SubstituteToken(command, "{path}", call.GetArg("path", ""));
+            command = SubstituteToken(command, "{command}", call.GetArg("command", ""));
+            command = SubstituteToken(command, "{arguments}",
+                argsJson.Length <= MaxInlineArgumentsChars ? argsJson : "{}");
         }
         else
         {
@@ -261,31 +326,49 @@ public class HookService
         }
 
         // ── Session-context substitutions (Stop / SessionStart / PreCompact) ─
-        command = command.Replace("{model}", SanitizeShellArg(context.Model ?? ""));
-        command = command.Replace("{cost}", SanitizeShellArg(context.SessionCostUsd?.ToString("F4") ?? "0"));
-        command = command.Replace("{tokens}", SanitizeShellArg(context.SessionTokens?.ToString() ?? "0"));
-        command = command.Replace("{turn_count}", SanitizeShellArg(context.TurnCount?.ToString() ?? "0"));
-        command = command.Replace("{message_count}", SanitizeShellArg(context.MessageCount?.ToString() ?? "0"));
-        command = command.Replace("{token_estimate}", SanitizeShellArg(context.TokenEstimate?.ToString() ?? "0"));
-        command = command.Replace("{cwd}", SanitizeShellArg(
-            _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : Environment.CurrentDirectory));
+        command = SubstituteToken(command, "{model}", context.Model ?? "");
+        command = SubstituteToken(command, "{cost}", context.SessionCostUsd?.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) ?? "0");
+        command = SubstituteToken(command, "{tokens}", context.SessionTokens?.ToString() ?? "0");
+        command = SubstituteToken(command, "{turn_count}", context.TurnCount?.ToString() ?? "0");
+        command = SubstituteToken(command, "{message_count}", context.MessageCount?.ToString() ?? "0");
+        command = SubstituteToken(command, "{token_estimate}", context.TokenEstimate?.ToString() ?? "0");
+        command = SubstituteToken(command, "{cwd}", cwd);
+
+        // A hook we cannot even launch is OUR failure, not a verdict on the tool call — report it and
+        // let the call through, the same rule as a broken script below.
+        if (command.Length > MaxCmdLineChars)
+            return new HookResult { Success = true, ExitCode = 0, Message = HookNotRunMessage("command line too long") };
 
         Process? proc = null;
+        string? payloadFile = null;
         try
         {
             var psi = new ProcessStartInfo("cmd", $"/c {command}")
             {
-                WorkingDirectory = _fileSystemService.HasWorkingDirectory
-                    ? _fileSystemService.WorkingDirectory
-                    : Environment.CurrentDirectory,
+                WorkingDirectory = cwd,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
 
+            // ── The hook contract: exact values in the environment, full arguments in a file ──
+            if (call != null)
+            {
+                string dir = Path.Combine(Path.GetTempPath(), "cluadex-hooks");
+                Directory.CreateDirectory(dir);
+                payloadFile = Path.Combine(dir, $"payload-{Guid.NewGuid():N}.json");
+                await File.WriteAllTextAsync(payloadFile, argsJson, new System.Text.UTF8Encoding(false), ct);
+            }
+            psi.Environment["CLUADEX_HOOK_TOOL"] = call?.ToolName ?? "";
+            psi.Environment["CLUADEX_HOOK_PATH"] = call?.GetArg("path", "") ?? "";
+            psi.Environment["CLUADEX_HOOK_CWD"] = cwd;
+            psi.Environment["CLUADEX_HOOK_PAYLOAD_FILE"] = payloadFile ?? "";
+            psi.Environment["CLUADEX_HOOK_PHASE"] = hook.Phase;
+
             proc = Process.Start(psi);
-            if (proc == null) return new HookResult { Success = false, Message = "Failed to start hook process" };
+            if (proc == null)
+                return new HookResult { Success = true, ExitCode = 0, Message = HookNotRunMessage("process did not start") };
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(hook.TimeoutMs);
@@ -311,7 +394,14 @@ public class HookService
                     // deliberate block. Fail open so one bad hook can't brick every commit.
                     || stderr.Contains("was unexpected at this time", StringComparison.OrdinalIgnoreCase)
                     || stderr.Contains("The syntax of the command is incorrect", StringComparison.OrdinalIgnoreCase)
-                    || stderr.Contains("is not recognized as an internal or external command", StringComparison.OrdinalIgnoreCase));
+                    || stderr.Contains("is not recognized as an internal or external command", StringComparison.OrdinalIgnoreCase)
+                    // An over-long line from a hook config we didn't cap (or a nested command) —
+                    // cmd never ran the hook at all.
+                    || stderr.Contains("The command line is too long", StringComparison.OrdinalIgnoreCase)
+                    // A machine whose execution policy refuses scripts never ran the hook either — failing
+                    // closed there would block every write on that PC.
+                    || stderr.Contains("running scripts is disabled", StringComparison.OrdinalIgnoreCase)
+                    || stderr.Contains("is not digitally signed", StringComparison.OrdinalIgnoreCase));
             if (scriptBroken)
             {
                 return new HookResult
@@ -334,15 +424,67 @@ public class HookService
             try { proc?.Kill(true); } catch { }
             return new HookResult { Success = false, Message = $"Hook timed out after {hook.TimeoutMs}ms" };
         }
+        catch (Exception ex) when (proc == null)
+        {
+            // Process.Start itself threw — Win32Exception for a >32K command line, a missing cmd.exe,
+            // a temp folder we can't write the payload to. The hook never ran, so it never decided
+            // anything: report it and let the tool through (it used to come back as "blocked").
+            return new HookResult { Success = true, ExitCode = 0, Message = HookNotRunMessage(ex.GetType().Name) };
+        }
         catch (Exception ex)
         {
-            return new HookResult { Success = false, Message = $"Hook failed: {ex.Message}" };
+            return new HookResult { Success = false, Message = $"Hook failed: {ex.GetType().Name}" };
         }
         finally
         {
             proc?.Dispose();
+            if (payloadFile != null)
+            {
+                try { File.Delete(payloadFile); } catch { /* temp folder — the OS cleans it eventually */ }
+            }
         }
     }
+
+    private static string HookNotRunMessage(string why) => $"[hook could not run — not blocking] {why}";
+
+    /// <summary>
+    /// Put a value into a hook command line in place of <paramref name="token"/>, escaped for where
+    /// the token sits. Inside a "double-quoted" span cmd.exe takes &amp; | &lt; &gt; ^ literally, so
+    /// caret-escaping there corrupted the value ("R&amp;D" reached the script as "R^&amp;D" and the
+    /// hook looked at a path that doesn't exist); only the quote itself must go, so the value can't
+    /// close the quote and escape it. Outside quotes the metacharacters are caret-escaped as before.
+    /// Either way %VAR%, $ and backticks are removed (cmd and PowerShell expansion) and newlines
+    /// flattened.
+    /// </summary>
+    public static string SubstituteToken(string command, string token, string value)
+    {
+        if (string.IsNullOrEmpty(command) || !command.Contains(token)) return command;
+
+        var sb = new System.Text.StringBuilder(command.Length + value.Length);
+        bool inQuotes = false;
+        int i = 0;
+        while (i < command.Length)
+        {
+            if (string.CompareOrdinal(command, i, token, 0, token.Length) == 0)
+            {
+                sb.Append(inQuotes ? SanitizeQuotedArg(value) : SanitizeShellArg(value));
+                i += token.Length;
+                continue;
+            }
+            if (command[i] == '"') inQuotes = !inQuotes;
+            sb.Append(command[i]);
+            i++;
+        }
+        return sb.ToString();
+    }
+
+    private static string SanitizeQuotedArg(string value) => value
+        .Replace("\"", "")      // could close the quote and expose the rest to cmd
+        .Replace("%", "")       // %VAR% still expands inside quotes
+        .Replace("`", "")
+        .Replace("$", "")
+        .Replace("\r", "")
+        .Replace("\n", " ");
 
     /// <summary>Load hooks from config files.</summary>
     private List<HookDefinition> LoadHooks()

@@ -247,6 +247,18 @@ public class AppSettings
     /// <summary>The "your free trial has ended" invitation has been shown.</summary>
     public bool LicenseTrialEndedNoticeShown { get; set; }
 
+    /// <summary>The user chose "Not interested" / "don't show again" on the BrainX invitation — never opened by
+    /// itself again (the brain chip still opens it on request).</summary>
+    public bool BrainXInviteDismissed { get; set; }
+
+    /// <summary>Host name or IP of the NVIDIA DGX Spark on the local network that serves models (null = none).</summary>
+    public string? DgxSparkHost { get; set; }
+
+    /// <summary>The context size in force before a Spark model raised it — put back the moment CluadeX leaves the
+    /// Spark, because the same setting sizes a local llama-server load (a Spark-sized window on a desktop GPU is
+    /// the out-of-VRAM case).</summary>
+    public uint? DgxSparkSavedContextSize { get; set; }
+
     // Feature Toggles — users can enable/disable optional features
     public FeatureToggles Features { get; set; } = new();
 

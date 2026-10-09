@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
@@ -12,6 +13,13 @@ namespace CluadeX.ViewModels;
 public class TimeMachineViewModel : ViewModelBase
 {
     private readonly TimeMachineService _tm;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService? _log;
+
+    // One token per selection: clicking through commits quickly used to let an older commit's file list
+    // (still loading) land after a newer one's, mixing two commits in the Changes panel.
+    private CancellationTokenSource? _filesCts;
+    private CancellationTokenSource? _diffCts;
 
     // ─── Collections shown in the timeline / detail panel ───
     public ObservableCollection<CommitInfo> Commits { get; } = new();
@@ -46,7 +54,7 @@ public class TimeMachineViewModel : ViewModelBase
     public string SelectedShortSha => _selected?.ShortSha ?? "";
     public string SelectedMessage => _selected?.Message ?? "";
     public string SelectedAuthor => _selected?.Author ?? "";
-    public string SelectedTime => _selected?.RelativeTime ?? "";
+    public string SelectedTime => _selected == null ? "" : RelativeTime(_selected.Date);
     public string SelectedBranch => _selected?.Branch ?? "";
     public int SelectedFilesCount => _selected?.FilesChanged ?? 0;
     public int SelectedAdditions => _selected?.Additions ?? 0;
@@ -116,10 +124,12 @@ public class TimeMachineViewModel : ViewModelBase
     public ICommand ShowAllCommand { get; }
     public ICommand ShowAgentOnlyCommand { get; }
 
-    public TimeMachineViewModel(TimeMachineService tm)
+    public TimeMachineViewModel(TimeMachineService tm, LocalizationService loc, DebugLogService? log = null)
     {
         _tm = tm;
-        RefreshCommand = new AsyncRelayCommand(LoadAsync);
+        _loc = loc;
+        _log = log;
+        RefreshCommand = new AsyncRelayCommand(() => LoadAsync());
         SelectCommitCommand = new RelayCommand<CommitInfo>(c => { if (c != null) Selected = c; });
         SelectFileCommand = new RelayCommand<CommitFileChange>(f => { if (f != null) SelectedFile = f; });
         OpenConfirmCommand = new RelayCommand(() =>
@@ -132,21 +142,48 @@ public class TimeMachineViewModel : ViewModelBase
         CherryPickCommand = new AsyncRelayCommand(DoCherryPickAsync);
         ShowAllCommand = new RelayCommand(() => FilterAgentOnly = false);
         ShowAgentOnlyCommand = new RelayCommand(() => FilterAgentOnly = true);
+        _loc.LanguageChanged += () => OnPropertyChanged(nameof(SelectedTime));
+    }
+
+    private string RelativeTime(DateTimeOffset date) => FormatRelativeTime(date, key => _loc.T(key));
+
+    /// <summary>"just now" / "5m ago" / "yesterday" / a date — in the UI language (CommitInfo.RelativeTime is English-only).</summary>
+    public static string FormatRelativeTime(DateTimeOffset date, Func<string, string> text)
+    {
+        var diff = DateTimeOffset.Now - date;
+        if (diff.TotalSeconds < 60) return text("tm.justNow");
+        if (diff.TotalMinutes < 60) return string.Format(text("tm.minutesAgo"), (int)diff.TotalMinutes);
+        if (diff.TotalHours < 24) return string.Format(text("tm.hoursAgo"), (int)diff.TotalHours);
+        if (diff.TotalDays < 2) return text("tm.yesterday");
+        if (diff.TotalDays < 14) return string.Format(text("tm.daysAgo"), (int)diff.TotalDays);
+        // Gregorian with the UI language's month names (th-TH alone would switch to the Buddhist-era year).
+        CultureInfo culture;
+        try
+        {
+            culture = (CultureInfo)CultureInfo.GetCultureInfo(text("tm.dateCulture")).Clone();
+            culture.DateTimeFormat.Calendar = new GregorianCalendar();
+        }
+        catch { culture = CultureInfo.InvariantCulture; }
+        return date.ToLocalTime().ToString("d MMM yyyy", culture);
     }
 
     // ═══════════════════════════════════════════
     // Load
     // ═══════════════════════════════════════════
 
-    public async Task LoadAsync()
+    /// <summary>
+    /// Reload the timeline. <paramref name="keepStatus"/> keeps the current status line: after a rewind it
+    /// carries the snapshot branch and stash names — the only way back — and the reload used to wipe them.
+    /// </summary>
+    public async Task LoadAsync(bool keepStatus = false)
     {
         IsLoading = true;
-        StatusMessage = "";
+        if (!keepStatus) StatusMessage = "";
         try
         {
             if (!await _tm.IsGitRepoAsync())
             {
-                StatusMessage = "Not a git repository — open a project folder to see commit history.";
+                StatusMessage = _loc.T("tm.notRepoHint");
                 Commits.Clear();
                 VisibleCommits.Clear();
                 Files.Clear();
@@ -167,7 +204,8 @@ public class TimeMachineViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Failed to load commits: {ex.Message}";
+            _log?.Error("TimeMachine", "Loading commits failed", ex);
+            StatusMessage = _loc.T("tm.loadFailed");
         }
         finally
         {
@@ -185,33 +223,49 @@ public class TimeMachineViewModel : ViewModelBase
 
     private async Task LoadSelectedFilesAsync()
     {
+        _filesCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _filesCts = cts;
         Files.Clear();
         DiffLines.Clear();
-        if (_selected == null) return;
+        var commit = _selected;
+        if (commit == null) return;
         try
         {
-            var files = await Task.Run(() => _tm.GetCommitFilesAsync(_selected.Sha));
+            var files = await Task.Run(() => _tm.GetCommitFilesAsync(commit.Sha, cts.Token), cts.Token);
+            // A newer selection superseded this one while git was running — drop the stale list.
+            if (cts.IsCancellationRequested || !ReferenceEquals(commit, _selected)) return;
             foreach (var f in files) Files.Add(f);
             SelectedFile = Files.FirstOrDefault();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            StatusMessage = $"Diff load failed: {ex.Message}";
+            _log?.Error("TimeMachine", $"Listing files of {commit.Sha} failed", ex);
+            StatusMessage = _loc.T("tm.filesFailed");
         }
     }
 
     private async Task LoadSelectedFileDiffAsync()
     {
+        _diffCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _diffCts = cts;
         DiffLines.Clear();
-        if (_selected == null || _selectedFile == null) return;
+        var commit = _selected;
+        var file = _selectedFile;
+        if (commit == null || file == null) return;
         try
         {
-            var lines = await Task.Run(() => _tm.GetFileDiffAsync(_selected.Sha, _selectedFile.Path));
+            var lines = await Task.Run(() => _tm.GetFileDiffAsync(commit.Sha, file.Path, cts.Token), cts.Token);
+            if (cts.IsCancellationRequested || !ReferenceEquals(commit, _selected) || !ReferenceEquals(file, _selectedFile)) return;
             foreach (var l in lines) DiffLines.Add(l);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            StatusMessage = $"File diff failed: {ex.Message}";
+            _log?.Error("TimeMachine", $"Diff of {file.Path} at {commit.Sha} failed", ex);
+            StatusMessage = _loc.T("tm.diffFailed");
         }
     }
 
@@ -221,19 +275,22 @@ public class TimeMachineViewModel : ViewModelBase
 
     private async Task DoRewindAsync()
     {
-        if (_selected == null) return;
+        var target = _selected;
+        if (target == null) return;
         IsConfirmOpen = false;
         IsRewinding = true;
-        StatusMessage = "Rewinding...";
+        StatusMessage = _loc.T("tm.rewindingStatus");
         try
         {
-            var result = await Task.Run(() => _tm.RewindToCommitAsync(_selected.Sha, _createSnapshot));
+            var result = await Task.Run(() => _tm.RewindToCommitAsync(target.Sha, _createSnapshot));
+            if (result.Success) await LoadAsync(keepStatus: true);
+            // Set AFTER the reload so the snapshot branch / stash name stay on screen.
             StatusMessage = result.Message;
-            if (result.Success) await LoadAsync();
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Rewind failed: {ex.Message}";
+            _log?.Error("TimeMachine", $"Rewind to {target.Sha} threw", ex);
+            StatusMessage = _loc.T("tm.rewindFailed");
         }
         finally
         {
@@ -245,34 +302,48 @@ public class TimeMachineViewModel : ViewModelBase
 
     private async Task DoBranchFromAsync()
     {
-        if (_selected == null) return;
-        string newBranch = $"from-{_selected.ShortSha}-{DateTime.Now:HHmmss}";
-        StatusMessage = $"Creating {newBranch}...";
+        var target = _selected;
+        if (target == null) return;
+        string newBranch = $"from-{target.ShortSha}-{DateTime.Now.ToString("HHmmss", CultureInfo.InvariantCulture)}";
+        StatusMessage = _loc.T("tm.creatingBranch", newBranch);
         try
         {
-            var result = await Task.Run(() => _tm.BranchFromCommitAsync(_selected.Sha, newBranch));
+            var result = await Task.Run(() => _tm.BranchFromCommitAsync(target.Sha, newBranch));
+            if (result.Success) await LoadAsync(keepStatus: true);
             StatusMessage = result.Message;
-            if (result.Success) await LoadAsync();
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Branch failed: {ex.Message}";
+            _log?.Error("TimeMachine", $"Branch from {target.Sha} threw", ex);
+            StatusMessage = _loc.T("tm.branchFailed", newBranch);
         }
     }
 
     private async Task DoCherryPickAsync()
     {
-        if (_selected == null) return;
-        StatusMessage = "Cherry-picking...";
+        var target = _selected;
+        if (target == null) return;
+        StatusMessage = _loc.T("tm.cherryPicking");
         try
         {
-            var result = await Task.Run(() => _tm.CherryPickCommitAsync(_selected.Sha));
+            var result = await Task.Run(() => _tm.CherryPickCommitAsync(target.Sha));
+            if (result.Success) await LoadAsync(keepStatus: true);
             StatusMessage = result.Message;
-            if (result.Success) await LoadAsync();
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Cherry-pick failed: {ex.Message}";
+            _log?.Error("TimeMachine", $"Cherry-pick of {target.Sha} threw", ex);
+            StatusMessage = _loc.T("tm.cherryFailed");
         }
     }
+}
+
+/// <summary>Commit date → localized relative time for the timeline rows (rebuilt on every page load).</summary>
+public sealed class CommitRelativeTimeConverter : System.Windows.Data.IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+        value is DateTimeOffset d ? TimeMachineViewModel.FormatRelativeTime(d, k => LocalizedResources.Instance[k]) : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        System.Windows.Data.Binding.DoNothing;
 }

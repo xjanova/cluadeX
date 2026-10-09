@@ -13,11 +13,11 @@
     <UserControl.Resources>
 
         <!-- Installed plugin card -->
-        <DataTemplate x:Key="InstalledPluginCard" DataType="{x:Type m:PluginInfo}">
+        <DataTemplate x:Key="InstalledPluginCard" DataType="{x:Type vm:InstalledPluginItem}">
             <Border Margin="0,0,0,10" Padding="14,12" CornerRadius="10"
                     BorderThickness="1" BorderBrush="{StaticResource NeonLineBrush}"
                     Background="{StaticResource NeonCardFill}"
-                    Cursor="Hand" MouseLeftButtonDown="OnInstalledClick" Tag="{Binding}">
+                    Cursor="Hand" MouseLeftButtonDown="OnInstalledClick" Tag="{Binding Plugin}">
                 <Border.ToolTip>
                     <StackPanel Margin="4" MaxWidth="320">
                         <TextBlock Text="{Binding Name}" FontWeight="Bold"
@@ -56,6 +56,9 @@
                         <TextBlock Text="{Binding Description}" FontSize="11" Margin="0,4,0,0"
                                    Foreground="{StaticResource NeonInk2Brush}"
                                    TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{services:Loc pluginsm.placeholderNote}" FontSize="10" Margin="0,4,0,0"
+                                   Foreground="{StaticResource NeonAmberBrush}" TextWrapping="Wrap"
+                                   Visibility="{Binding IsPlaceholder, Converter={StaticResource BoolVis}}"/>
                     </StackPanel>
                     <!-- Enabled badge -->
                     <Border Grid.Column="2" Padding="6,2" CornerRadius="3" VerticalAlignment="Top">
@@ -72,14 +75,12 @@
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
-                        <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}" FontWeight="Bold">
+                        <TextBlock Text="{Binding EnabledLabel}" FontSize="9" FontFamily="{StaticResource NeonMonoFont}" FontWeight="Bold">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
-                                    <Setter Property="Text" Value="OFF"/>
                                     <Setter Property="Foreground" Value="{StaticResource NeonRedBrush}"/>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Enabled}" Value="True">
-                                            <Setter Property="Text" Value="ON"/>
                                             <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -92,11 +93,11 @@
         </DataTemplate>
 
         <!-- Catalog plugin card -->
-        <DataTemplate x:Key="CatalogPluginCard" DataType="{x:Type m:CatalogPlugin}">
+        <DataTemplate x:Key="CatalogPluginCard" DataType="{x:Type vm:CatalogPluginItem}">
             <Border Margin="0,0,0,10" Padding="14,12" CornerRadius="10"
                     BorderThickness="1" BorderBrush="{StaticResource NeonLineBrush}"
                     Background="{StaticResource NeonCardFill}"
-                    Cursor="Hand" MouseLeftButtonDown="OnCatalogClick" Tag="{Binding}">
+                    Cursor="Hand" MouseLeftButtonDown="OnCatalogClick" Tag="{Binding Plugin}">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -132,15 +133,25 @@
                                    Foreground="{StaticResource NeonInk2Brush}"
                                    TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
-                    <!-- Installed badge -->
-                    <Border Grid.Column="2" Padding="6,2" CornerRadius="3" VerticalAlignment="Top"
-                            Background="#225CFFB0"
-                            BorderBrush="{StaticResource NeonMintBrush}" BorderThickness="1"
-                            Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}">
-                        <TextBlock Text="{services:Loc plugins.installedCaps}" FontSize="9" FontWeight="Bold"
-                                   FontFamily="{StaticResource NeonMonoFont}"
-                                   Foreground="{StaticResource NeonMintBrush}"/>
-                    </Border>
+                    <!-- Installed / coming-soon badges -->
+                    <StackPanel Grid.Column="2" VerticalAlignment="Top">
+                        <Border Padding="6,2" CornerRadius="3"
+                                Background="#225CFFB0"
+                                BorderBrush="{StaticResource NeonMintBrush}" BorderThickness="1"
+                                Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc plugins.installedCaps}" FontSize="9" FontWeight="Bold"
+                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       Foreground="{StaticResource NeonMintBrush}"/>
+                        </Border>
+                        <Border Padding="6,2" CornerRadius="3" Margin="0,4,0,0"
+                                Background="#22FFD166"
+                                BorderBrush="{StaticResource NeonAmberBrush}" BorderThickness="1"
+                                Visibility="{Binding IsComingSoon, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc pluginsm.comingSoon}" FontSize="9" FontWeight="Bold"
+                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       Foreground="{StaticResource NeonAmberBrush}"/>
+                        </Border>
+                    </StackPanel>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -275,8 +286,11 @@
                     <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="{Binding PageTitle, FallbackValue=Plugins}" FontSize="20" FontWeight="Bold"
                                    Foreground="{StaticResource NeonInk0Brush}"/>
-                        <TextBlock Text="{Binding PageSubtitle, FallbackValue='Extend CluadeX with hooks, commands, and ready-to-use automations'}"
+                        <TextBlock Text="{Binding PageSubtitle}"
                                    FontSize="11" Foreground="{StaticResource NeonInk2Brush}" Margin="0,2,0,0"/>
+                        <TextBlock Text="{Binding StatusMessage}" FontSize="11" Margin="0,4,0,0"
+                                   Foreground="{StaticResource NeonCyanBrush}" TextWrapping="Wrap"
+                                   Visibility="{Binding StatusMessage, Converter={StaticResource BoolVis}}"/>
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
@@ -460,7 +474,7 @@
                                                    Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding SelectedPlugin.Name}" FontSize="20" FontWeight="Bold"
+                                        <TextBlock Text="{Binding SelectedPluginItem.Name}" FontSize="20" FontWeight="Bold"
                                                    Foreground="{StaticResource NeonInk0Brush}"/>
                                         <TextBlock FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                                                    Foreground="{StaticResource NeonInk3Brush}" Margin="0,4,0,0">
@@ -474,8 +488,16 @@
                                 <Border Padding="14" CornerRadius="6" Margin="0,0,0,14"
                                         Background="#11FFFFFF"
                                         BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
-                                    <TextBlock Text="{Binding SelectedPlugin.Description}" FontSize="13"
+                                    <TextBlock Text="{Binding SelectedPluginItem.Description}" FontSize="13"
                                                Foreground="{StaticResource NeonInk1Brush}" TextWrapping="Wrap"/>
+                                </Border>
+
+                                <Border Padding="12" CornerRadius="6" Margin="0,0,0,14"
+                                        Background="#22FFD166"
+                                        BorderBrush="{StaticResource NeonAmberBrush}" BorderThickness="1"
+                                        Visibility="{Binding SelectedPluginItem.IsPlaceholder, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{services:Loc pluginsm.placeholderDetail}" FontSize="12"
+                                               Foreground="{StaticResource NeonAmberBrush}" TextWrapping="Wrap"/>
                                 </Border>
 
                                 <StackPanel Orientation="Horizontal">
@@ -529,7 +551,7 @@
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding SelectedCatalogPlugin.Name}" FontSize="20" FontWeight="Bold"
+                                        <TextBlock Text="{Binding SelectedCatalogItem.Name}" FontSize="20" FontWeight="Bold"
                                                    Foreground="{StaticResource NeonInk0Brush}"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <Border Padding="6,2" CornerRadius="3"
@@ -559,22 +581,30 @@
                                 <Border Padding="14" CornerRadius="6" Margin="0,0,0,14"
                                         Background="#11FFFFFF"
                                         BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
-                                    <TextBlock Text="{Binding SelectedCatalogPlugin.Description}" FontSize="13"
+                                    <TextBlock Text="{Binding SelectedCatalogItem.Description}" FontSize="13"
                                                Foreground="{StaticResource NeonInk1Brush}" TextWrapping="Wrap"/>
                                 </Border>
 
                                 <Border Padding="14" CornerRadius="6" Margin="0,0,0,14"
                                         Background="#7011152E"
                                         BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
-                                        Visibility="{Binding SelectedCatalogPlugin.HookSummary, Converter={StaticResource BoolVis}}">
+                                        Visibility="{Binding SelectedCatalogItem.HookSummary, Converter={StaticResource BoolVis}}">
                                     <StackPanel>
                                         <TextBlock Text="{services:Loc plugins.hooks}" FontFamily="{StaticResource NeonMonoFont}"
                                                    FontSize="9" FontWeight="Bold"
                                                    Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,8"/>
-                                        <TextBlock Text="{Binding SelectedCatalogPlugin.HookSummary}"
+                                        <TextBlock Text="{Binding SelectedCatalogItem.HookSummary}"
                                                    FontSize="12" Foreground="{StaticResource NeonInk1Brush}"
                                                    TextWrapping="Wrap"/>
                                     </StackPanel>
+                                </Border>
+
+                                <Border Padding="12" CornerRadius="6" Margin="0,0,0,14"
+                                        Background="#22FFD166"
+                                        BorderBrush="{StaticResource NeonAmberBrush}" BorderThickness="1"
+                                        Visibility="{Binding SelectedCatalogItem.IsComingSoon, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{services:Loc pluginsm.comingSoonDetail}" FontSize="12"
+                                               Foreground="{StaticResource NeonAmberBrush}" TextWrapping="Wrap"/>
                                 </Border>
 
                                 <StackPanel Orientation="Horizontal">

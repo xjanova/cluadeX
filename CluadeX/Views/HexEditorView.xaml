@@ -276,7 +276,7 @@
                                  Text="{Binding GotoInput, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="{services:Loc hex.gotoTip}"/>
                         <Button Command="{Binding GotoCommand}" Style="{StaticResource HexButton}" Margin="6,0,0,0">
-                            <TextBlock Text="Go"/>
+                            <TextBlock Text="{services:Loc hex.goBtn}"/>
                         </Button>
                     </StackPanel>
 
@@ -300,7 +300,7 @@
                     <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
                         <RadioButton Content="HEX" GroupName="FindMode" Foreground="{StaticResource NeonInk1Brush}"
                                      IsChecked="{Binding SearchModeHex}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                        <RadioButton Content="TEXT" GroupName="FindMode" Foreground="{StaticResource NeonInk1Brush}"
+                        <RadioButton Content="{services:Loc hex.textMode}" GroupName="FindMode" Foreground="{StaticResource NeonInk1Brush}"
                                      IsChecked="{Binding SearchModeText}" VerticalAlignment="Center"/>
                     </StackPanel>
                     <TextBox Style="{StaticResource HexTextBox}" Width="200"
@@ -310,7 +310,7 @@
                         <TextBlock Text="{services:Loc hex.findAll}"/>
                     </Button>
                     <Button Command="{Binding FindNextCommand}" Style="{StaticResource HexButton}">
-                        <TextBlock Text="Next ▶"/>
+                        <TextBlock Text="{services:Loc hex.nextMatch}"/>
                     </Button>
                     <Border Width="1" Background="{StaticResource NeonLineBrush}" Margin="10,4,10,4"/>
                     <TextBlock Text="{services:Loc hex.replaceWith}" Foreground="{StaticResource NeonInk2Brush}" FontSize="11"
@@ -411,7 +411,7 @@
                             <TextBlock Grid.Column="1" HorizontalAlignment="Center" VerticalAlignment="Center"
                                        FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
                                        Foreground="{StaticResource NeonInk2Brush}">
-                                <Run Text="Showing "/>
+                                <Run Text="{services:Loc hex.showingPrefix}"/>
                                 <Run Text="{Binding WindowStartHex, Mode=OneWay}"/>
                                 <Run Text=" → "/>
                                 <Run Text="{Binding WindowEndHex, Mode=OneWay}"/>
@@ -448,12 +448,12 @@
                                            Foreground="{StaticResource NeonAmberBrush}" FontSize="12"/>
                                 <TextBlock Margin="0,4,0,0" FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                                            Foreground="{StaticResource NeonInk1Brush}">
-                                    <Run Text="Size: "/>
+                                    <Run Text="{services:Loc hex.sizePrefix}"/>
                                     <Run Text="{Binding FileInfo.SizeDisplay, Mode=OneWay}"/>
                                 </TextBlock>
                                 <TextBlock Margin="0,2,0,0" FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                                            Foreground="{StaticResource NeonInk2Brush}" TextTrimming="CharacterEllipsis">
-                                    <Run Text="Magic: "/>
+                                    <Run Text="{services:Loc hex.magicPrefix}"/>
                                     <Run Text="{Binding FileInfo.MagicHex, Mode=OneWay}"/>
                                 </TextBlock>
                                 <TextBlock Margin="0,2,0,0" FontSize="10" FontFamily="{StaticResource NeonMonoFont}"

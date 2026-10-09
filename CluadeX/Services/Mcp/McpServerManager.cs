@@ -147,6 +147,104 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     /// <summary>Last error seen on the brain server — the tooltip's whole point.</summary>
     public string? BrainLastError { get; private set; }
 
+    // ─── Is BrainX on this PC at all? ─────────────────────────────────
+
+    /// <summary>Where BrainX stands on this PC, from best to worst.</summary>
+    public enum BrainInstall { Connected, Configured, InstalledNotConfigured, NotInstalled }
+
+    /// <summary>BrainX's MCP server exe, or null when BrainX isn't installed. The stable <c>BrainX\mcp</c> shim
+    /// first (it survives BrainX updates), then the Velopack <c>current</c> folder.</summary>
+    public static string? FindInstalledBrainExe()
+    {
+        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        foreach (var p in new[]
+        {
+            Path.Combine(local, "BrainX", "mcp", "brainx-mcp.exe"),
+            Path.Combine(local, "BrainX", "current", "mcp", "brainx-mcp.exe"),
+        })
+            if (File.Exists(p)) return p;
+        return null;
+    }
+
+    public BrainInstall GetBrainInstallState()
+    {
+        if (IsBrainConnected) return BrainInstall.Connected;
+        if (BrainServerName != null) return BrainInstall.Configured;
+        return FindInstalledBrainExe() != null ? BrainInstall.InstalledNotConfigured : BrainInstall.NotInstalled;
+    }
+
+    /// <summary>
+    /// Connect a BrainX that is installed but not (yet) in this app's MCP list — installed after CluadeX started,
+    /// or before CluadeX existed. BrainX's installer registers itself in mcp_servers.json, so that entry is taken
+    /// first; otherwise one is made from the installed exe, carrying only the BRAINX_* settings (the vault path)
+    /// from Claude Code's config — never any other variable, so no key of another tool is copied along.
+    /// </summary>
+    public async Task<bool> ConnectInstalledBrainAsync(CancellationToken ct = default)
+    {
+        if (BrainServerName == null)
+        {
+            var fromDisk = ReadBrainEntryFromDisk();
+            if (fromDisk is { } entry)
+            {
+                SetConfig(entry.Name, entry.Config);
+            }
+            else
+            {
+                string? exe = FindInstalledBrainExe();
+                if (exe == null) return false;
+                var env = ImportBrainEnvFromClaudeConfig();
+                SetConfig("brainx-brain", new McpServerConfig { Command = exe, Env = env.Count > 0 ? env : null, Enabled = true });
+                SaveConfig();
+                Log("brainx-brain", $"registered the installed BrainX ({exe})");
+            }
+        }
+
+        string name = BrainServerName!;
+        if (IsBrainConnected) return true;
+        if (_configs.TryGetValue(name, out var cfg) && !cfg.Enabled)
+        {
+            cfg.Enabled = true;
+            SaveConfig();
+        }
+        return await StartServerAsync(name, ct);
+    }
+
+    private (string Name, McpServerConfig Config)? ReadBrainEntryFromDisk()
+    {
+        try
+        {
+            if (!File.Exists(ConfigPath)) return null;
+            var file = JsonSerializer.Deserialize<McpConfigFile>(File.ReadAllText(ConfigPath), JsonOpts);
+            foreach (var (name, config) in file?.McpServers ?? new())
+                if (LooksLikeBrain(name)) return (name, config);
+        }
+        catch (Exception ex) { Log("config", $"Could not re-read MCP config: {ex.Message}"); }
+        return null;
+    }
+
+    private static Dictionary<string, string> ImportBrainEnvFromClaudeConfig()
+    {
+        var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
+            if (!File.Exists(path)) return env;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("mcpServers", out var servers) || servers.ValueKind != JsonValueKind.Object) return env;
+            foreach (var server in servers.EnumerateObject())
+            {
+                if (!LooksLikeBrain(server.Name)) continue;
+                if (server.Value.TryGetProperty("env", out var e) && e.ValueKind == JsonValueKind.Object)
+                    foreach (var kv in e.EnumerateObject())
+                        if (kv.Name.StartsWith("BRAINX_", StringComparison.OrdinalIgnoreCase) && kv.Value.ValueKind == JsonValueKind.String)
+                            env[kv.Name] = kv.Value.GetString()!;
+                break;
+            }
+        }
+        catch { /* Claude Code not installed or its config unreadable — BrainX falls back to its own default vault */ }
+        return env;
+    }
+
     private int _reconnectAttempt;
 
     private void RaiseBrainStatus()
@@ -160,7 +258,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     private void SetState(string name, McpServerState state, string? error = null)
     {
         _states[name] = state;
-        if (error != null || state == McpServerState.Ready) BrainLastError = error;
+        // Only the brain's own transitions: another server's failure used to land in the brain chip's tooltip.
+        if (LooksLikeBrain(name) && (error != null || state == McpServerState.Ready)) BrainLastError = error;
         try { OnServerStateChanged?.Invoke(name, state); } catch { }
         RaiseBrainStatus();
     }
@@ -640,7 +739,10 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         }
 
         var callParams = new { name = toolName, arguments = arguments };
-        var response = await transport.SendRequestAsync("tools/call", callParams, ct: ct);
+        // 3 minutes, not the transport's 30 s default: brain_synthesize, media_generate and friends routinely run
+        // past 30 s, and a timeout there reported a tool that was still working as failed. The user's Stop
+        // (ct) still ends it at once.
+        var response = await transport.SendRequestAsync("tools/call", callParams, timeoutMs: 180_000, ct: ct);
 
         if (!response.IsSuccess)
         {
@@ -678,18 +780,25 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
         try
         {
-            var response = await transport.SendRequestAsync("tools/list", new { }, ct: ct);
-
-            if (response.IsSuccess && response.Result.HasValue)
+            var tools = new List<McpTool>();
+            string? cursor = null;
+            bool listed = false;
+            // tools/list is paginated (MCP 2025-03+): a server with many tools returns nextCursor, and reading only
+            // the first page silently dropped the rest. Bounded so a server that loops its cursor can't hang us.
+            for (int page = 0; page < 20; page++)
             {
-                var tools = new List<McpTool>();
+                var response = await transport.SendRequestAsync("tools/list",
+                    cursor == null ? new { } : (object)new { cursor }, ct: ct);
+                cursor = null;
+                if (!response.IsSuccess || !response.Result.HasValue) break;
+                listed = true;
 
                 // Guard: only call TryGetProperty on Object-kind JsonElements, and ensure
                 // the 'tools' field is actually an array before enumerating. Malformed MCP
                 // servers can return unexpected shapes — prior code could throw here.
-                if (response.Result.Value.ValueKind == JsonValueKind.Object
-                    && response.Result.Value.TryGetProperty("tools", out var toolsArray)
-                    && toolsArray.ValueKind == JsonValueKind.Array)
+                var result = response.Result.Value;
+                if (result.ValueKind != JsonValueKind.Object) break;
+                if (result.TryGetProperty("tools", out var toolsArray) && toolsArray.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var toolElem in toolsArray.EnumerateArray())
                     {
@@ -698,7 +807,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                             Name = toolElem.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
                             Description = toolElem.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "",
                             Title = toolElem.TryGetProperty("title", out var t) ? t.GetString() : null,
-                            InputSchema = toolElem.TryGetProperty("inputSchema", out var s) ? s : null,
+                            // Clone: the element must outlive this page's response document.
+                            InputSchema = toolElem.TryGetProperty("inputSchema", out var s) ? s.Clone() : null,
                             ServerName = name,
                         };
 
@@ -706,7 +816,14 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                             tools.Add(tool);
                     }
                 }
+                if (result.TryGetProperty("nextCursor", out var next) && next.ValueKind == JsonValueKind.String
+                    && next.GetString() is { Length: > 0 } nc)
+                    cursor = nc;
+                if (cursor == null) break;
+            }
 
+            if (listed)
+            {
                 _toolRegistry.UpdateServer(name, tools);
                 OnToolsChanged?.Invoke();
                 RaiseBrainStatus();   // the chip shows the tool count

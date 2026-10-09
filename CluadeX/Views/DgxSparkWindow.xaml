@@ -1,0 +1,243 @@
+<Window x:Class="CluadeX.Views.DgxSparkWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:CluadeX.Services"
+        Title="CluadeX · DGX Spark" Width="680" SizeToContent="Height" MaxHeight="900"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="{StaticResource MainFont}" Foreground="{StaticResource TextBrush}">
+
+    <Window.Resources>
+        <!-- NVIDIA-style green, used as a colour only (no NVIDIA logo in the app). -->
+        <SolidColorBrush x:Key="SparkGreen" Color="#76D16B"/>
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource NeonInk2Brush}"/>
+            <Setter Property="FontFamily" Value="{StaticResource NeonMonoFont}"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Margin="18" CornerRadius="16" BorderThickness="1" BorderBrush="#5576D16B">
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0.4,1">
+                <GradientStop Color="#FA132A1E" Offset="0"/>
+                <GradientStop Color="#FA0A0C22" Offset="0.55"/>
+            </LinearGradientBrush>
+        </Border.Background>
+        <Border.Effect>
+            <DropShadowEffect Color="Black" BlurRadius="30" ShadowDepth="0" Opacity="0.65"/>
+        </Border.Effect>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="26,22,26,20">
+
+            <!-- ── Header (drag handle) ── -->
+            <Grid Background="Transparent" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Width="48" Height="48" CornerRadius="12" VerticalAlignment="Top">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#9BE26B" Offset="0"/>
+                            <GradientStop Color="#3FA34D" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.Effect>
+                        <DropShadowEffect Color="#76D16B" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
+                    </Border.Effect>
+                    <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="#0B1A10"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="14,2,10,0">
+                    <TextBlock Text="{services:Loc spark.title}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap"/>
+                    <TextBlock Text="{services:Loc spark.subtitle}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Foreground="{StaticResource Subtext0Brush}"/>
+                    <TextBlock Text="{Binding ActiveLine}" FontSize="11.5" Margin="0,6,0,0"
+                               FontFamily="{StaticResource NeonMonoFont}" Foreground="{StaticResource SparkGreen}"
+                               Visibility="{Binding HasActiveLine, Converter={StaticResource BoolVis}}"/>
+                </StackPanel>
+                <Button Grid.Column="2" Width="30" Height="30" VerticalAlignment="Top" Cursor="Hand"
+                        Click="Close_Click" ToolTip="{services:Loc spark.close}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="15">
+                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{StaticResource NeonInk2Brush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+
+            <TextBlock Text="{services:Loc spark.how}" TextWrapping="Wrap" FontSize="12.5" Margin="0,16,0,0"
+                       Foreground="{StaticResource Subtext0Brush}"/>
+
+            <!-- ── Connect ── -->
+            <StackPanel Margin="0,18,0,0">
+                <TextBlock Text="{services:Loc spark.hostTitle}" Style="{StaticResource SectionLabel}"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Background="#33000000" CornerRadius="8" BorderBrush="#5576D16B" BorderThickness="1" Padding="12,0">
+                        <Grid>
+                            <TextBlock Text="{services:Loc spark.hostPlaceholder}" FontFamily="{StaticResource NeonMonoFont}" FontSize="13"
+                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" IsHitTestVisible="False"
+                                       Visibility="{Binding HostInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                            <TextBox x:Name="HostBox" Text="{Binding HostInput, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0"
+                                     Foreground="{StaticResource TextBrush}" CaretBrush="{StaticResource SparkGreen}"
+                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="13" Padding="0,9"
+                                     VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                    <Button Grid.Column="1" Content="{services:Loc spark.connect}" Style="{StaticResource PrimaryButton}"
+                            Margin="8,0,0,0" Padding="18,8" IsDefault="True"
+                            Command="{Binding ConnectCommand}"/>
+                </Grid>
+                <ProgressBar IsIndeterminate="True" Height="2" Margin="0,6,0,0" BorderThickness="0"
+                             Background="Transparent" Foreground="{StaticResource SparkGreen}"
+                             Visibility="{Binding IsProbing, Converter={StaticResource BoolVis}}"/>
+            </StackPanel>
+
+            <!-- ── Result of the last action ── -->
+            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12.5" Margin="0,8,0,0"
+                       Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding StatusIsError}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <!-- ── Models ── -->
+            <StackPanel Margin="0,18,0,0">
+                <TextBlock Text="{services:Loc spark.modelsTitle}" Style="{StaticResource SectionLabel}"/>
+                <ItemsControl ItemsSource="{Binding Models}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,0,8" CornerRadius="10" Padding="14,10" BorderThickness="1">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="#14FFFFFF"/>
+                                        <Setter Property="BorderBrush" Value="#22FFFFFF"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsInUse}" Value="True">
+                                                <Setter Property="Background" Value="#2276D16B"/>
+                                                <Setter Property="BorderBrush" Value="#AA76D16B"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"/>
+                                            <Border Margin="8,0,0,0" CornerRadius="6" Padding="6,0" Background="#3376D16B"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="{Binding IsRecommended, Converter={StaticResource BoolVis}}">
+                                                <TextBlock Text="{services:Loc spark.recommended}" FontSize="10" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource SparkGreen}"/>
+                                            </Border>
+                                            <Border Margin="6,0,0,0" CornerRadius="6" Padding="6,0" Background="#225CFFB0"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}">
+                                                <TextBlock Text="{services:Loc spark.installed}" FontSize="10"
+                                                           Foreground="{StaticResource NeonMintBrush}"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding UseText}" FontSize="12" Margin="0,3,0,0" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource Subtext0Brush}"/>
+                                        <TextBlock Text="{Binding Facts}" FontSize="11" Margin="0,2,0,0"
+                                                   FontFamily="{StaticResource NeonMonoFont}" Foreground="{StaticResource NeonInk2Brush}"
+                                                   Visibility="{Binding Facts, Converter={StaticResource BoolVis}}"/>
+                                        <StackPanel Margin="0,6,0,0" Visibility="{Binding IsPulling, Converter={StaticResource BoolVis}}">
+                                            <ProgressBar Height="4" Minimum="0" Maximum="1" Value="{Binding Progress}" BorderThickness="0"
+                                                         Background="#22FFFFFF" Foreground="{StaticResource SparkGreen}"/>
+                                            <TextBlock Text="{Binding PullStatus}" FontSize="10.5" Margin="0,3,0,0"
+                                                       FontFamily="{StaticResource NeonMonoFont}" Foreground="{StaticResource NeonInk2Brush}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                                        <Button Content="{services:Loc spark.pull}" Style="{StaticResource SecondaryButton}"
+                                                Padding="12,6" FontSize="12"
+                                                Command="{Binding DataContext.PullCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                Visibility="{Binding CanPull, Converter={StaticResource BoolVis}}"/>
+                                        <Button Content="{services:Loc spark.cancel}" Style="{StaticResource SecondaryButton}"
+                                                Padding="12,6" FontSize="12"
+                                                Command="{Binding DataContext.CancelPullCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                Visibility="{Binding IsPulling, Converter={StaticResource BoolVis}}"/>
+                                        <Button Content="{services:Loc spark.use}" Style="{StaticResource PrimaryButton}"
+                                                Padding="16,6" FontSize="12"
+                                                Command="{Binding DataContext.UseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                Visibility="{Binding CanUse, Converter={StaticResource BoolVis}}"/>
+                                        <TextBlock Text="{services:Loc spark.inUse}" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource SparkGreen}" VerticalAlignment="Center" Margin="6,0"
+                                                   Visibility="{Binding IsInUse, Converter={StaticResource BoolVis}}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{services:Loc spark.speedNote}" FontSize="10.5" TextWrapping="Wrap" Margin="0,2,0,0"
+                           Foreground="{StaticResource Overlay0Brush}"/>
+                <TextBlock Text="{services:Loc spark.lanNote}" FontSize="10.5" TextWrapping="Wrap" Margin="0,4,0,0"
+                           Foreground="{StaticResource Overlay0Brush}"/>
+            </StackPanel>
+
+            <!-- ── The bundle (the only purchase link: the XMAN Studio campaign page) ── -->
+            <Border Margin="0,18,0,0" CornerRadius="12" Padding="16,12" BorderThickness="1" BorderBrush="#88FFD166">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="#33FFD166" Offset="0"/>
+                        <GradientStop Color="#1476D16B" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc spark.campaignTitle}" FontSize="14" FontWeight="Bold"
+                                   Foreground="{StaticResource NeonAmberBrush}"/>
+                        <TextBlock Text="{services:Loc spark.campaignBody}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Content="{services:Loc spark.campaignButton}" Style="{StaticResource PrimaryButton}"
+                            Margin="12,0,0,0" Padding="16,8" VerticalAlignment="Center"
+                            Command="{Binding OpenCampaignCommand}"/>
+                </Grid>
+            </Border>
+
+            <!-- ── Footer ── -->
+            <Button Content="{services:Loc spark.close}" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Right"
+                    Padding="16,6" FontSize="12" Margin="0,18,0,0" IsCancel="True" Click="Close_Click"/>
+        </StackPanel>
+        </ScrollViewer>
+    </Border>
+</Window>

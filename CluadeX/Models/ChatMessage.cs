@@ -13,6 +13,22 @@ public enum MessageRole
     AgentStatus,
     Thinking,
     PermissionRequest,
+    /// <summary>Compaction marker: the model's context starts here. Its Content is the summary of everything
+    /// above it, which replaces those messages in what is SENT to the model — the transcript itself (screen and
+    /// database) keeps every message. Stored as role 8; appended last so older rows keep their numbers.</summary>
+    ContextSummary,
+}
+
+/// <summary>How an inline permission prompt was answered.</summary>
+public enum PermissionOutcome
+{
+    Pending,
+    Allowed,
+    Denied,
+    /// <summary>The turn was stopped while the prompt was open.</summary>
+    Cancelled,
+    /// <summary>The chat was cleared or switched while the prompt was open.</summary>
+    Dismissed,
 }
 
 public class ChatMessage : INotifyPropertyChanged
@@ -87,6 +103,15 @@ public class ChatMessage : INotifyPropertyChanged
 
     public bool IsRetrying => !string.IsNullOrEmpty(_retryCountdown);
 
+    private bool _canRetry;
+    /// <summary>A failed REPLY that the hover Retry can re-run (it knows which question it answered). Not set
+    /// on tool rows — retrying one re-ran the whole agent turn — nor on notices like "not configured".</summary>
+    public bool CanRetry
+    {
+        get => _canRetry;
+        set { if (_canRetry != value) { _canRetry = value; OnPropertyChanged(); } }
+    }
+
     // ─── Hover State (for action buttons) ───
     public bool IsHovered
     {
@@ -146,8 +171,48 @@ public class ChatMessage : INotifyPropertyChanged
     // ─── Permission Request Fields ───
     /// <summary>Callback invoked when user clicks Allow/Deny on a permission request.</summary>
     public Action<bool>? PermissionCallback { get; set; }
-    /// <summary>Whether this permission request has been answered.</summary>
-    public bool PermissionAnswered { get; set; }
+
+    private PermissionOutcome _permissionOutcome;
+    /// <summary>How the prompt was answered. Notifies, so the Allow/Deny buttons collapse and the outcome label
+    /// appears the moment it is answered — they used to stay clickable and the answer was appended to the
+    /// prompt text as an English "*Allowed*".</summary>
+    public PermissionOutcome PermissionOutcome
+    {
+        get => _permissionOutcome;
+        private set
+        {
+            if (_permissionOutcome == value) return;
+            _permissionOutcome = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PermissionAnswered));
+        }
+    }
+
+    /// <summary>Whether this permission request has been answered (in any way).</summary>
+    public bool PermissionAnswered => _permissionOutcome != PermissionOutcome.Pending;
+
+    /// <summary>Answer the prompt once: records the outcome and resolves the waiting agent (only Allowed lets
+    /// the tool run). Returns false when it was already answered — a second click, or Stop racing a click.</summary>
+    public bool ResolvePermission(PermissionOutcome outcome)
+    {
+        if (outcome == PermissionOutcome.Pending || PermissionAnswered) return false;
+        PermissionOutcome = outcome;
+        try { PermissionCallback?.Invoke(outcome == PermissionOutcome.Allowed); }
+        catch { /* resolving an already-completed prompt is a no-op */ }
+        return true;
+    }
+
+    /// <summary>Status lines older builds saved as ordinary Assistant messages ("⏵ Reading…", "⏳ Waiting…",
+    /// "✓ 120 tokens · 3.1s · 38.7 tok/s"). They were reloaded and sent back to the model as fake assistant
+    /// turns; the database layer reclassifies them as AgentStatus when it reads them.</summary>
+    public static bool IsLegacyStatusLine(string? content)
+    {
+        if (string.IsNullOrEmpty(content)) return false;
+        return content.StartsWith("⏵ ", StringComparison.Ordinal)
+            || content.StartsWith("⏳", StringComparison.Ordinal)
+            || content.StartsWith("⚡ Generating", StringComparison.Ordinal)
+            || System.Text.RegularExpressions.Regex.IsMatch(content, @"^✓ [\d,]+ tokens · [\d.]+s · [\d.]+ tok/s$");
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     protected void OnPropertyChanged([CallerMemberName] string? name = null)

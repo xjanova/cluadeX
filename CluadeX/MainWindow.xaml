@@ -27,7 +27,7 @@
         <KeyBinding Modifiers="Control" Key="L"
                     Command="{Binding ChatVM.ClearChatCommand}"/>
         <KeyBinding Modifiers="Control" Key="N"
-                    Command="{Binding ChatVM.NewSessionCommand}"/>
+                    Command="{Binding ChatVM.NewChatAndShowCommand}"/>
         <KeyBinding Modifiers="Control" Key="OemComma"
                     Command="{Binding NavigateToCommand}" CommandParameter="Settings"/>
         <KeyBinding Modifiers="Control" Key="D1"
@@ -181,7 +181,7 @@
                     </Border.Background>
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>  <!-- Traffic lights -->
+                            <ColumnDefinition Width="Auto"/>  <!-- (unused: the cosmetic mac traffic lights were removed) -->
                             <ColumnDefinition Width="Auto"/>  <!-- Project / branch -->
                             <ColumnDefinition Width="*"/>
                             <!-- The palette pill is the one thing that gives way on a narrow window: star-sized, so the
@@ -196,39 +196,6 @@
                             <ColumnDefinition Width="Auto"/>  <!-- Caption buttons -->
                         </Grid.ColumnDefinitions>
 
-                        <!-- Traffic lights (cosmetic) — actual window controls are on the right -->
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,12,0">
-                            <Ellipse Width="12" Height="12" Margin="0,0,7,0">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                        <GradientStop Color="#FFB8B8" Offset="0"/>
-                                        <GradientStop Color="#FF6E6E" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                                <Ellipse.Effect><DropShadowEffect Color="#FF6E6E" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/></Ellipse.Effect>
-                            </Ellipse>
-                            <Ellipse Width="12" Height="12" Margin="0,0,7,0">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                        <GradientStop Color="#FFE6B0" Offset="0"/>
-                                        <GradientStop Color="#FFD166" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                                <Ellipse.Effect><DropShadowEffect Color="#FFD166" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/></Ellipse.Effect>
-                            </Ellipse>
-                            <Ellipse Width="12" Height="12">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                        <GradientStop Color="#BFFFE0" Offset="0"/>
-                                        <GradientStop Color="#5CFFB0" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                                <Ellipse.Effect><DropShadowEffect Color="#5CFFB0" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/></Ellipse.Effect>
-                            </Ellipse>
-                        </StackPanel>
-
-                        <Border Grid.Column="0" Width="1" Margin="106,8,0,8" HorizontalAlignment="Left"
-                                Background="{StaticResource NeonLineBrush}"/>
 
                         <!-- Project + branch -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
@@ -291,7 +258,40 @@
 
                         <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
                              during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
-                        <Button Grid.Column="5" Height="26" Margin="4,0,2,0"
+                        <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- DGX Spark chip — opens the Spark window; solid green while CluadeX runs on a Spark -->
+                        <Button Height="26" Margin="4,0,2,0" Cursor="Hand"
+                                Command="{Binding OpenDgxSparkCommand}"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{services:Loc spark.chipTip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" CornerRadius="13" Padding="10,0" BorderThickness="1"
+                                            Background="#1476D16B" BorderBrush="#9976D16B">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="#5576D16B"
+                                                     VerticalAlignment="Center"/>
+                                            <TextBlock x:Name="txt" Text="{services:Loc spark.chip}" FontSize="11.5" FontWeight="SemiBold"
+                                                       Foreground="#9BE26B" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="#3376D16B"/>
+                                        </Trigger>
+                                        <DataTrigger Binding="{Binding IsSparkActive}" Value="True">
+                                            <Setter TargetName="dot" Property="Fill" Value="#9BE26B"/>
+                                            <Setter TargetName="bd" Property="Effect">
+                                                <Setter.Value>
+                                                    <DropShadowEffect Color="#76D16B" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button Height="26" Margin="4,0,2,0"
                                 Command="{Binding OpenLicenseCommand}" Cursor="Hand"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 ToolTip="{Binding LicenseChipTip}">
@@ -363,11 +363,12 @@
                                            FontFamily="{StaticResource MainFont}" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
+                        </StackPanel>
 
                         <!-- New Chat (icon button) -->
                         <Button Grid.Column="6" Width="32" Height="32" Margin="6,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                Command="{Binding ChatVM.NewSessionCommand}"
+                                Command="{Binding ChatVM.NewChatAndShowCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 ToolTip="{services:Loc nav.newChatTip}">
                             <Button.Template>
@@ -960,11 +961,9 @@
                             <ColumnDefinition Width="Auto"/>  <!-- GPU -->
                             <ColumnDefinition Width="Auto"/>  <!-- Model -->
                             <ColumnDefinition Width="Auto"/>  <!-- Tok/s + cost -->
-                            <ColumnDefinition Width="Auto"/>  <!-- BrainX link + ObsidianX bridge chips -->
+                            <ColumnDefinition Width="Auto"/>  <!-- BrainX link chip -->
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>  <!-- LED context -->
-                            <ColumnDefinition Width="Auto"/>  <!-- Time Machine -->
-                            <ColumnDefinition Width="Auto"/>  <!-- Secure -->
                         </Grid.ColumnDefinitions>
 
                         <!-- Connected pip -->
@@ -1008,8 +1007,9 @@
                         </StackPanel>
 
                         <!-- GPU info — VRAM + sparkline + temp chip -->
+                        <!-- Only while a local model is the brain: with Claude / GPT / Gemini this PC's GPU does no work for the chat -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
-                                    Visibility="{Binding HasLiveGpuStats, Converter={StaticResource BoolVis}}">
+                                    Visibility="{Binding ShowGpuStats, Converter={StaticResource BoolVis}}">
                             <StackPanel.ToolTip>
                                 <StackPanel Margin="4">
                                     <TextBlock Text="{services:Loc nav.gpuMonitor}" FontWeight="Bold"
@@ -1086,10 +1086,13 @@
                              🌉 = orchestrators can reach us (inbound named-pipe host) -->
                         <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
 
-                        <!-- BrainX link chip -->
-                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
+                        <!-- BrainX link chip — click: the MCP page when connected, the BrainX window (install / connect) otherwise -->
+                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6" Cursor="Hand"
                                 Background="#1AA672FF" BorderBrush="#55A672FF" BorderThickness="1"
                                 Visibility="{Binding McpServers, Converter={StaticResource NullToCollapsed}}">
+                            <Border.InputBindings>
+                                <MouseBinding MouseAction="LeftClick" Command="{Binding OpenBrainCommand}"/>
+                            </Border.InputBindings>
                             <Border.ToolTip>
                                 <StackPanel Margin="4" MaxWidth="420">
                                     <TextBlock Text="BrainX" FontWeight="Bold"
@@ -1139,43 +1142,6 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- ObsidianX bridge chip -->
-                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
-                                Background="#1A4FFFE2" BorderBrush="#554FFFE2" BorderThickness="1"
-                                Visibility="{Binding McpHost, Converter={StaticResource NullToCollapsed}}">
-                            <Border.ToolTip>
-                                <StackPanel Margin="4">
-                                    <TextBlock Text="{services:Loc nav.bridge}" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
-                                        <Run Text="Pipe: \\.\pipe\"/><Run Text="{Binding McpHost.PipeName, Mode=OneWay}"/>
-                                    </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
-                                        <Run Text="Active: "/><Run Text="{Binding McpHost.ActiveConnections, Mode=OneWay}"/>
-                                        <Run Text=" · Total: "/><Run Text="{Binding McpHost.TotalRequests, Mode=OneWay}"/>
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border.ToolTip>
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center">
-                                    <Ellipse.Style>
-                                        <Style TargetType="Ellipse">
-                                            <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding McpHost.IsListening}" Value="True">
-                                                    <Setter Property="Fill" Value="#4FFFE2"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Ellipse.Style>
-                                </Ellipse>
-                                <TextBlock Text="🌉" FontSize="10" Margin="0,0,4,0"/>
-                                <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk1Brush}">
-                                    <Run Text="{Binding McpHost.ActiveConnections, Mode=OneWay, FallbackValue=0}"/>
-                                </TextBlock>
-                            </StackPanel>
-                        </Border>
 
                         </StackPanel>
 
@@ -1275,23 +1241,6 @@
                             </Border>
                         </StackPanel>
 
-                        <!-- Time Machine quick button -->
-                        <Button Grid.Column="7" Style="{StaticResource StatusBarChipButton}"
-                                Command="{Binding NavigateToCommand}" CommandParameter="TimeMachine"
-                                VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE823;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,5,0"/>
-                                <TextBlock Text="Time Machine"/>
-                            </StackPanel>
-                        </Button>
-
-                        <!-- Secure badge -->
-                        <StackPanel Grid.Column="8" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
-                            <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                            <TextBlock Text="{services:Loc nav.secure}" FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center"/>
-                        </StackPanel>
                     </Grid>
                 </Border>
             </Grid>

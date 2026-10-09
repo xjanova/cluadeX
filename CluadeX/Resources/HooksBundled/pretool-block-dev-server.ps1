@@ -8,6 +8,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Exact values from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_CWD) { $Cwd = $env:CLUADEX_HOOK_CWD }
+if ($env:CLUADEX_HOOK_PAYLOAD_FILE -and (Test-Path -LiteralPath $env:CLUADEX_HOOK_PAYLOAD_FILE)) {
+  try {
+    $payload = [System.IO.File]::ReadAllText($env:CLUADEX_HOOK_PAYLOAD_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($payload.command) { $Command = [string]$payload.command }
+  } catch { }
+}
+
 $cmd = $Command.ToLowerInvariant()
 
 $patterns = @(
@@ -20,7 +30,7 @@ $patterns = @(
 
 foreach ($p in $patterns) {
   if ($cmd -match [regex]::Escape($p)) {
-    if (-not $Cwd -or -not (Test-Path $Cwd)) {
+    if (-not $Cwd -or -not (Test-Path -LiteralPath $Cwd)) {
       Write-Error "Dev-server command detected but no workspace path provided. Blocking: $Command"
       exit 1
     }

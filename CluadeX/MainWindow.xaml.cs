@@ -80,6 +80,13 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // Unsaved editor tabs: Save all / Discard / Cancel. Cancel (or a failed save) keeps the app open.
+        if (!_viewModel.CodeEditorVM.ConfirmCloseAll())
+        {
+            e.Cancel = true;
+            return;
+        }
+
         // Force-save current session before app exits
         try { _viewModel.ChatVM.SaveNow(); }
         catch { /* don't prevent closing */ }

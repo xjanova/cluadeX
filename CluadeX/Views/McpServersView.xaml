@@ -102,14 +102,38 @@
                                     <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                Foreground="{StaticResource TextBrush}"/>
                                     <TextBlock FontSize="10" Foreground="{StaticResource Overlay0Brush}"
-                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis">
-                                        <Run Text="{Binding Command, Mode=OneWay}"/>
-                                        <Run Text=" "/>
-                                        <Run Text="{Binding ArgsString, Mode=OneWay}"/>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding ToolCount, StringFormat='{}{0} tools'}"
-                                               FontSize="10" Foreground="{StaticResource Subtext0Brush}"
-                                               Margin="0,2,0,0"/>
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                               Text="{Binding CommandLineDisplay, Mode=OneWay}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                        <TextBlock Text="{Binding ToolCountText}"
+                                                   FontSize="10" Foreground="{StaticResource Subtext0Brush}"/>
+                                        <!-- Enabled badge: a disabled server does not start with CluadeX -->
+                                        <Border CornerRadius="6" Padding="6,0" Margin="8,0,0,0" BorderThickness="1"
+                                                VerticalAlignment="Center">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Enabled}" Value="False">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource Overlay0Brush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Text="{Binding EnabledLabel}" FontSize="9">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Enabled}" Value="False">
+                                                                <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Border>
+                                    </StackPanel>
                                 </StackPanel>
                                 <!-- Status Badge -->
                                 <Border Grid.Column="1" CornerRadius="8" Padding="8,3"
@@ -130,10 +154,13 @@
                                                 <DataTrigger Binding="{Binding Status}" Value="starting">
                                                     <Setter Property="Background" Value="{StaticResource BlueBrush}"/>
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding Status}" Value="reconnecting">
+                                                    <Setter Property="Background" Value="{StaticResource PeachBrush}"/>
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
-                                    <TextBlock Text="{Binding Status}" FontSize="10" FontWeight="SemiBold"
+                                    <TextBlock Text="{Binding StatusLabel}" FontSize="10" FontWeight="SemiBold"
                                                Foreground="{StaticResource CrustBrush}"/>
                                 </Border>
                             </Grid>
@@ -162,11 +189,8 @@
                                 <Border Background="{StaticResource Surface0Brush}" CornerRadius="4"
                                         Padding="8,6" Margin="0,0,0,12">
                                     <TextBlock Foreground="{StaticResource TextBrush}" FontSize="12"
-                                               FontFamily="Cascadia Code,Consolas,monospace" TextWrapping="Wrap">
-                                        <Run Text="{Binding SelectedServer.Command, Mode=OneWay}"/>
-                                        <Run Text=" "/>
-                                        <Run Text="{Binding SelectedServer.ArgsString, Mode=OneWay}"/>
-                                    </TextBlock>
+                                               FontFamily="Cascadia Code,Consolas,monospace" TextWrapping="Wrap"
+                                               Text="{Binding SelectedServer.CommandLineDisplay, Mode=OneWay}"/>
                                 </Border>
 
                                 <!-- Discovered Tools -->
@@ -216,10 +240,12 @@
                                 <TextBox Text="{Binding SelectedServer.Command, UpdateSourceTrigger=PropertyChanged}"
                                          Style="{StaticResource ModernTextBox}" Margin="0,0,0,12"/>
 
-                                <TextBlock Text="{services:Loc mcp.argsHint}" FontSize="11" FontWeight="SemiBold"
+                                <TextBlock Text="{services:Loc mcpm.argsOnePerLine}" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
-                                <TextBox Text="{Binding SelectedServer.ArgsString, UpdateSourceTrigger=PropertyChanged}"
-                                         Style="{StaticResource ModernTextBox}" Margin="0,0,0,12"/>
+                                <TextBox Text="{Binding SelectedServer.ArgsText, UpdateSourceTrigger=PropertyChanged}"
+                                         Style="{StaticResource ModernTextBox}" AcceptsReturn="True"
+                                         TextWrapping="NoWrap" MinHeight="60"
+                                         FontFamily="Cascadia Code,Consolas,monospace" Margin="0,0,0,12"/>
 
                                 <TextBlock Text="{services:Loc mcp.envHint}" FontSize="11" FontWeight="SemiBold"
                                            Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,4"/>
@@ -270,7 +296,8 @@
                     <StackPanel Grid.Column="4">
                         <TextBlock Text="{services:Loc mcp.arguments}" FontSize="10" Foreground="{StaticResource Subtext0Brush}" Margin="0,0,0,3"/>
                         <TextBox Text="{Binding NewServerArgs, UpdateSourceTrigger=PropertyChanged}"
-                                 Style="{StaticResource ModernTextBox}"/>
+                                 Style="{StaticResource ModernTextBox}"
+                                 ToolTip="{services:Loc mcpm.argsLineHint}"/>
                     </StackPanel>
                     <Button Grid.Column="6" Content="{services:Loc mcp.add}" Style="{StaticResource PrimaryButton}"
                             Command="{Binding AddServerCommand}" VerticalAlignment="Bottom"

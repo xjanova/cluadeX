@@ -3,6 +3,16 @@
 # Refuses obviously destructive commands.
 param([string]$Command = "")
 
+# The exact command from the CluadeX hook contract. Through the command line it arrived
+# with $ and % stripped ("rm -rf $HOME" reached this script as "rm -rf HOME" and slipped
+# past the pattern below), and long commands could not be passed at all.
+if ($env:CLUADEX_HOOK_PAYLOAD_FILE -and (Test-Path -LiteralPath $env:CLUADEX_HOOK_PAYLOAD_FILE)) {
+  try {
+    $payload = [System.IO.File]::ReadAllText($env:CLUADEX_HOOK_PAYLOAD_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($payload.command) { $Command = [string]$payload.command }
+  } catch { }
+}
+
 $cmd = $Command.ToLowerInvariant().Trim()
 
 $patterns = @(

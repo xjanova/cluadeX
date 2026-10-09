@@ -60,6 +60,7 @@ public partial class ChatView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         InputBox.Focus();
+        HookScrollViewer();
 
         if (DataContext is ChatViewModel vm)
         {
@@ -68,17 +69,24 @@ public partial class ChatView : UserControl
             if (_collectionHandler != null)
                 vm.Messages.CollectionChanged -= _collectionHandler;
 
+            // Follow new output only while the reader is already at the bottom. This used to jump to the end
+            // on every change and every 20 streamed tokens, so nobody could scroll up to read while a reply
+            // streamed — the view yanked them back down.
             _scrollHandler = () =>
             {
                 Dispatcher.InvokeAsync(
-                    () => ScrollToEnd(),
+                    () => { if (_stickToBottom) ScrollToEnd(); },
                     System.Windows.Threading.DispatcherPriority.Background);
             };
 
-            _collectionHandler = (_, _) =>
+            _collectionHandler = (_, args) =>
             {
+                // The user just sent something, or a whole chat was swapped in: take them to the end.
+                bool force = args.Action == NotifyCollectionChangedAction.Reset
+                    || (args.NewItems?.OfType<ChatMessage>().Any(m => m.Role == MessageRole.User) ?? false);
+                if (force) _stickToBottom = true;
                 Dispatcher.InvokeAsync(
-                    () => ScrollToEnd(),
+                    () => { if (_stickToBottom) ScrollToEnd(); },
                     System.Windows.Threading.DispatcherPriority.Background);
             };
 
@@ -89,6 +97,12 @@ public partial class ChatView : UserControl
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        if (_chatScrollViewer != null)
+        {
+            _chatScrollViewer.ScrollChanged -= OnChatScrollChanged;
+            _chatScrollViewer = null;
+        }
+
         if (DataContext is ChatViewModel vm)
         {
             if (_scrollHandler != null)
@@ -107,10 +121,37 @@ public partial class ChatView : UserControl
     // ─── ScrollToEnd via ListBox's internal ScrollViewer ───
 
     private ScrollViewer? _chatScrollViewer;
+    /// <summary>True while the reader is at (or within a few lines of) the bottom — only then does new output
+    /// pull the view down.</summary>
+    private bool _stickToBottom = true;
+    private const double BottomSlackPx = 48;
+
+    private void HookScrollViewer()
+    {
+        if (_chatScrollViewer != null) return;
+        _chatScrollViewer = FindVisualChild<ScrollViewer>(ChatList);
+        if (_chatScrollViewer != null)
+            _chatScrollViewer.ScrollChanged += OnChatScrollChanged;
+    }
+
+    private void OnChatScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (sender is not ScrollViewer sv) return;
+        if (e.ExtentHeightChange == 0 && e.ViewportHeightChange == 0)
+        {
+            // The offset moved by itself: the user scrolled (wheel, drag, keys) — remember where they are.
+            _stickToBottom = sv.ScrollableHeight - sv.VerticalOffset <= BottomSlackPx;
+        }
+        else if (_stickToBottom)
+        {
+            // Content grew (a message arrived, a reply streamed, a bubble re-measured): keep following.
+            sv.ScrollToEnd();
+        }
+    }
 
     private void ScrollToEnd()
     {
-        _chatScrollViewer ??= FindVisualChild<ScrollViewer>(ChatList);
+        HookScrollViewer();
         _chatScrollViewer?.ScrollToEnd();
     }
 
@@ -152,19 +193,15 @@ public partial class ChatView : UserControl
         }
     }
 
-    // ─── Retry — resend the last user message ───
+    // ─── Retry — re-run the question THIS failed reply answered ───
+    // (It used to resend the latest user message whatever bubble was hovered, as a duplicate.)
 
     private void RetryMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ChatViewModel vm)
+        if (DataContext is ChatViewModel vm && sender is FrameworkElement fe && fe.DataContext is ChatMessage failed
+            && vm.RetryMessageCommand.CanExecute(failed))
         {
-            var lastUserMsg = vm.Messages.LastOrDefault(m => m.Role == MessageRole.User);
-            if (lastUserMsg != null)
-            {
-                vm.UserInput = lastUserMsg.Content;
-                if (vm.SendMessageCommand.CanExecute(null))
-                    vm.SendMessageCommand.Execute(null);
-            }
+            vm.RetryMessageCommand.Execute(failed);
         }
     }
 
@@ -186,24 +223,18 @@ public partial class ChatView : UserControl
 
     // ─── Permission request ───
 
+    // Answering collapses the buttons and shows a localized outcome label (bound to PermissionOutcome) — they
+    // used to stay clickable with a literal English "*Allowed*" appended to the prompt text.
     private void PermissionAllow_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg && !msg.PermissionAnswered)
-        {
-            msg.PermissionAnswered = true;
-            msg.Content += "\n*Allowed*";
-            msg.PermissionCallback?.Invoke(true);
-        }
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.ResolvePermission(PermissionOutcome.Allowed);
     }
 
     private void PermissionDeny_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg && !msg.PermissionAnswered)
-        {
-            msg.PermissionAnswered = true;
-            msg.Content += "\n*Denied*";
-            msg.PermissionCallback?.Invoke(false);
-        }
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.ResolvePermission(PermissionOutcome.Denied);
     }
 
     // ─── Suggested prompts ───

@@ -79,9 +79,36 @@ public class SecurityShieldService
 
     // ─── Scanning ────────────────────────────────────────────────────
 
+    /// <summary>A rule with its regex built once. The old scanner constructed (and, with
+    /// RegexOptions.Compiled, JIT-compiled to IL) a fresh Regex for every rule × every file — tens of
+    /// thousands of compilations for a mid-size repo, which is where most of a scan's time went.</summary>
+    private sealed record CompiledRule(SecurityRule Rule, Regex Regex);
+
+    /// <summary>Per-line match budget. A rule that backtracks catastrophically on one pathological
+    /// line (minified bundle, base64 blob) must cost that line, not hang the whole scan.</summary>
+    private static readonly TimeSpan RuleMatchTimeout = TimeSpan.FromMilliseconds(200);
+
+    private List<CompiledRule> CompileEnabledRules()
+    {
+        var compiled = new List<CompiledRule>();
+        foreach (var rule in GetAllRules().Where(r => r.Enabled))
+        {
+            var rx = BuildRegex(rule);
+            if (rx != null) compiled.Add(new CompiledRule(rule, rx));
+            else _log.Warn("Security", $"Rule {rule.Id} has an invalid pattern — skipped");
+        }
+        return compiled;
+    }
+
     /// <summary>Scan a single file. Returns empty list on binary/too-large/error.</summary>
     public List<SecurityFinding> ScanFile(string filePath)
+        => ScanFile(filePath, CompileEnabledRules(), out _);
+
+    /// <param name="readFailed">True when the file was a scannable candidate but could not be read —
+    /// the caller counts it, so "no findings" is never claimed for files nobody looked at.</param>
+    private List<SecurityFinding> ScanFile(string filePath, List<CompiledRule> rules, out bool readFailed)
     {
+        readFailed = false;
         var findings = new List<SecurityFinding>();
         try
         {
@@ -94,20 +121,20 @@ public class SecurityShieldService
 
             string[] lines;
             try { lines = File.ReadAllLines(filePath); }
-            catch { return findings; }
+            catch { readFailed = true; return findings; }
 
-            var rules = GetAllRules().Where(r => r.Enabled).ToList();
-            foreach (var rule in rules)
+            foreach (var (rule, regex) in rules)
             {
                 if (rule.Languages.Count > 0 && !rule.Languages.Contains(ext, StringComparer.OrdinalIgnoreCase))
                     continue;
-                var regex = BuildRegex(rule);
-                if (regex == null) continue;
                 for (int i = 0; i < lines.Length; i++)
                 {
                     var line = lines[i];
                     if (string.IsNullOrEmpty(line)) continue;
-                    if (regex.IsMatch(line))
+                    bool hit;
+                    try { hit = regex.IsMatch(line); }
+                    catch (RegexMatchTimeoutException) { continue; }
+                    if (hit)
                     {
                         findings.Add(new SecurityFinding
                         {
@@ -128,12 +155,19 @@ public class SecurityShieldService
         }
         catch (Exception ex)
         {
+            readFailed = true;
             _log.Warn("Security", $"ScanFile failed on {filePath}", ex);
         }
         return findings;
     }
 
-    /// <summary>Scan a folder recursively (skips excluded dirs + non-text + > 2 MB).</summary>
+    /// <summary>
+    /// Scan a folder recursively (skips excluded dirs + non-text + > 2 MB + junctions/symlinks).
+    /// Cancellation and failure are THROWN, not swallowed: the old version caught both and returned
+    /// a partial result, so a cancelled or crashed scan was reported as "Done: N findings" — a
+    /// clean bill of health for files that were never looked at. Files that could not be read are
+    /// counted in <see cref="SecurityScanResult.FilesSkipped"/>.
+    /// </summary>
     public async Task<SecurityScanResult> ScanFolderAsync(string rootPath, CancellationToken ct = default)
     {
         var result = new SecurityScanResult { RootPath = rootPath };
@@ -144,22 +178,26 @@ public class SecurityShieldService
         {
             await Task.Run(() =>
             {
+                var rules = CompileEnabledRules();   // once per scan, not once per file
                 foreach (var file in EnumerateScannableFiles(rootPath))
                 {
                     ct.ThrowIfCancellationRequested();
                     result.FilesScanned++;
-                    var findings = ScanFile(file);
+                    var findings = ScanFile(file, rules, out bool readFailed);
+                    if (readFailed) result.FilesSkipped++;
                     result.Findings.AddRange(findings);
                 }
             }, ct);
         }
         catch (OperationCanceledException)
         {
-            _log.Info("Security", "Scan cancelled");
+            _log.Info("Security", $"Scan cancelled after {result.FilesScanned} files");
+            throw;
         }
         catch (Exception ex)
         {
             _log.Error("Security", "Scan failed", ex);
+            throw;
         }
 
         sw.Stop();
@@ -200,6 +238,14 @@ public class SecurityShieldService
                 if (string.IsNullOrEmpty(name)) continue;
                 if (name.StartsWith(".") && name != ".cluadex" && name != ".claude") continue;
                 if (ExcludedDirs.Contains(name)) continue;
+                // Junctions / symlinks: a link back up the tree (pnpm and some monorepo tools create
+                // them) made this walk loop until it ran out of memory; a link elsewhere scanned a
+                // folder outside the project and reported it as the project's.
+                try
+                {
+                    if ((File.GetAttributes(d) & FileAttributes.ReparsePoint) != 0) continue;
+                }
+                catch { continue; }
                 stack.Push(d);
             }
             foreach (var f in files)
@@ -213,9 +259,9 @@ public class SecurityShieldService
     {
         try
         {
-            var opts = RegexOptions.Compiled;
+            var opts = RegexOptions.Compiled | RegexOptions.CultureInvariant;
             if (!rule.CaseSensitive) opts |= RegexOptions.IgnoreCase;
-            return new Regex(rule.Pattern, opts);
+            return new Regex(rule.Pattern, opts, RuleMatchTimeout);
         }
         catch
         {

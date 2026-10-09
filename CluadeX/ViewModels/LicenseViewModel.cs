@@ -207,9 +207,21 @@ public class LicenseViewModel : ViewModelBase
                 ShowTransfer = false;
                 Say(T("license.moved", _activation.TierDisplayName), error: false);
             }
-            else Say(string.IsNullOrEmpty(message) ? T("license.offline") : message, error: true);
+            else Say(DescribeTransferFailure(message), error: true);
         }
         finally { IsBusy = false; }
+    }
+
+    /// <summary>
+    /// ActivateForceAsync gives no error code, only text: the server's own sentence (worth showing), or — when the
+    /// server could not be reached — "Connection failed: " + a raw .NET exception message, which must not be shown.
+    /// </summary>
+    private string DescribeTransferFailure(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message) || message.StartsWith("Connection failed:", StringComparison.Ordinal))
+            return T("license.offline");
+        if (message == "Failed to transfer license.") return T("licensem.transferFailed");
+        return message;
     }
 
     private async Task StartTrialAsync()
@@ -245,10 +257,19 @@ public class LicenseViewModel : ViewModelBase
         finally { IsBusy = false; }
     }
 
+    /// <summary>
+    /// Every plan's Buy opens the same product page: the plans are chosen there, and whether the store accepts a
+    /// pre-selected plan in the URL is unconfirmed — so no plan parameter is invented here.
+    /// </summary>
     private void OpenStore()
     {
-        try { Process.Start(new ProcessStartInfo(XmanLicenseService.SafeStoreUrl(_purchaseUrl)) { UseShellExecute = true }); }
-        catch (Exception ex) { Say(ex.Message, error: true); }
+        string url = XmanLicenseService.SafeStoreUrl(_purchaseUrl);
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Opening the store failed: {ex}");
+            Say(T("licensem.browserFailed", url), error: true);
+        }
     }
 
     private void Say(string text, bool error)

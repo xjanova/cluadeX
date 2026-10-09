@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
+using System.Windows;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
@@ -9,6 +12,9 @@ using Microsoft.Win32;
 
 namespace CluadeX.ViewModels;
 
+/// <summary>A category filter choice: the key the catalog uses + its localized label.</summary>
+public sealed record ModelCategoryOption(string Key, string Label);
+
 public class ModelManagerViewModel : ViewModelBase
 {
     private readonly HuggingFaceService _huggingFaceService;
@@ -17,7 +23,11 @@ public class ModelManagerViewModel : ViewModelBase
     private readonly LocalGgufProvider _localProvider;
     private readonly SettingsService _settingsService;
     private readonly AiProviderManager _providerManager;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService? _log;
     private CancellationTokenSource? _downloadCts;
+    private CancellationTokenSource? _searchCts;
+    private GpuInfo? _gpu;
 
     private string _searchQuery = string.Empty;
     private bool _isSearching;
@@ -36,7 +46,11 @@ public class ModelManagerViewModel : ViewModelBase
     public ObservableCollection<RecommendedModel> RecommendedModels { get; } = new();
     public ObservableCollection<ModelInfo> SearchResults { get; } = new();
     public ObservableCollection<ModelSource> ModelSources { get; } = new();
-    public ObservableCollection<string> Categories { get; } = new() { "All", "Coding", "General", "Reasoning" };
+
+    private static readonly string[] CategoryKeys = { "All", "Coding", "General", "Reasoning" };
+    private List<ModelCategoryOption> _categories = new();
+    /// <summary>Category filter choices (Key is what the catalog uses; Label is shown).</summary>
+    public List<ModelCategoryOption> Categories { get => _categories; private set => SetProperty(ref _categories, value); }
 
     public string SearchQuery { get => _searchQuery; set => SetProperty(ref _searchQuery, value); }
     public bool IsSearching { get => _isSearching; set => SetProperty(ref _isSearching, value); }
@@ -83,7 +97,12 @@ public class ModelManagerViewModel : ViewModelBase
         set
         {
             if (SetProperty(ref _selectedCategory, value))
+            {
+                // Back to page 1: on page 3 a smaller category showed an empty list and "3 / 1".
+                _currentPage = 1;
+                OnPropertyChanged(nameof(CurrentPage));
                 FilterRecommendedModels();
+            }
         }
     }
 
@@ -111,6 +130,7 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand UnloadModelCommand { get; }
     public ICommand DownloadRecommendedCommand { get; }
     public ICommand SearchModelsCommand { get; }
+    public ICommand CancelSearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
     public ICommand CancelDownloadCommand { get; }
     public ICommand DeleteModelCommand { get; }
@@ -127,8 +147,8 @@ public class ModelManagerViewModel : ViewModelBase
         if (model == null) return;
         _settingsService.UpdateSettings(s => s.GpuLayerCount = model.RecommendedGpuLayers);
         ModelLoadStatus = model.RecommendedGpuLayers == -1
-            ? $"✓ Applied: all layers on GPU (-ngl auto) for {model.DisplayName}"
-            : $"✓ Applied: -ngl {model.RecommendedGpuLayers} for {model.DisplayName} — takes effect on next load";
+            ? _loc.T("modelsm.fitAppliedAll", model.DisplayName)
+            : _loc.T("modelsm.fitAppliedLayers", model.RecommendedGpuLayers, model.DisplayName);
     }
 
     private List<RecommendedModel> _allRecommended = new();
@@ -139,7 +159,9 @@ public class ModelManagerViewModel : ViewModelBase
         LlamaInferenceService inferenceService,
         LocalGgufProvider localProvider,
         SettingsService settingsService,
-        AiProviderManager providerManager)
+        AiProviderManager providerManager,
+        LocalizationService loc,
+        DebugLogService? log = null)
     {
         _huggingFaceService = huggingFaceService;
         _gpuDetectionService = gpuDetectionService;
@@ -147,39 +169,78 @@ public class ModelManagerViewModel : ViewModelBase
         _localProvider = localProvider;
         _settingsService = settingsService;
         _providerManager = providerManager;
+        _loc = loc;
+        _log = log;
         _isGridView = settingsService.Settings.ModelCatalogGridView;
 
         RefreshLocalModelsCommand = new RelayCommand(RefreshLocalModels);
         LoadModelCommand = new AsyncRelayCommand<string>(LoadModel);
-        UnloadModelCommand = new RelayCommand(UnloadModel);
+        UnloadModelCommand = new AsyncRelayCommand(UnloadModel);
         DownloadRecommendedCommand = new AsyncRelayCommand<RecommendedModel>(DownloadRecommended);
         SearchModelsCommand = new AsyncRelayCommand(SearchModels);
+        CancelSearchCommand = new RelayCommand(() => _searchCts?.Cancel(), () => IsSearching);
         DownloadSearchResultCommand = new AsyncRelayCommand<ModelInfo>(DownloadSearchResult);
         CancelDownloadCommand = new RelayCommand(CancelDownload);
-        DeleteModelCommand = new RelayCommand<ModelInfo>(DeleteModel);
+        DeleteModelCommand = new AsyncRelayCommand<ModelInfo>(DeleteModel);
         BrowseAndLoadModelCommand = new AsyncRelayCommand(BrowseAndLoadModel);
         AddModelDirectoryCommand = new RelayCommand(AddModelDirectory);
         OpenUrlCommand = new RelayCommand<string>(OpenUrl);
         OpenModelFolderCommand = new RelayCommand(OpenModelFolder);
         ApplyFitCommand = new RelayCommand<RecommendedModel>(ApplyFit);
 
-        // Populate model sources
-        foreach (var source in HuggingFaceService.PopularSources)
-            ModelSources.Add(source);
+        BuildModelSources();
+        BuildCategories();
+        _loc.LanguageChanged += () =>
+        {
+            BuildModelSources();
+            string keep = SelectedCategory;
+            BuildCategories();
+            _selectedCategory = keep;
+            OnPropertyChanged(nameof(SelectedCategory));
+            UpdateGpuRecommendation();
+            FilterRecommendedModels();   // re-labels the fit badges
+        };
 
         Initialize();
     }
+
+    /// <summary>The "Where to get models" cards, with descriptions in the UI language.</summary>
+    private void BuildModelSources()
+    {
+        ModelSources.Clear();
+        foreach (var source in HuggingFaceService.PopularSources)
+        {
+            string key = "modelsm.src." + source.Name.Replace(" ", "");
+            string text = _loc.T(key);
+            ModelSources.Add(new ModelSource
+            {
+                Name = source.Name,
+                Url = source.Url,
+                Icon = source.Icon,
+                Description = text == key ? source.Description : text,
+            });
+        }
+    }
+
+    private void BuildCategories() =>
+        Categories = CategoryKeys.Select(k => new ModelCategoryOption(k, _loc.T("modelsm.cat" + k))).ToList();
 
     private void Initialize()
     {
         Task.Run(() =>
         {
-            var gpu = _gpuDetectionService.DetectGpu();
-            var rec = gpu.GetRecommendation();
+            GpuInfo gpu;
+            try { gpu = _gpuDetectionService.DetectGpu(); }
+            catch (Exception ex)
+            {
+                _log?.Warn("Models", "GPU detection failed", ex);
+                gpu = new GpuInfo();
+            }
             App.Current?.Dispatcher.Invoke(() =>
             {
+                _gpu = gpu;
                 AvailableVramMB = gpu.VramTotalMB;
-                GpuRecommendation = $"{gpu.Name} - {gpu.VramTotalGB:F1} GB VRAM\n{rec.Description}";
+                UpdateGpuRecommendation();
                 // Show the full catalog and use FitTier badges to signal which models run
                 // well on this GPU. Previously we silently filtered out anything larger than
                 // the user's VRAM — that hid useful options (bigger models still run via
@@ -189,6 +250,16 @@ public class ModelManagerViewModel : ViewModelBase
             });
         });
         RefreshLocalModels();
+    }
+
+    private void UpdateGpuRecommendation()
+    {
+        if (_gpu == null) return;
+        var rec = _gpu.GetRecommendation();
+        GpuRecommendation = _gpu.VramTotalMB <= 0
+            ? _loc.T("modelsm.gpuNone", rec.RecommendedParameterBillions)
+            : _loc.T("modelsm.gpuLine", _gpu.Name, _gpu.VramTotalGB.ToString("F1"), rec.RecommendedParameterBillions,
+                rec.RecommendedQuantization, rec.MaxParameterBillions);
     }
 
     private void FilterRecommendedModels()
@@ -210,6 +281,7 @@ public class ModelManagerViewModel : ViewModelBase
             : _allRecommended.Where(m => m.Category == _selectedCategory).ToList();
 
         _filteredCount = filtered.Count;
+        if (_currentPage > TotalPages) { _currentPage = TotalPages; OnPropertyChanged(nameof(CurrentPage)); }
 
         // Apply pagination
         var paged = filtered
@@ -239,14 +311,14 @@ public class ModelManagerViewModel : ViewModelBase
     /// much CPU offload would be needed. A model whose size is more than ~2× the available
     /// VRAM runs so slowly via CPU offload that we label it TooLarge.
     /// </summary>
-    private static void ComputeFit(RecommendedModel model, int availableVramMB)
+    private void ComputeFit(RecommendedModel model, int availableVramMB)
     {
         if (availableVramMB <= 0)
         {
             // No GPU detected → everything is CPU-only. Small models are still usable.
             model.FitTier = model.ParameterBillions <= 3 ? ModelFitTier.Partial : ModelFitTier.Poor;
-            model.FitLabel = "CPU only";
-            model.FitHint = "No dedicated GPU detected — runs on CPU only (slow).";
+            model.FitLabel = _loc.T("modelsm.fitCpuOnly");
+            model.FitHint = _loc.T("modelsm.fitCpuOnlyHint");
             model.RecommendedGpuLayers = 0;
             return;
         }
@@ -261,16 +333,16 @@ public class ModelManagerViewModel : ViewModelBase
         if (needed > 0 && usable >= needed * 1.3)
         {
             model.FitTier = ModelFitTier.Excellent;
-            model.FitLabel = "Fast";
-            model.FitHint = $"Runs entirely on GPU with headroom ({usable} MB usable vs {needed} MB needed).";
+            model.FitLabel = _loc.T("modelsm.fitFast");
+            model.FitHint = _loc.T("modelsm.fitFastHint", usable, needed);
             model.RecommendedGpuLayers = -1;
         }
         // Good: fits but tight
         else if (usable >= needed)
         {
             model.FitTier = ModelFitTier.Good;
-            model.FitLabel = "Good";
-            model.FitHint = $"Fits on GPU but tight — you may need to lower context size. ({usable} MB usable vs {needed} MB needed)";
+            model.FitLabel = _loc.T("modelsm.fitGood");
+            model.FitHint = _loc.T("modelsm.fitGoodHint", usable, needed);
             model.RecommendedGpuLayers = -1;
         }
         // Partial: model bigger than VRAM but within ~1.5× — partial offload works OK
@@ -279,8 +351,8 @@ public class ModelManagerViewModel : ViewModelBase
             double fraction = (double)usable / needed;
             int suggestedLayers = Math.Clamp((int)Math.Round(fraction * 40), 10, 40);
             model.FitTier = ModelFitTier.Partial;
-            model.FitLabel = "Partial";
-            model.FitHint = $"Needs CPU offload — suggest -ngl {suggestedLayers} (about {(int)(fraction*100)}% on GPU). Slower but runs.";
+            model.FitLabel = _loc.T("modelsm.fitPartial");
+            model.FitHint = _loc.T("modelsm.fitPartialHint", suggestedLayers, (int)(fraction * 100));
             model.RecommendedGpuLayers = suggestedLayers;
         }
         // Poor: heavy CPU offload
@@ -289,23 +361,29 @@ public class ModelManagerViewModel : ViewModelBase
             double fraction = (double)usable / needed;
             int suggestedLayers = Math.Clamp((int)Math.Round(fraction * 40), 5, 20);
             model.FitTier = ModelFitTier.Poor;
-            model.FitLabel = "Slow";
-            model.FitHint = $"Much larger than your VRAM — will be significantly slower. Try a smaller quant or a different model.";
+            model.FitLabel = _loc.T("modelsm.fitSlow");
+            model.FitHint = _loc.T("modelsm.fitSlowHint");
             model.RecommendedGpuLayers = suggestedLayers;
         }
         // Too large — not recommended
         else
         {
             model.FitTier = ModelFitTier.TooLarge;
-            model.FitLabel = "Too large";
-            model.FitHint = $"Model needs ~{needed} MB VRAM but you only have {availableVramMB} MB. Not practical — pick a smaller quant/size.";
+            model.FitLabel = _loc.T("modelsm.fitTooLarge");
+            model.FitHint = _loc.T("modelsm.fitTooLargeHint", needed, availableVramMB);
             model.RecommendedGpuLayers = 5;
         }
     }
 
     private void RefreshLocalModels()
     {
-        var models = _huggingFaceService.GetLocalModels();
+        List<ModelInfo> models;
+        try { models = _huggingFaceService.GetLocalModels(); }
+        catch (Exception ex)
+        {
+            _log?.Warn("Models", "Scanning model folders failed", ex);
+            models = new List<ModelInfo>();
+        }
         LocalModels.Clear();
         foreach (var model in models) LocalModels.Add(model);
 
@@ -317,40 +395,52 @@ public class ModelManagerViewModel : ViewModelBase
     private async Task LoadModel(string? path)
     {
         if (string.IsNullOrEmpty(path) || _localProvider.IsLoading) return;
+        string name = Path.GetFileNameWithoutExtension(path);
         IsLoadingModel = true;
-        ModelLoadStatus = "Loading model...";
+        ModelLoadStatus = _loc.T("modelsm.loading", name);
         try
         {
             // Ensure active provider is Local so events flow to MainViewModel (overlay)
             if (_providerManager.ActiveProviderType != AiProviderType.Local)
                 await _providerManager.SwitchProviderAsync(AiProviderType.Local);
 
-            var progress = new Progress<string>(s =>
-                App.Current?.Dispatcher.Invoke(() => ModelLoadStatus = s));
+            // Created on the UI thread, so Progress<T> posts back to it — no blocking Dispatcher.Invoke.
+            var progress = new Progress<string>(s => ModelLoadStatus = s);
 
             // Route through LocalGgufProvider — it inspects the GGUF arch and
             // transparently picks LLamaSharp or llama-server.exe (Gemma 4 etc.)
             await _localProvider.LoadModelAsync(path, progress);
 
             SelectedModelPath = path;
-            ModelLoadStatus = $"Loaded: {System.IO.Path.GetFileNameWithoutExtension(path)}";
+            ModelLoadStatus = _loc.T("modelsm.loaded", name);
             _settingsService.UpdateSettings(s =>
             {
                 s.SelectedModelPath = path;
-                s.SelectedModelName = System.IO.Path.GetFileNameWithoutExtension(path);
+                s.SelectedModelName = name;
             });
         }
-        catch (Exception ex) { ModelLoadStatus = $"Failed: {ex.Message}"; }
+        catch (Exception ex)
+        {
+            _log?.Error("Models", $"Loading {path} failed", ex);
+            ModelLoadStatus = ex switch
+            {
+                FileNotFoundException => _loc.T("modelsm.loadFailedMissing", name),
+                OutOfMemoryException or InsufficientMemoryException => _loc.T("modelsm.loadFailedMemory", name),
+                _ => _loc.T("modelsm.loadFailed", name),
+            };
+        }
         finally { IsLoadingModel = false; }
     }
 
-    private void UnloadModel()
+    private async Task UnloadModel()
     {
-        // LocalGgufProvider doesn't expose an explicit unload — but unloading both
-        // backends is safe (each is a no-op if it wasn't loaded).
-        _inferenceService.UnloadModel();
+        // Through the router: the default GPU path runs llama-server, and unloading only LLamaSharp (as this did)
+        // left the server — and its VRAM — running under a "Model unloaded" message.
+        try { await _localProvider.UnloadAsync(); }
+        catch (Exception ex) { _log?.Warn("Models", "Unload failed", ex); }
+        try { _inferenceService.UnloadModel(); } catch { /* already unloaded */ }
         SelectedModelPath = null;
-        ModelLoadStatus = "Model unloaded.";
+        ModelLoadStatus = _loc.T("modelsm.unloaded");
 
         // Clear settings so the model doesn't auto-load on next app restart
         _settingsService.UpdateSettings(s =>
@@ -365,17 +455,18 @@ public class ModelManagerViewModel : ViewModelBase
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Select a GGUF Model File",
-            Filter = "GGUF Models (*.gguf)|*.gguf|All Files (*.*)|*.*",
-            InitialDirectory = _settingsService.Settings.ModelDirectory,
+            Title = _loc.T("modelsm.browseTitle"),
+            Filter = _loc.T("modelsm.browseFilter"),
         };
+        if (Directory.Exists(_settingsService.Settings.ModelDirectory))
+            dialog.InitialDirectory = _settingsService.Settings.ModelDirectory;
 
         if (dialog.ShowDialog() == true)
         {
             string path = dialog.FileName;
 
             // If file is not in known directories, offer to add the parent directory
-            string? parentDir = System.IO.Path.GetDirectoryName(path);
+            string? parentDir = Path.GetDirectoryName(path);
             if (parentDir != null)
             {
                 var settings = _settingsService.Settings;
@@ -402,7 +493,7 @@ public class ModelManagerViewModel : ViewModelBase
     /// <summary>Add an extra directory to scan for models.</summary>
     private void AddModelDirectory()
     {
-        string? dir = FolderPicker.ShowDialog("Select a folder containing GGUF models",
+        string? dir = FolderPicker.ShowDialog(_loc.T("modelsm.pickFolderTitle"),
             _settingsService.Settings.ModelDirectory);
 
         if (!string.IsNullOrEmpty(dir))
@@ -416,7 +507,7 @@ public class ModelManagerViewModel : ViewModelBase
                 settings.AdditionalModelDirectories.Add(dir);
                 _settingsService.Save();
                 RefreshLocalModels();
-                DownloadStatus = $"Added model folder: {dir}";
+                DownloadStatus = _loc.T("modelsm.folderAdded", dir);
             }
         }
     }
@@ -425,7 +516,7 @@ public class ModelManagerViewModel : ViewModelBase
     {
         if (string.IsNullOrEmpty(url)) return;
         try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-        catch { }
+        catch (Exception ex) { _log?.Warn("Models", $"Opening {url} failed", ex); }
     }
 
     private void OpenModelFolder()
@@ -433,88 +524,164 @@ public class ModelManagerViewModel : ViewModelBase
         try
         {
             string dir = _settingsService.Settings.ModelDirectory;
-            if (System.IO.Directory.Exists(dir))
+            if (Directory.Exists(dir))
                 Process.Start(new ProcessStartInfo(dir) { UseShellExecute = true });
         }
-        catch { }
+        catch (Exception ex) { _log?.Warn("Models", "Opening the model folder failed", ex); }
     }
 
-    private async Task DownloadRecommended(RecommendedModel? model)
+    // ─── Downloads ───
+
+    private Task DownloadRecommended(RecommendedModel? model) =>
+        model == null ? Task.CompletedTask : RunDownloadAsync(model.RepoId, model.FileName, model.DisplayName);
+
+    private Task DownloadSearchResult(ModelInfo? model) =>
+        model == null || string.IsNullOrEmpty(model.RepoId)
+            ? Task.CompletedTask
+            : RunDownloadAsync(model.RepoId, model.FileName, Path.GetFileName(model.FileName));
+
+    private async Task RunDownloadAsync(string repoId, string repoFileName, string displayName)
     {
-        if (model == null || IsDownloading) return;
-        string targetPath = System.IO.Path.Combine(_settingsService.Settings.ModelDirectory, model.FileName);
-        if (System.IO.File.Exists(targetPath)) { DownloadStatus = "Model already downloaded!"; return; }
+        if (IsDownloading) return;
+        string targetPath = Path.Combine(_settingsService.Settings.ModelDirectory, Path.GetFileName(repoFileName));
+        if (File.Exists(targetPath)) { DownloadStatus = _loc.T("modelsm.alreadyDownloaded", displayName); return; }
 
         IsDownloading = true;
         DownloadProgress = 0;
-        DownloadStatus = $"Downloading {model.DisplayName}...";
+        DownloadStatus = _loc.T("modelsm.downloading", displayName);
         _downloadCts = new CancellationTokenSource();
         try
         {
-            var progress = new Progress<(double progress, string status)>(p =>
-                App.Current?.Dispatcher.Invoke(() => { DownloadProgress = p.progress * 100; DownloadStatus = p.status; }));
-            await _huggingFaceService.DownloadModelAsync(model.RepoId, model.FileName, targetPath, progress, _downloadCts.Token);
-            DownloadStatus = "Download complete!";
+            // Created on the UI thread → callbacks are posted back to it.
+            var progress = new Progress<HuggingFaceService.DownloadProgressInfo>(p =>
+            {
+                DownloadProgress = p.Fraction * 100;
+                DownloadStatus = FormatProgress(displayName, p);
+            });
+            await _huggingFaceService.DownloadModelAsync(repoId, repoFileName, targetPath, progress, _downloadCts.Token);
+            DownloadStatus = _loc.T("modelsm.downloadDone", displayName);
             RefreshLocalModels();
         }
-        catch (OperationCanceledException) { DownloadStatus = "Download cancelled."; }
-        catch (Exception ex) { DownloadStatus = $"Download failed: {ex.Message}"; }
+        catch (OperationCanceledException)
+        {
+            // The partial file is invisible in "My Models" (it is not a .gguf yet) — so say what is left behind
+            // and let the user choose instead of silently keeping gigabytes.
+            var answer = MessageBox.Show(_loc.T("modelsm.cancelKeepConfirm", displayName), "CluadeX",
+                MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+            if (answer == MessageBoxResult.No)
+            {
+                try { HuggingFaceService.DeletePartialDownload(targetPath); DownloadStatus = _loc.T("modelsm.cancelDeleted"); }
+                catch (Exception ex) { _log?.Warn("Models", "Deleting a partial download failed", ex); DownloadStatus = _loc.T("modelsm.cancelDeleteFailed"); }
+            }
+            else DownloadStatus = _loc.T("modelsm.cancelKept");
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Models", $"Download of {repoId}/{repoFileName} failed", ex);
+            DownloadStatus = DownloadFailureMessage(ex);
+        }
         finally { IsDownloading = false; _downloadCts?.Dispose(); _downloadCts = null; }
     }
+
+    private string FormatProgress(string name, HuggingFaceService.DownloadProgressInfo p)
+    {
+        string part = p.ShardCount > 1 ? _loc.T("modelsm.shardPart", p.Shard, p.ShardCount) : "";
+        if (p.Verifying)
+            return _loc.T("modelsm.verifying", name, part, p.Fraction.ToString("P0"));
+        return p.Total > 0
+            ? _loc.T("modelsm.progress", name, part, Mb(p.Bytes), Mb(p.Total), p.Fraction.ToString("P1"))
+            : _loc.T("modelsm.progressNoTotal", name, part, Mb(p.Bytes));
+    }
+
+    private static string Mb(long bytes) => (bytes / (1024.0 * 1024)).ToString("N1");
+    private static string Gb(long bytes) => (bytes / (1024.0 * 1024 * 1024)).ToString("N1");
+
+    private string DownloadFailureMessage(Exception ex) => ex switch
+    {
+        HfAccessDeniedException d when d.IsGated => _loc.T("modelsm.dlGated"),
+        HfAccessDeniedException => _loc.T("modelsm.dlDenied"),
+        HfNotFoundException => _loc.T("modelsm.dlNotFound"),
+        InsufficientDiskSpaceException s => _loc.T("modelsm.dlNoSpace", Gb(s.BytesNeeded), Gb(s.BytesAvailable), s.Drive),
+        DownloadVerificationException { Kind: "incomplete" } => _loc.T("modelsm.dlIncomplete"),
+        DownloadVerificationException => _loc.T("modelsm.dlCorrupt"),
+        HttpRequestException or TimeoutException => _loc.T("modelsm.dlNetwork"),
+        UnauthorizedAccessException => _loc.T("modelsm.dlNoPermission"),
+        IOException => _loc.T("modelsm.dlDiskError"),
+        _ => _loc.T("modelsm.dlFailed"),
+    };
+
+    // ─── Search ───
 
     private async Task SearchModels()
     {
         if (string.IsNullOrWhiteSpace(SearchQuery)) return;
+        _searchCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+        var ct = cts.Token;
+
         IsSearching = true;
         SearchResults.Clear();
         _allSearchResults.Clear();
         SearchResultInfo = "";
         _searchPage = 1;
+        OnPropertyChanged(nameof(SearchPage));
         try
         {
-            var results = await _huggingFaceService.SearchModelsAsync(SearchQuery);
-            int fileCount = 0;
-            foreach (var result in results)
+            var results = await _huggingFaceService.SearchModelsAsync(SearchQuery, ct);
+
+            // File lists for up to 20 repos: fetched 4 at a time instead of one after another.
+            using var gate = new SemaphoreSlim(4);
+            var perRepo = await Task.WhenAll(results.Select(async result =>
             {
-                try
+                await gate.WaitAsync(ct);
+                try { return (result, files: await _huggingFaceService.GetModelFilesAsync(result.ModelId, ct)); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
                 {
-                    var files = await _huggingFaceService.GetModelFilesAsync(result.ModelId);
-                    foreach (var file in files.Take(5))
-                    {
-                        // Extract author from modelId if API didn't return it
-                        string author = !string.IsNullOrEmpty(result.Author) ? result.Author
-                            : result.ModelId.Contains('/') ? result.ModelId.Split('/')[0] : "";
-                        string shortName = result.ModelId.Contains('/')
-                            ? result.ModelId.Split('/')[1] : result.ModelId;
-
-                        // Check if already downloaded locally
-                        bool isLocal = LocalModels.Any(lm =>
-                            string.Equals(lm.FileName, file.RFilename, StringComparison.OrdinalIgnoreCase));
-                        string? localPath = isLocal
-                            ? LocalModels.First(lm => string.Equals(lm.FileName, file.RFilename, StringComparison.OrdinalIgnoreCase)).LocalPath
-                            : null;
-
-                        _allSearchResults.Add(new ModelInfo
-                        {
-                            Id = $"{result.ModelId}/{file.RFilename}",
-                            Name = shortName,
-                            FileName = file.RFilename,
-                            RepoId = result.ModelId,
-                            FileSize = file.Size ?? 0,
-                            Author = author,
-                            Downloads = result.Downloads,
-                            Likes = result.Likes,
-                            Tags = result.Tags,
-                            LastModified = result.LastModified,
-                            QuantizationType = ExtractQuantFromFile(file.RFilename),
-                            Description = $"Downloads: {result.Downloads:N0} | Likes: {result.Likes}",
-                            IsDownloaded = isLocal,
-                            LocalPath = localPath,
-                        });
-                        fileCount++;
-                    }
+                    _log?.Debug("Models", $"Listing files of {result.ModelId} failed: {ex.Message}");
+                    return (result, files: new List<HuggingFaceSibling>());
                 }
-                catch { }
+                finally { gate.Release(); }
+            }));
+            ct.ThrowIfCancellationRequested();
+
+            int fileCount = 0;
+            foreach (var (result, files) in perRepo)
+            {
+                // Files come back best quant first (Q4_K_M, Q5_K_M, …) with split models grouped — the top five
+                // are the ones worth offering.
+                foreach (var file in files.Take(5))
+                {
+                    // Extract author from modelId if API didn't return it
+                    string author = !string.IsNullOrEmpty(result.Author) ? result.Author
+                        : result.ModelId.Contains('/') ? result.ModelId.Split('/')[0] : "";
+                    string shortName = result.ModelId.Contains('/')
+                        ? result.ModelId.Split('/')[1] : result.ModelId;
+                    string leaf = Path.GetFileName(file.RFilename);
+
+                    // Check if already downloaded locally
+                    var local = LocalModels.FirstOrDefault(lm =>
+                        string.Equals(lm.FileName, leaf, StringComparison.OrdinalIgnoreCase));
+
+                    _allSearchResults.Add(new ModelInfo
+                    {
+                        Id = $"{result.ModelId}/{file.RFilename}",
+                        Name = shortName,
+                        FileName = file.RFilename,
+                        RepoId = result.ModelId,
+                        FileSize = file.Size ?? 0,
+                        Author = author,
+                        Downloads = result.Downloads,
+                        Likes = result.Likes,
+                        Tags = result.Tags,
+                        LastModified = result.LastModified,
+                        QuantizationType = ExtractQuantFromFile(file.RFilename),
+                        IsDownloaded = local != null,
+                        LocalPath = local?.LocalPath,
+                    });
+                    fileCount++;
+                }
             }
 
             // Apply pagination
@@ -522,11 +689,30 @@ public class ModelManagerViewModel : ViewModelBase
             ApplySearchPagination();
 
             SearchResultInfo = fileCount > 0
-                ? $"Found {fileCount} GGUF files from {results.Count} repositories"
-                : "No GGUF files found. Try a different search term.";
+                ? _loc.T("modelsm.searchFound", fileCount, results.Count)
+                : _loc.T("modelsm.searchNone");
         }
-        catch (Exception ex) { SearchResultInfo = $"Search failed: {ex.Message}"; }
-        finally { IsSearching = false; }
+        catch (OperationCanceledException)
+        {
+            if (ReferenceEquals(_searchCts, cts)) SearchResultInfo = _loc.T("modelsm.searchCancelled");
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Models", $"Hugging Face search for '{SearchQuery}' failed", ex);
+            SearchResultInfo = ex is HttpRequestException or TimeoutException
+                ? _loc.T("modelsm.searchNetwork")
+                : _loc.T("modelsm.searchFailed");
+        }
+        finally
+        {
+            if (ReferenceEquals(_searchCts, cts))
+            {
+                IsSearching = false;
+                _searchCts = null;
+            }
+            cts.Dispose();
+            CommandManager.InvalidateRequerySuggested();
+        }
     }
 
     private void ApplySearchPagination()
@@ -554,36 +740,47 @@ public class ModelManagerViewModel : ViewModelBase
         return "";
     }
 
-    private async Task DownloadSearchResult(ModelInfo? model)
-    {
-        if (model == null || IsDownloading || string.IsNullOrEmpty(model.RepoId)) return;
-        string targetPath = System.IO.Path.Combine(_settingsService.Settings.ModelDirectory, model.FileName);
-
-        IsDownloading = true;
-        DownloadProgress = 0;
-        DownloadStatus = $"Downloading {model.FileName}...";
-        _downloadCts = new CancellationTokenSource();
-        try
-        {
-            var progress = new Progress<(double progress, string status)>(p =>
-                App.Current?.Dispatcher.Invoke(() => { DownloadProgress = p.progress * 100; DownloadStatus = p.status; }));
-            await _huggingFaceService.DownloadModelAsync(model.RepoId, model.FileName, targetPath, progress, _downloadCts.Token);
-            DownloadStatus = "Download complete!";
-            RefreshLocalModels();
-        }
-        catch (OperationCanceledException) { DownloadStatus = "Download cancelled."; }
-        catch (Exception ex) { DownloadStatus = $"Download failed: {ex.Message}"; }
-        finally { IsDownloading = false; _downloadCts?.Dispose(); _downloadCts = null; }
-    }
-
     private void CancelDownload() => _downloadCts?.Cancel();
 
-    private void DeleteModel(ModelInfo? model)
+    // ─── Delete ───
+
+    private static bool SamePath(string? a, string? b) =>
+        !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
+        && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Delete a model file — any .gguf the page lists, including ones in the user's own folders, so it asks
+    /// first. A model that is loaded (by this page or by the startup auto-load, which uses the saved
+    /// SelectedModelPath) is unloaded first: llama-server holds the file open, and File.Delete used to throw
+    /// straight into an English crash dialog.
+    /// </summary>
+    private async Task DeleteModel(ModelInfo? model)
     {
         if (model?.LocalPath == null) return;
-        if (model.LocalPath == SelectedModelPath) UnloadModel();
-        _huggingFaceService.DeleteModel(model.LocalPath);
-        RefreshLocalModels();
-        DownloadStatus = $"Deleted: {model.FileName}";
+        string path = model.LocalPath;
+        var answer = MessageBox.Show(_loc.T("modelsm.deleteConfirm", model.FileName, model.FileSizeDisplay, path), "CluadeX",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            if (SamePath(path, SelectedModelPath) || SamePath(path, _settingsService.Settings.SelectedModelPath))
+                await UnloadModel();
+
+            _huggingFaceService.DeleteModel(path);
+            RefreshLocalModels();
+            DownloadStatus = _loc.T("modelsm.deleted", model.FileName);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Models", $"Deleting {path} failed", ex);
+            DownloadStatus = ex switch
+            {
+                UnauthorizedAccessException => _loc.T("modelsm.deleteNoPermission", model.FileName),
+                IOException => _loc.T("modelsm.deleteInUse", model.FileName),
+                _ => _loc.T("modelsm.deleteFailed", model.FileName),
+            };
+            RefreshLocalModels();
+        }
     }
 }

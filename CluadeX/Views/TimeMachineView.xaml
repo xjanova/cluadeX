@@ -12,6 +12,7 @@
              Background="{StaticResource NeonBg0Brush}"
              Loaded="OnLoaded">
     <UserControl.Resources>
+        <vm:CommitRelativeTimeConverter x:Key="CommitTime"/>
         <!-- Soft glow shadow effects (instance-per-use; WPF Effects can't be reused as resource brushes) -->
         <Style x:Key="NeonPanel" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource NeonPanelFill}"/>
@@ -265,7 +266,7 @@
                                         <TextBlock Text="{Binding Author}" FontSize="10"
                                                    Foreground="{Binding IsAiAuthored, Converter={StaticResource AiBoolBrush}}"/>
                                         <TextBlock Text=" · " FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
-                                        <TextBlock Text="{Binding RelativeTime}" FontSize="10"
+                                        <TextBlock Text="{Binding Date, Converter={StaticResource CommitTime}}" FontSize="10"
                                                    Foreground="{StaticResource NeonInk3Brush}"/>
                                         <TextBlock Text=" · " FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
                                         <TextBlock Text="{Binding FilesChanged}" FontSize="10"
@@ -574,9 +575,13 @@
                                      Command="{Binding ShowAgentOnlyCommand}"
                                      Style="{StaticResource FilterChip}" Margin="0,0,12,0"/>
                         <Border Width="1" Background="{StaticResource NeonLineBrush}" Margin="0,4,12,4"/>
-                        <Button Content="&#xE72C; Refresh" FontFamily="Segoe UI"
-                                Command="{Binding RefreshCommand}"
-                                Style="{StaticResource NeonButton}" Margin="0,0,8,0"/>
+                        <Button Command="{Binding RefreshCommand}"
+                                Style="{StaticResource NeonButton}" Margin="0,0,8,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc tm.refresh}" FontFamily="Segoe UI" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -763,13 +768,13 @@
                                                Foreground="{StaticResource NeonInk0Brush}"
                                                TextWrapping="Wrap"/>
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                        <TextBlock Text="by " Foreground="{StaticResource NeonInk2Brush}" FontSize="11"/>
+                                        <TextBlock Text="{services:Loc tm.byPrefix}" Foreground="{StaticResource NeonInk2Brush}" FontSize="11"/>
                                         <TextBlock Text="{Binding SelectedAuthor}" FontSize="11"
                                                    Foreground="{Binding SelectedIsAi, Converter={StaticResource AiBoolBrush}}"/>
                                         <TextBlock Margin="14,0,0,0" Text="{Binding SelectedFilesCount}"
                                                    FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
                                                    Foreground="{StaticResource NeonInk2Brush}"/>
-                                        <TextBlock Text=" files" FontSize="11" Foreground="{StaticResource NeonInk2Brush}"/>
+                                        <TextBlock Text="{services:Loc tm.filesWord}" FontSize="11" Foreground="{StaticResource NeonInk2Brush}"/>
                                         <TextBlock Margin="14,0,0,0" FontSize="11"
                                                    FontFamily="{StaticResource NeonMonoFont}"
                                                    Foreground="{StaticResource NeonMintBrush}">
@@ -874,9 +879,13 @@
                     BorderBrush="{StaticResource NeonLineBrush}"
                     Background="#88141838"
                     Visibility="{Binding StatusMessage, Converter={StaticResource BoolVis}}">
-                <TextBlock Text="{Binding StatusMessage}" FontSize="11"
-                           FontFamily="{StaticResource NeonMonoFont}"
-                           Foreground="{StaticResource NeonInk1Brush}"/>
+                <!-- Read-only TextBox, not a TextBlock: after a rewind this line holds the snapshot branch and
+                     stash names needed to get back, so they must be selectable / copyable. -->
+                <TextBox Text="{Binding StatusMessage, Mode=OneWay}" FontSize="11" IsReadOnly="True"
+                         Background="Transparent" BorderThickness="0" Padding="0" TextWrapping="Wrap"
+                         FontFamily="{StaticResource NeonMonoFont}"
+                         Foreground="{StaticResource NeonInk1Brush}"
+                         CaretBrush="{StaticResource NeonCyanBrush}"/>
             </Border>
         </Grid>
 

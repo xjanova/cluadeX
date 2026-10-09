@@ -1,9 +1,11 @@
 ﻿# Hook: posttool-typescript-check
-# Phase: PostToolUse / matcher write_file
+# Phase: PostToolUse / matcher write_file|edit_file|multi_edit
 # Type-check a .ts/.tsx file after writing. Logs errors to debug log.
 param([string]$Path = "")
 
-if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) { exit 0 }
+# Exact path from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_PATH) { $Path = $env:CLUADEX_HOOK_PATH }
+if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { exit 0 }
 $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
 if ($ext -notin @('.ts', '.tsx')) { exit 0 }
 

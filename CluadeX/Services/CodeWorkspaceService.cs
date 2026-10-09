@@ -109,6 +109,37 @@ public class CodeWorkspaceService
         }
     }
 
+    /// <summary>Largest file the editor (and the diff view) will load — beyond this it is almost
+    /// always a generated or binary file, and the text controls stop being usable.</summary>
+    public const long MaxEditableBytes = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// What the file on disk looked like when a tab last read or wrote it. Kept beside the tab (the
+    /// model class isn't ours to extend) and weakly keyed, so a closed tab's stamp just goes away.
+    /// Save compares against it: without this, saving a tab silently overwrote whatever the agent,
+    /// a git checkout or another editor had written to that file since it was opened.
+    /// </summary>
+    private sealed class DiskStamp
+    {
+        public bool Existed;
+        public long Length;
+        public byte[] Hash = Array.Empty<byte>();
+    }
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<OpenFileTab, DiskStamp> _stamps = new();
+
+    private static DiskStamp StampOf(byte[] bytes) => new()
+    {
+        Existed = true,
+        Length = bytes.LongLength,
+        Hash = System.Security.Cryptography.SHA256.HashData(bytes),
+    };
+
+    private void SetStamp(OpenFileTab tab, DiskStamp stamp)
+    {
+        _stamps.Remove(tab);
+        _stamps.Add(tab, stamp);
+    }
+
     /// <summary>Open a file and return its tab — caller pushes to ObservableCollection.</summary>
     public async Task<OpenFileTab?> OpenFileAsync(string fullPath, CancellationToken ct = default)
     {
@@ -116,12 +147,13 @@ public class CodeWorkspaceService
 
         // Cap at 2 MB so opening accidental binaries doesn't freeze
         var fi = new FileInfo(fullPath);
-        if (fi.Length > 2 * 1024 * 1024) return null;
+        if (fi.Length > MaxEditableBytes) return null;
 
         CluadeX.Helpers.TextFileCodec.TextFile decoded;
+        byte[] bytes;
         try
         {
-            byte[] bytes = await File.ReadAllBytesAsync(fullPath, ct);
+            bytes = await File.ReadAllBytesAsync(fullPath, ct);
             // Detect binary by checking for NUL bytes in the first 1 KB — refuse to open it as text.
             for (int i = 0; i < Math.Min(1024, bytes.Length); i++)
                 if (bytes[i] == 0) return null;
@@ -134,7 +166,54 @@ public class CodeWorkspaceService
 
         var tab = new OpenFileTab { FullPath = fullPath, HasBom = decoded.HasBom, IsValidUtf8 = decoded.IsValidUtf8 };
         tab.MarkOpened(decoded.Text);
+        SetStamp(tab, StampOf(bytes));
         return tab;
+    }
+
+    /// <summary>
+    /// <paramref name="target"/> was just reloaded with <paramref name="freshlyLoaded"/>'s text
+    /// (agent live-follow, branch switch, rename). Carry the fresh disk fingerprint over too —
+    /// otherwise the next Save would compare against the OLD file and cry "changed on disk" about
+    /// a change the tab already shows.
+    /// </summary>
+    public void AdoptDiskState(OpenFileTab target, OpenFileTab freshlyLoaded)
+    {
+        if (_stamps.TryGetValue(freshlyLoaded, out var stamp)) SetStamp(target, stamp);
+        target.HasBom = freshlyLoaded.HasBom;
+        target.IsValidUtf8 = freshlyLoaded.IsValidUtf8;
+    }
+
+    /// <summary>True when the file on disk is no longer what this tab last read or wrote (edited by
+    /// the agent / git / another program, or deleted).</summary>
+    public bool HasChangedOnDisk(OpenFileTab tab)
+    {
+        if (!_stamps.TryGetValue(tab, out var stamp)) return false;   // never read from disk — nothing to compare
+        try
+        {
+            if (!File.Exists(tab.FullPath)) return stamp.Existed;
+            var fi = new FileInfo(tab.FullPath);
+            if (fi.Length != stamp.Length) return true;
+            // Same length is not proof: hash (bounded by the 2 MB open cap, so this is cheap).
+            if (fi.Length > MaxEditableBytes * 4) return true;
+            var hash = System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tab.FullPath));
+            return !hash.AsSpan().SequenceEqual(stamp.Hash);
+        }
+        catch
+        {
+            return false;   // unreadable right now — let the save itself report the real error
+        }
+    }
+
+    /// <summary>The current disk text of a tab's file (for the "compare" choice), or null.</summary>
+    public async Task<string?> ReadDiskTextAsync(string fullPath)
+    {
+        try
+        {
+            if (!File.Exists(fullPath) || new FileInfo(fullPath).Length > MaxEditableBytes) return null;
+            var bytes = await File.ReadAllBytesAsync(fullPath);
+            return CluadeX.Helpers.TextFileCodec.Decode(bytes).Text;
+        }
+        catch { return null; }
     }
 
     /// <summary>
@@ -142,20 +221,141 @@ public class CodeWorkspaceService
     /// Encoding.UTF8, which prepends a BOM to every file, so saving a shell script or package.json
     /// from the editor broke it. A tab opened from a non-UTF-8 file is never saved (returns false):
     /// its text holds replacement characters, and writing them would destroy the originals.
+    /// A file that changed on disk since the tab read it is NOT overwritten (returns false) — use
+    /// <see cref="SaveTabCheckedAsync"/> to find out why and to overwrite deliberately.
     /// </summary>
     public async Task<bool> SaveTabAsync(OpenFileTab tab, CancellationToken ct = default)
+        => (await SaveTabCheckedAsync(tab, overwriteExternalChanges: false, ct)).Outcome == SaveOutcome.Saved;
+
+    /// <summary>
+    /// Save with the reason when it doesn't happen. Writes atomically: the bytes go to a temp file
+    /// in the same folder and replace the original in one step (File.Replace), so a crash, a full
+    /// disk or a power cut mid-save leaves either the old file or the new one — never a truncated
+    /// half-file, which is what a plain WriteAllText can leave behind.
+    /// </summary>
+    public async Task<SaveResult> SaveTabCheckedAsync(OpenFileTab tab, bool overwriteExternalChanges, CancellationToken ct = default)
     {
-        if (tab == null || string.IsNullOrEmpty(tab.FullPath)) return false;
-        if (!tab.IsValidUtf8) return false;
+        var refused = PrepareSave(tab, overwriteExternalChanges, out string content, out byte[] bytes);
+        if (refused != null) return refused;
         try
         {
-            await File.WriteAllTextAsync(tab.FullPath, tab.Content, new UTF8Encoding(tab.HasBom), ct);
-            tab.MarkSaved();
-            return true;
+            await WriteAtomicAsync(tab.FullPath, bytes, ct);
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            return new SaveResult(SaveOutcome.Failed, ex.GetType().Name + ": " + ex.Message);
+        }
+        return CompleteSave(tab, content, bytes);
+    }
+
+    /// <summary>Synchronous save, for the one caller that cannot await: the window's Closing handler
+    /// (awaiting there would let the window close before the bytes are written).</summary>
+    public SaveResult SaveTabChecked(OpenFileTab tab, bool overwriteExternalChanges)
+    {
+        var refused = PrepareSave(tab, overwriteExternalChanges, out string content, out byte[] bytes);
+        if (refused != null) return refused;
+        try
+        {
+            WriteAtomic(tab.FullPath, bytes);
+        }
+        catch (Exception ex)
+        {
+            return new SaveResult(SaveOutcome.Failed, ex.GetType().Name + ": " + ex.Message);
+        }
+        return CompleteSave(tab, content, bytes);
+    }
+
+    /// <summary>The checks every save makes before touching the disk; null = go ahead.</summary>
+    private SaveResult? PrepareSave(OpenFileTab tab, bool overwriteExternalChanges, out string content, out byte[] bytes)
+    {
+        content = "";
+        bytes = Array.Empty<byte>();
+        if (tab == null || string.IsNullOrEmpty(tab.FullPath)) return new SaveResult(SaveOutcome.Failed, "no path");
+        if (!tab.IsValidUtf8) return new SaveResult(SaveOutcome.NotUtf8, null);
+
+        if (!overwriteExternalChanges && HasChangedOnDisk(tab))
+            return new SaveResult(SaveOutcome.ChangedOnDisk, null) { DeletedOnDisk = !File.Exists(tab.FullPath) };
+
+        content = tab.Content;   // snapshot: the user keeps typing while the write runs
+        byte[] body = Encoding.UTF8.GetBytes(content);
+        bytes = tab.HasBom ? Encoding.UTF8.GetPreamble().Concat(body).ToArray() : body;
+        return null;
+    }
+
+    private SaveResult CompleteSave(OpenFileTab tab, string content, byte[] bytes)
+    {
+        SetStamp(tab, StampOf(bytes));
+        // Only clear the dirty flag if nothing was typed during the write; otherwise the newer
+        // keystrokes would show as saved when they are not.
+        if (string.Equals(tab.Content, content, StringComparison.Ordinal)) tab.MarkSaved();
+        return new SaveResult(SaveOutcome.Saved, null);
+    }
+
+    private static string TempPathFor(string path)
+    {
+        string dir = Path.GetDirectoryName(path) ?? ".";
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.cluadex-tmp");
+    }
+
+    private static async Task WriteAtomicAsync(string path, byte[] bytes, CancellationToken ct)
+    {
+        string temp = TempPathFor(path);
+        try
+        {
+            await using (var fs = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                             81920, FileOptions.Asynchronous))
+            {
+                await fs.WriteAsync(bytes, ct);
+                await fs.FlushAsync(ct);
+                fs.Flush(flushToDisk: true);
+            }
+            ReplaceWith(temp, path);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best-effort temp cleanup */ }
+        }
+    }
+
+    private static void WriteAtomic(string path, byte[] bytes)
+    {
+        string temp = TempPathFor(path);
+        try
+        {
+            using (var fs = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                fs.Write(bytes, 0, bytes.Length);
+                fs.Flush(flushToDisk: true);
+            }
+            ReplaceWith(temp, path);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* best-effort temp cleanup */ }
+        }
+    }
+
+    /// <summary>Swap the fully written temp file in for <paramref name="path"/> in one step.</summary>
+    private static void ReplaceWith(string temp, string path)
+    {
+        if (File.Exists(path))
+        {
+            try
+            {
+                // Keeps the original's ACLs, creation time and attributes.
+                File.Replace(temp, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            }
+            catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
+            {
+                // Some volumes (FAT, a few network shares) can't ReplaceFile — fall back to an
+                // overwrite copy. Still never truncates in place before the new bytes exist.
+                File.Copy(temp, path, overwrite: true);
+            }
+        }
+        else
+        {
+            File.Move(temp, path);
         }
     }
 
@@ -166,18 +366,17 @@ public class CodeWorkspaceService
         if (!HasWorkingDirectory) return;
         try
         {
-            var st = await _git.StatusAsync();
+            // Porcelain -z: unquoted, unescaped paths. The --short parse here used to miss every
+            // file with a space or a Thai name, so those never got a badge.
+            var st = await _git.StatusEntriesAsync();
             if (!st.Success) return;
 
-            var map = new Dictionary<string, (string badge, string color)>();
-            foreach (var line in st.Output.Split('\n'))
+            var map = new Dictionary<string, (string badge, string color)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in st.Entries)
             {
-                var l = line.TrimEnd('\r');
-                if (l.Length < 4) continue;
-                string code = l.Substring(0, 2).Trim();
-                string relPath = l.Substring(3).Trim();
-                if (relPath.StartsWith("\"") && relPath.EndsWith("\"")) relPath = relPath[1..^1];
-                string full = Path.GetFullPath(Path.Combine(WorkingDirectory, relPath));
+                if (string.IsNullOrEmpty(e.FullPath)) continue;
+                string code = e.Code;
+                string full = e.FullPath;
 
                 string badge = code switch
                 {
@@ -214,4 +413,21 @@ public class CodeWorkspaceService
         }
         foreach (var c in node.Children) WalkAndTag(c, map);
     }
+}
+
+public enum SaveOutcome
+{
+    Saved,
+    /// <summary>The tab came from a non-UTF-8 file; saving would destroy its characters.</summary>
+    NotUtf8,
+    /// <summary>The file on disk changed (or vanished) since the tab read it — nothing was written.</summary>
+    ChangedOnDisk,
+    Failed,
+}
+
+public sealed record SaveResult(SaveOutcome Outcome, string? Error)
+{
+    /// <summary>With <see cref="SaveOutcome.ChangedOnDisk"/>: the file is gone, not just different.</summary>
+    public bool DeletedOnDisk { get; init; }
+    // Error is a diagnostic for the log (exception type + message), never for the UI.
 }

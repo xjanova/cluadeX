@@ -531,16 +531,20 @@ public class CodeAgentService
               - มี CODEBASE MAP (ด้านล่าง) สรุป type/function ของทั้งโปรเจค — ใช้นำทางก่อน แล้วค่อย read_file ไฟล์ที่เกี่ยวข้อง แทนการเดาหรือ grep มั่ว
               - จะหาว่า "X อยู่ตรงไหน / ทำงานยังไง" ใช้ codebase_search (จัดอันดับความเกี่ยวข้อง ฉลาดกว่า grep ดิบ) แล้ว read_file ผลลัพธ์อันดับต้น
               - หานิยามของชื่อ (class/method/function) ใช้ find_symbol "ชื่อ" (go-to-definition ไม่ต้องใช้ coord); ดูโครงไฟล์ (class/method พร้อมเลขบรรทัด) ใช้ list_symbols — แม่นกว่าและถูกกว่าการ read ทั้งไฟล์
-              - งานที่ไม่ trivial: เรียก brain_recall ก่อนลงมือ เพื่อดูบทเรียน/การตัดสินใจ/บั๊กที่เคยเจอจาก BrainX (อย่าแก้บั๊กเดิมซ้ำรอย)
               - หลังแก้โค้ด: ยืนยันก่อนบอกว่าเสร็จ — เรียก run_build (auto-detect คำสั่ง build/type-check) และ run_tests (สรุป pass/fail + เทสต์ที่ fail) และ/หรือ lsp_diagnostics กับไฟล์ที่แก้ อ่าน error แล้วแก้ จน build ผ่านและเทสต์เขียว
               """
             : """
               - A CODEBASE MAP (below) lists the project's types/functions. Use it to navigate, then read_file the relevant files — don't guess or blind-grep.
               - To locate "where is X handled?", use codebase_search (ranked relevance, smarter than raw grep), then read_file the top hits.
               - To find where a NAME (class/method/function) is DEFINED, use find_symbol "name" (go-to-definition, no coords needed). To outline a file (symbols + line numbers) use list_symbols — both beat reading the whole file.
-              - For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX (don't re-solve a bug you already solved).
               - After editing code, VERIFY before claiming done: call run_build (auto-detects the build/type-check command), run_tests (distilled pass/fail + failing tests), and/or lsp_diagnostics on the changed file; read any errors and fix them, then build again until clean and tests pass.
               """);
+        // Only with a brain to ask: telling the model to call brain_recall on a PC without BrainX makes it try,
+        // fail and spend the turn explaining the failure.
+        if (_brainSync?.IsBrainAvailable == true)
+            sb.AppendLine(isThai
+                ? "- งานที่ไม่ trivial: เรียก brain_recall ก่อนลงมือ เพื่อดูบทเรียน/การตัดสินใจ/บั๊กที่เคยเจอจาก BrainX (อย่าแก้บั๊กเดิมซ้ำรอย)"
+                : "- For non-trivial tasks, call brain_recall BEFORE starting, to surface past lessons / decisions / bugs from BrainX (don't re-solve a bug you already solved).");
 
         // ═══════════════════════════════════════════
         // Section 4: Executing Actions with Care

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using CluadeX.Models;
@@ -27,62 +28,156 @@ public partial class CodeEditorView : UserControl
     public CodeEditorView()
     {
         InitializeComponent();
+        Unloaded += OnUnloaded;
+        // Preview, so Ctrl+S reaches us even when the focused control (editor, terminal box) would
+        // otherwise swallow the key.
+        PreviewKeyDown += OnPagePreviewKeyDown;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (DataContext is CodeEditorViewModel vm)
+        try
         {
-            if (!_hooked)
-            {
-                _hooked = true;
-                _vm = vm;
-                vm.ScrollToLineRequested += OnScrollToLine;
-                vm.AgentEditFlashRequested += OnAgentEditFlash;
-                vm.SelectRangeRequested += OnSelectRange;
-                vm.SearchFocusRequested += () => FocusBox(SearchBox, selectAll: true);
-                vm.RenameFocusRequested += () => FocusBox(RenameBox, selectAll: true);
-                vm.PropertyChanged += OnVmPropertyChanged;
-
-                // Code navigation lives on the editor's own key handler so it can read the caret.
-                Editor.PreviewKeyDown += OnEditorPreviewKeyDown;
-                // TextEntered fires only for real keyboard input, never for the agent's programmatic
-                // Document.Replace — so the popup can't gatecrash a live-typing reveal.
-                Editor.TextArea.TextEntered += OnTextEntered;
-
-                // Editor chrome XAML can't reach (TextArea exists only at runtime)
-                Editor.TextArea.Caret.CaretBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0xDF, 0xFF));
-                Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x59, 0xA6, 0x72, 0xFF));
-                Editor.TextArea.SelectionBorder = null;
-                Editor.TextArea.TextView.BackgroundRenderers.Add(_glow);
-                Editor.TextArea.TextView.BackgroundRenderers.Add(_executionLine);
-
-                // Breakpoint gutter. State lives in the VM (keyed by path) so breakpoints survive
-                // closing and reopening a file — the margin only asks and reports.
-                _breakpointMargin.IsBreakpoint = line =>
-                    _boundTab != null && _vm != null && _vm.BreakpointsFor(_boundTab.FullPath).Contains(line);
-                _breakpointMargin.ToggleRequested = line =>
-                {
-                    if (_boundTab != null) _vm?.ToggleBreakpoint(_boundTab.FullPath, line);
-                };
-                Editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
-
-                vm.BreakpointsChanged += path =>
-                {
-                    if (_boundTab != null
-                        && string.Equals(path, _boundTab.FullPath, StringComparison.OrdinalIgnoreCase))
-                        _breakpointMargin.Refresh();
-                };
-                vm.ExecutionPointerMoved += OnExecutionPointerMoved;
-                Editor.Options.EnableHyperlinks = false;
-                Editor.Options.EnableEmailHyperlinks = false;
-                Editor.TextChanged += OnEditorTextChanged;
-                Minimap.Attach(Editor);
-
-                BindActiveTab(vm.ActiveTab);
-            }
+            if (DataContext is not CodeEditorViewModel vm) return;
+            InitializeEditorOnce();
+            AttachVm(vm);
             if (vm.Tree.Count == 0) await vm.RefreshTreeAsync();
         }
+        catch (Exception ex)
+        {
+            // async void — an escaped exception would hit the global crash dialog.
+            CommandErrorSink.Report(nameof(OnLoaded), ex);
+        }
+    }
+
+    /// <summary>
+    /// The view model is a SINGLETON; this view is rebuilt on every visit to the Code page. Every
+    /// subscription to the VM therefore has to be undone when the view leaves — the old code
+    /// subscribed 8 VM events (and the active tab's PropertyChanged) in Loaded and never removed
+    /// them, so each visit left another invisible editor alive, still syncing text, still scrolling,
+    /// still repainting on every agent edit.
+    /// </summary>
+    private void OnUnloaded(object sender, RoutedEventArgs e) => DetachVm();
+
+    private void AttachVm(CodeEditorViewModel vm)
+    {
+        if (ReferenceEquals(_vm, vm) && _hooked) return;
+        DetachVm();
+        _hooked = true;
+        _vm = vm;
+        vm.ScrollToLineRequested += OnScrollToLine;
+        vm.AgentEditFlashRequested += OnAgentEditFlash;
+        vm.SelectRangeRequested += OnSelectRange;
+        vm.SearchFocusRequested += OnSearchFocusRequested;
+        vm.RenameFocusRequested += OnRenameFocusRequested;
+        vm.PropertyChanged += OnVmPropertyChanged;
+        vm.BreakpointsChanged += OnBreakpointsChanged;
+        vm.ExecutionPointerMoved += OnExecutionPointerMoved;
+        BindActiveTab(vm.ActiveTab);
+
+        // A finding opened from Security Shield before this view existed: jump to its line now.
+        int reveal = vm.ConsumePendingReveal(_boundTab?.FullPath);
+        if (reveal > 0) OnSelectRange(reveal, 0, 0);
+    }
+
+    private void DetachVm()
+    {
+        var vm = _vm;
+        if (vm != null)
+        {
+            vm.ScrollToLineRequested -= OnScrollToLine;
+            vm.AgentEditFlashRequested -= OnAgentEditFlash;
+            vm.SelectRangeRequested -= OnSelectRange;
+            vm.SearchFocusRequested -= OnSearchFocusRequested;
+            vm.RenameFocusRequested -= OnRenameFocusRequested;
+            vm.PropertyChanged -= OnVmPropertyChanged;
+            vm.BreakpointsChanged -= OnBreakpointsChanged;
+            vm.ExecutionPointerMoved -= OnExecutionPointerMoved;
+        }
+        // The tab objects belong to the VM too — let go of the one we listen to. The editor is
+        // emptied so a re-attach starts from the VM's state, not from this view's leftovers.
+        if (_boundTab != null) _boundTab.PropertyChanged -= OnTabContentChanged;
+        _boundTab = null;
+        _suppressSync = true;
+        try { Editor.Clear(); _lastSynced = ""; }
+        catch { /* the control may already be torn down */ }
+        finally { _suppressSync = false; }
+        _vm = null;
+        _hooked = false;
+        _glowTimer?.Stop();
+        _glowTimer = null;
+        _completionWindow?.Close();
+    }
+
+    private bool _editorInitialized;
+
+    /// <summary>Editor chrome and the editor's own event handlers — per view instance, once. These
+    /// only reference this view's controls, so they die with it.</summary>
+    private void InitializeEditorOnce()
+    {
+        if (_editorInitialized) return;
+        _editorInitialized = true;
+
+        // Code navigation lives on the editor's own key handler so it can read the caret.
+        Editor.PreviewKeyDown += OnEditorPreviewKeyDown;
+        // A keystroke during the agent's typing reveal: settle the reveal first (see OnUserEdits).
+        Editor.TextArea.PreviewTextInput += (_, _) => SettleAgentTyping();
+        // TextEntered fires only for real keyboard input, never for the agent's programmatic
+        // Document.Replace — so the popup can't gatecrash a live-typing reveal.
+        Editor.TextArea.TextEntered += OnTextEntered;
+
+        // Editor chrome XAML can't reach (TextArea exists only at runtime)
+        Editor.TextArea.Caret.CaretBrush = new SolidColorBrush(Color.FromRgb(0x4C, 0xDF, 0xFF));
+        Editor.TextArea.SelectionBrush = new SolidColorBrush(Color.FromArgb(0x59, 0xA6, 0x72, 0xFF));
+        Editor.TextArea.SelectionBorder = null;
+        Editor.TextArea.TextView.BackgroundRenderers.Add(_glow);
+        Editor.TextArea.TextView.BackgroundRenderers.Add(_executionLine);
+
+        // Breakpoint gutter. State lives in the VM (keyed by path) so breakpoints survive
+        // closing and reopening a file — the margin only asks and reports.
+        _breakpointMargin.IsBreakpoint = line =>
+            _boundTab != null && _vm != null && _vm.BreakpointsFor(_boundTab.FullPath).Contains(line);
+        _breakpointMargin.ToggleRequested = line =>
+        {
+            if (_boundTab != null) _vm?.ToggleBreakpoint(_boundTab.FullPath, line);
+        };
+        Editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
+
+        Editor.Options.EnableHyperlinks = false;
+        Editor.Options.EnableEmailHyperlinks = false;
+        Editor.TextChanged += OnEditorTextChanged;
+        Minimap.Attach(Editor);
+    }
+
+    private void OnSearchFocusRequested() => FocusBox(SearchBox, selectAll: true);
+    private void OnRenameFocusRequested() => FocusBox(RenameBox, selectAll: true);
+
+    private void OnBreakpointsChanged(string path)
+    {
+        if (_boundTab != null
+            && string.Equals(path, _boundTab.FullPath, StringComparison.OrdinalIgnoreCase))
+            _breakpointMargin.Refresh();
+    }
+
+    /// <summary>
+    /// The user is about to change the buffer while the agent's typing reveal is animating it: jump
+    /// the reveal to its final text first. Each reveal frame replaces the whole buffer every 16 ms,
+    /// so a keystroke typed mid-animation was overwritten by the next frame.
+    /// </summary>
+    private void SettleAgentTyping()
+    {
+        if (_vm != null && _vm.IsAgentTypingInto(_boundTab)) _vm.FinishAgentTyping();
+    }
+
+    /// <summary>Ctrl+S saves the active tab, Ctrl+Shift+S saves every tab — anywhere on the page.</summary>
+    private void OnPagePreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_vm == null || e.Key != Key.S) return;
+        var mods = Keyboard.Modifiers;
+        if ((mods & ModifierKeys.Control) == 0 || (mods & ModifierKeys.Alt) != 0) return;
+        e.Handled = true;
+        var cmd = (mods & ModifierKeys.Shift) != 0 ? _vm.SaveAllCommand : _vm.SaveActiveCommand;
+        if (cmd.CanExecute(null)) cmd.Execute(null);
     }
 
     private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -277,6 +372,30 @@ public partial class CodeEditorView : UserControl
         }
     }
 
+    // ── Branch switcher: commit the choice deliberately ──
+
+    private static void CommitBranchChoice(object sender)
+    {
+        if (sender is ComboBox box)
+            BindingOperations.GetBindingExpression(box, System.Windows.Controls.Primitives.Selector.SelectedItemProperty)?.UpdateSource();
+    }
+
+    private void OnBranchDropDownClosed(object? sender, EventArgs e) => CommitBranchChoice(sender!);
+
+    private void OnBranchKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        CommitBranchChoice(sender);
+        e.Handled = true;
+    }
+
+    /// <summary>Walked away after arrowing to another branch without committing: show the real one again.</summary>
+    private void OnBranchLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ComboBox { IsDropDownOpen: false } box)
+            BindingOperations.GetBindingExpression(box, System.Windows.Controls.Primitives.Selector.SelectedItemProperty)?.UpdateTarget();
+    }
+
     // ── Embedded terminal ──
 
     private void OnTerminalOutputChanged(object sender, TextChangedEventArgs e)
@@ -301,6 +420,20 @@ public partial class CodeEditorView : UserControl
         if (e.Key == Key.Enter && DataContext is CodeEditorViewModel vm)
         {
             vm.RunTerminalCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Ctrl+C in the input line stops what is running (like a console), unless text is
+    /// selected — then it is the usual Copy. Preview: the TextBox's own Copy binding would eat it.</summary>
+    private void OnTerminalInputPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.C || (Keyboard.Modifiers & ModifierKeys.Control) == 0
+            || (Keyboard.Modifiers & ModifierKeys.Shift) != 0) return;
+        if (sender is TextBox box && box.SelectionLength > 0) return;
+        if (DataContext is CodeEditorViewModel vm)
+        {
+            vm.InterruptTerminalCommand.Execute(null);
             e.Handled = true;
         }
     }
@@ -349,6 +482,12 @@ public partial class CodeEditorView : UserControl
 
         bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+        // Editing keys that never produce TextInput (Backspace, Delete, Enter, Ctrl+V/X, Tab) must
+        // also settle a running reveal before they act.
+        if (e.Key is Key.Back or Key.Delete or Key.Enter or Key.Tab
+            || (ctrl && e.Key is Key.V or Key.X or Key.Z or Key.Y))
+            SettleAgentTyping();
 
         try
         {
@@ -539,23 +678,12 @@ public partial class CodeEditorView : UserControl
         }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
-    // Review the result like a human would: open the active file with its default app
-    // (HTML lands in the browser). Dirty tabs are saved first so the preview matches the editor.
-    private async void OnPreviewClick(object sender, RoutedEventArgs e)
+    // Review the result like a human would — HTML/SVG/Markdown/images in their viewer, anything
+    // else pointed at in Explorer. The VM owns the rule (SafeShell): this used to shell-open ANY
+    // file, which RUNS a .js/.vbs/.bat/.py from whatever repo is open.
+    private void OnPreviewClick(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            if (DataContext is not CodeEditorViewModel vm || vm.ActiveTab is not { } tab) return;
-            if (tab.IsDirty && vm.SaveActiveCommand.CanExecute(null))
-            {
-                vm.SaveActiveCommand.Execute(null);
-                await Task.Delay(150); // let the async save land before the external app reads the file
-            }
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(tab.FullPath)
-            {
-                UseShellExecute = true,
-            });
-        }
-        catch { /* preview is best-effort (no associated app, file deleted, …) */ }
+        if (DataContext is CodeEditorViewModel vm && vm.PreviewActiveCommand.CanExecute(null))
+            vm.PreviewActiveCommand.Execute(null);
     }
 }

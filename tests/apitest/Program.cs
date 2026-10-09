@@ -494,6 +494,7 @@ internal static class Program
 
         await MockProviders.Run(Check, Section);
         await MockLicense.Run(Check, Section);
+        await MockSpark.Run(Check, Section);
 
         Section("offline · assistant turn rebuild");
         var resp = new NativeToolResponse

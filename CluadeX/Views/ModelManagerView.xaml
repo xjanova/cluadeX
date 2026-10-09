@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:conv="clr-namespace:CluadeX.Converters"
+             xmlns:views="clr-namespace:CluadeX.Views"
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
@@ -38,6 +39,7 @@
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
         <conv:FileSizeConverter x:Key="FileSize"/>
         <conv:InverseBoolConverter x:Key="InvertBool"/>
+        <views:ModelCategoryLabelConverter x:Key="CategoryLabel"/>
 
         <!-- Tag badge style -->
         <Style x:Key="TagBadge" TargetType="Border">
@@ -191,6 +193,24 @@
                 </StackPanel>
             </Border>
 
+            <!-- Last load / unload / apply-fit result. Above the tabs: it used to live inside "My Models",
+                 so pressing Apply fit or Load on the Recommended tab showed no result at all. -->
+            <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{StaticResource Subtext0Brush}"
+                       FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ModelLoadStatus}" Value="">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsLoadingModel}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
             <!-- ═══════ TAB NAVIGATION ═══════ -->
             <Border BorderThickness="0,0,0,1" BorderBrush="{StaticResource Surface0Brush}"
                     Margin="0,16,0,0" Padding="0,0,0,0">
@@ -267,9 +287,10 @@
                         <TextBlock Text="{services:Loc models.category}" Foreground="{StaticResource Overlay0Brush}"
                                    FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding Categories}"
-                                  SelectedItem="{Binding SelectedCategory}"
+                                  DisplayMemberPath="Label" SelectedValuePath="Key"
+                                  SelectedValue="{Binding SelectedCategory}"
                                   Style="{StaticResource ModernComboBox}"
-                                  Width="120"/>
+                                  Width="140"/>
                     </StackPanel>
                 </Grid>
 
@@ -339,7 +360,7 @@
                                             <!-- Category badge -->
                                             <Border Style="{StaticResource TagBadge}" Margin="8,0,0,0"
                                                     VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Category}" FontSize="10"
+                                                <TextBlock Text="{Binding Category, Converter={StaticResource CategoryLabel}}" FontSize="10"
                                                            Foreground="{StaticResource BlueBrush}" FontWeight="SemiBold"/>
                                             </Border>
                                             <!-- Parameter badge -->
@@ -503,12 +524,12 @@
 
                 <!-- Pagination Controls -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,4">
-                    <Button Content="◀ Prev" Style="{StaticResource SecondaryButton}"
+                    <Button Content="{services:Loc modelsm.prev}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding PrevPageCommand}" Padding="12,4" FontSize="11"/>
                     <TextBlock Text="{Binding PageInfo}" Foreground="{StaticResource TextBrush}"
                                FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
                                Margin="16,0" FontFamily="{StaticResource MonoFont}"/>
-                    <Button Content="Next ▶" Style="{StaticResource SecondaryButton}"
+                    <Button Content="{services:Loc modelsm.next}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding NextPageCommand}" Padding="12,4" FontSize="11"/>
                 </StackPanel>
 
@@ -558,9 +579,6 @@
                                 Command="{Binding RefreshLocalModelsCommand}" Padding="12,6"/>
                     </StackPanel>
                 </Grid>
-
-                <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{StaticResource Subtext0Brush}"
-                           FontSize="12" Margin="0,0,0,8"/>
 
                 <ItemsControl ItemsSource="{Binding LocalModels}">
                     <ItemsControl.ItemTemplate>
@@ -632,11 +650,9 @@
                                    HorizontalAlignment="Center" Margin="0,0,0,10"/>
                         <TextBlock Text="{services:Loc models.noModelsFound}" Foreground="{StaticResource Subtext0Brush}"
                                    FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                        <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="12"
-                                   HorizontalAlignment="Center" Margin="0,4,0,12" TextAlignment="Center">
-                            Download a model from the Recommended tab, or click
-                            <Bold>"Load GGUF File"</Bold> above to load any .gguf file from your computer.
-                        </TextBlock>
+                        <TextBlock Text="{services:Loc modelsm.noModelsHint}" Foreground="{StaticResource Overlay0Brush}" FontSize="12"
+                                   HorizontalAlignment="Center" Margin="0,4,0,12" TextAlignment="Center"
+                                   TextWrapping="Wrap" MaxWidth="520"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                             <Button Style="{StaticResource PrimaryButton}"
                                     Command="{Binding BrowseAndLoadModelCommand}" Padding="14,8">
@@ -667,9 +683,8 @@
                         Margin="0,16,0,0">
                 <TextBlock Text="{services:Loc models.searchHfTitle}" FontWeight="SemiBold"
                            Foreground="{StaticResource TextBrush}" FontSize="15" Margin="0,0,0,4"/>
-                <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="12" Margin="0,0,0,12">
-                    Search for any model. Try: "codellama", "deepseek coder", "qwen", "mistral", "phi"
-                </TextBlock>
+                <TextBlock Text="{services:Loc modelsm.searchHint}" Foreground="{StaticResource Overlay0Brush}"
+                           FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"/>
 
                 <!-- Search Bar -->
                 <Grid Margin="0,0,0,12">
@@ -701,7 +716,9 @@
                                Foreground="{StaticResource BlueBrush}" VerticalAlignment="Center"
                                Margin="0,0,8,0"/>
                     <TextBlock Text="{services:Loc models.searching}" Foreground="{StaticResource BlueBrush}"
-                               FontSize="13"/>
+                               FontSize="13" VerticalAlignment="Center"/>
+                    <Button Content="{services:Loc models.cancel}" Style="{StaticResource SecondaryButton}"
+                            Command="{Binding CancelSearchCommand}" Padding="10,3" FontSize="11" Margin="12,0,0,0"/>
                 </StackPanel>
 
                 <!-- Search Result Info -->
@@ -837,12 +854,12 @@
                      buttons, so only the first page was ever reachable. -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,4"
                             Visibility="{Binding HasSearchResults, Converter={StaticResource BoolVis}}">
-                    <Button Content="◀ Prev" Style="{StaticResource SecondaryButton}"
+                    <Button Content="{services:Loc modelsm.prev}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding PrevSearchPageCommand}" Padding="12,4" FontSize="11"/>
                     <TextBlock Text="{Binding SearchPageInfo}" Foreground="{StaticResource TextBrush}"
                                FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
                                Margin="16,0" FontFamily="{StaticResource MonoFont}"/>
-                    <Button Content="Next ▶" Style="{StaticResource SecondaryButton}"
+                    <Button Content="{services:Loc modelsm.next}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding NextSearchPageCommand}" Padding="12,4" FontSize="11"/>
                 </StackPanel>
             </StackPanel>
@@ -854,10 +871,8 @@
                         Margin="0,16,0,0">
                 <TextBlock Text="{services:Loc models.whereToGetTitle}" FontWeight="SemiBold"
                            Foreground="{StaticResource TextBrush}" FontSize="15" Margin="0,0,0,4"/>
-                <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap">
-                    GGUF is the standard format for local LLM inference. Download .gguf files and load them with the "Load GGUF File" button.
-                    Q4_K_M quantization offers the best balance of quality and size.
-                </TextBlock>
+                <TextBlock Text="{services:Loc modelsm.ggufIntro}" Foreground="{StaticResource Overlay0Brush}"
+                           FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"/>
 
                 <!-- Model Sources -->
                 <ItemsControl ItemsSource="{Binding ModelSources}">
@@ -916,23 +931,23 @@
 
                         <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
                                    TextWrapping="Wrap" Margin="0,0,0,6">
-                            <Bold Foreground="{StaticResource TealBrush}">Quantization:</Bold>
-                            Q4_K_M = best quality/size ratio. Q8_0 = near-original quality. Q2_K = smallest but lower quality.
+                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipQuantTitle}"/></Bold>
+                            <Run Text="{services:Loc modelsm.tipQuant}"/>
                         </TextBlock>
                         <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
                                    TextWrapping="Wrap" Margin="0,0,0,6">
-                            <Bold Foreground="{StaticResource TealBrush}">VRAM Guide:</Bold>
-                            4GB VRAM = 1-3B models, 8GB = 7B models, 12GB = 13B models, 16GB+ = 14-32B models, 24GB+ = 70B models (Q4).
+                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipVramTitle}"/></Bold>
+                            <Run Text="{services:Loc modelsm.tipVram}"/>
                         </TextBlock>
                         <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
                                    TextWrapping="Wrap" Margin="0,0,0,6">
-                            <Bold Foreground="{StaticResource TealBrush}">For Coding:</Bold>
-                            Qwen2.5 Coder, DeepSeek Coder, and StarCoder2 are the best coding-specialized models.
+                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipCodingTitle}"/></Bold>
+                            <Run Text="{services:Loc modelsm.tipCoding}"/>
                         </TextBlock>
                         <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
                                    TextWrapping="Wrap">
-                            <Bold Foreground="{StaticResource TealBrush}">Portability:</Bold>
-                            Place a "portable.txt" file next to CluadeX.exe to store all data alongside the app (USB-friendly).
+                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipPortableTitle}"/></Bold>
+                            <Run Text="{services:Loc modelsm.tipPortable}"/>
                         </TextBlock>
                     </StackPanel>
                 </Border>

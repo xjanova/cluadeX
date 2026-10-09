@@ -14,6 +14,8 @@ namespace CluadeX.ViewModels;
 public class SkillsViewModel : ViewModelBase
 {
     private readonly SkillService _service;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService _log;
 
     public ObservableCollection<SkillDefinition> Skills { get; } = new();
 
@@ -38,7 +40,7 @@ public class SkillsViewModel : ViewModelBase
     public string SelectedToolsDisplay => _selected == null
         ? ""
         : _selected.AllowedTools.Count == 0
-            ? "(inherits all tools)"
+            ? _loc.T("skill.inheritsTools")
             : string.Join(", ", _selected.AllowedTools);
 
     public string SelectedInvokeSnippet => _selected == null ? "" : $"/{_selected.Name}";
@@ -46,8 +48,8 @@ public class SkillsViewModel : ViewModelBase
     public string SelectedSource => _selected == null
         ? ""
         : _selected.IsBuiltIn
-            ? "built-in"
-            : (string.IsNullOrEmpty(_selected.FilePath) ? "custom" : _selected.FilePath);
+            ? _loc.T("skill.sourceBuiltIn")
+            : (string.IsNullOrEmpty(_selected.FilePath) ? _loc.T("skill.sourceCustom") : _selected.FilePath);
 
     private string _statusMessage = "";
     public string StatusMessage { get => _statusMessage; set => SetProperty(ref _statusMessage, value); }
@@ -60,9 +62,16 @@ public class SkillsViewModel : ViewModelBase
     public ICommand CopyInvokeCommand { get; }
     public ICommand OpenUserSkillsFolderCommand { get; }
 
-    public SkillsViewModel(SkillService service)
+    public SkillsViewModel(SkillService service, LocalizationService loc, DebugLogService log)
     {
         _service = service;
+        _loc = loc;
+        _log = log;
+        _loc.LanguageChanged += () =>
+        {
+            OnPropertyChanged(nameof(SelectedToolsDisplay));
+            OnPropertyChanged(nameof(SelectedSource));
+        };
         RefreshCommand = new RelayCommand(Refresh);
         SelectCommand = new RelayCommand<SkillDefinition>(s => { if (s != null) Selected = s; });
         CopyInvokeCommand = new RelayCommand(() =>
@@ -71,9 +80,9 @@ public class SkillsViewModel : ViewModelBase
             try
             {
                 System.Windows.Clipboard.SetText(SelectedInvokeSnippet);
-                StatusMessage = $"Copied {SelectedInvokeSnippet}";
+                StatusMessage = string.Format(_loc.T("skill.copied"), SelectedInvokeSnippet);
             }
-            catch { StatusMessage = "Clipboard write failed"; }
+            catch { StatusMessage = _loc.T("skill.clipboardFailed"); }
         });
         OpenUserSkillsFolderCommand = new RelayCommand(() =>
         {
@@ -83,13 +92,18 @@ public class SkillsViewModel : ViewModelBase
             try
             {
                 Directory.CreateDirectory(dir);
+                // A folder path: the shell opens it in Explorer (it can't "run" a directory).
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = dir, UseShellExecute = true,
                 });
-                StatusMessage = $"Opened {dir}";
+                StatusMessage = string.Format(_loc.T("skill.openedFolder"), dir);
             }
-            catch (Exception ex) { StatusMessage = $"Open folder failed: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                _log.Warn("Skills", "Open skills folder failed", ex);
+                StatusMessage = _loc.T("skill.openFolderFailed");
+            }
         });
 
         Refresh();
@@ -97,13 +111,19 @@ public class SkillsViewModel : ViewModelBase
 
     public void Refresh()
     {
+        // Re-select by NAME: ReloadSkills builds new objects, so the old `Selected ??=` kept the
+        // previous (stale) instance — a skill deleted from disk stayed selected and previewable.
+        var previouslySelectedName = _selected?.Name;
         _service.ReloadSkills();
         Skills.Clear();
         foreach (var s in _service.GetAllSkills().OrderBy(x => !x.IsBuiltIn).ThenBy(x => x.Name))
             Skills.Add(s);
         OnPropertyChanged(nameof(BuiltInCount));
         OnPropertyChanged(nameof(CustomCount));
-        Selected ??= Skills.FirstOrDefault();
-        StatusMessage = $"{Skills.Count} skills · {BuiltInCount} built-in · {CustomCount} custom";
+        Selected = (previouslySelectedName == null
+                       ? null
+                       : Skills.FirstOrDefault(s => string.Equals(s.Name, previouslySelectedName, StringComparison.OrdinalIgnoreCase)))
+                   ?? Skills.FirstOrDefault();
+        StatusMessage = string.Format(_loc.T("skill.summary"), Skills.Count, BuiltInCount, CustomCount);
     }
 }

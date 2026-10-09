@@ -88,19 +88,22 @@ public class RoleToBackgroundConverter : IValueConverter
 
 public class RoleToLabelConverter : IValueConverter
 {
+    private static string L(string key) => CluadeX.Services.LocalizedResources.Instance[key];
+
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value switch
         {
-            MessageRole.User => "\U0001F464 You",
-            MessageRole.Assistant => "\u2728 CluadeX",
-            MessageRole.CodeExecution => "\u25B6 Execution",
-            MessageRole.ToolAction => "\U0001F527 Tool",
-            MessageRole.AgentStatus => "\u2699 Agent",
-            MessageRole.System => "\u2699 System",
-            MessageRole.PermissionRequest => "\U0001F512 Permission",
-            MessageRole.Thinking => "\U0001F9E0 Thinking",
-            _ => "Unknown",
+            MessageRole.User => "\U0001F464 " + L("chat.you"),
+            MessageRole.Assistant => "\u2728 " + L("chat.role.assistant"),
+            MessageRole.CodeExecution => "\u25B6 " + L("chat.role.execution"),
+            MessageRole.ToolAction => "\U0001F527 " + L("chat.role.tool"),
+            MessageRole.AgentStatus => "\u2699 " + L("chat.role.agent"),
+            MessageRole.System => "\u2699 " + L("chat.role.system"),
+            MessageRole.PermissionRequest => "\U0001F512 " + L("chat.role.permission"),
+            MessageRole.Thinking => "\U0001F9E0 " + L("chat.role.thinking"),
+            MessageRole.ContextSummary => "\U0001F5DC " + L("chat.role.summary"),
+            _ => "",
         };
     }
 

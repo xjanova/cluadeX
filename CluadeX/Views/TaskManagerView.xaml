@@ -40,6 +40,7 @@
             <Setter Property="Padding" Value="8,3"/>
             <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
+        <vm:TaskStatusLabelConverter x:Key="TaskStatusLabel"/>
     </UserControl.Resources>
 
     <Grid Background="{StaticResource BaseBrush}">
@@ -153,7 +154,7 @@
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
-                                        <TextBlock Text="{Binding Status}" FontSize="11"
+                                        <TextBlock Text="{Binding Status, Converter={StaticResource TaskStatusLabel}}" FontSize="11"
                                                    FontFamily="{StaticResource MainFont}" FontWeight="SemiBold">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
@@ -236,22 +237,31 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
                 <TextBox Grid.Column="0"
                          Text="{Binding NewTaskName, UpdateSourceTrigger=PropertyChanged}"
                          Style="{StaticResource ModernTextBox}"
-                         Tag="Task name..."
+                         Tag="{services:Loc tasksm.namePlaceholder}"
                          Margin="0,0,8,0"/>
 
                 <TextBox Grid.Column="1"
                          Text="{Binding NewTaskCommand, UpdateSourceTrigger=PropertyChanged}"
                          Style="{StaticResource ModernTextBox}"
-                         Tag="Command to run..."
+                         Tag="{services:Loc tasksm.commandPlaceholder}"
                          Margin="0,0,8,0"/>
 
                 <Button Grid.Column="2" Content="{services:Loc tasks.start}"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding CreateTaskCommand}"
                         Padding="16,8"/>
+
+                <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Margin="2,6,0,0" FontSize="11"
+                           Text="{Binding WorkingDirectoryText}"
+                           Foreground="{StaticResource Overlay0Brush}" TextTrimming="CharacterEllipsis"/>
             </Grid>
         </Border>
 
@@ -271,7 +281,7 @@
                                Foreground="{StaticResource Subtext0Brush}">
                         <Run Text="{services:Loc tasks.output}"/>
                         <Run Text=" - "/>
-                        <Run Text="{Binding SelectedTask.Name, FallbackValue='(select a task)', Mode=OneWay}"
+                        <Run Text="{Binding SelectedTaskTitle, Mode=OneWay}"
                              Foreground="{StaticResource TealBrush}"/>
                     </TextBlock>
                 </Border>

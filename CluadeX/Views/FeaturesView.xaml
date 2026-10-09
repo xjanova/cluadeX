@@ -173,11 +173,11 @@
                         </Button>
                     </Grid>
 
-                    <!-- Deactivate button (when activated) -->
+                    <!-- Deactivate button — paid keys only: deactivating a trial released the demo key for good -->
                     <Button Content="{services:Loc activation.deactivate}" Margin="0,4,0,0" HorizontalAlignment="Left"
                             Style="{StaticResource SecondaryButton}" Padding="12,6"
                             Command="{Binding DeactivateCommand}"
-                            Visibility="{Binding IsActivated, Converter={StaticResource BoolVis}}"/>
+                            Visibility="{Binding CanDeactivate, Converter={StaticResource BoolVis}}"/>
 
                     <!-- Force transfer button (when device conflict) -->
                     <Button Content="{services:Loc activation.transfer}" Margin="0,6,0,0"

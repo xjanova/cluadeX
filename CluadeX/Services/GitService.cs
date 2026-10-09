@@ -57,6 +57,103 @@ public class GitService
         return await RunGitAsync("status --short --branch");
     }
 
+    /// <summary>
+    /// Machine-readable status for the IDE panels: <c>-c core.quotepath=off status --porcelain=v1 -z
+    /// --branch -- .</c>. The human <c>--short</c> form the agent tool prints is useless to a parser:
+    /// a path with a space comes back wrapped in quotes and a Thai file name as octal escapes
+    /// (<c>"\340\270\201.txt"</c>), so Open did nothing and Diff showed an empty file for exactly
+    /// those files. With -z nothing is quoted or escaped, and porcelain paths are always relative to
+    /// the REPOSITORY ROOT — which is why every entry also carries its absolute path (the opened
+    /// folder may be a subfolder of the repo). The <c>-- .</c> pathspec keeps the list to the
+    /// opened folder.
+    /// </summary>
+    public async Task<GitStatusSnapshot> StatusEntriesAsync()
+    {
+        var snap = new GitStatusSnapshot();
+        if (!_fileSystem.HasWorkingDirectory) { snap.Error = "no-workdir"; return snap; }
+
+        var top = await RunGitArgsAsync(new[] { "rev-parse", "--show-toplevel" });
+        if (!top.Success) { snap.Error = top.Error; return snap; }
+        try { snap.RepoRoot = Path.GetFullPath(top.Output.Trim()); }
+        catch { snap.RepoRoot = _fileSystem.WorkingDirectory; }
+
+        var r = await RunGitArgsAsync(new[]
+        {
+            "-c", "core.quotepath=off", "status", "--porcelain=v1", "-z", "--branch", "--", ".",
+        });
+        if (!r.Success) { snap.Error = r.Error; return snap; }
+
+        ParsePorcelainZ(r.Output ?? "", snap);
+        snap.Success = true;
+        return snap;
+    }
+
+    /// <summary>Parse <c>status --porcelain=v1 -z --branch</c>. Separate from the process call so a
+    /// harness can feed it raw bytes.</summary>
+    public static void ParsePorcelainZ(string output, GitStatusSnapshot snap)
+    {
+        var records = output.Split('\0');
+        for (int i = 0; i < records.Length; i++)
+        {
+            string rec = records[i];
+            if (rec.Length == 0) continue;
+
+            if (rec.StartsWith("## ", StringComparison.Ordinal))
+            {
+                ParseBranchLine(rec[3..], snap);
+                continue;
+            }
+            if (rec.Length < 4) continue;
+
+            string xy = rec[..2];
+            var entry = new GitStatusEntry
+            {
+                XY = xy,
+                RepoPath = rec[3..],
+            };
+            // Renames/copies: "R  new\0old\0" — the ORIGINAL path is the next record.
+            if ((xy[0] == 'R' || xy[0] == 'C' || xy[1] == 'R' || xy[1] == 'C') && i + 1 < records.Length)
+                entry.OrigRepoPath = records[++i];
+
+            if (!string.IsNullOrEmpty(snap.RepoRoot))
+            {
+                try { entry.FullPath = Path.GetFullPath(Path.Combine(snap.RepoRoot, entry.RepoPath)); }
+                catch { entry.FullPath = ""; }
+            }
+            snap.Entries.Add(entry);
+        }
+    }
+
+    /// <summary>
+    /// "master...origin/master [ahead 1]", "No commits yet on master", "HEAD (no branch)".
+    /// The old parser cut at the first space or '.', which showed "No" for every brand-new repo and
+    /// "release/1" for a branch called "release/1.2" (branch names cannot contain spaces or "...",
+    /// but they can contain single dots).
+    /// </summary>
+    private static void ParseBranchLine(string b, GitStatusSnapshot snap)
+    {
+        foreach (var prefix in new[] { "No commits yet on ", "Initial commit on " })
+        {
+            if (b.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                snap.NoCommits = true;
+                b = b[prefix.Length..];
+                break;
+            }
+        }
+        if (b.StartsWith("HEAD (no branch)", StringComparison.Ordinal))
+        {
+            snap.IsDetached = true;
+            snap.Branch = "HEAD";
+            return;
+        }
+        int dots = b.IndexOf("...", StringComparison.Ordinal);
+        if (dots >= 0) b = b[..dots];
+        int space = b.IndexOf(' ');
+        if (space >= 0) b = b[..space];
+        snap.Branch = b.Trim();
+    }
+
     /// <summary>git status (full / long format)</summary>
     public async Task<GitResult> StatusLongAsync()
     {
@@ -246,17 +343,51 @@ public class GitService
     /// for the side-by-side diff editor. Fails cleanly for a file that does not exist at that
     /// revision (newly added), which the caller renders as "everything is an addition".
     /// </summary>
-    public async Task<GitResult> ShowFileAsync(string revision, string relativePath)
+    public async Task<GitResult> ShowFileAsync(string revision, string repoRelativePath)
     {
         if (!IsValidGitArg(revision))
             return new GitResult { Success = false, Error = "Invalid revision." };
-        if (!IsValidGitArg(relativePath))
-            return new GitResult { Success = false, Error = "Invalid file path characters." };
+        if (string.IsNullOrEmpty(repoRelativePath) || repoRelativePath.Contains('\0'))
+            return new GitResult { Success = false, Error = "Invalid file path." };
 
-        // git wants forward slashes in a rev:path spec even on Windows, and the ':' separator means
-        // the path cannot be quoted as a whole — quote the combined spec instead.
-        string spec = $"{revision}:{relativePath.Replace('\\', '/')}";
-        return await RunGitAsync($"show \"{spec}\"");
+        // Passed as ONE argv entry (ArgumentList), never through a quoted command line: the old
+        // IsValidGitArg gate refused any path with '&' or '$' ("R&D/notes.md" could never be diffed)
+        // and a path starting with "rev:" can't be mistaken for an option. Forward slashes because
+        // git wants them in a rev:path spec even on Windows. The path is REPOSITORY-ROOT relative —
+        // the form porcelain status reports — so a project opened in a subfolder still resolves.
+        string spec = $"{revision}:{repoRelativePath.Replace('\\', '/')}";
+        return await RunGitArgsAsync(new[] { "show", spec });
+    }
+
+    /// <summary>
+    /// A file's content at a revision for the diff editor, with the same limits as opening a file
+    /// in the editor: over <paramref name="maxBytes"/> or binary is reported instead of read (a
+    /// 300 MB lockfile or a PNG used to be pulled into a string and handed to the diff).
+    /// The size is asked first (<c>cat-file -s</c>) so a huge blob is never transferred at all.
+    /// </summary>
+    public async Task<GitBlobResult> ReadBlobAsync(string revision, string repoRelativePath, long maxBytes)
+    {
+        var blob = new GitBlobResult();
+        if (!IsValidGitArg(revision) || string.IsNullOrEmpty(repoRelativePath) || repoRelativePath.Contains('\0'))
+            return blob;
+
+        string spec = $"{revision}:{repoRelativePath.Replace('\\', '/')}";
+        var size = await RunGitArgsAsync(new[] { "cat-file", "-s", spec });
+        if (!size.Success || !long.TryParse(size.Output.Trim(), out long bytes))
+            return blob;   // not in that revision (newly added) — the caller treats it as "no baseline"
+
+        blob.Exists = true;
+        blob.Size = bytes;
+        if (bytes > maxBytes) { blob.TooLarge = true; return blob; }
+
+        var show = await RunGitArgsAsync(new[] { "show", spec });
+        if (!show.Success) { blob.Exists = false; return blob; }
+        string text = show.Output ?? "";
+        int probe = Math.Min(text.Length, 8192);
+        for (int i = 0; i < probe; i++)
+            if (text[i] == '\0') { blob.Binary = true; return blob; }
+        blob.Text = text;
+        return blob;
     }
 
     /// <summary>git show for a specific commit.</summary>
@@ -427,8 +558,26 @@ public class GitService
         return await RunGitCommandAsync(arguments, _fileSystem.WorkingDirectory, CancellationToken.None, timeoutMs);
     }
 
-    private static async Task<GitResult> RunGitCommandAsync(
+    /// <summary>
+    /// Run git with an argv list (ProcessStartInfo.ArgumentList): each entry reaches git exactly as
+    /// given, so paths with spaces, '&amp;', '$' or Thai characters need no quoting and can't be
+    /// re-split. Prefer this for anything that carries a file path.
+    /// </summary>
+    public async Task<GitResult> RunGitArgsAsync(IReadOnlyList<string> args, int timeoutMs = 30000)
+    {
+        if (!_fileSystem.HasWorkingDirectory)
+            return new GitResult { Success = false, Error = "No working directory set." };
+
+        return await RunGitCommandAsync(psi => { foreach (var a in args) psi.ArgumentList.Add(a); },
+            _fileSystem.WorkingDirectory, CancellationToken.None, timeoutMs);
+    }
+
+    private static Task<GitResult> RunGitCommandAsync(
         string arguments, string workingDir, CancellationToken ct, int timeoutMs = 30000)
+        => RunGitCommandAsync(psi => psi.Arguments = arguments, workingDir, ct, timeoutMs);
+
+    private static async Task<GitResult> RunGitCommandAsync(
+        Action<ProcessStartInfo> setArgs, string workingDir, CancellationToken ct, int timeoutMs)
     {
         var result = new GitResult();
 
@@ -437,7 +586,6 @@ public class GitService
             var psi = new ProcessStartInfo
             {
                 FileName = "git",
-                Arguments = arguments,
                 WorkingDirectory = workingDir,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -446,6 +594,7 @@ public class GitService
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            setArgs(psi);
 
             using var process = Process.Start(psi);
             if (process == null)
@@ -501,6 +650,52 @@ public class GitResult
         : string.IsNullOrEmpty(Output)
             ? Error
             : $"{Output}\n{Error}";
+}
+
+/// <summary>One changed path from <see cref="GitService.StatusEntriesAsync"/>.</summary>
+public sealed class GitStatusEntry
+{
+    /// <summary>The raw two-letter porcelain code: index then worktree (" M", "A ", "??", "UU" …).</summary>
+    public string XY { get; set; } = "  ";
+    /// <summary>Path relative to the repository root, forward slashes, unquoted.</summary>
+    public string RepoPath { get; set; } = "";
+    /// <summary>Rename/copy source (repository-root relative), when there is one.</summary>
+    public string? OrigRepoPath { get; set; }
+    public string FullPath { get; set; } = "";
+
+    /// <summary>The compact code the panels show: "??" for untracked, else the trimmed XY.</summary>
+    public string Code
+    {
+        get
+        {
+            if (XY == "??") return "??";
+            string t = XY.Trim();
+            return t.Length == 0 ? "?" : t;
+        }
+    }
+    public bool IsUntracked => XY == "??";
+    public bool IsDeleted => XY.Contains('D');
+}
+
+public sealed class GitStatusSnapshot
+{
+    public bool Success { get; set; }
+    public string Error { get; set; } = "";
+    public string RepoRoot { get; set; } = "";
+    public string Branch { get; set; } = "";
+    public bool IsDetached { get; set; }
+    /// <summary>A freshly initialised repo — the branch exists but has no commit yet.</summary>
+    public bool NoCommits { get; set; }
+    public List<GitStatusEntry> Entries { get; } = new();
+}
+
+public sealed class GitBlobResult
+{
+    public bool Exists { get; set; }
+    public bool TooLarge { get; set; }
+    public bool Binary { get; set; }
+    public long Size { get; set; }
+    public string Text { get; set; } = "";
 }
 
 public class GitInfo

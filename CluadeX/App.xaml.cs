@@ -135,6 +135,20 @@ public partial class App : Application
 
                 await mcpManager.InitializeAsync();
                 dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
+
+                // BrainX installed but not in our MCP list (installed after CluadeX, or before it existed):
+                // connect it without asking — that is what installing it meant. Not installed: invite, once.
+                var brainInstall = mcpManager.GetBrainInstallState();
+                if (brainInstall == Services.Mcp.McpServerManager.BrainInstall.InstalledNotConfigured)
+                {
+                    bool ok = await mcpManager.ConnectInstalledBrainAsync();
+                    dbg?.Info("MCP", $"installed BrainX found and connected={ok} · {mcpManager.BrainStatusText}");
+                }
+                else if (brainInstall == Services.Mcp.McpServerManager.BrainInstall.NotInstalled
+                         && !_serviceProvider.GetRequiredService<SettingsService>().Settings.BrainXInviteDismissed)
+                {
+                    _ = Dispatcher.BeginInvoke(() => _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>().ScheduleBrainXInvite());
+                }
             }
             catch (Exception ex)
             {
@@ -667,6 +681,8 @@ public partial class App : Application
         services.AddSingleton<LocalizationService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
+        // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
+        services.AddSingleton<DgxSparkService>();
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
         services.AddSingleton<LspClientService>();

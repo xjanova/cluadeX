@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Windows;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
@@ -15,6 +16,8 @@ namespace CluadeX.ViewModels;
 public class HexEditorViewModel : ViewModelBase
 {
     private readonly HexEditorService _hex;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService? _log;
 
     // ─── Visible rows (windowed view; not the full file) ───
     public ObservableCollection<HexRow> Rows { get; } = new();
@@ -119,10 +122,11 @@ public class HexEditorViewModel : ViewModelBase
     {
         get
         {
-            if (_fileInfo == null) return "No file open — click Open to begin";
-            var dirty = _hex.IsDirty ? " · MODIFIED" : "";
-            var ro = _hex.IsReadOnly ? " · READ-ONLY" : "";
-            return $"{Path.GetFileName(_fileInfo.Path)}  ·  {_fileInfo.SizeDisplay}  ·  {_fileInfo.DetectedType}{dirty}{ro}";
+            if (_fileInfo == null) return _loc.T("hex.noFile");
+            var dirty = _hex.IsDirty ? _loc.T("hex.modifiedTag") : "";
+            var ro = _hex.IsReadOnly ? _loc.T("hex.readOnlyTag") : "";
+            var cut = _hex.IsTruncated ? _loc.T("hex.truncatedTag", FormatSize(HexEditorService.InMemoryLimit)) : "";
+            return $"{Path.GetFileName(_fileInfo.Path)}  ·  {_fileInfo.SizeDisplay}  ·  {_fileInfo.DetectedType}{dirty}{ro}{cut}";
         }
     }
 
@@ -180,13 +184,15 @@ public class HexEditorViewModel : ViewModelBase
     public ICommand CopyHexCommand { get; }
     public ICommand CopyAsciiCommand { get; }
 
-    public HexEditorViewModel(HexEditorService hex)
+    public HexEditorViewModel(HexEditorService hex, LocalizationService loc, DebugLogService? log = null)
     {
         _hex = hex;
+        _loc = loc;
+        _log = log;
         OpenCommand = new AsyncRelayCommand(OpenAsync);
         SaveCommand = new AsyncRelayCommand(SaveAsync, () => HasFile && _hex.IsDirty && !_hex.IsReadOnly);
         SaveAsCommand = new AsyncRelayCommand(SaveAsAsync, () => HasFile);
-        CloseCommand = new RelayCommand(() => { _hex.Close(); FileInfo = null; Rows.Clear(); SearchResults.Clear(); });
+        CloseCommand = new RelayCommand(DoClose);
         UndoCommand = new RelayCommand(() => { _hex.Undo(); }, () => CanUndo);
         RedoCommand = new RelayCommand(() => { _hex.Redo(); }, () => CanRedo);
         FindCommand = new RelayCommand(DoFind);
@@ -217,17 +223,24 @@ public class HexEditorViewModel : ViewModelBase
         CopyHexCommand = new RelayCommand(() =>
         {
             if (!HasFile) return;
-            string hex = _hex.FormatHex(_selectedOffset, Math.Max(1, _selectedLength));
-            try { System.Windows.Clipboard.SetText(hex); StatusMessage = $"Copied {hex.Length / 3 + 1} bytes as hex"; }
-            catch { StatusMessage = "Copy failed"; }
+            int n = Math.Max(1, _selectedLength);
+            string hexText = _hex.FormatHex(_selectedOffset, n);
+            try { Clipboard.SetText(hexText); StatusMessage = _loc.T("hex.copiedHex", n); }
+            catch (Exception ex) { _log?.Warn("HexEditor", "Clipboard copy failed", ex); StatusMessage = _loc.T("hex.copyFailed"); }
         });
         CopyAsciiCommand = new RelayCommand(() =>
         {
             if (!HasFile) return;
             var (_, ascii) = _hex.ReadHexAndAscii(_selectedOffset, Math.Max(1, _selectedLength));
-            try { System.Windows.Clipboard.SetText(ascii); StatusMessage = $"Copied {ascii.Length} chars as ASCII"; }
-            catch { StatusMessage = "Copy failed"; }
+            try { Clipboard.SetText(ascii); StatusMessage = _loc.T("hex.copiedAscii", ascii.Length); }
+            catch (Exception ex) { _log?.Warn("HexEditor", "Clipboard copy failed", ex); StatusMessage = _loc.T("hex.copyFailed"); }
         });
+
+        // The service is shared with the agent's hex_* tools: an agent hex_open (or this page's Open) on top of
+        // unsaved patches must ask first instead of silently replacing the buffer.
+        _hex.ConfirmDiscardChanges = ConfirmDiscardAsync;
+
+        _loc.LanguageChanged += () => OnPropertyChanged(nameof(StatusBarText));
 
         _hex.Changed += () =>
         {
@@ -261,12 +274,25 @@ public class HexEditorViewModel : ViewModelBase
                 OnPropertyChanged(nameof(WindowEndHex));
                 RefreshRows();
                 SelectedOffset = 0;
-                StatusMessage = $"Loaded {info.SizeDisplay} · {info.DetectedType} · SHA256: {info.Sha256[..Math.Min(16, info.Sha256.Length)]}…";
+                StatusMessage = _hex.IsTruncated
+                    ? _loc.T("hex.loadedTruncated", FormatSize(HexEditorService.InMemoryLimit), info.SizeDisplay)
+                    : _loc.T("hex.loaded", info.SizeDisplay, info.DetectedType, info.Sha256[..Math.Min(16, info.Sha256.Length)]);
             });
         };
     }
 
     public HexEditorService Service => _hex;
+
+    private static string FormatSize(long bytes) => new HexFileInfo { Size = bytes }.SizeDisplay;
+
+    private Task<bool> ConfirmDiscardAsync(string pathWithEdits, string pathToOpen)
+    {
+        var app = Application.Current;
+        if (app == null) return Task.FromResult(false);
+        return app.Dispatcher.InvokeAsync(() => MessageBox.Show(
+            _loc.T("hex.discardConfirm", Path.GetFileName(pathWithEdits), Path.GetFileName(pathToOpen)),
+            "CluadeX", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes).Task;
+    }
 
     // ═══════════════════════════════════════════
     // File operations
@@ -276,66 +302,98 @@ public class HexEditorViewModel : ViewModelBase
     {
         var dlg = new OpenFileDialog
         {
-            Title = "Open file in Hex Editor",
-            Filter = "All files|*.*",
+            Title = _loc.T("hex.openDialogTitle"),
+            Filter = _loc.T("hex.allFilesFilter"),
             CheckFileExists = true,
         };
         if (dlg.ShowDialog() != true) return;
-        try
-        {
-            StatusMessage = "Opening...";
-            await _hex.OpenAsync(dlg.FileName);
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Open failed: {ex.Message}";
-        }
+        await OpenPathAsync(dlg.FileName);
     }
 
     public async Task OpenPathAsync(string path)
     {
         try
         {
-            StatusMessage = "Opening...";
+            StatusMessage = _loc.T("hex.opening");
             await _hex.OpenAsync(path);
+        }
+        catch (HexUnsavedChangesException)
+        {
+            StatusMessage = _loc.T("hex.openKeptEdits");
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Open failed: {ex.Message}";
+            _log?.Error("HexEditor", $"Open failed: {path}", ex);
+            StatusMessage = ex switch
+            {
+                FileNotFoundException or DirectoryNotFoundException => _loc.T("hex.openFailedMissing"),
+                UnauthorizedAccessException or IOException => _loc.T("hex.openFailedLocked"),
+                OutOfMemoryException => _loc.T("hex.openFailedMemory"),
+                _ => _loc.T("hex.openFailed"),
+            };
         }
     }
 
     private async Task SaveAsync()
     {
+        bool truncated = _hex.IsTruncated;
         try
         {
             await _hex.SaveAsync(createBackup: true);
-            StatusMessage = "Saved (.bak written)";
+            StatusMessage = truncated
+                ? _loc.T("hex.savedInPlace", FormatSize(HexEditorService.InMemoryLimit))
+                : _loc.T("hex.saved");
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Save failed: {ex.Message}";
+            _log?.Error("HexEditor", $"Save failed: {_hex.CurrentPath}", ex);
+            StatusMessage = SaveFailureMessage(ex);
         }
     }
+
+    private string SaveFailureMessage(Exception ex) => ex switch
+    {
+        HexBackupFailedException b => _loc.T("hex.saveFailedBackup", Path.GetFileName(b.BackupPath)),
+        UnauthorizedAccessException => _loc.T("hex.saveFailedLocked"),
+        IOException => _loc.T("hex.saveFailedLocked"),
+        InvalidOperationException => _loc.T("hex.saveFailedReadOnly"),
+        _ => _loc.T("hex.saveFailed"),
+    };
 
     private async Task SaveAsAsync()
     {
         var dlg = new SaveFileDialog
         {
-            Title = "Save As (binary)",
-            Filter = "All files|*.*",
+            Title = _loc.T("hex.saveAsDialogTitle"),
+            Filter = _loc.T("hex.allFilesFilter"),
             FileName = _fileInfo == null ? "patched.bin" : Path.GetFileNameWithoutExtension(_fileInfo.Path) + ".patched" + Path.GetExtension(_fileInfo.Path),
         };
         if (dlg.ShowDialog() != true) return;
         try
         {
+            StatusMessage = _loc.T("hex.saving");
             await _hex.SaveAsAsync(dlg.FileName);
-            StatusMessage = $"Saved as {dlg.FileName}";
+            StatusMessage = _loc.T("hex.savedAs", dlg.FileName);
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Save failed: {ex.Message}";
+            _log?.Error("HexEditor", $"Save As failed: {dlg.FileName}", ex);
+            StatusMessage = SaveFailureMessage(ex);
         }
+    }
+
+    private void DoClose()
+    {
+        if (_hex.IsDirty && _hex.CurrentPath != null)
+        {
+            var answer = MessageBox.Show(_loc.T("hex.closeConfirm", Path.GetFileName(_hex.CurrentPath)), "CluadeX",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+        _hex.Close();
+        FileInfo = null;
+        Rows.Clear();
+        SearchResults.Clear();
     }
 
     // ═══════════════════════════════════════════
@@ -362,28 +420,37 @@ public class HexEditorViewModel : ViewModelBase
         SelectedOffset = offset;
     }
 
+    /// <summary>
+    /// "0x…" is hex, plain digits are decimal — the tooltip promises "0x1A00 or 6656". The old parser read any
+    /// all-hex-digit string as hex, and every all-digit string is one, so "100" jumped to 0x100 (256) and the
+    /// decimal branch could never run.
+    /// </summary>
+    public static bool TryParseOffset(string input, out long offset)
+    {
+        offset = 0;
+        if (string.IsNullOrWhiteSpace(input)) return false;
+        var s = input.Trim().Replace("_", "").Replace(",", "");
+        if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return s.Length > 2 && long.TryParse(s[2..], System.Globalization.NumberStyles.HexNumber, null, out offset) && offset >= 0;
+        return long.TryParse(s, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out offset);
+    }
+
     private void DoGoto()
     {
         if (string.IsNullOrWhiteSpace(_gotoInput)) return;
-        var input = _gotoInput.Trim();
-        long offset;
-        if (input.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        if (!TryParseOffset(_gotoInput, out long offset))
         {
-            if (!long.TryParse(input[2..], System.Globalization.NumberStyles.HexNumber, null, out offset))
-            { StatusMessage = "Invalid hex offset"; return; }
+            StatusMessage = _loc.T("hex.invalidOffset");
+            return;
         }
-        else if (input.All(c => "0123456789abcdefABCDEF".Contains(c)))
+        if (!_hex.HasFile) return;
+        if (offset >= _hex.Size)
         {
-            if (!long.TryParse(input, System.Globalization.NumberStyles.HexNumber, null, out offset))
-            { StatusMessage = "Invalid hex offset"; return; }
-        }
-        else if (!long.TryParse(input, out offset))
-        {
-            StatusMessage = "Invalid offset (use 0x... for hex, or decimal)";
+            StatusMessage = _loc.T("hex.offsetPastEnd", $"0x{offset:X8}", $"0x{Math.Max(0, _hex.Size - 1):X8}");
             return;
         }
         JumpTo(offset);
-        StatusMessage = $"Jumped to 0x{offset:X8}";
+        StatusMessage = _loc.T("hex.jumped", $"0x{offset:X8}");
     }
 
     // ═══════════════════════════════════════════
@@ -407,13 +474,18 @@ public class HexEditorViewModel : ViewModelBase
         SearchResults.Clear();
         if (!_hex.HasFile || string.IsNullOrWhiteSpace(_searchPattern))
         {
-            StatusMessage = "Empty search pattern";
+            StatusMessage = _loc.T("hex.emptyPattern");
             return;
         }
         var mode = _searchModeHex ? HexEditorService.SearchMode.Hex : HexEditorService.SearchMode.Text;
+        if (mode == HexEditorService.SearchMode.Hex && !HexEditorService.TryParseHex(_searchPattern, out _))
+        {
+            StatusMessage = _loc.T("hex.invalidHexInput");
+            return;
+        }
         var hits = _hex.Search(_searchPattern, mode);
         foreach (var h in hits) SearchResults.Add(h);
-        StatusMessage = hits.Count == 0 ? "No matches" : $"{hits.Count} match(es) found";
+        StatusMessage = hits.Count == 0 ? _loc.T("hex.noMatches") : _loc.T("hex.matchesFound", hits.Count);
         if (hits.Count > 0) JumpTo(hits[0].Offset);
     }
 
@@ -432,12 +504,13 @@ public class HexEditorViewModel : ViewModelBase
         if (!_hex.HasFile) return;
         if (string.IsNullOrWhiteSpace(_searchPattern))
         {
-            StatusMessage = "Empty search pattern";
+            StatusMessage = _loc.T("hex.emptyPattern");
             return;
         }
+        if (_hex.IsReadOnly) { StatusMessage = _loc.T("hex.readOnlyNoEdit"); return; }
         var mode = _searchModeHex ? HexEditorService.SearchMode.Hex : HexEditorService.SearchMode.Text;
         int n = _hex.ReplaceAll(_searchPattern, _replacePattern, mode);
-        StatusMessage = n == 0 ? "Nothing replaced (length must match)" : $"Replaced {n} occurrence(s)";
+        StatusMessage = n == 0 ? _loc.T("hex.nothingReplaced") : _loc.T("hex.replacedCount", n);
     }
 
     private void DoApplyPatch()
@@ -445,17 +518,20 @@ public class HexEditorViewModel : ViewModelBase
         if (!_hex.HasFile) return;
         if (string.IsNullOrWhiteSpace(_patchInput))
         {
-            StatusMessage = "Enter bytes to patch (hex)";
+            StatusMessage = _loc.T("hex.enterPatchBytes");
             return;
         }
         if (!HexEditorService.TryParseHex(_patchInput, out var bytes))
         {
-            StatusMessage = "Invalid hex input";
+            StatusMessage = _loc.T("hex.invalidHexInput");
             return;
         }
+        // Patch throws on a read-only file; this is a sync RelayCommand, so an escaping exception would reach
+        // the global crash dialog.
+        if (_hex.IsReadOnly) { StatusMessage = _loc.T("hex.readOnlyNoEdit"); return; }
         bool ok = _hex.Patch(_selectedOffset, bytes, "manual patch");
         StatusMessage = ok
-            ? $"Patched {bytes.Length} byte(s) at {SelectedOffsetHex}"
-            : "Patch failed (out of range or no change)";
+            ? _loc.T("hex.patchedAt", bytes.Length, SelectedOffsetHex)
+            : _loc.T("hex.patchFailed");
     }
 }

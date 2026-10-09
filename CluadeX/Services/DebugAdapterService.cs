@@ -21,6 +21,7 @@ namespace CluadeX.Services;
 public sealed class DebugAdapterService : IDisposable
 {
     private readonly FileSystemService _fs;
+    private readonly DebugLogService? _log;
 
     private Process? _adapter;
     private StreamWriter? _writer;
@@ -31,7 +32,18 @@ public sealed class DebugAdapterService : IDisposable
     private readonly Dictionary<int, TaskCompletionSource<DapResponse>> _pending = new();
     private CancellationTokenSource? _readCts;
 
-    public DebugAdapterService(FileSystemService fs) => _fs = fs;
+    /// <summary>Set once the session is being torn down (user Stop, or the debuggee terminated and
+    /// we are disconnecting). The adapter answers a disconnect with its own "terminated" event; without
+    /// this guard the UI reported the end of the session twice.</summary>
+    private volatile bool _stopRequested;
+
+    public DebugAdapterService(FileSystemService fs, DebugLogService? log = null)
+    {
+        _fs = fs;
+        _log = log;
+    }
+
+    private static string L(string key) => LocalizedResources.Instance[key];
 
     // ─── Session state ───
 
@@ -76,7 +88,7 @@ public sealed class DebugAdapterService : IDisposable
             Executable = netcoredbg ?? "netcoredbg",
             Arguments = "--interpreter=vscode",
             IsAvailable = netcoredbg != null,
-            InstallHint = "Download netcoredbg from github.com/Samsung/netcoredbg/releases and put it on PATH.",
+            InstallHint = L("dbg.installNetcoredbg"),
             LaunchType = "coreclr",
         });
 
@@ -91,8 +103,8 @@ public sealed class DebugAdapterService : IDisposable
             Arguments = "-m debugpy.adapter",
             IsAvailable = hasDebugpy,
             InstallHint = python == null
-                ? "Install Python, then run: pip install debugpy"
-                : "Run: pip install debugpy",
+                ? L("dbg.installPythonDebugpy")
+                : L("dbg.installDebugpy"),
             LaunchType = "python",
         });
 
@@ -167,19 +179,33 @@ public sealed class DebugAdapterService : IDisposable
         DebugAdapterInfo adapter, string program, IReadOnlyDictionary<string, List<int>> breakpoints,
         CancellationToken ct = default)
     {
-        if (IsRunning) return new DebugStartResult { Error = "A debug session is already running." };
+        if (IsRunning) return new DebugStartResult { Error = L("dbg.alreadyRunning") };
         if (!adapter.IsAvailable)
-            return new DebugStartResult { Error = $"{adapter.Language} adapter not installed. {adapter.InstallHint}" };
+            return new DebugStartResult { Error = string.Format(L("dbg.notInstalled"), adapter.Language, adapter.InstallHint) };
         if (!File.Exists(program))
-            return new DebugStartResult { Error = $"Program not found: {program}" };
+            return new DebugStartResult { Error = string.Format(L("dbg.programNotFound"), program) };
 
+        // netcoredbg debugs a BUILT assembly, not a source file. The file the user has open is a .cs
+        // — handing that to the adapter as "program" (what this used to do) can never start, so C#
+        // debugging was a Start button that always failed. Build the project that owns the file and
+        // launch its output .dll instead.
+        string workingDir = _fs.HasWorkingDirectory ? _fs.WorkingDirectory : Path.GetDirectoryName(program)!;
+        if (adapter.Id == "netcoredbg")
+        {
+            var built = await BuildDotnetProgramAsync(program, _fs.HasWorkingDirectory ? _fs.WorkingDirectory : null, ct);
+            if (built.Error != null) return new DebugStartResult { Error = built.Error };
+            program = built.AssemblyPath!;
+            workingDir = built.ProjectDir!;
+        }
+
+        _stopRequested = false;
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = adapter.Executable,
                 Arguments = adapter.Arguments,
-                WorkingDirectory = _fs.HasWorkingDirectory ? _fs.WorkingDirectory : Path.GetDirectoryName(program)!,
+                WorkingDirectory = workingDir,
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -188,7 +214,7 @@ public sealed class DebugAdapterService : IDisposable
             };
 
             _adapter = Process.Start(psi);
-            if (_adapter == null) return new DebugStartResult { Error = "Could not start the debug adapter process." };
+            if (_adapter == null) return new DebugStartResult { Error = L("dbg.adapterStartFailed") };
 
             ActiveAdapter = adapter;
             _writer = _adapter.StandardInput;
@@ -222,7 +248,10 @@ public sealed class DebugAdapterService : IDisposable
             }, ct);
 
             if (!init.Success)
-                return new DebugStartResult { Error = $"initialize failed: {init.Message}" };
+            {
+                StopSession();
+                return new DebugStartResult { Error = string.Format(L("dbg.initializeFailed"), init.Message) };
+            }
 
             // "initialized" arrives while `launch` is still in flight — arm the wait BEFORE launching.
             var initializedEvent = WaitForEventAsync("initialized", TimeSpan.FromSeconds(15), ct);
@@ -251,11 +280,12 @@ public sealed class DebugAdapterService : IDisposable
             if (!await initializedEvent)
             {
                 var launched = await launchTask;
+                StopSession();
                 return new DebugStartResult
                 {
                     Error = launched.Success
-                        ? "Adapter never sent 'initialized'."
-                        : $"launch failed: {launched.Message}",
+                        ? L("dbg.neverInitialized")
+                        : string.Format(L("dbg.launchFailed"), launched.Message),
                 };
             }
 
@@ -271,14 +301,150 @@ public sealed class DebugAdapterService : IDisposable
 
             var launchResult = await launchTask;
             if (!launchResult.Success)
-                return new DebugStartResult { Error = $"launch failed: {launchResult.Message}" };
+            {
+                StopSession();
+                return new DebugStartResult { Error = string.Format(L("dbg.launchFailed"), launchResult.Message) };
+            }
 
-            return new DebugStartResult { Started = true, Breakpoints = verified };
+            return new DebugStartResult { Started = true, Breakpoints = verified, Program = program };
         }
         catch (Exception ex)
         {
             StopSession();
-            return new DebugStartResult { Error = ex.Message };
+            _log?.Warn("Debugger", $"Starting {adapter.Id} failed", ex);
+            return new DebugStartResult { Error = string.Format(L("dbg.startFailed"), adapter.Language) };
+        }
+    }
+
+    // ═══════════════════════════ .NET: build, then debug the output ═══════════════════════════
+
+    public sealed record DotnetBuildResult(string? AssemblyPath, string? ProjectDir, string? Error);
+
+    /// <summary>
+    /// The project file that owns a source file: the nearest *.csproj / *.fsproj / *.vbproj walking
+    /// up from the file's folder, stopping at <paramref name="stopAt"/> (the opened workspace).
+    /// </summary>
+    public static string? FindProjectFile(string sourceFile, string? stopAt)
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(Path.GetFullPath(sourceFile));
+            string? stop = string.IsNullOrEmpty(stopAt) ? null : Path.GetFullPath(stopAt).TrimEnd('\\', '/');
+            while (!string.IsNullOrEmpty(dir))
+            {
+                var projects = Directory.EnumerateFiles(dir, "*.*proj")
+                    .Where(p => p.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                             || p.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
+                             || p.EndsWith(".vbproj", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (projects.Count > 0) return projects[0];
+                if (stop != null && string.Equals(dir.TrimEnd('\\', '/'), stop, StringComparison.OrdinalIgnoreCase)) break;
+                dir = Path.GetDirectoryName(dir);
+            }
+        }
+        catch { /* unreadable folder — treated as "no project" */ }
+        return null;
+    }
+
+    /// <summary>A class library builds to a .dll that has nothing to run. SDK web/worker projects
+    /// are executables by default; anything else needs OutputType Exe/WinExe.</summary>
+    public static bool IsRunnableProject(string projectFile)
+    {
+        try
+        {
+            string xml = File.ReadAllText(projectFile);
+            if (System.Text.RegularExpressions.Regex.IsMatch(xml,
+                    @"<OutputType>\s*(Exe|WinExe)\s*</OutputType>", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return true;
+            if (System.Text.RegularExpressions.Regex.IsMatch(xml,
+                    @"<OutputType>\s*\w+\s*</OutputType>", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return false;   // explicitly Library / Module
+            return System.Text.RegularExpressions.Regex.IsMatch(xml,
+                @"Sdk\s*=\s*""Microsoft\.NET\.Sdk\.(Web|Worker|BlazorWebAssembly|Razor)""",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>The " -> path\X.dll" line MSBuild prints for the project's primary output.</summary>
+    public static string? ParseBuiltAssembly(string buildOutput, string projectName)
+    {
+        string? fallback = null;
+        foreach (var raw in buildOutput.Split('\n'))
+        {
+            string line = raw.Trim();
+            int arrow = line.IndexOf(" -> ", StringComparison.Ordinal);
+            if (arrow <= 0) continue;
+            string name = line[..arrow].Trim();
+            string path = line[(arrow + 4)..].Trim();
+            if (!path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(name, projectName, StringComparison.OrdinalIgnoreCase)) return path;
+            fallback ??= path;
+        }
+        return fallback;
+    }
+
+    private async Task<DotnetBuildResult> BuildDotnetProgramAsync(string sourceFile, string? workspace, CancellationToken ct)
+    {
+        string? project = FindProjectFile(sourceFile, workspace);
+        if (project == null) return new DotnetBuildResult(null, null, L("dbg.noProject"));
+        if (!IsRunnableProject(project))
+            return new DotnetBuildResult(null, null, string.Format(L("dbg.libraryProject"), Path.GetFileName(project)));
+
+        string projectDir = Path.GetDirectoryName(project)!;
+        Output?.Invoke(string.Format(L("dbg.building"), Path.GetFileName(project)));
+
+        var psi = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = projectDir,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        foreach (var a in new[] { "build", project, "-c", "Debug", "-nologo", "-v", "minimal", "-p:GenerateFullPaths=true" })
+            psi.ArgumentList.Add(a);
+
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc == null) return new DotnetBuildResult(null, null, L("dbg.dotnetMissing"));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromMinutes(5));
+            var stdout = proc.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderr = proc.StandardError.ReadToEndAsync(cts.Token);
+            try { await proc.WaitForExitAsync(cts.Token); }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(true); } catch { }
+                return new DotnetBuildResult(null, null, L("dbg.buildTimeout"));
+            }
+            string output = await stdout + "\n" + await stderr;
+
+            if (proc.ExitCode != 0)
+            {
+                // The first few compiler errors are what the user needs; the rest is MSBuild noise.
+                var errors = output.Split('\n')
+                    .Select(l => l.Trim())
+                    .Where(l => l.Contains(": error ", StringComparison.Ordinal))
+                    .Distinct()
+                    .Take(5)
+                    .ToList();
+                foreach (var e in errors) Output?.Invoke("[build] " + e);
+                return new DotnetBuildResult(null, null, string.Format(L("dbg.buildFailed"), Path.GetFileName(project)));
+            }
+
+            string? dll = ParseBuiltAssembly(output, Path.GetFileNameWithoutExtension(project));
+            if (dll == null || !File.Exists(dll))
+                return new DotnetBuildResult(null, null, string.Format(L("dbg.noAssembly"), Path.GetFileName(project)));
+            return new DotnetBuildResult(dll, projectDir, null);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return new DotnetBuildResult(null, null, L("dbg.dotnetMissing"));
         }
     }
 
@@ -343,7 +509,7 @@ public sealed class DebugAdapterService : IDisposable
             // "running" would grey out the step buttons for a session that never moved.
             IsPaused = true;
             StoppedThreadId = thread;
-            Output?.Invoke($"[{command} failed] {response.Message}");
+            Output?.Invoke(string.Format(L("dbg.resumeFailed"), command, response.Message));
             Stopped?.Invoke("error", thread);
         }
     }
@@ -445,7 +611,7 @@ public sealed class DebugAdapterService : IDisposable
     /// <summary>Evaluate an expression in a frame — the debug console / watch window.</summary>
     public async Task<string> EvaluateAsync(string expression, int frameId, CancellationToken ct = default)
     {
-        if (!IsRunning) return "(no debug session)";
+        if (!IsRunning) return L("dbg.noSession");
 
         var response = await SendRequestAsync("evaluate", new
         {
@@ -454,7 +620,7 @@ public sealed class DebugAdapterService : IDisposable
             context = "repl",
         }, ct);
 
-        if (!response.Success) return $"error: {response.Message}";
+        if (!response.Success) return string.Format(L("dbg.evalError"), response.Message);
         if (response.Body is not { } body) return "";
         return body.TryGetProperty("result", out var r) ? r.GetString() ?? "" : "";
     }
@@ -463,6 +629,7 @@ public sealed class DebugAdapterService : IDisposable
     /// a debugger that can't be stopped is worse than no debugger.</summary>
     public async Task StopAsync()
     {
+        _stopRequested = true;
         if (!IsRunning) { StopSession(); return; }
         try
         {
@@ -498,7 +665,7 @@ public sealed class DebugAdapterService : IDisposable
         lock (_lock)
         {
             foreach (var tcs in _pending.Values)
-                tcs.TrySetResult(new DapResponse { Success = false, Message = "session ended" });
+                tcs.TrySetResult(new DapResponse { Success = false, Message = L("dbg.sessionEnded") });
             _pending.Clear();
         }
     }
@@ -544,7 +711,7 @@ public sealed class DebugAdapterService : IDisposable
 
     private async Task<DapResponse> SendRequestAsync(string command, object arguments, CancellationToken ct)
     {
-        if (_writer == null) return new DapResponse { Success = false, Message = "adapter not running" };
+        if (_writer == null) return new DapResponse { Success = false, Message = L("dbg.adapterNotRunning") };
 
         int id = Interlocked.Increment(ref _seq);
         var tcs = new TaskCompletionSource<DapResponse>();
@@ -558,9 +725,15 @@ public sealed class DebugAdapterService : IDisposable
             cts.CancelAfter(TimeSpan.FromSeconds(20));
             return await tcs.Task.WaitAsync(cts.Token);
         }
+        catch (OperationCanceledException)
+        {
+            return new DapResponse { Success = false, Message = string.Format(L("dbg.requestTimeout"), command) };
+        }
         catch (Exception ex)
         {
-            return new DapResponse { Success = false, Message = ex.Message };
+            // This text reaches the debug panel ("launch failed: …") — keep the raw exception in the log.
+            _log?.Warn("Debugger", $"DAP request '{command}' failed", ex);
+            return new DapResponse { Success = false, Message = L("dbg.adapterNotRunning") };
         }
         finally
         {
@@ -637,10 +810,11 @@ public sealed class DebugAdapterService : IDisposable
         catch (OperationCanceledException) { }
         catch { /* stream closed */ }
 
-        if (!ct.IsCancellationRequested)
+        if (!ct.IsCancellationRequested && !_stopRequested)
         {
+            _stopRequested = true;
             IsPaused = false;
-            Terminated?.Invoke("adapter exited");
+            Terminated?.Invoke(L("dbg.adapterExited"));
         }
     }
 
@@ -718,13 +892,20 @@ public sealed class DebugAdapterService : IDisposable
             case "terminated":
                 IsPaused = false;
                 StoppedThreadId = null;
-                Terminated?.Invoke("program terminated");
+                if (_stopRequested) break;   // our own Stop already reported the end
+                _stopRequested = true;
+                Terminated?.Invoke(L("dbg.programTerminated"));
+                // DAP: after "terminated" the client must send "disconnect" — otherwise the adapter
+                // (and with debugpy, the debuggee's interpreter) lingers as an orphan process.
+                // Off the read loop: StopAsync waits for the disconnect RESPONSE, which this very
+                // loop has to read.
+                _ = Task.Run(StopAsync);
                 break;
             case "exited":
             {
                 int code = eventBody.ValueKind == JsonValueKind.Object
                     && eventBody.TryGetProperty("exitCode", out var c) ? c.GetInt32() : 0;
-                Output?.Invoke($"[process exited with code {code}]");
+                Output?.Invoke(string.Format(L("dbg.processExited"), code));
                 break;
             }
         }
@@ -752,7 +933,7 @@ public sealed class DebugAdapterInfo
     public bool IsAvailable { get; set; }
     public string InstallHint { get; set; } = "";
 
-    public string StatusLabel => IsAvailable ? "installed" : "not installed";
+    public string StatusLabel => LocalizedResources.Instance[IsAvailable ? "dbg.installed" : "dbg.notInstalledShort"];
 }
 
 public sealed class DapResponse
@@ -767,6 +948,8 @@ public sealed class DebugStartResult
     public bool Started { get; set; }
     public string? Error { get; set; }
     public Dictionary<string, List<DapBreakpoint>> Breakpoints { get; set; } = new();
+    /// <summary>What actually runs — for C# the built .dll, not the .cs file that was open.</summary>
+    public string Program { get; set; } = "";
 }
 
 public sealed class DapBreakpoint

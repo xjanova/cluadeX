@@ -183,28 +183,25 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Agent + Thinking Toggles -->
+                <!-- Agent + Thinking Toggles. "Steps" lives on the bottom bar only (it was here too). The
+                     autonomous loop has its own explicit label: it used to be a second "Auto" next to the
+                     bottom bar's run-code "Auto", with a different meaning. -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                    <CheckBox Content="Agent" Margin="8,0,4,0"
+                    <CheckBox Content="{services:Loc chat.agentLabel}" Margin="8,0,4,0"
                               IsChecked="{Binding AgenticMode}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
                               ToolTip="{services:Loc chat.agentTip}"/>
-                    <CheckBox Content="{services:Loc chat.auto}" Margin="4,0"
+                    <CheckBox Content="{services:Loc chat.autonomousLabel}" Margin="4,0"
                               IsChecked="{Binding AutonomousMode}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
                               ToolTip="{services:Loc chat.autoTip}"/>
-                    <CheckBox Content="{services:Loc chat.thinkingToggle}" Margin="4,0"
+                    <CheckBox Content="{services:Loc chat.showThinkingLabel}" Margin="4,0"
                               IsChecked="{Binding ShowThinking}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="10" VerticalAlignment="Center"
                               ToolTip="{services:Loc chat.thinkingTip}"/>
-                    <CheckBox Content="Steps" Margin="4,0"
-                              IsChecked="{Binding ShowAgentInternals}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="10" VerticalAlignment="Center"
-                              ToolTip="แสดงขั้นตอนการทำงานของ agent (tool calls / สถานะ) ในแชท&#10;ปิดไว้ = เห็นเฉพาะคำถามกับคำตอบ · ข้อผิดพลาด diff และคำขออนุญาตยังแสดงเสมอ"/>
                 </StackPanel>
 
                 <Button Grid.Column="4" Content="&#xE711;"
@@ -242,9 +239,7 @@
                            Foreground="{StaticResource Overlay0Brush}"
                            FontSize="11" FontFamily="{StaticResource MonoFont}"
                            VerticalAlignment="Center" Margin="8,0">
-                    <TextBlock.Text>
-                        <Binding Path="SearchMatchCount" StringFormat="{}{0} matches"/>
-                    </TextBlock.Text>
+                    <Run Text="{Binding SearchMatchCount, Mode=OneWay}"/><Run Text="{services:Loc chat.search.matchesSuffix}"/>
                 </TextBlock>
                 <Button Grid.Column="3" Content="&#xE711;" FontFamily="Segoe MDL2 Assets"
                         Style="{StaticResource IconButton}" FontSize="10" Padding="4,4"
@@ -314,10 +309,14 @@
                                     </MultiDataTrigger.Conditions>
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </MultiDataTrigger>
+                                <!-- A LIVE status row (the "⏳ waiting" / "⏵ Reading…" line, IsStreaming) stays
+                                     visible with Steps off — it is the only sign the agent is working. Finished
+                                     status rows are internals and collapse. -->
                                 <MultiDataTrigger>
                                     <MultiDataTrigger.Conditions>
                                         <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}"/>
                                         <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
+                                        <Condition Binding="{Binding IsStreaming}" Value="False"/>
                                     </MultiDataTrigger.Conditions>
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </MultiDataTrigger>
@@ -333,12 +332,21 @@
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
+                            <!-- Two rows: the collapsible thinking block sits ABOVE the row's content. Row 1 holds
+                                 exactly one of the role-specific bodies below — each is Visible for its own role
+                                 only. (The grid had no rows and the normal bubble was hidden only for AgentStatus,
+                                 so on a permission prompt it was drawn on top with an opaque background and took
+                                 every click meant for Allow / Deny: no "Ask" could be answered with the mouse.) -->
                             <Grid Margin="0,1,0,1"
                                   MouseEnter="MessageBubble_MouseEnter"
                                   MouseLeave="MessageBubble_MouseLeave">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
 
                                 <!-- ═══ Thinking Block (collapsible) ═══ -->
-                                <Border HorizontalAlignment="Left"
+                                <Border Grid.Row="0" HorizontalAlignment="Left"
                                         Margin="12,2,200,2"
                                         Background="#18CBA6F7"
                                         CornerRadius="8" Padding="10,4"
@@ -381,7 +389,7 @@
                                 </Border>
 
                                 <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
-                                <Border HorizontalAlignment="Left"
+                                <Border Grid.Row="1" HorizontalAlignment="Left"
                                         Margin="12,4,100,4"
                                         Background="#20F9E2AF"
                                         BorderBrush="{StaticResource YellowBrush}"
@@ -450,7 +458,9 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <StackPanel Orientation="Horizontal" Margin="22,0,0,0">
+                                        <!-- Allow / Deny until answered; then the outcome, localized -->
+                                        <StackPanel Orientation="Horizontal" Margin="22,0,0,0"
+                                                    Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                                             <Button Content="{services:Loc chat.allow}" Padding="16,4" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
@@ -460,11 +470,106 @@
                                                     FontSize="12"
                                                     Click="PermissionDeny_Click"/>
                                         </StackPanel>
+                                        <Grid Margin="22,0,0,0"
+                                              Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}}">
+                                            <TextBlock Text="{services:Loc chat.perm.allowed}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource GreenBrush}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PermissionOutcome}" Value="{x:Static models:PermissionOutcome.Allowed}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{services:Loc chat.perm.denied}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource RedBrush}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PermissionOutcome}" Value="{x:Static models:PermissionOutcome.Denied}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{services:Loc chat.perm.cancelled}" FontSize="12" FontStyle="Italic"
+                                                       Foreground="{StaticResource Overlay1Brush}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PermissionOutcome}" Value="{x:Static models:PermissionOutcome.Cancelled}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{services:Loc chat.perm.dismissed}" FontSize="12" FontStyle="Italic"
+                                                       Foreground="{StaticResource Overlay1Brush}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PermissionOutcome}" Value="{x:Static models:PermissionOutcome.Dismissed}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Compaction marker: where the model's context now starts ═══ -->
+                                <Border Grid.Row="1" Margin="40,10,40,10" Padding="12,8" CornerRadius="8"
+                                        Background="#144CDFFF" BorderBrush="#444CDFFF" BorderThickness="1">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ContextSummary}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                                       Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBlock Text="{services:Loc chat.compact.markerTitle}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TealBrush}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                        <TextBlock Text="{services:Loc chat.compact.marker}" FontSize="11" Margin="20,2,0,0"
+                                                   Foreground="{StaticResource Subtext0Brush}" TextWrapping="Wrap"/>
+                                        <!-- Bound, not local: the ListBox recycles containers, and a local IsExpanded
+                                             would carry over to whichever row reuses this one. -->
+                                        <Expander Margin="16,4,0,0" Style="{StaticResource ToolExpander}" IsExpanded="{Binding IsExpanded}">
+                                            <Expander.Header>
+                                                <TextBlock Text="{services:Loc chat.compact.showSummary}" FontSize="11"
+                                                           Foreground="{StaticResource Overlay0Brush}"/>
+                                            </Expander.Header>
+                                            <Border Background="{StaticResource Surface0Brush}" CornerRadius="6" Padding="10,8"
+                                                    Margin="0,4,0,0" MaxHeight="300">
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                                    <TextBlock Text="{Binding Content}" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                                               Foreground="{StaticResource Subtext0Brush}" TextWrapping="Wrap"/>
+                                                </ScrollViewer>
+                                            </Border>
+                                        </Expander>
                                     </StackPanel>
                                 </Border>
 
                                 <!-- ═══ AgentStatus: inline tool indicator ═══ -->
-                                <Border HorizontalAlignment="Left"
+                                <Border Grid.Row="1" HorizontalAlignment="Left"
                                         Margin="12,2,200,2"
                                         Background="{StaticResource Surface0Brush}"
                                         CornerRadius="8"
@@ -522,12 +627,22 @@
                                 </Border>
 
                                 <!-- ═══ Normal chat bubble ═══ -->
-                                <Grid>
+                                <!-- Hidden for every role that has its own body above. -->
+                                <Grid Grid.Row="1">
                                     <Grid.Style>
                                         <Style TargetType="Grid">
                                             <Setter Property="Visibility" Value="Visible"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.PermissionRequest}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Thinking}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ContextSummary}">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -682,13 +797,14 @@
                                                         ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
-                                                <!-- Retry (only for error messages) -->
+                                                <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
+                                                     retrying one re-ran the whole agent turn. -->
                                                 <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
                                                         Style="{StaticResource IconButton}"
                                                         FontSize="10" Padding="4,2" Margin="2,0"
                                                         ToolTip="{services:Loc chat.retryTip}"
                                                         Click="RetryMessage_Click"
-                                                        Visibility="{Binding HasError, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                        Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                             </StackPanel>
                                         </Grid>
 
@@ -840,10 +956,10 @@
                                         </Expander>
                                         </StackPanel>
 
-                                        <!-- Row 5: Error bar with retry hint -->
+                                        <!-- Row 5: Error bar with retry hint — only where Retry is actually offered -->
                                         <Border Grid.Row="5" Margin="0,4,0,0" Padding="6,3"
                                                 Background="#20F38BA8" CornerRadius="4"
-                                                Visibility="{Binding HasError, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                             <TextBlock FontSize="10" Foreground="{StaticResource RedBrush}"
                                                        FontFamily="{StaticResource MainFont}">
                                                 <Run Text="&#xE783;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
@@ -896,7 +1012,7 @@
             <WrapPanel HorizontalAlignment="Center" Margin="0,24,0,0" MaxWidth="600">
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
                         Click="SuggestedPrompt_Click"
-                        Tag="Explain this codebase's architecture and key patterns">
+                        Tag="{services:Loc chat.suggestExplainPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource MauveBrush}"/>
@@ -905,7 +1021,7 @@
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
                         Click="SuggestedPrompt_Click"
-                        Tag="Find and fix bugs in this project">
+                        Tag="{services:Loc chat.suggestBugsPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource RedBrush}"/>
@@ -914,7 +1030,7 @@
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
                         Click="SuggestedPrompt_Click"
-                        Tag="Write unit tests for the most critical code paths">
+                        Tag="{services:Loc chat.suggestTestsPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8A0;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource GreenBrush}"/>
@@ -923,7 +1039,7 @@
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
                         Click="SuggestedPrompt_Click"
-                        Tag="Review recent changes and suggest improvements">
+                        Tag="{services:Loc chat.suggestReviewPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
                                    VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource TealBrush}"/>
@@ -1281,8 +1397,10 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Model Selector -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Model Selector — only while a model on this PC answers the chat. Shown for every provider,
+                     it let a Claude chat load a GGUF and switch itself to Local without a word. -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                            Visibility="{Binding ShowLocalModelPicker, Converter={StaticResource BoolVis}}">
                     <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets"
                                FontSize="11" Foreground="{StaticResource MauveBrush}"
                                VerticalAlignment="Center" Margin="4,0,6,0"/>
@@ -1441,17 +1559,19 @@
                             Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
                     </Button>
-                    <CheckBox Content="{services:Loc chat.auto}" IsChecked="{Binding AutoExecute}"
+                    <!-- Runs AI-written code on this PC without asking: explicit label + warning tooltip, and
+                         the view model asks for confirmation whenever it is switched on. -->
+                    <CheckBox Content="{services:Loc chat.autoRunLabel}" IsChecked="{Binding AutoExecute}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center"
-                              ToolTip="{services:Loc chat.autoRunTip}"/>
+                              ToolTip="{services:Loc chat.autoRunWarnTip}"/>
                     <!-- Lives on the BOTTOM bar, not the project bar: the project bar is
                          hidden whenever no folder is open, and a plain chat with only the
                          brain connected is exactly where the step spam is worst. -->
-                    <CheckBox Content="Steps" IsChecked="{Binding ShowAgentInternals}"
+                    <CheckBox Content="{services:Loc chat.stepsLabel}" IsChecked="{Binding ShowAgentInternals}"
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="แสดงขั้นตอนการทำงานของ agent (tool calls / สถานะ) ในแชท&#10;ปิดไว้ = เห็นเฉพาะคำถามกับคำตอบ · ข้อผิดพลาด diff และคำขออนุญาตยังแสดงเสมอ"/>
+                              ToolTip="{services:Loc chat.stepsTip}"/>
                     <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
                               Foreground="{StaticResource MauveBrush}"
                               FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"

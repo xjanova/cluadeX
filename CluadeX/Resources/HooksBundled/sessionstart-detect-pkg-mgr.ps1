@@ -4,6 +4,9 @@
 # ~/.cluadex/logs/last-package-manager.txt.
 param([string]$Cwd = "")
 
+# Exact project folder from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_CWD) { $Cwd = $env:CLUADEX_HOOK_CWD }
+
 if (-not $Cwd -or -not (Test-Path $Cwd)) { exit 0 }
 
 $detected = @()

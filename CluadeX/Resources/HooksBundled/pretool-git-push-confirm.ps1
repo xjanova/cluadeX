@@ -4,6 +4,14 @@
 # Override: create file ~/.cluadex/allow-push-main OR include "--force-confirmed" in the command.
 param([string]$Command = "")
 
+# The exact command from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_PAYLOAD_FILE -and (Test-Path -LiteralPath $env:CLUADEX_HOOK_PAYLOAD_FILE)) {
+  try {
+    $payload = [System.IO.File]::ReadAllText($env:CLUADEX_HOOK_PAYLOAD_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($payload.command) { $Command = [string]$payload.command }
+  } catch { }
+}
+
 $cmd = $Command.ToLowerInvariant().Trim()
 if (-not $cmd.StartsWith("git push")) { exit 0 }
 

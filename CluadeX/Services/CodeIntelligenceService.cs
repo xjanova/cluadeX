@@ -86,7 +86,7 @@ public sealed class CodeIntelligenceService
 
         if (!_fs.HasWorkingDirectory)
         {
-            outcome.Error = "No project open.";
+            outcome.Error = L("intel.noProject");
             return outcome;
         }
         if (string.IsNullOrEmpty(query.Text))
@@ -97,10 +97,11 @@ public sealed class CodeIntelligenceService
         {
             rx = BuildMatcher(query);
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            // Invalid user regex — a normal thing to type mid-pattern, not a crash.
-            outcome.Error = $"Invalid regular expression: {ex.Message.Split('\n')[0]}";
+            // Invalid user regex — a normal thing to type mid-pattern, not a crash. The .NET parser
+            // message is English-only internals ("Not enough )'s"), so say it in the UI language.
+            outcome.Error = L("intel.badRegex");
             return outcome;
         }
 
@@ -135,7 +136,9 @@ public sealed class CodeIntelligenceService
                 if ((i & 0x3F) == 0) ct.ThrowIfCancellationRequested();
 
                 string line = lines[i];
-                if (line.Length == 0 || line.Length > MaxLineLength) continue;
+                // Minified lines are skipped for interactive search speed — but never for a rename
+                // plan: an occurrence the preview doesn't list must not exist for the rename either.
+                if (line.Length == 0 || (!query.IncludeLongLines && line.Length > MaxLineLength)) continue;
 
                 MatchCollection found;
                 try { found = rx.Matches(line); }
@@ -232,7 +235,7 @@ public sealed class CodeIntelligenceService
     {
         var result = new NavigationResult { Symbol = symbol };
         if (string.IsNullOrWhiteSpace(symbol)) return result;
-        if (!_fs.HasWorkingDirectory) { result.Error = "No project open."; return result; }
+        if (!_fs.HasWorkingDirectory) { result.Error = L("intel.noProject"); return result; }
 
         // 1) Language server, when present.
         if (_lsp?.IsConnected == true && !string.IsNullOrEmpty(fromFile))
@@ -331,13 +334,22 @@ public sealed class CodeIntelligenceService
     {
         var plan = new RenamePlan { OldName = oldName?.Trim() ?? "", NewName = newName?.Trim() ?? "" };
 
-        if (string.IsNullOrEmpty(plan.OldName)) { plan.Error = "Nothing to rename — put the caret on a symbol first."; return plan; }
-        if (string.IsNullOrEmpty(plan.NewName)) { plan.Error = "New name is empty."; return plan; }
-        if (plan.OldName == plan.NewName) { plan.Error = "The new name is identical to the old one."; return plan; }
-        if (!IsIdentifier(plan.NewName)) { plan.Error = $"'{plan.NewName}' is not a valid identifier."; return plan; }
-        if (!_fs.HasWorkingDirectory) { plan.Error = "No project open."; return plan; }
+        if (string.IsNullOrEmpty(plan.OldName)) { plan.Error = L("intel.renameNoSymbol"); return plan; }
+        if (string.IsNullOrEmpty(plan.NewName)) { plan.Error = L("intel.renameEmpty"); return plan; }
+        if (plan.OldName == plan.NewName) { plan.Error = L("intel.renameSame"); return plan; }
+        if (!IsIdentifier(plan.NewName)) { plan.Error = string.Format(L("intel.renameInvalid"), plan.NewName); return plan; }
+        if (!_fs.HasWorkingDirectory) { plan.Error = L("intel.noProject"); return plan; }
 
-        var found = await FindReferencesAsync(plan.OldName, ct);
+        // IncludeLongLines: the interactive search skips lines over 1,000 chars, and the old apply
+        // then rewrote the WHOLE file — renaming occurrences on long lines the user was never shown.
+        var found = await SearchAsync(new SearchQuery
+        {
+            Text = plan.OldName,
+            IsRegex = false,
+            MatchCase = true,
+            WholeWord = true,
+            IncludeLongLines = true,
+        }, ct);
         plan.Error = found.Error;
         plan.Files = found.Files;
         plan.TotalEdits = found.TotalMatches;
@@ -346,9 +358,11 @@ public sealed class CodeIntelligenceService
     }
 
     /// <summary>
-    /// Apply a previously previewed rename. Re-reads and re-matches every file at write time rather
-    /// than trusting the offsets captured during preview — the file may have changed since (the agent
-    /// edits in the background), and writing stale offsets would corrupt it. Returns per-file results.
+    /// Apply a previously previewed rename — exactly the occurrences the preview listed, nothing else.
+    /// Each previewed position is re-checked against the file at write time (the agent edits in the
+    /// background); if ANY of a file's previewed occurrences is no longer where the preview saw it,
+    /// that whole file is skipped and reported, rather than half-renamed or renamed at positions the
+    /// user never reviewed. The reported count is what was actually replaced.
     /// </summary>
     public Task<RenameResult> ApplyRenameAsync(RenamePlan plan, CancellationToken ct = default)
         => Task.Run(() =>
@@ -356,41 +370,91 @@ public sealed class CodeIntelligenceService
             var result = new RenameResult();
             if (plan.Files.Count == 0) return result;
 
-            Regex rx;
-            try { rx = BuildMatcher(new SearchQuery { Text = plan.OldName, MatchCase = true, WholeWord = true }); }
-            catch (ArgumentException ex) { result.Error = ex.Message; return result; }
-
             foreach (var group in plan.Files)
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    if (!File.Exists(group.FullPath)) { result.Skipped.Add($"{group.RelPath} (gone)"); continue; }
+                    if (!File.Exists(group.FullPath)) { result.Skipped.Add(string.Format(L("intel.skipGone"), group.RelPath)); continue; }
 
                     // Same encoding rules as every other writer: keep the BOM exactly as found, and never
                     // rewrite a file that isn't UTF-8 (its non-ASCII text would be replaced by U+FFFD).
                     var file = CluadeX.Helpers.TextFileCodec.Read(group.FullPath);
-                    if (!file.IsValidUtf8) { result.Skipped.Add($"{group.RelPath} (not UTF-8 — left untouched)"); continue; }
-                    string content = file.Text;
-                    string updated = rx.Replace(content, plan.NewName);
-                    if (string.Equals(content, updated, StringComparison.Ordinal))
+                    if (!file.IsValidUtf8) { result.Skipped.Add(string.Format(L("intel.skipNotUtf8"), group.RelPath)); continue; }
+
+                    string? updated = ApplyPreviewedEdits(file.Text, group.Matches, plan.OldName, plan.NewName, out int applied);
+                    if (updated == null || applied == 0)
                     {
-                        result.Skipped.Add($"{group.RelPath} (no longer matches)");
+                        result.Skipped.Add(string.Format(L("intel.skipChanged"), group.RelPath));
                         continue;
                     }
 
                     CluadeX.Helpers.TextFileCodec.Write(group.FullPath, updated, file.HasBom);
                     result.FilesChanged++;
-                    result.EditsApplied += group.Matches.Count;
+                    result.EditsApplied += applied;
                     result.ChangedPaths.Add(group.FullPath);
                 }
                 catch (Exception ex)
                 {
-                    result.Skipped.Add($"{group.RelPath} ({ex.GetType().Name})");
+                    result.Skipped.Add(string.Format(L("intel.skipError"), group.RelPath, ex.GetType().Name));
                 }
             }
             return result;
         }, ct);
+
+    /// <summary>
+    /// Replace <paramref name="oldName"/> at exactly the previewed (line, column) positions. Lines are
+    /// counted the way the preview's File.ReadAllLines counted them (\r\n, \n or a lone \r). Returns
+    /// null when any previewed occurrence is no longer there as a whole word — the file changed since
+    /// the preview, so none of it is touched.
+    /// </summary>
+    internal static string? ApplyPreviewedEdits(string content, IEnumerable<SearchMatch> matches,
+        string oldName, string newName, out int applied)
+    {
+        applied = 0;
+
+        // Start offset of every line, ReadAllLines-compatible.
+        var lineStarts = new List<int> { 0 };
+        for (int i = 0; i < content.Length; i++)
+        {
+            char c = content[i];
+            if (c == '\r')
+            {
+                if (i + 1 < content.Length && content[i + 1] == '\n') i++;
+                lineStarts.Add(i + 1);
+            }
+            else if (c == '\n') lineStarts.Add(i + 1);
+        }
+
+        var offsets = new SortedSet<int>();
+        foreach (var m in matches)
+        {
+            if (m.Line < 1 || m.Line > lineStarts.Count) return null;
+            int at = lineStarts[m.Line - 1] + m.Column;
+            if (at < 0 || at + oldName.Length > content.Length) return null;
+            if (string.CompareOrdinal(content, at, oldName, 0, oldName.Length) != 0) return null;
+            // Still a whole word there (an edit may have glued it to a neighbour).
+            if (at > 0 && IsWordChar(content[at - 1])) return null;
+            int end = at + oldName.Length;
+            if (end < content.Length && IsWordChar(content[end])) return null;
+            offsets.Add(at);
+        }
+        if (offsets.Count == 0) return null;
+
+        var sb = new StringBuilder(content.Length + offsets.Count * Math.Max(0, newName.Length - oldName.Length));
+        int pos = 0;
+        foreach (int at in offsets)
+        {
+            if (at < pos) continue;   // overlapping duplicates can't happen for a word, but never double-apply
+            sb.Append(content, pos, at - pos).Append(newName);
+            pos = at + oldName.Length;
+            applied++;
+        }
+        sb.Append(content, pos, content.Length - pos);
+        return sb.ToString();
+    }
+
+    private static string L(string key) => LocalizedResources.Instance[key];
 
     private static bool IsIdentifier(string s)
     {
@@ -436,7 +500,7 @@ public sealed class CodeIntelligenceService
                 foreach (var label in await _lsp.GetCompletionsAsync(filePath!, line, character, ct))
                 {
                     if (string.IsNullOrEmpty(label) || !seen.Add(label)) continue;
-                    results.Add(new CompletionItem { Label = label, Kind = "lsp", Detail = "language server", Score = 1000 });
+                    results.Add(new CompletionItem { Label = label, Kind = "lsp", Detail = L("intel.languageServer"), Score = 1000 });
                 }
             }
             catch { /* fall through to the local sources */ }
@@ -857,6 +921,8 @@ public sealed class SearchQuery
     /// <summary>Comma-separated globs, e.g. "*.cs, Views/**". Empty = every file.</summary>
     public string Include { get; set; } = "";
     public string Exclude { get; set; } = "";
+    /// <summary>Also scan lines over the interactive 1,000-char limit (rename plans need every hit).</summary>
+    public bool IncludeLongLines { get; set; }
 }
 
 public sealed class SearchMatch

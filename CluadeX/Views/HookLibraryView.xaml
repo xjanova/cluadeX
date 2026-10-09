@@ -173,7 +173,7 @@
                                 </VisualBrush>
                             </TextBox.Resources>
                         </TextBox>
-                        <Button Content="&#xE838; Bundle folder" FontFamily="Segoe UI"
+                        <Button FontFamily="Segoe UI"
                                 Command="{Binding OpenBundleFolderCommand}"
                                 Padding="12,7" Margin="0,0,6,0" Cursor="Hand"
                                 Background="#7028326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
@@ -188,8 +188,12 @@
                                     </Border>
                                 </ControlTemplate>
                             </Button.Template>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc hooklib.bundleFolder}" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Button>
-                        <Button Content="&#xE72C; Refresh" FontFamily="Segoe UI"
+                        <Button FontFamily="Segoe UI"
                                 Command="{Binding RefreshCommand}"
                                 Padding="12,7" Cursor="Hand"
                                 Background="#7028326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
@@ -204,6 +208,10 @@
                                     </Border>
                                 </ControlTemplate>
                             </Button.Template>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc hooklib.refresh}" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -282,9 +290,11 @@
                                         <Border Padding="6,2" CornerRadius="3" Margin="6,0,0,0"
                                                 Background="#22FF6B6B"
                                                 BorderThickness="1" BorderBrush="#FF6B6B">
-                                            <TextBlock Text="{Binding Selected.Risk, StringFormat='risk: {0}'}" FontSize="9"
+                                            <TextBlock FontSize="9"
                                                        FontFamily="{StaticResource NeonMonoFont}"
-                                                       Foreground="#FF6B6B"/>
+                                                       Foreground="#FF6B6B">
+                                                <Run Text="{services:Loc hooklib.riskPrefix}"/><Run Text="{Binding Selected.Risk, Mode=OneWay}"/>
+                                            </TextBlock>
                                         </Border>
                                     </StackPanel>
                                 </StackPanel>
@@ -306,7 +316,7 @@
                                         <Run Text="{Binding Selected.Matcher}" Foreground="{StaticResource NeonCyanBrush}"/>
                                         <Run Text="{services:Loc hooks.timeoutLabel}"/>
                                         <Run Text="{Binding Selected.TimeoutMs}" Foreground="{StaticResource NeonCyanBrush}"/>
-                                        <Run Text="ms"/>
+                                        <Run Text="{services:Loc hooklib.msSuffix}"/>
                                     </TextBlock>
                                     <TextBlock Text="{Binding SelectedScriptPath}" FontSize="10"
                                                FontFamily="{StaticResource NeonMonoFont}"

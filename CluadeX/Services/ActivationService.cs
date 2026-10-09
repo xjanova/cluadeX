@@ -370,20 +370,22 @@ public class ActivationService
             // commit, add, status, merge, branch, checkout, diff, log, stash, init, clone.
             // Publishing to a remote (git_push) + GitHub PRs stay behind feature.github.
             "feature.git" => true,
-            // These require activation:
+            // Nothing in the app gates these, and the safety ones (permissions, command blocking) must never be
+            // paywalled — free, so the Features page never shows a lock that isn't real.
+            "feature.huggingface" => true,
+            "feature.contextMemory" => true,
+            "feature.smartEditing" => true,
+            "feature.plugins" => true,
+            "feature.permissions" => true,
+            "feature.commandBlock" => true,
+            // These require activation (the same list as FeaturesViewModel.GatedFeatures):
             "feature.openai" => false,
             "feature.anthropic" => false,
             "feature.gemini" => false,
             "feature.multiProvider" => false, // Cloud providers need activation
-            "feature.huggingface" => false,
             "feature.github" => false,
             "feature.webFetch" => false,
-            "feature.contextMemory" => false,
-            "feature.smartEditing" => false,
-            "feature.plugins" => false,
             "feature.taskManager" => false,
-            "feature.permissions" => false,
-            "feature.commandBlock" => false,
             _ => false,
         };
     }

@@ -6,11 +6,20 @@ param(
   [string]$Cwd = ""
 )
 
+# Exact values from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_CWD) { $Cwd = $env:CLUADEX_HOOK_CWD }
+if ($env:CLUADEX_HOOK_PAYLOAD_FILE -and (Test-Path -LiteralPath $env:CLUADEX_HOOK_PAYLOAD_FILE)) {
+  try {
+    $payload = [System.IO.File]::ReadAllText($env:CLUADEX_HOOK_PAYLOAD_FILE, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($payload.command) { $Command = [string]$payload.command }
+  } catch { }
+}
+
 if (-not ($Command.ToLowerInvariant().Trim().StartsWith("git commit"))) { exit 0 }
-if (-not $Cwd -or -not (Test-Path (Join-Path $Cwd ".git"))) { exit 0 }
+if (-not $Cwd -or -not (Test-Path -LiteralPath (Join-Path $Cwd ".git"))) { exit 0 }
 
 try {
-  Push-Location $Cwd
+  Push-Location -LiteralPath $Cwd
   $staged = git diff --cached --name-only 2>$null
   Pop-Location
 } catch { exit 0 }

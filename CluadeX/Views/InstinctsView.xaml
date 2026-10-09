@@ -76,7 +76,7 @@
                             Visibility="{Binding SyncedToBrain, Converter={StaticResource BoolVis}}">
                         <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
                                    Foreground="{StaticResource NeonVioletBrush}">
-                            <Run Text="🧠 SYNCED · "/>
+                            <Run Text="{services:Loc inst.syncedChip}"/>
                             <Run Text="{Binding BrainNoteId, Mode=OneWay}"/>
                         </TextBlock>
                     </Border>
@@ -103,13 +103,13 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock FontSize="10" FontFamily="{StaticResource NeonMonoFont}"
                                    Foreground="{StaticResource NeonInk3Brush}">
-                            <Run Text="conf "/>
+                            <Run Text="{services:Loc inst.confPrefix}"/>
                             <Run Text="{Binding Confidence, Mode=OneWay, StringFormat={}{0:P0}}"/>
                         </TextBlock>
                         <TextBlock Text=" · " FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
                         <TextBlock FontSize="10" FontFamily="{StaticResource NeonMonoFont}"
                                    Foreground="{StaticResource NeonCyanBrush}">
-                            <Run Text="seen "/>
+                            <Run Text="{services:Loc inst.seenPrefix}"/>
                             <Run Text="{Binding OccurrenceCount, Mode=OneWay}"/>
                             <Run Text="×"/>
                         </TextBlock>
@@ -438,7 +438,7 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                                                            Foreground="{StaticResource NeonCyanBrush}">
-                                                    <Run Text="seen "/>
+                                                    <Run Text="{services:Loc inst.seenPrefix}"/>
                                                     <Run Text="{Binding Selected.OccurrenceCount, Mode=OneWay}"/>
                                                     <Run Text="×"/>
                                                 </TextBlock>
@@ -454,7 +454,7 @@
                                                     <Run Text="✗ "/>
                                                     <Run Text="{Binding Selected.RejectCount, Mode=OneWay}"/>
                                                 </TextBlock>
-                                                <TextBlock Text=" · last " Margin="10,0,0,0" FontSize="11"
+                                                <TextBlock Text="{services:Loc inst.lastPrefix}" Margin="10,0,0,0" FontSize="11"
                                                            Foreground="{StaticResource NeonInk3Brush}"/>
                                                 <TextBlock Text="{Binding Selected.RelativeLastSeen}" FontSize="11"
                                                            FontFamily="{StaticResource NeonMonoFont}"

@@ -185,10 +185,10 @@
                         </TextBlock>
                     </StackPanel>
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Command="{Binding TestCommand}" Style="{StaticResource NeonAction}" ToolTip="{services:Loc debuglog.testTip}">
+                        <Button Command="{Binding TestCommand}" Style="{StaticResource NeonAction}" ToolTip="{services:Loc dbglog.selfTestTip}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xEC7A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Margin="0,0,6,0"/>
-                                <TextBlock Text="{services:Loc debuglog.test}"/>
+                                <TextBlock Text="{services:Loc dbglog.selfTest}"/>
                             </StackPanel>
                         </Button>
                         <Button Command="{Binding CopyAllCommand}" Style="{StaticResource NeonAction}">
@@ -235,8 +235,9 @@
                     <TextBlock Text="{services:Loc debuglog.minLevel}" FontFamily="{StaticResource NeonMonoFont}" FontSize="9" FontWeight="Bold"
                                Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox Grid.Column="1" ItemsSource="{Binding LevelChoices}"
-                              SelectedItem="{Binding SelectedLevelName}"
-                              Width="100" Height="28" Margin="0,0,16,0" VerticalContentAlignment="Center"
+                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                              SelectedValue="{Binding SelectedLevelName}"
+                              Width="110" Height="28" Margin="0,0,16,0" VerticalContentAlignment="Center"
                               FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                               Background="#7011152E" Foreground="{StaticResource NeonInk0Brush}"
                               BorderBrush="{StaticResource NeonLineHiBrush}"/>
@@ -244,7 +245,8 @@
                     <TextBlock Grid.Column="2" Text="{services:Loc debuglog.category}" FontFamily="{StaticResource NeonMonoFont}" FontSize="9" FontWeight="Bold"
                                Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <ComboBox Grid.Column="3" ItemsSource="{Binding CategoryChoices}"
-                              SelectedItem="{Binding FilterCategory}"
+                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                              SelectedValue="{Binding FilterCategory}"
                               Width="140" Height="28" Margin="0,0,16,0" VerticalContentAlignment="Center"
                               FontSize="11" FontFamily="{StaticResource NeonMonoFont}"
                               Background="#7011152E" Foreground="{StaticResource NeonInk0Brush}"

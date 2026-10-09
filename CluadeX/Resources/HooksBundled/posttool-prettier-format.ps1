@@ -1,10 +1,12 @@
 ﻿# Hook: posttool-prettier-format
-# Phase: PostToolUse / matcher write_file
+# Phase: PostToolUse / matcher write_file|edit_file|multi_edit
 # After a write, run prettier --write on the file if prettier is installed and
 # the file extension is supported. Best-effort, never blocks.
 param([string]$Path = "")
 
-if (-not $Path -or -not (Test-Path $Path -PathType Leaf)) { exit 0 }
+# Exact path from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_PATH) { $Path = $env:CLUADEX_HOOK_PATH }
+if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { exit 0 }
 
 $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
 $ok = @('.js', '.jsx', '.ts', '.tsx', '.css', '.scss', '.less', '.html', '.json', '.md', '.yaml', '.yml', '.vue', '.svelte')

@@ -1,9 +1,14 @@
 ﻿# Hook: pretool-secret-scan
-# Phase: PreToolUse / matcher write_file
-# Scans the *target file path* (after write — peek the new contents from the
-# tool args JSON) for common secret patterns. Blocks the write if any hit.
-# This is best-effort: we cannot see the new content before the write happens
-# unless it's in {arguments}, so we scan that JSON blob.
+# Phase: PreToolUse / matcher write_file|edit_file|multi_edit
+# Scans the content about to be written (write_file content, edit_file/multi_edit
+# replacement text) for common secret patterns. Blocks the write if any hit.
+#
+# Input comes from the CluadeX hook contract, NOT the command line:
+#   CLUADEX_HOOK_PAYLOAD_FILE  JSON file with every tool argument (UTF-8)
+#   CLUADEX_HOOK_PATH          the target path
+# The old version received the whole argument JSON as -Arguments on the command
+# line; past cmd.exe's 8191-char limit that failed with "The command line is too
+# long." (exit 1), which blocked every write larger than ~8 KB.
 param(
   [string]$Path = "",
   [string]$Arguments = "{}"
@@ -11,9 +16,52 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ($env:CLUADEX_HOOK_PATH) { $Path = $env:CLUADEX_HOOK_PATH }
+
 # Skip binary-ish extensions outright
-$binExt = '.png|.jpg|.jpeg|.gif|.ico|.pdf|.zip|.exe|.dll|.gguf|.bin'
+$binExt = '\.(png|jpg|jpeg|gif|ico|pdf|zip|exe|dll|gguf|bin)$'
 if ($Path -match $binExt) { exit 0 }
+
+# Decoded argument VALUES, not raw JSON: in JSON a quote is \" and a newline is \n,
+# so patterns like  password = "..."  never matched the escaped text. multi_edit's
+# "edits" (itself a JSON list) is decoded too. The text being REPLACED ("find") is not
+# scanned: an edit that removes a leaked key from the code must not be blocked for it.
+$skipNames = @('find', 'old_string', 'old_text', 'search')
+$script:values = @()
+function Add-Values([string]$name, $v) {
+  if ($null -eq $v) { return }
+  if ($skipNames -contains $name) { return }
+  if ($v -is [string]) {
+    if ($name -eq 'edits') {
+      try { Add-Values '' ($v | ConvertFrom-Json); return } catch { }
+    }
+    $script:values += $v
+    return
+  }
+  if ($v -is [System.Management.Automation.PSCustomObject]) {
+    foreach ($p in $v.PSObject.Properties) { Add-Values $p.Name $p.Value }
+    return
+  }
+  if ($v -is [System.Collections.IEnumerable]) {
+    foreach ($x in $v) { Add-Values '' $x }
+    return
+  }
+  $script:values += [string]$v
+}
+
+$payloadFile = $env:CLUADEX_HOOK_PAYLOAD_FILE
+if ($payloadFile -and (Test-Path -LiteralPath $payloadFile)) {
+  $raw = [System.IO.File]::ReadAllText($payloadFile, [System.Text.Encoding]::UTF8)
+  try {
+    $obj = $raw | ConvertFrom-Json
+    foreach ($p in $obj.PSObject.Properties) { Add-Values $p.Name $p.Value }
+  } catch {
+    $script:values += $raw
+  }
+} else {
+  $script:values += $Arguments
+}
+$Arguments = ($script:values -join "`n")
 
 # Patterns
 $rules = @(
@@ -37,7 +85,7 @@ foreach ($r in $rules) {
 }
 
 if ($findings.Count -gt 0) {
-  Write-Error ("Secret pattern(s) detected in write target — blocked: " + ($findings -join ', '))
+  Write-Error ("Secret pattern(s) detected in write target - blocked: " + ($findings -join ', '))
   exit 1
 }
 exit 0

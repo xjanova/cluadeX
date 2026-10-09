@@ -1,0 +1,151 @@
+<Window x:Class="CluadeX.Views.BrainXInviteWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:CluadeX.Services"
+        Title="BrainX" Width="600" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="{StaticResource MainFont}" Foreground="{StaticResource TextBrush}">
+
+    <Window.Resources>
+        <Style x:Key="BenefitTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="BenefitBody" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Margin="18" CornerRadius="16" BorderThickness="1" BorderBrush="#55A672FF">
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0.4,1">
+                <GradientStop Color="#FA1D1442" Offset="0"/>
+                <GradientStop Color="#FA0A0C22" Offset="1"/>
+            </LinearGradientBrush>
+        </Border.Background>
+        <Border.Effect>
+            <DropShadowEffect Color="Black" BlurRadius="30" ShadowDepth="0" Opacity="0.65"/>
+        </Border.Effect>
+
+        <StackPanel Margin="26,22,26,20">
+            <!-- ── Header (drag handle) ── -->
+            <Grid Background="Transparent" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Width="52" Height="52" CornerRadius="14" VerticalAlignment="Top">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#A672FF" Offset="0"/>
+                            <GradientStop Color="#4CDFFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.Effect>
+                        <DropShadowEffect Color="#A672FF" BlurRadius="20" ShadowDepth="0" Opacity="0.7"/>
+                    </Border.Effect>
+                    <TextBlock Text="🧠" FontSize="26" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="14,0,10,0">
+                    <TextBlock Text="{services:Loc brainx.kicker}" FontSize="10.5" FontWeight="SemiBold"
+                               FontFamily="{StaticResource NeonMonoFont}" Foreground="#C9A8FF"/>
+                    <TextBlock Text="{services:Loc brainx.title}" FontSize="19" FontWeight="Bold" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                    <TextBlock Text="{Binding Subtitle}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Foreground="{StaticResource Subtext0Brush}"/>
+                </StackPanel>
+                <Button Grid.Column="2" Width="30" Height="30" VerticalAlignment="Top" Cursor="Hand"
+                        Click="Close_Click" ToolTip="{services:Loc brainx.close}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="15">
+                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{StaticResource NeonInk2Brush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+
+            <!-- ── What BrainX adds ── -->
+            <TextBlock Text="{services:Loc brainx.benefitsTitle}" FontSize="11" FontWeight="SemiBold" Margin="0,18,0,8"
+                       FontFamily="{StaticResource NeonMonoFont}" Foreground="{StaticResource NeonInk2Brush}"/>
+            <UniformGrid Columns="2">
+                <Border Margin="0,0,8,8" Padding="12,10" CornerRadius="10" Background="#14FFFFFF" BorderBrush="#22FFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc brainx.b1}" Style="{StaticResource BenefitTitle}"/>
+                        <TextBlock Text="{services:Loc brainx.b1d}" Style="{StaticResource BenefitBody}"/>
+                    </StackPanel>
+                </Border>
+                <Border Margin="0,0,0,8" Padding="12,10" CornerRadius="10" Background="#14FFFFFF" BorderBrush="#22FFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc brainx.b2}" Style="{StaticResource BenefitTitle}"/>
+                        <TextBlock Text="{services:Loc brainx.b2d}" Style="{StaticResource BenefitBody}"/>
+                    </StackPanel>
+                </Border>
+                <Border Margin="0,0,8,0" Padding="12,10" CornerRadius="10" Background="#14FFFFFF" BorderBrush="#22FFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc brainx.b3}" Style="{StaticResource BenefitTitle}"/>
+                        <TextBlock Text="{services:Loc brainx.b3d}" Style="{StaticResource BenefitBody}"/>
+                    </StackPanel>
+                </Border>
+                <Border Padding="12,10" CornerRadius="10" Background="#14FFFFFF" BorderBrush="#22FFFFFF" BorderThickness="1">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc brainx.b4}" Style="{StaticResource BenefitTitle}"/>
+                        <TextBlock Text="{services:Loc brainx.b4d}" Style="{StaticResource BenefitBody}"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- ── Result of the last action ── -->
+            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="12.5" Margin="0,12,0,0"
+                       Visibility="{Binding HasStatus, Converter={StaticResource BoolVis}}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding StatusIsError}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <!-- ── Footer: don't-show-again, then the three choices ── -->
+            <Grid Margin="0,18,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <CheckBox Content="{services:Loc brainx.dontShow}" IsChecked="{Binding DontShowAgain}" VerticalAlignment="Center"
+                          Foreground="{StaticResource Subtext0Brush}" FontSize="12"
+                          Visibility="{Binding ShowPrimary, Converter={StaticResource BoolVis}}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="{services:Loc brainx.readFirst}" Style="{StaticResource SecondaryButton}"
+                            Padding="12,7" FontSize="12" Margin="0,0,8,0" Command="{Binding ReadFirstCommand}"/>
+                    <Button Content="{services:Loc brainx.notInterested}" Style="{StaticResource SecondaryButton}"
+                            Padding="12,7" FontSize="12" Margin="0,0,8,0" Command="{Binding NotInterestedCommand}"
+                            Visibility="{Binding ShowPrimary, Converter={StaticResource BoolVis}}"/>
+                    <Button Content="{Binding PrimaryText}" Style="{StaticResource PrimaryButton}"
+                            Padding="16,7" FontSize="12.5" IsDefault="True" Command="{Binding PrimaryCommand}"
+                            Visibility="{Binding ShowPrimary, Converter={StaticResource BoolVis}}"/>
+                    <Button Content="{services:Loc brainx.close}" Style="{StaticResource PrimaryButton}"
+                            Padding="16,7" FontSize="12.5" Click="Close_Click"
+                            Visibility="{Binding IsConnected, Converter={StaticResource BoolVis}}"/>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

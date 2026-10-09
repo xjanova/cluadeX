@@ -16,7 +16,8 @@ public class LocalizationService
     // never edits the same giant dictionary. A key defined twice keeps the first definition.
     static LocalizationService()
     {
-        foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys })
+        foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys,
+                                      Localization.SparkKeys.Keys, Localization.BrainKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

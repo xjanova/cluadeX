@@ -150,7 +150,7 @@
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Content="&#xE838; Open agents folder" FontFamily="Segoe UI"
+                        <Button FontFamily="Segoe UI"
                                 Command="{Binding OpenUserAgentsFolderCommand}"
                                 Padding="12,7" Margin="0,0,6,0" Cursor="Hand"
                                 Background="#7028326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
@@ -165,8 +165,12 @@
                                     </Border>
                                 </ControlTemplate>
                             </Button.Template>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc subag.openFolder}" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Button>
-                        <Button Content="&#xE72C; Refresh" FontFamily="Segoe UI"
+                        <Button FontFamily="Segoe UI"
                                 Command="{Binding RefreshCommand}"
                                 Padding="12,7" Cursor="Hand"
                                 Background="#7028326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
@@ -181,6 +185,10 @@
                                     </Border>
                                 </ControlTemplate>
                             </Button.Template>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{services:Loc subag.refresh}" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </Button>
                     </StackPanel>
                 </Grid>

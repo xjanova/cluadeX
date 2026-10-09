@@ -19,6 +19,10 @@ public class MainViewModel : ViewModelBase
     private readonly XmanLicenseService? _license;
     private Views.LicenseWindow? _licenseWindow;
     private DispatcherTimer? _licenseTimer;
+    private readonly DgxSparkService? _spark;
+    private Views.DgxSparkWindow? _sparkWindow;
+    private Views.BrainXInviteWindow? _brainWindow;
+    private DispatcherTimer? _brainInviteTimer;
 
     private ViewModelBase? _currentView;
     private string _selectedNavItem = "Chat";
@@ -45,6 +49,7 @@ public class MainViewModel : ViewModelBase
             if (SetProperty(ref _liveGpuStats, value))
             {
                 OnPropertyChanged(nameof(HasLiveGpuStats));
+                OnPropertyChanged(nameof(ShowGpuStats));
                 OnPropertyChanged(nameof(GpuTempDisplay));
                 OnPropertyChanged(nameof(GpuUsageDisplay));
                 OnPropertyChanged(nameof(GpuVramDisplay));
@@ -55,6 +60,9 @@ public class MainViewModel : ViewModelBase
     }
 
     public bool HasLiveGpuStats => _liveGpuStats != null;
+    /// <summary>The status-bar GPU readout, only while a local model (LLamaSharp / llama-server) is answering.</summary>
+    public bool ShowGpuStats => _liveGpuStats != null
+        && _providerManager?.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer;
     public string GpuTempDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.TemperatureC}°C";
     public string GpuUsageDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.GpuUtilization}%";
     public string GpuVramDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.VramUsedGB:F1} / {_liveGpuStats.VramTotalGB:F1} GB";
@@ -245,6 +253,20 @@ public class MainViewModel : ViewModelBase
             });
         }
 
+        // Core commands (new chat, open folder, clear, compact, updates, settings, license).
+        items.AddRange(CommandPaletteViewModel.BuildCoreCommandItems(ChatVM, t => NavigateTo(t), CheckUpdateCommand, OpenLicenseCommand));
+
+        if (_spark != null)
+        {
+            items.Add(new PaletteItem
+            {
+                Icon = "", Title = "DGX Spark", Subtitle = L("spark.paletteSubtitle"), Kind = "Page",
+                KindColor = "#76D16B",
+                Haystack = "dgx spark nvidia ollama gpu 128gb",
+                Run = OpenDgxSpark,
+            });
+        }
+
         // Skills — running one drops its slash command into the chat box.
         try
         {
@@ -286,6 +308,12 @@ public class MainViewModel : ViewModelBase
     public ICommand DismissUpdateCommand { get; }
     public ICommand CheckUpdateCommand { get; }
     public ICommand OpenLicenseCommand { get; }
+    public ICommand OpenDgxSparkCommand { get; }
+    /// <summary>The status-bar brain chip: the MCP page when BrainX is connected, the BrainX window otherwise.</summary>
+    public ICommand OpenBrainCommand { get; }
+
+    /// <summary>The title-bar DGX Spark chip glows solid while CluadeX is running on a Spark.</summary>
+    public bool IsSparkActive => _spark?.IsActive == true;
 
     // ── License chip (title bar): invites a key when there is none, counts a trial down, says Pro when bought ──
     private string _licenseChipText = "", _licenseChipTip = "", _licenseChipState = "none";
@@ -320,11 +348,13 @@ public class MainViewModel : ViewModelBase
         LocalizationService loc,
         AutoUpdateService autoUpdate,
         ActivationService? activation = null,
-        XmanLicenseService? license = null)
+        XmanLicenseService? license = null,
+        DgxSparkService? spark = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
         _license = license;
+        _spark = spark;
         ChatVM = chatVM;
         ModelManagerVM = modelManagerVM;
         SettingsVM = settingsVM;
@@ -398,6 +428,12 @@ public class MainViewModel : ViewModelBase
         DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
         CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
         OpenLicenseCommand = new RelayCommand(() => OpenLicense(null));
+        OpenDgxSparkCommand = new RelayCommand(OpenDgxSpark);
+        OpenBrainCommand = new RelayCommand(() =>
+        {
+            if (McpServers?.IsBrainConnected == true) NavigateTo("McpServers");
+            else OpenBrainXInvite();
+        });
 
         // Wire up auto-update events
         _autoUpdate.OnDownloadProgress += (percent, status) =>
@@ -429,6 +465,8 @@ public class MainViewModel : ViewModelBase
             {
                 IsModelLoaded = _providerManager.ActiveProvider.IsReady;
                 ModelStatus = _providerManager.ActiveProvider.StatusMessage;
+                OnPropertyChanged(nameof(IsSparkActive));
+                OnPropertyChanged(nameof(ShowGpuStats));
             });
 
         // Initialize localization from saved setting
@@ -469,6 +507,8 @@ public class MainViewModel : ViewModelBase
         _gpuLiveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _gpuLiveTimer.Tick += (_, _) =>
         {
+            // No local model answering → nothing on screen shows the GPU; don't spawn nvidia-smi every 2 s for it.
+            if (_providerManager.ActiveProviderType is not (AiProviderType.Local or AiProviderType.LlamaServer)) return;
             // Keep the UI responsive: nvidia-smi can take ~200ms on first call.
             Task.Run(() =>
             {
@@ -581,6 +621,74 @@ public class MainViewModel : ViewModelBase
         else win.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
         win.Closed += (_, _) => { if (_licenseWindow == win) _licenseWindow = null; };
         _licenseWindow = win;
+        win.Show();
+        win.Activate();
+    }
+
+    /// <summary>Open the BrainX invitation (one at a time).</summary>
+    public void OpenBrainXInvite()
+    {
+        if (McpServers is not { } mcp) return;
+        if (_brainWindow != null)
+        {
+            _brainWindow.Activate();
+            return;
+        }
+
+        var win = new Views.BrainXInviteWindow(new BrainXInviteViewModel(mcp, _settingsService, _loc));
+        var owner = App.Current?.MainWindow;
+        if (owner != null && owner.IsLoaded && owner != win) win.Owner = owner;
+        else win.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
+        win.Closed += (_, _) => { if (_brainWindow == win) _brainWindow = null; };
+        _brainWindow = win;
+        win.Show();
+        win.Activate();
+    }
+
+    /// <summary>
+    /// First launch without BrainX: invite once the app has settled — never on top of another dialog (the license
+    /// window opens by itself when the free trial is issued). Gives up quietly after ~5 minutes of other dialogs.
+    /// </summary>
+    public void ScheduleBrainXInvite()
+    {
+        if (_brainInviteTimer != null) return;
+        int tries = 0;
+        _brainInviteTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+        _brainInviteTimer.Tick += (_, _) =>
+        {
+            tries++;
+            bool otherDialog = _licenseWindow != null || _sparkWindow != null
+                || (App.Current?.Windows.OfType<System.Windows.Window>().Any(w => w != App.Current.MainWindow && w.IsVisible) ?? false);
+            if (otherDialog && tries < 20) return;
+            _brainInviteTimer?.Stop();
+            _brainInviteTimer = null;
+            if (otherDialog || _settingsService.Settings.BrainXInviteDismissed
+                || McpServers?.GetBrainInstallState() != Services.Mcp.McpServerManager.BrainInstall.NotInstalled) return;
+            OpenBrainXInvite();
+        };
+        _brainInviteTimer.Start();
+    }
+
+    /// <summary>Open the DGX Spark window (one at a time).</summary>
+    public void OpenDgxSpark()
+    {
+        if (_spark == null) return;
+        if (_sparkWindow != null)
+        {
+            _sparkWindow.Activate();
+            return;
+        }
+
+        var win = new Views.DgxSparkWindow(new DgxSparkViewModel(_spark, _settingsService, _loc));
+        var owner = App.Current?.MainWindow;
+        if (owner != null && owner.IsLoaded && owner != win) win.Owner = owner;
+        else win.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
+        win.Closed += (_, _) =>
+        {
+            if (_sparkWindow == win) _sparkWindow = null;
+            OnPropertyChanged(nameof(IsSparkActive));
+        };
+        _sparkWindow = win;
         win.Show();
         win.Activate();
     }

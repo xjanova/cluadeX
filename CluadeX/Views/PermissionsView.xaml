@@ -150,12 +150,12 @@
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
-                                        <TextBlock Text="{Binding Action}" FontSize="11" FontWeight="Bold"
+                                        <TextBlock Text="{Binding ActionLabel}" FontSize="11" FontWeight="Bold"
                                                    Foreground="{StaticResource BaseBrush}"/>
                                     </Border>
 
                                     <!-- Scope -->
-                                    <TextBlock Grid.Column="1" Text="{Binding Scope}" FontSize="12"
+                                    <TextBlock Grid.Column="1" Text="{Binding ScopeLabel}" FontSize="12"
                                                Foreground="{StaticResource Overlay0Brush}"
                                                VerticalAlignment="Center" Margin="0,0,8,0"
                                                FontFamily="{StaticResource MonoFont}"/>
@@ -172,7 +172,7 @@
                     </ListBox>
 
                     <!-- Empty state -->
-                    <TextBlock Text="{services:Loc perms.noRules}"
+                    <TextBlock Text="{services:Loc permsm.noRules}"
                                Foreground="{StaticResource Overlay0Brush}" FontSize="12"
                                Margin="4,8,0,4" FontStyle="Italic">
                         <TextBlock.Style>
@@ -207,10 +207,11 @@
 
                     <!-- Scope -->
                     <TextBlock Text="{services:Loc perms.scope}" Style="{StaticResource SettingLabel}"/>
-                    <TextBlock Text="{services:Loc perms.scopeDesc}"
+                    <TextBlock Text="{services:Loc permsm.scopeDesc}"
                                Style="{StaticResource SettingDesc}"/>
                     <ComboBox ItemsSource="{Binding ScopeOptions}"
-                              SelectedItem="{Binding NewScope}"
+                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                              SelectedValue="{Binding NewScope}"
                               Style="{StaticResource ModernComboBox}"
                               Width="200" HorizontalAlignment="Left" Margin="0,0,0,16"/>
 

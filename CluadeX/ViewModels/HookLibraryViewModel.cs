@@ -14,6 +14,8 @@ namespace CluadeX.ViewModels;
 public class HookLibraryViewModel : ViewModelBase
 {
     private readonly HookBundleService _service;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService _log;
 
     public ObservableCollection<HookBundle> Bundles { get; } = new();
 
@@ -35,7 +37,7 @@ public class HookLibraryViewModel : ViewModelBase
     public bool HasSelection => _selected != null;
 
     public string SelectedScriptContent =>
-        _selected == null ? "(select a hook to preview)" : _service.ReadScript(_selected);
+        _selected == null ? _loc.T("hooklib.selectToPreview") : _service.ReadScript(_selected);
 
     public string SelectedScriptPath =>
         _selected == null ? "" : Path.Combine(_service.BundleDir, _selected.ScriptFile);
@@ -58,10 +60,14 @@ public class HookLibraryViewModel : ViewModelBase
     public ICommand ToggleCommand { get; }
     public ICommand OpenBundleFolderCommand { get; }
 
-    public HookLibraryViewModel(HookBundleService service)
+    public HookLibraryViewModel(HookBundleService service, LocalizationService loc, DebugLogService log)
     {
         _service = service;
+        _loc = loc;
+        _log = log;
         _service.Changed += Refresh;
+        // Names and descriptions come back in the UI language from the service — re-read them.
+        _loc.LanguageChanged += () => App.Current?.Dispatcher.BeginInvoke(() => Refresh());
         RefreshCommand = new RelayCommand(Refresh);
         SelectCommand = new RelayCommand<HookBundle>(b => { if (b != null) Selected = b; });
         ToggleCommand = new RelayCommand<HookBundle>(b =>
@@ -71,21 +77,34 @@ public class HookLibraryViewModel : ViewModelBase
             // so reading b.IsEnabled afterwards reported the opposite of what just happened.
             bool willEnable = !b.IsEnabled;
             string name = b.Name;
-            _service.SetEnabled(b.Id, willEnable);
-            StatusMessage = willEnable ? $"Enabled {name}" : $"Disabled {name}";
+            try
+            {
+                _service.SetEnabled(b.Id, willEnable);
+                StatusMessage = string.Format(_loc.T(willEnable ? "hooklib.enabled" : "hooklib.disabled"), name);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("Hooks", $"Toggle {b.Id} failed", ex);
+                StatusMessage = _loc.T("hooklib.toggleFailed");
+            }
         });
         OpenBundleFolderCommand = new RelayCommand(() =>
         {
             try
             {
                 Directory.CreateDirectory(_service.BundleDir);
+                // A folder path: the shell opens it in Explorer (it can't "run" a directory).
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = _service.BundleDir, UseShellExecute = true,
                 });
-                StatusMessage = $"Opened {_service.BundleDir}";
+                StatusMessage = string.Format(_loc.T("hooklib.openedFolder"), _service.BundleDir);
             }
-            catch (Exception ex) { StatusMessage = $"Open folder failed: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                _log.Warn("Hooks", "Open bundle folder failed", ex);
+                StatusMessage = _loc.T("hooklib.openFolderFailed");
+            }
         });
 
         Refresh();
@@ -120,7 +139,9 @@ public class HookLibraryViewModel : ViewModelBase
         {
             Selected ??= Bundles.FirstOrDefault();
         }
-        StatusMessage = $"{EnabledCount}/{TotalCount} enabled";
+        // The catalog objects are reused, so Selected may be "unchanged" while its text changed.
+        OnPropertyChanged(nameof(SelectedScriptContent));
+        StatusMessage = string.Format(_loc.T("hooklib.summary"), EnabledCount, TotalCount);
     }
 
     private static int PhaseRank(string phase) => phase switch
