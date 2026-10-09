@@ -324,15 +324,27 @@ public abstract class ApiProviderBase : IAiProvider
             else // "user": text stays user; tool_result blocks become separate role:"tool" messages
             {
                 var userText = new StringBuilder();
+                var images = new List<ToolImage>();
+                var imageMode = ToolImageMode;
                 foreach (var block in msg.Content)
                 {
                     if (block.Type == "tool_result")
                     {
+                        string content = block.Content ?? "";
+                        if (block.Images is { Count: > 0 } imgs)
+                        {
+                            // Chat-completions tool messages are text-only everywhere: the pixels ride in one
+                            // user message after them (vision models), or the model is told plainly it can't see.
+                            if (imageMode == ChatToolImageMode.Omit)
+                                content = Vision.ToolImageWire.AppendNote(content, Vision.ToolImageWire.OmittedForBlindModel(imgs, null, "image"));
+                            else
+                                images.AddRange(imgs);
+                        }
                         result.Add(new Dictionary<string, object>
                         {
                             ["role"] = "tool",
                             ["tool_call_id"] = block.ToolUseId ?? "",
-                            ["content"] = block.Content ?? "",
+                            ["content"] = content,
                         });
                     }
                     else if (block.Type == "text" && !string.IsNullOrEmpty(block.Text))
@@ -340,11 +352,135 @@ public abstract class ApiProviderBase : IAiProvider
                         userText.Append(block.Text);
                     }
                 }
-                if (userText.Length > 0)
+                if (images.Count > 0)
+                {
+                    // ONE user message (two in a row trip strict chat templates): what the images are, the images,
+                    // then whatever text the loop added.
+                    string header = images.Count == 1
+                        ? "[The image returned by the tool call above]"
+                        : $"[The {images.Count} images returned by the tool calls above, in order]";
+                    if (imageMode == ChatToolImageMode.OllamaImages)
+                    {
+                        result.Add(new Dictionary<string, object>
+                        {
+                            ["role"] = "user",
+                            ["content"] = userText.Length > 0 ? header + "\n" + userText : header,
+                            ["images"] = images.Select(i => i.Base64).ToList(),
+                        });
+                    }
+                    else
+                    {
+                        var parts = new List<object> { new Dictionary<string, object> { ["type"] = "text", ["text"] = header } };
+                        foreach (var img in images)
+                            parts.Add(new Dictionary<string, object>
+                            {
+                                ["type"] = "image_url",
+                                ["image_url"] = new Dictionary<string, object> { ["url"] = Vision.ToolImageWire.DataUrl(img) },
+                            });
+                        if (userText.Length > 0) parts.Add(new Dictionary<string, object> { ["type"] = "text", ["text"] = userText.ToString() });
+                        result.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = parts });
+                    }
+                }
+                else if (userText.Length > 0)
                     result.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = userText.ToString() });
             }
         }
         return result;
+    }
+
+    // ── Tool images ──
+
+    /// <summary>How <see cref="BuildOpenAiToolMessages"/> sends tool images on the chat-completions wire.</summary>
+    protected enum ChatToolImageMode
+    {
+        /// <summary>The model can't see: no image is sent; each tool message says so in text.</summary>
+        Omit,
+        /// <summary>One following user message with OpenAI image_url parts (data URLs) — llama-server with an mmproj.</summary>
+        ImageUrlMessage,
+        /// <summary>One following user message with Ollama's images[] (raw base64) — an Ollama vision model.</summary>
+        OllamaImages,
+    }
+
+    /// <summary>The image wire for this provider's current model. Default: the model can't see images.</summary>
+    protected virtual ChatToolImageMode ToolImageMode => ChatToolImageMode.Omit;
+
+    /// <summary>Can the model see images returned in tool results? Default false (see each provider).</summary>
+    public virtual bool SupportsToolResultImages(string modelId) => false;
+
+    public virtual Task<bool> SupportsToolResultImagesAsync(string modelId, CancellationToken ct = default)
+        => Task.FromResult(SupportsToolResultImages(modelId));
+
+    /// <summary>The chat-completions messages this provider would send for a native tool conversation, exactly as
+    /// <see cref="ChatWithToolsAsync"/> builds them (public for the contract harness — llama-server can't be
+    /// pointed at a mock without starting a real server).</summary>
+    public List<object> PreviewToolMessages(List<NativeMessage> messages, string? systemPrompt)
+        => BuildOpenAiToolMessages(messages, systemPrompt, argumentsAsObject: ProviderId == "Ollama");
+
+    /// <summary>
+    /// Correction for a chars/4 estimate of a serialized chat-completions body: the base64 that rides in it is
+    /// not text tokens — a vision model is charged ~w×h/750 per image. Without this a single screenshot "costs"
+    /// ~50k tokens and the max_tokens clamp leaves the model no room to answer. Zero when images are not sent.
+    /// </summary>
+    protected int ToolImageTokenAdjustment(List<NativeMessage> messages)
+    {
+        if (ToolImageMode == ChatToolImageMode.Omit) return 0;
+        int adj = 0;
+        foreach (var m in messages)
+            foreach (var b in m.Content)
+                if (b.Images is { Count: > 0 } imgs)
+                    foreach (var img in imgs)
+                        adj += Vision.ToolImageWire.EstimateTokens(img) - (img.Base64?.Length ?? 0) / 4;
+        return adj;
+    }
+
+    /// <summary>True when any block in <paramref name="messages"/> carries images.</summary>
+    protected static bool HasToolImages(List<NativeMessage> messages)
+        => messages.Any(m => m.Content.Any(b => b.Images is { Count: > 0 }));
+
+    /// <summary>A copy of <paramref name="messages"/> with every image removed and a note in its place: the API's
+    /// refusal (<paramref name="why"/> given — a retry after a 400 that named the image; the same note the agent
+    /// loop then writes into its own conversation, see <see cref="Vision.ToolImageWire.DropRefused"/>), or that the
+    /// model cannot see images (<paramref name="why"/> null).</summary>
+    protected static List<NativeMessage> WithoutImages(List<NativeMessage> messages, string? why)
+    {
+        var copy = new List<NativeMessage>(messages.Count);
+        foreach (var m in messages)
+        {
+            var nm = new NativeMessage { Role = m.Role };
+            foreach (var b in m.Content)
+            {
+                if (b.Images is not { Count: > 0 } imgs) { nm.Content.Add(b); continue; }
+                string note = why != null
+                    ? Vision.ToolImageWire.RefusedByApi(imgs, why)
+                    : Vision.ToolImageWire.OmittedForBlindModel(imgs, null, "image");
+                nm.Content.Add(new ContentBlock
+                {
+                    Type = b.Type, Text = b.Type == "tool_result" ? b.Text : Vision.ToolImageWire.AppendNote(b.Text, note),
+                    Signature = b.Signature, Data = b.Data, Provider = b.Provider, Id = b.Id, Name = b.Name, Input = b.Input,
+                    ToolUseId = b.ToolUseId, IsError = b.IsError,
+                    Content = b.Type == "tool_result" ? Vision.ToolImageWire.AppendNote(b.Content, note) : b.Content,
+                });
+            }
+            copy.Add(nm);
+        }
+        return copy;
+    }
+
+    /// <summary>The API's own error message out of a JSON error body (for a one-line "why"), or a short raw cut.</summary>
+    protected static string ShortApiMessage(string body, string? apiKey = null)
+    {
+        body ??= "";
+        if (!string.IsNullOrEmpty(apiKey)) body = body.Replace(apiKey, "[REDACTED]");
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0 ? doc.RootElement[0] : doc.RootElement;
+            if (root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.Object
+                && err.TryGetProperty("message", out var em) && em.GetString() is { Length: > 0 } s)
+                return s.Length > 200 ? s[..200] + "…" : s;
+        }
+        catch (JsonException) { }
+        return body.Length > 200 ? body[..200] + "…" : body;
     }
 
     /// <summary>Convert our ToolSchema list to OpenAI tools[] (type:function) definitions.</summary>

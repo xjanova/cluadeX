@@ -42,6 +42,7 @@ internal static class Program
         // Child-process mode for McpConfigSafety: a "server" that never answers (must run before anything else).
         if (args.Length > 0 && args[0] == McpConfigSafety.SleepStubFlag) return McpConfigSafety.SleepStub(args);
         if (args.Length > 0 && args[0] == McpConfigSafety.ServerStubFlag) return McpConfigSafety.ServerStub(args);
+        if (args.Length > 0 && args[0] == ImageWire.StubFlag) return ImageWire.Stub(args);
 
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
@@ -520,6 +521,8 @@ internal static class Program
         var plain = new NativeToolResponse { TextContent = "hi", ToolCalls = resp.ToolCalls }.ToAssistantMessage();
         Check("turn", "providers without blocks: text then tool_use",
             plain.Content.Select(b => b.Type).SequenceEqual(new[] { "text", "tool_use" }), string.Join(",", plain.Content.Select(b => b.Type)));
+
+        await ImageWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>

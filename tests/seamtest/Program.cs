@@ -10,6 +10,7 @@ using CluadeX.Services.Providers;
 using CluadeX.Services.Tools;
 using CluadeX.Services.Vision;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace SeamTest;
 
@@ -82,6 +83,11 @@ internal static class Program
         var configure = typeof(CluadeX.App).GetMethod("ConfigureServices", BindingFlags.NonPublic | BindingFlags.Static)!;
         var services = new ServiceCollection();
         configure.Invoke(null, new object[] { services });
+        // The real feature modules (bg_*, browser_*) and shell interceptors register in App.ConfigureServices too.
+        // This contract drives every seam with fakes only — and the fakes claim the same tool types — so the real
+        // ones are taken out first (each team's own harness tests its real module).
+        services.RemoveAll<IAgentToolModule>();
+        services.RemoveAll<IShellCommandInterceptor>();
         services.AddSingleton<IAgentToolModule>(Module);
         services.AddSingleton<IMcpToolPolicy>(new ThrowingPolicy());   // a broken policy first: it must not take the tool
         services.AddSingleton<IMcpToolPolicy>(Policy);

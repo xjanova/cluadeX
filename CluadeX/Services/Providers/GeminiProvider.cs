@@ -370,6 +370,31 @@ public class GeminiProvider : ApiProviderBase, IModelLister
 
     public override bool SupportsNativeToolUse => NativeToolsUsable;
 
+    /// <summary>Models whose API refused tool images this session (they count as blind from then on).</summary>
+    private readonly HashSet<string> _imagesRefused = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Gemini models are multimodal; one that refused images this session is not.</summary>
+    public override bool SupportsToolResultImages(string modelId)
+    {
+        string m = string.IsNullOrWhiteSpace(modelId) ? ModelOf(GetConfig()) : modelId.Trim();
+        if (m.StartsWith("models/")) m = m["models/".Length..];
+        lock (_imagesRefused) return !_imagesRefused.Contains(m);
+    }
+
+    /// <summary>Does a 400 body talk about the image (inline_data / inlineData / mime type / image)?</summary>
+    internal static bool NamesImage(string? error) =>
+        !string.IsNullOrEmpty(error)
+        && (error.Contains("image", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("inline_data", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("inlineData", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("mime", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Gemini's prompt-overflow 400 ("The input token count (N) exceeds the maximum number of tokens allowed").</summary>
+    internal static bool IsTokenOverflow(string? error) =>
+        !string.IsNullOrEmpty(error)
+        && (error.Contains("token count", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("maximum number of tokens", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Prefix for call ids CluadeX makes up when the model sent none (older models).</summary>
     private const string SyntheticCallPrefix = "gemini_call_";
     /// <summary>Documented bypass for function calls the client injected itself (no model signature).</summary>
@@ -440,6 +465,13 @@ public class GeminiProvider : ApiProviderBase, IModelLister
                     };
                     if (id.Length > 0 && !id.StartsWith(SyntheticCallPrefix)) fr["id"] = id;
                     parts.Add(new Dictionary<string, object> { ["functionResponse"] = fr });
+                    // The tool's images ride right behind its functionResponse, as inlineData parts of the same turn.
+                    if (b.Images is { Count: > 0 } imgs)
+                        foreach (var img in imgs)
+                            parts.Add(new Dictionary<string, object>
+                            {
+                                ["inlineData"] = new Dictionary<string, object> { ["mimeType"] = img.MediaType, ["data"] = img.Base64 },
+                            });
                 }
                 foreach (var b in msg.Content.Where(b => b.Type == "text" && !string.IsNullOrEmpty(b.Text)))
                     parts.Add(new Dictionary<string, object> { ["text"] = b.Text! });
@@ -510,6 +542,9 @@ public class GeminiProvider : ApiProviderBase, IModelLister
     {
         var config = GetConfig();
         string model = ModelOf(config);
+        // A model that can't take the images (or a refused one this session) gets text and the omitted note.
+        if (HasToolImages(messages) && !SupportsToolResultImages(model))
+            messages = WithoutImages(messages, null);
         var body = JsonSerializer.Serialize(BuildToolRequest(messages, systemPrompt, tools, toolChoice));
 
         string url = $"{BaseUrlOf(config)}/v1beta/models/{Uri.EscapeDataString(model)}:streamGenerateContent?alt=sse";
@@ -521,7 +556,28 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
+            // inlineData beside a functionResponse has never met the live API (no key on the dev machine): if it is
+            // refused, retry ONCE as text and treat this model as blind for the rest of the session. Only a 400 that
+            // names the image counts — an overflow, a thought-signature or a schema error is not about the picture
+            // and must not blind the model for the session.
+            // (An overflow that happens to mention image tokens is still an overflow: the loop drops images first.)
+            if ((int)response.StatusCode == 400 && HasToolImages(messages) && NamesImage(error) && !IsTokenOverflow(error))
+            {
+                lock (_imagesRefused) _imagesRefused.Add(model);
+                string why = ShortApiMessage(error, config.ApiKey);
+                var retried = await ChatWithToolsAsync(WithoutImages(messages, why),
+                    systemPrompt, tools, onTextDelta, ct, toolChoice);
+                retried.ImagesRefused = true;
+                retried.ImagesRefusedReason = why;
+                return retried;
+            }
             string explained = DescribeHttpError("Gemini", (int)response.StatusCode, error, config.ApiKey, model, KeysUrl, BillingUrl);
+            // Gemini words a prompt overflow as "The input token count (N) exceeds the maximum number of tokens
+            // allowed (M)" — no "context" / "too long", so it used to turn native tools off below instead of
+            // reaching the agent loop's overflow path (which drops tool images first, then compacts).
+            if ((int)response.StatusCode == 400 && IsTokenOverflow(error))
+                throw new HttpRequestException("Prompt too long for the model's context window. " + explained,
+                    null, response.StatusCode);
             if (DisableNativeToolsIfRejected((int)response.StatusCode, explained) is { } fallback) return fallback;
             throw new HttpRequestException(explained, null, response.StatusCode);
         }

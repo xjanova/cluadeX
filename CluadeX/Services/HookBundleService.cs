@@ -332,8 +332,9 @@ public class HookBundleService
     /// so the same command sent as task_create (a background task), powershell, or as run_build /
     /// run_tests (whose optional "command" overrides the detected one and runs through the same shell)
     /// skipped the dangerous-command, push-gate, pre-commit and dev-server checks. The scripts read the
-    /// payload's "command" — or, for powershell, "script".</summary>
-    public const string ShellCommandTools = "run_command|task_create|powershell|run_build|run_tests";
+    /// payload's "command" — or, for powershell, "script". bg_start (a background dev server; task_create is now
+    /// its alias) sends "command" too.</summary>
+    public const string ShellCommandTools = "run_command|task_create|bg_start|powershell|run_build|run_tests";
 
     /// <summary>Timeout of every bundled PreToolUse hook. A PreToolUse timeout BLOCKS the tool, and a bundled hook
     /// is a PowerShell process whose cold start alone can pass 3 s on a loaded machine — at 3000 ms the advisory
@@ -350,7 +351,7 @@ public class HookBundleService
         {
             Id = "pretool-block-dev-server",
             Name = "Block Dev Server Outside Workspace",
-            Description = "Refuses a shell command (run_command / task_create / powershell / run_build / run_tests) that starts a long-running dev server (npm run dev, vite, next, etc.) when no workspace folder is open.",
+            Description = "Refuses a shell command (run_command / task_create / bg_start / powershell / run_build / run_tests) that starts a long-running dev server (npm run dev, vite, next, etc.) when no workspace folder is open.",
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-block-dev-server.ps1",
             SubstitutionTokens = new() { "{command}", "{cwd}" },
@@ -360,7 +361,7 @@ public class HookBundleService
         {
             Id = "pretool-git-push-confirm",
             Name = "Git Push Confirmation Gate",
-            Description = "Stops git push to main / master / production — sent through run_command / task_create / powershell / run_build / run_tests — unless the command contains '--force-confirmed' or a marker file exists.",
+            Description = "Stops git push to main / master / production — sent through run_command / task_create / bg_start / powershell / run_build / run_tests — unless the command contains '--force-confirmed' or a marker file exists.",
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-git-push-confirm.ps1",
             SubstitutionTokens = new() { "{command}" },
@@ -381,7 +382,7 @@ public class HookBundleService
         {
             Id = "pretool-pre-commit-quality",
             Name = "Pre-Commit Quality Check",
-            Description = "Before a git commit run through run_command / task_create / powershell / run_build / run_tests, ensures no .env / *.key / *.pem files are staged.",
+            Description = "Before a git commit run through run_command / task_create / bg_start / powershell / run_build / run_tests, ensures no .env / *.key / *.pem files are staged.",
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-pre-commit-quality.ps1",
             SubstitutionTokens = new() { "{command}", "{cwd}" },
@@ -391,7 +392,7 @@ public class HookBundleService
         {
             Id = "pretool-dangerous-cmd-warn",
             Name = "Dangerous Command Warning",
-            Description = "Refuses rm -rf /, format c:, drop database, git push --force --no-verify and similar destructive commands sent through run_command / task_create / powershell / run_build / run_tests.",
+            Description = "Refuses rm -rf /, format c:, drop database, git push --force --no-verify and similar destructive commands sent through run_command / task_create / bg_start / powershell / run_build / run_tests.",
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-dangerous-cmd-warn.ps1",
             SubstitutionTokens = new() { "{command}" },

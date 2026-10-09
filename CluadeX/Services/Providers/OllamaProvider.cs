@@ -333,6 +333,48 @@ public class OllamaProvider : ApiProviderBase
     // ─── Native tool use (OpenAI-style function calling via Ollama /api/chat) ───
     public override bool SupportsNativeToolUse => _settingsService.Settings.LocalNativeToolUseEnabled;
 
+    // ─── Tool images: only for a model whose /api/show lists the "vision" capability ───
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _visionByModel = new(StringComparer.OrdinalIgnoreCase);
+
+    private string CurrentModel(string? modelId) =>
+        !string.IsNullOrWhiteSpace(modelId) ? modelId.Trim() : (GetConfig().EffectiveModelId ?? "llama3.1");
+
+    /// <summary>From the cache only (filled by <see cref="SupportsToolResultImagesAsync"/>); unknown = blind.</summary>
+    public override bool SupportsToolResultImages(string modelId) =>
+        _visionByModel.TryGetValue(CurrentModel(modelId), out bool v) && v;
+
+    /// <summary>Ask Ollama once per model (POST /api/show): capabilities containing "vision" (or a projector on
+    /// older servers) means it sees images. A failed probe is not cached, so it is asked again next turn.</summary>
+    public override async Task<bool> SupportsToolResultImagesAsync(string modelId, CancellationToken ct = default)
+    {
+        string model = CurrentModel(modelId);
+        if (_visionByModel.TryGetValue(model, out bool known)) return known;
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(TimeSpan.FromSeconds(5));
+            var body = JsonSerializer.Serialize(new Dictionary<string, object> { ["model"] = model, ["name"] = model });
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{GetBaseUrl()}/api/show")
+            { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            using var resp = await _httpClient.SendAsync(req, limit.Token);
+            if (!resp.IsSuccessStatusCode) return false;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(limit.Token));
+            var root = doc.RootElement;
+            bool vision = (root.TryGetProperty("capabilities", out var caps) && caps.ValueKind == JsonValueKind.Array
+                           && caps.EnumerateArray().Any(c => c.ValueKind == JsonValueKind.String
+                                                             && string.Equals(c.GetString(), "vision", StringComparison.OrdinalIgnoreCase)))
+                          || (root.TryGetProperty("projector_info", out var proj) && proj.ValueKind == JsonValueKind.Object);
+            _visionByModel[model] = vision;
+            return vision;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return false; }
+        catch (HttpRequestException) { return false; }
+        catch (JsonException) { return false; }
+    }
+
+    protected override ChatToolImageMode ToolImageMode =>
+        SupportsToolResultImages("") ? ChatToolImageMode.OllamaImages : ChatToolImageMode.Omit;
+
     /// <summary>
     /// Native tool-calling via Ollama /api/chat. Requires a tool-capable model (qwen2.5-coder,
     /// llama3.1+, mistral-nemo…). Non-streaming so tool_calls arrive whole. Ollama encodes tool-call
@@ -351,6 +393,8 @@ public class OllamaProvider : ApiProviderBase
         var config = GetConfig();
         string model = config.EffectiveModelId ?? "llama3.1";
         var settings = _settingsService.Settings;
+        // Tool images go out as images[] only to a vision model — make sure that is known before building.
+        if (HasToolImages(messages)) await SupportsToolResultImagesAsync(model, ct);
 
         // Weak-model tool path: low temperature + top_k/min_p/repeat_penalty for deterministic, well-formed
         // tool-call JSON. options is shared by reference into requestObj so adding num_predict after the
@@ -375,7 +419,8 @@ public class OllamaProvider : ApiProviderBase
             requestObj["tools"] = BuildOpenAiToolDefs(tools);
 
         // Clamp AFTER assembling messages+tools so the estimate reflects the real prompt footprint.
-        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj));
+        int approxPromptTokens = Math.Max(0, CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj))
+            + ToolImageTokenAdjustment(messages));
         options["num_predict"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
 
         var body = JsonSerializer.Serialize(requestObj);

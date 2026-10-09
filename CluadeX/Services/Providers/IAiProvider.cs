@@ -52,6 +52,22 @@ public interface IAiProvider : IDisposable
         CancellationToken ct = default,
         string? toolChoice = null)
         => Task.FromResult(new NativeToolResponse { TextContent = "Native tool use not supported by this provider." });
+
+    // ═══════════════════════════════════════════
+    // Tool images (vision)
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Can <paramref name="modelId"/> (empty = the provider's configured model) SEE images that come back in tool
+    /// results (<see cref="ContentBlock.Images"/>)? False = the agent loop drops the images and tells the model in
+    /// text that it did not see them. Must answer from what is already known (cached), without I/O.
+    /// </summary>
+    bool SupportsToolResultImages(string modelId) => false;
+
+    /// <summary>The same question, allowed to ask the backend once (Ollama's /api/show) — the agent loop calls this
+    /// before a turn so <see cref="SupportsToolResultImages"/> then answers from the cache.</summary>
+    Task<bool> SupportsToolResultImagesAsync(string modelId, CancellationToken ct = default)
+        => Task.FromResult(SupportsToolResultImages(modelId));
 }
 
 // ═══════════════════════════════════════════
@@ -121,6 +137,14 @@ public class NativeToolResponse
     public string StopReason { get; set; } = "end_turn"; // end_turn, tool_use, max_tokens, refusal
     public int InputTokens { get; set; }
     public int OutputTokens { get; set; }
+
+    /// <summary>The API refused the tool images of this request (a 400 that named the image) and the provider
+    /// answered from a text-only retry. The agent loop then drops those images from its own conversation
+    /// (<see cref="Vision.ToolImageWire.DropRefused"/>) so later steps don't resend them into the same 400.</summary>
+    public bool ImagesRefused { get; set; }
+
+    /// <summary>The API's own reason for <see cref="ImagesRefused"/> (key redacted, one short line).</summary>
+    public string? ImagesRefusedReason { get; set; }
 
     /// <summary>Every block the model emitted, in order (thinking, redacted_thinking, text, tool_use).
     /// Empty for providers that don't report blocks. Anthropic rejects a continued tool loop whose

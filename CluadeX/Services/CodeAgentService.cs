@@ -27,7 +27,15 @@ public class CodeAgentService
     private readonly CostTrackingService? _costTrackingService;
 
     // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
-    private int MaxAgentIterations => Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
+    // A caller may override it for one run (a pipe-driven task's maxSteps): clamped 1–200, and scoped to that
+    // call's async flow only — a chat turn running at the same time keeps the setting.
+    private int MaxAgentIterations => _iterationOverride.Value is int o
+        ? Math.Clamp(o, 1, MaxIterationOverride)
+        : Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
+
+    /// <summary>Largest per-run step budget <see cref="ExecuteAgenticAsync"/> accepts.</summary>
+    public const int MaxIterationOverride = 200;
+    private static readonly AsyncLocal<int?> _iterationOverride = new();
 
     // High-value BUILT-IN tools offered to a SMALL-context local model (the full ~46-schema catalogue eats
     // 40-70% of a 4k window). This list is BUILT-INS ONLY — MCP tools are selected by budget, not by name
@@ -111,17 +119,33 @@ public class CodeAgentService
     /// <summary>Tool definitions one OpenAI / Gemini request may carry.</summary>
     private const int MaxApiToolSchemas = 128;
 
-    /// <summary>At most <paramref name="max"/> schemas: all built-ins first (original order), then pinned MCP
-    /// recall tools, then the remaining MCP tools in order.</summary>
+    /// <summary>At most <paramref name="max"/> schemas, admitted in this order: every built-in and tool-module tool
+    /// (bg_*, browser_* — not mcp__ names), then the pinned brain recall tools, then the tools of MCP servers CluadeX
+    /// manages itself (<paramref name="managedServers"/>: the Claude in Chrome connector) and of a bridge to Chrome
+    /// (a "chrome__" leaf, e.g. BrainX's mcp__brainx-brain__chrome__navigate), then every other MCP tool. The ones
+    /// that stay keep their original order.</summary>
     public static List<Services.Providers.ToolSchema> CapToolSchemas(
-        List<Services.Providers.ToolSchema> schemas, int max, out int dropped)
+        List<Services.Providers.ToolSchema> schemas, int max, out int dropped, IReadOnlySet<string>? managedServers = null)
     {
+        bool Priority(string name) => IsMcpToolName(name) && !IsPinnedMcpTool(name) && IsPriorityMcpTool(name, managedServers);
         var ordered = schemas.Where(t => !IsMcpToolName(t.Name))
             .Concat(schemas.Where(t => IsMcpToolName(t.Name) && IsPinnedMcpTool(t.Name)))
-            .Concat(schemas.Where(t => IsMcpToolName(t.Name) && !IsPinnedMcpTool(t.Name)))
+            .Concat(schemas.Where(t => Priority(t.Name)))
+            .Concat(schemas.Where(t => IsMcpToolName(t.Name) && !IsPinnedMcpTool(t.Name) && !Priority(t.Name)))
             .Take(max).ToHashSet();
         dropped = schemas.Count - ordered.Count;
         return schemas.Where(ordered.Contains).ToList();   // original order for the ones that stay
+    }
+
+    /// <summary>A managed server's tool, or a Chrome tool reached through a bridge ("…__chrome__&lt;tool&gt;").</summary>
+    private static bool IsPriorityMcpTool(string qualifiedName, IReadOnlySet<string>? managedServers)
+    {
+        if (!IsMcpToolName(qualifiedName)) return false;
+        if (managedServers is { Count: > 0 } && managedServers.Contains(McpServerOf(qualifiedName))) return true;
+        int start = "mcp__".Length;
+        int afterServer = qualifiedName.IndexOf("__", start, StringComparison.Ordinal);
+        return afterServer > start
+               && qualifiedName.AsSpan(afterServer + 2).StartsWith("chrome__", StringComparison.Ordinal);
     }
 
     private static bool IsPinnedMcpTool(string qualifiedName)
@@ -328,6 +352,8 @@ public class CodeAgentService
     /// same reason as the brain line: the local backend can change under it (llama-server ↔ in-process),
     /// and a prompt for the other tool protocol leaves the model unable to call anything.</summary>
     private bool _cachedNativeTools;
+    /// <summary>Whether the cached prompt told the model it can see tool images.</summary>
+    private bool _cachedVision;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -337,6 +363,9 @@ public class CodeAgentService
     {
         string? brainNow = _brainSync?.LiveStatusLine;
         bool nativeNow = ActiveProviderHasNativeTools();
+        // The vision line is a fact about the active model AND loop: switching to a blind one inside the 30 s window
+        // must not leave a prompt that says "you can see images".
+        bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
         // thing. A reconnect or a death inside the window rebuilds the prompt now.
@@ -344,7 +373,8 @@ public class CodeAgentService
         {
             if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry
                 && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal)
-                && _cachedNativeTools == nativeNow)
+                && _cachedNativeTools == nativeNow
+                && _cachedVision == visionNow)
                 return _cachedSystemPrompt;
         }
 
@@ -355,6 +385,7 @@ public class CodeAgentService
             _cachedSystemPrompt = prompt;
             _cachedBrainStatusLine = brainNow;
             _cachedNativeTools = nativeNow;
+            _cachedVision = visionNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
@@ -949,8 +980,10 @@ public class CodeAgentService
         BrainSyncService? brainSync = null,
         RepoMapService? repoMap = null,
         DebugLogService? debugLog = null,
-        IEnumerable<Tools.IPromptSectionProvider>? promptSections = null)
+        IEnumerable<Tools.IPromptSectionProvider>? promptSections = null,
+        Mcp.McpServerManager? mcpManager = null)
     {
+        _mcpManager = mcpManager;
         _promptSections = promptSections?.Where(p => p != null).ToArray() ?? Array.Empty<Tools.IPromptSectionProvider>();
         _debugLog = debugLog;
         _brainSync = brainSync;
@@ -967,6 +1000,8 @@ public class CodeAgentService
         _memoryService = memoryService;
         _hookService = hookService;
         _costTrackingService = costTrackingService;
+        // Screenshots are browsing data: the week-old ones go at startup, not only once an agent turn runs.
+        PruneToolImagesInBackground(startup: true);
     }
 
     // Agent-loop tracing: when the user reports "it just doesn't work", the daily log file must be
@@ -975,6 +1010,105 @@ public class CodeAgentService
 
     // ─── Tool-group prompt sections (S0 seam) ───
     private readonly Tools.IPromptSectionProvider[] _promptSections;
+
+    /// <summary>For the OpenAI/Gemini tool cap only: which MCP servers CluadeX manages itself (ManagedBy set).</summary>
+    private readonly Mcp.McpServerManager? _mcpManager;
+
+    // ─── Tool images (vision) ───
+
+    /// <summary>The model id configured for <paramref name="p"/> ("" = the provider's own default).</summary>
+    private string ModelIdFor(Services.Providers.IAiProvider? p)
+    {
+        try
+        {
+            if (p != null && _settingsService.Settings.ProviderConfigs.TryGetValue(p.ProviderId, out var cfg))
+                return cfg.EffectiveModelId ?? "";
+        }
+        catch { }
+        return "";
+    }
+
+    /// <summary>Can <paramref name="p"/>'s model see tool images right now (from what is already known)?</summary>
+    private bool ProviderSeesImages(Services.Providers.IAiProvider? p)
+    {
+        try { return p != null && p.SupportsToolResultImages(ModelIdFor(p)); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// What the system prompt may promise: the model sees tool images AND this turn runs the native loop — the only
+    /// one that sends them. An OpenAI vision model whose native tools were refused, or an Ollama vision model with
+    /// native tools off, runs the [ACTION:] text loop, where every image is omitted.
+    /// </summary>
+    private bool PromptSeesImages(Services.Providers.IAiProvider? p)
+    {
+        try { return p != null && p.SupportsNativeToolUse && ProviderSeesImages(p); }
+        catch { return false; }
+    }
+
+    private const string VisionLinePrefix = "- Vision: ";
+
+    /// <summary>The system prompt's vision line.</summary>
+    public static string VisionLine(bool seesImages) => seesImages
+        ? VisionLinePrefix + "You can see images returned by tools (screenshots, image files)."
+        : VisionLinePrefix + "You cannot see images; tools describe them in text.";
+
+    /// <summary><paramref name="prompt"/> with its vision line set to <paramref name="seesImages"/> — for an
+    /// escalation that hands the turn to another model mid-loop. A prompt without the line is returned as it is.
+    /// Public for the contract harness.</summary>
+    public static string WithVisionLine(string prompt, bool seesImages)
+    {
+        if (string.IsNullOrEmpty(prompt)) return prompt;
+        int at = prompt.IndexOf(VisionLinePrefix, StringComparison.Ordinal);
+        if (at < 0 || (at > 0 && prompt[at - 1] != '\n')) return prompt;
+        int end = prompt.IndexOf('\n', at);
+        string line = end < 0 ? prompt[at..] : prompt[at..end].TrimEnd('\r');
+        return prompt[..at] + VisionLine(seesImages) + prompt[(at + line.Length)..];
+    }
+
+    /// <summary>The same, allowed to ask the backend once (Ollama /api/show) — run before a turn's prompt is built.</summary>
+    private async Task<bool> ProviderSeesImagesAsync(Services.Providers.IAiProvider? p, CancellationToken ct)
+    {
+        if (p == null) return false;
+        try { return await p.SupportsToolResultImagesAsync(ModelIdFor(p), ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return false; }
+    }
+
+    /// <summary>MCP servers CluadeX manages itself (the Claude in Chrome connector) — their tools win the tool cap.</summary>
+    private HashSet<string> ManagedMcpServers()
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            if (_mcpManager != null)
+                foreach (var (name, cfg) in _mcpManager.Configs)
+                    if (!string.IsNullOrEmpty(cfg?.ManagedBy)) set.Add(name);
+        }
+        catch { }
+        return set;
+    }
+
+    private static int _fullImagePruneDone;
+
+    /// <summary>Keep the screenshot folder bounded (≤ 200 per chat, ≤ 7 days): every chat once per run — at startup,
+    /// from the constructor, so screenshots older than a week go even when no agent turn runs — and this chat on
+    /// every turn. Off the calling thread; never throws.</summary>
+    private void PruneToolImagesInBackground(bool startup = false)
+    {
+        try
+        {
+            var store = Vision.ToolImageWire.StoreFor(_settingsService);
+            string? session = startup ? null : _agentToolService.SessionKey;
+            bool all = Interlocked.Exchange(ref _fullImagePruneDone, 1) == 0;
+            if (!all && session == null) return;
+            _ = Task.Run(() =>
+            {
+                try { store.Prune(all ? null : session); } catch { }
+            });
+        }
+        catch { }
+    }
 
     /// <summary>Names the registered tool modules add to the small-context CORE set this turn.</summary>
     private HashSet<string> ModuleCoreToolNames()
@@ -1166,6 +1300,9 @@ public class CodeAgentService
                 sb.AppendLine($"- Model: {activeCfg.EffectiveModelId}");
         }
         catch { /* model id is best-effort */ }
+        // One line, measured from the provider AND the loop that will run: a model that is not told it can't see an
+        // image claims it looked.
+        sb.AppendLine(VisionLine(PromptSeesImages(_providerManager.ActiveProvider)));
         sb.AppendLine($"- Date: {DateTime.Now:yyyy-MM-dd}");
         sb.AppendLine($"- CluadeX Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "2.1.0"}");
 
@@ -1612,12 +1749,18 @@ public class CodeAgentService
     /// Integrates smart editing for code validation and context enrichment.
     /// Integrates context memory for automatic compaction.
     /// </summary>
+    /// <param name="maxIterations">Step budget for THIS run only (a pipe-driven task's maxSteps), clamped 1–200;
+    /// null = Settings.MaxAgentIterations.</param>
     public async Task<AgentLoopResult> ExecuteAgenticAsync(
         List<ChatMessage> history,
         string userMessage,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        int? maxIterations = null)
     {
+        // Scoped to this call's async flow (AsyncLocal): restored for the caller when this method returns.
+        _iterationOverride.Value = maxIterations is int mi ? Math.Clamp(mi, 1, MaxIterationOverride) : null;
+
         // Entry trace FIRST — a turn that dies before the loop (brain recall, system prompt build,
         // provider not ready) used to leave the log completely empty, which is indistinguishable
         // from "the user never sent anything".
@@ -2013,6 +2156,8 @@ public class CodeAgentService
             });
 
             string toolFeedback = FormatToolResultsWithBudget(toolResults);
+            // This loop never sends pixels (the note above says so): keep only the files' paths and sizes.
+            StripImagePixels(toolResults);
             workingHistory.Add(new ChatMessage
             {
                 Role = MessageRole.System,
@@ -2122,16 +2267,29 @@ public class CodeAgentService
         // Truncate individual results WITHOUT mutating originals
         var truncated = results.Select(r =>
         {
+            // The [ACTION:] text loop carries no images: the model must hear that it did not see them — on Error
+            // too, because FormatToolResults prints Error (not Output) for a failed result, and an MCP error reply
+            // can carry a screenshot.
+            string blindNote = r.Images is { Count: > 0 } imgs
+                ? "\n" + Vision.ToolImageWire.OmittedForBlindModel(imgs, null, r.Type == ToolType.ReadFile ? "image" : "screenshot")
+                : "";
+            string error = blindNote.Length > 0 && !r.Success ? (r.Error ?? "") + blindNote : r.Error ?? "";
             if (r.Output.Length > MaxPerToolOutputChars)
             {
                 return new ToolResult
                 {
                     Type = r.Type, ToolName = r.ToolName, Success = r.Success,
-                    Error = r.Error, Summary = r.Summary,
+                    Error = error, Summary = r.Summary,
                     Output = r.Output[..MaxPerToolOutputChars]
-                        + $"\n... (truncated, {r.Output.Length:N0} chars total)",
+                        + $"\n... (truncated, {r.Output.Length:N0} chars total)" + blindNote,
                 };
             }
+            if (blindNote.Length > 0)
+                return new ToolResult
+                {
+                    Type = r.Type, ToolName = r.ToolName, Success = r.Success,
+                    Error = error, Summary = r.Summary, Output = r.Output + blindNote,
+                };
             return r;
         }).ToList();
 
@@ -2274,6 +2432,10 @@ public class CodeAgentService
         CancellationToken ct)
     {
         var result = new AgentLoopResult();
+        // Ask the backend whether this model sees images BEFORE the prompt is built (Ollama answers from
+        // /api/show), so the prompt's vision line and what the loop does with images agree.
+        await ProviderSeesImagesAsync(_providerManager.ActiveProvider, ct);
+        PruneToolImagesInBackground();
         string systemPrompt = await GetSystemPromptAsync();
         bool isThai = _localizationService.CurrentLanguage == "th";
         int maxTokenRecoveryCount = 0;
@@ -2393,7 +2555,7 @@ public class CodeAgentService
             // OpenAI documents 128 functions per request; built-ins (~70) plus the brain's 128 tools blow past
             // it and the first native request would be rejected. Keep every built-in, then the brain's recall
             // tools, then the rest of the MCP tools in order.
-            toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out mcpDropped);
+            toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out mcpDropped, ManagedMcpServers());
             _debugLog?.Warn("Agent", $"{loopProvider.ProviderId}: {mcpDropped} MCP tool schema(s) left out (limit {MaxApiToolSchemas} per request)");
         }
 
@@ -2426,7 +2588,9 @@ public class CodeAgentService
             nMsg.Content.Add(new Services.Providers.ContentBlock
             {
                 Type = "text",
-                Text = msg.Content,
+                // Earlier turns keep only the image's file path: their "[image N … attached …]" lines must not
+                // promise pixels this request doesn't carry.
+                Text = Vision.ToolImageWire.MarkEarlierTurn(msg.Content),
             });
             nativeMessages.Add(nMsg);
         }
@@ -2440,6 +2604,14 @@ public class CodeAgentService
 
         // Ensure alternating roles
         nativeMessages = EnsureAlternatingRoles(nativeMessages);
+
+        // Tool images: sent only to a model that sees them; a blind one is told in text, naming the text tools
+        // it has instead. Only the newest few stay in the conversation (each one resends on every request).
+        bool loopSeesImages = ProviderSeesImages(loopProvider);
+        string? blindHint = Vision.ToolImageWire.BlindHint(toolSchemas.Select(t => t.Name));
+        // At least 1: with 0 a vision model whose prompt says it can see would never get a single image. The newest
+        // step's images always go out whatever this is (KeepNewestImages) — it only bounds the older ones.
+        int keepImages = Math.Clamp(_settingsService.Settings.KeepRecentImages, 1, 20);
 
         for (int iteration = 0; iteration < iterationBudget; iteration++)
         {
@@ -2469,6 +2641,12 @@ public class CodeAgentService
                 : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations} · {nativeThinkVerb}..." : $"Step {iteration + 1}/{MaxAgentIterations} · {nativeThinkVerb}...");
             progress?.Report(nativeStepStatus);
             OnAgentStatus?.Invoke(nativeStepStatus);
+
+            // Older screenshots → "[screenshot omitted — saved at …]": in place, every step, whatever the size. The
+            // newest step's images (not seen yet) always go out.
+            int imagesDropped = Vision.ToolImageWire.KeepNewestImages(nativeMessages, keepImages);
+            if (imagesDropped > 0)
+                _debugLog?.Info("Agent", $"step {iteration + 1}: {imagesDropped} older tool image(s) replaced by their file path (keep {keepImages})");
 
             // Microcompact — shrink old tool results (keep recent turns verbatim).
             // Local models: from the 7th message on, their window is small. API models: only under real
@@ -2563,6 +2741,14 @@ public class CodeAgentService
                         && (ex.Message.Contains("too long", StringComparison.OrdinalIgnoreCase)
                             || ex.Message.Contains("context", StringComparison.OrdinalIgnoreCase))))
                 {
+                    // ─── Images go first: they are the cheapest thing to give up (each is on disk) ───
+                    if (Vision.ToolImageWire.CountImages(nativeMessages) > 0)
+                    {
+                        int gone = Vision.ToolImageWire.KeepNewestImages(nativeMessages, 0);
+                        _debugLog?.Warn("Agent", $"prompt too long at step {iteration + 1} — dropped {gone} tool image(s) before compacting");
+                        OnAgentStatus?.Invoke(isThai ? "Context เต็ม — ตัดภาพหน้าจอออกก่อน..." : "Context overflow — dropping screenshots first...");
+                        continue;
+                    }
                     // ─── Reactive compaction on 413 (prompt too long) ───
                     if (!hasAttemptedReactiveCompact)
                     {
@@ -2592,6 +2778,19 @@ public class CodeAgentService
                         : "Context too long even after compaction. Please start a new session.";
                     break;
                 }
+            }
+
+            // ─── The API refused the tool images and the provider answered from a text-only retry ───
+            // Drop them from the loop's own conversation (with the same note the retry carried), or every later
+            // step would resend the refused image, hit the same 400 and retry again. A provider that now counts
+            // the model as blind (Gemini / OpenAI) also stops getting images from here on.
+            if (response.ImagesRefused)
+            {
+                int refused = Vision.ToolImageWire.DropRefused(nativeMessages, response.ImagesRefusedReason);
+                loopSeesImages = ProviderSeesImages(loopProvider);
+                _debugLog?.Warn("Agent", $"step {iteration + 1}: the API refused {refused} tool image(s) — dropped from the conversation"
+                    + (loopSeesImages ? "" : "; this model counts as blind from now on")
+                    + $" · {(response.ImagesRefusedReason ?? "").Replace("\n", " ")}");
             }
 
             // ─── Strip leaked control tokens from local-model tool-turn text ───
@@ -2638,9 +2837,17 @@ public class CodeAgentService
                 // Compaction is retried, NOT one-shot. A single attempt meant that once anything else
                 // in the turn had already compacted, the next overflow — even by 3 tokens — killed the
                 // run outright. Each attempt keeps fewer messages than the last.
-                if (ctxCompactAttempts < 3
-                    && (errText.Contains("Context window too small", StringComparison.OrdinalIgnoreCase)
-                        || errText.Contains("context size", StringComparison.OrdinalIgnoreCase)))
+                bool ctxOverflow = errText.Contains("Context window too small", StringComparison.OrdinalIgnoreCase)
+                                   || errText.Contains("context size", StringComparison.OrdinalIgnoreCase);
+                if (ctxOverflow && Vision.ToolImageWire.CountImages(nativeMessages) > 0)
+                {
+                    // Images first — each one is a file on disk the model can be pointed at instead.
+                    int gone = Vision.ToolImageWire.KeepNewestImages(nativeMessages, 0);
+                    _debugLog?.Warn("Agent", $"context overflow at step {iteration + 1} — dropped {gone} tool image(s) before compacting");
+                    OnAgentStatus?.Invoke(isThai ? "Context เต็ม — ตัดภาพหน้าจอออกก่อน..." : "Context overflow — dropping screenshots first...");
+                    continue;
+                }
+                if (ctxCompactAttempts < 3 && ctxOverflow)
                 {
                     ctxCompactAttempts++;
                     hasAttemptedReactiveCompact = true;
@@ -3044,6 +3251,7 @@ public class CodeAgentService
 
                 string resultContent;
                 bool isError;
+                List<ToolImage>? resultImages = null;
                 try
                 {
                     ct.ThrowIfCancellationRequested();
@@ -3086,6 +3294,12 @@ public class CodeAgentService
                                 Success = true,
                                 Output = toolResult.Output + $"\n⚠ Validation: {writeValidation}",
                                 Summary = toolResult.Summary + " (with warnings)",
+                                // Everything else the result carried survives the rebuild (the per-file edit
+                                // bookkeeping reads FilePath; images ride on Images).
+                                Arguments = toolResult.Arguments,
+                                Diff = toolResult.Diff,
+                                FilePath = toolResult.FilePath,
+                                Images = toolResult.Images,
                             };
                         }
                     }
@@ -3099,14 +3313,41 @@ public class CodeAgentService
                         _debugLog.Info("Agent", $"tool {toolCall.Name}: {(toolResult.Success ? "OK" : "FAIL · " + errHead)}");
                     }
 
-                    // Per-tool and aggregate budget enforcement
+                    // Per-tool and aggregate budget enforcement — on TEXT only. Images never enter resultContent,
+                    // so these cuts can't split a base64 string; they ride on the block's Images below.
                     resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
+                    string uncutContent = resultContent;
                     isError = !toolResult.Success;
+                    bool cutText = false;
                     if (resultContent.Length > MaxPerToolOutputChars)
+                    {
                         resultContent = resultContent[..MaxPerToolOutputChars] + "\n... (truncated)";
+                        cutText = true;
+                    }
                     int currentAggregate = Interlocked.Add(ref aggregateChars, resultContent.Length);
                     if (currentAggregate > MaxAggregateOutputChars)
+                    {
                         resultContent = resultContent[..Math.Min(resultContent.Length, 500)] + "\n... (aggregate budget exceeded, truncated)";
+                        cutText = true;
+                    }
+
+                    // The "[image N …]" lines sit at the END of Output — a cut above removed them. They come back
+                    // verbatim from the uncut text, so their numbers stay the tool's own item numbers ("[image 2: …]"
+                    // after a broken item 1) and the "could not be used" lines survive too.
+                    if (cutText)
+                        resultContent = Vision.ToolImageWire.RestoreImageLines(resultContent, uncutContent);
+                    if (toolResult.Images is { Count: > 0 } produced)
+                    {
+                        if (loopSeesImages)
+                            resultImages = produced;
+                        else
+                        {
+                            // A file read is an image, not a screenshot — and the browser text tools are no help for it.
+                            bool fileRead = call.Type == ToolType.ReadFile;
+                            resultContent = Vision.ToolImageWire.AppendNote(resultContent,
+                                Vision.ToolImageWire.OmittedForBlindModel(produced, fileRead ? null : blindHint, fileRead ? "image" : "screenshot"));
+                        }
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -3131,6 +3372,7 @@ public class CodeAgentService
                         ToolUseId = toolCall.Id,
                         Content = resultContent,
                         IsError = isError,
+                        Images = resultImages,
                     });
                 }
             }
@@ -3335,6 +3577,15 @@ public class CodeAgentService
                     _debugLog?.Warn("Agent", $"escalating to {escalationProvider.ProviderId} · reason={(stagnating ? "repeated error" : "near exhaustion")} · errSig={lastErrorSig[..Math.Min(120, lastErrorSig.Length)]}");
                     loopProvider = escalationProvider;
                     toolSchemas = _agentToolService.BuildNativeToolSchemas(); // full catalogue for the strong model
+                    // The same 128-tool cap the loop start applies — an OpenAI/Gemini target rejects more.
+                    if (loopProvider.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
+                        toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out _, ManagedMcpServers());
+                    // A different model: images from here on follow ITS eyesight (earlier ones a blind local model
+                    // never had are gone; their files are named in the text).
+                    loopSeesImages = await ProviderSeesImagesAsync(loopProvider, ct);
+                    blindHint = Vision.ToolImageWire.BlindHint(toolSchemas.Select(t => t.Name));
+                    // …and the prompt's vision line follows: it was written for the model that got stuck.
+                    systemPrompt = WithVisionLine(systemPrompt, loopSeesImages && loopProvider.SupportsNativeToolUse);
                     iterationBudget = iteration + 1 + EscalationBonusIterations;
                     string elabel = escalationProvider.DisplayName ?? escalationProvider.ProviderId;
                     OnAgentStatus?.Invoke(isThai
@@ -3351,6 +3602,10 @@ public class CodeAgentService
                 }
             }
 
+            // The step keeps each result's image FILES (path, size), not its pixels: the model's copy rides on the
+            // tool_result blocks (bounded by KeepNewestImages), and a 200-step run with a screenshot per step would
+            // otherwise hold every base64 in Steps until the turn ends.
+            StripImagePixels(toolResults);
             step.ToolResults = toolResults;
             step.ToolCalls = toolResults.Select(r => new ToolCall
             {
@@ -3405,6 +3660,16 @@ public class CodeAgentService
         progress?.Report("Done");
         OnAgentStatus?.Invoke("Ready");
         return result;
+    }
+
+    /// <summary>Replace each result's <see cref="ToolResult.Images"/> with copies that keep the path, size and type
+    /// but not the base64 (a new list — a tool_result block that shares the old one keeps its pixels).</summary>
+    private static void StripImagePixels(List<ToolResult> results)
+    {
+        lock (results)
+            foreach (var r in results)
+                if (r.Images is { Count: > 0 } imgs && imgs.Any(i => !string.IsNullOrEmpty(i.Base64)))
+                    r.Images = imgs.Select(i => i with { Base64 = "" }).ToList();
     }
 
     /// <summary>Remove tool_result blocks whose matching assistant tool_use was dropped (and vice versa)
@@ -3544,12 +3809,43 @@ public class CodeAgentService
     /// Every API model CluadeX offers has a window of 128k tokens or more.</summary>
     internal const int ApiCompactThresholdTokens = 90_000;
 
-    /// <summary>Rough token count of a native conversation: characters / 4 over every block's payload.</summary>
-    internal static int EstimateNativeTokens(List<Services.Providers.NativeMessage> messages)
+    /// <summary>Rough token count of a native conversation: characters / 4 over every block's text payload, plus
+    /// ceil(w×h/750) per tool image — never its base64 length (a 1568-px screenshot is ~1,600 tokens, not the
+    /// ~150,000 its base64 characters would count as). Public for the contract harness.</summary>
+    public static int EstimateNativeTokens(List<Services.Providers.NativeMessage> messages)
         => messages.Sum(m => m.Content.Sum(c => ((c.Text?.Length ?? 0) + (c.Content?.Length ?? 0)
-            + (c.Input is { } input ? input.GetRawText().Length : 0) + (c.Data?.Length ?? 0)) / 4));
+            + (c.Input is { } input ? input.GetRawText().Length : 0) + (c.Data?.Length ?? 0)) / 4
+            + Vision.ToolImageWire.EstimateTokens(c.Images)));
 
-    internal static List<Services.Providers.NativeMessage> MicrocompactNativeMessages(
+    /// <param name="keepRecentImages">Keep only the newest N tool images in the returned copy (older ones become
+    /// "[screenshot omitted — saved at …]"); null = leave images as they are. The caller's blocks are not
+    /// changed either way. Public for the contract harness.</param>
+    public static List<Services.Providers.NativeMessage> MicrocompactNativeMessages(
+        List<Services.Providers.NativeMessage> messages,
+        int keepRecentTurns,
+        int maxOldResultChars,
+        int? keepRecentImages = null)
+    {
+        var compacted = MicrocompactText(messages, keepRecentTurns, maxOldResultChars);
+        if (keepRecentImages is not int keep || Vision.ToolImageWire.CountImages(compacted) <= keep) return compacted;
+        // Copy every image-carrying block before pruning, so the caller's conversation stays as it was.
+        var copy = compacted.Select(m => new Services.Providers.NativeMessage
+        {
+            Role = m.Role,
+            Content = m.Content.Select(b => b.Images is { Count: > 0 } ? CloneBlock(b) : b).ToList(),
+        }).ToList();
+        Vision.ToolImageWire.KeepNewestImages(copy, keep);
+        return copy;
+    }
+
+    private static Services.Providers.ContentBlock CloneBlock(Services.Providers.ContentBlock b) => new()
+    {
+        Type = b.Type, Text = b.Text, Signature = b.Signature, Data = b.Data, Provider = b.Provider,
+        Id = b.Id, Name = b.Name, Input = b.Input, ToolUseId = b.ToolUseId, Content = b.Content, IsError = b.IsError,
+        Images = b.Images?.ToList(),
+    };
+
+    private static List<Services.Providers.NativeMessage> MicrocompactText(
         List<Services.Providers.NativeMessage> messages,
         int keepRecentTurns,
         int maxOldResultChars)
@@ -3600,6 +3896,8 @@ public class CodeAgentService
                     ToolUseId = block.ToolUseId,
                     Content = content,
                     IsError = block.IsError,
+                    // Old turns keep their images here; how MANY images stay is KeepNewestImages' job.
+                    Images = block.Images,
                 };
             }
             case "text":
@@ -3609,7 +3907,7 @@ public class CodeAgentService
                 text = CompressTimestamps(text);
                 // Don't truncate text blocks — they're typically short and semantic.
                 // Only images/timestamps are stripped.
-                return new Services.Providers.ContentBlock { Type = "text", Text = text };
+                return new Services.Providers.ContentBlock { Type = "text", Text = text, Images = block.Images };
             }
             default:
                 // tool_use, thinking — keep unchanged (they drive semantics)

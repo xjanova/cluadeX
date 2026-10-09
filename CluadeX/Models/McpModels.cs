@@ -74,7 +74,7 @@ public class McpTool
 public class McpContentItem
 {
     [JsonPropertyName("type")]
-    public string Type { get; set; } = "text"; // text, image, resource_link
+    public string Type { get; set; } = "text"; // text, image, audio, resource, resource_link
 
     [JsonPropertyName("text")]
     public string? Text { get; set; }
@@ -90,6 +90,26 @@ public class McpContentItem
 
     [JsonPropertyName("name")]
     public string? Name { get; set; }
+
+    /// <summary>type "resource": the embedded resource (text or base64 blob).</summary>
+    [JsonPropertyName("resource")]
+    public McpEmbeddedResource? Resource { get; set; }
+}
+
+/// <summary>The body of an MCP "resource" content item: text, or a base64 blob, for one URI.</summary>
+public class McpEmbeddedResource
+{
+    [JsonPropertyName("uri")]
+    public string? Uri { get; set; }
+
+    [JsonPropertyName("mimeType")]
+    public string? MimeType { get; set; }
+
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
+
+    [JsonPropertyName("blob")]
+    public string? Blob { get; set; }
 }
 
 /// <summary>Result from tools/call.</summary>
@@ -101,13 +121,68 @@ public class McpToolResult
     [JsonPropertyName("isError")]
     public bool IsError { get; set; }
 
-    /// <summary>Flatten all text content into a single string.</summary>
+    /// <summary>
+    /// Flatten the text the model should read into one string: every text item (exactly as before), plus the
+    /// text of embedded "resource" items under a "[resource &lt;uri&gt;]" line and a one-line mention of each
+    /// "resource_link" — those used to vanish without a trace. Images are NOT here: see <see cref="GetImageItems"/>.
+    /// </summary>
     public string GetTextOutput()
     {
-        var texts = Content
-            .Where(c => c.Type == "text" && c.Text != null)
-            .Select(c => c.Text!);
+        var texts = new List<string>();
+        foreach (var c in Content)
+        {
+            if (c == null) continue;
+            switch (c.Type)
+            {
+                case "text" when c.Text != null:
+                    texts.Add(c.Text);
+                    break;
+                case "resource" when c.Resource?.Text != null:
+                    texts.Add($"[resource {c.Resource.Uri ?? "(no uri)"}]\n{c.Resource.Text}");
+                    break;
+                case "resource_link" when !string.IsNullOrEmpty(c.Uri):
+                    texts.Add($"[resource link: {(string.IsNullOrEmpty(c.Name) ? "" : c.Name + " ")}{c.Uri}]");
+                    break;
+            }
+        }
         return string.Join("\n", texts);
+    }
+
+    /// <summary>
+    /// The image items, in order: every type "image" item with data, plus embedded "resource" blobs whose
+    /// mimeType is image/* (returned as an image item). The base64 is untouched — decoding, size caps and
+    /// downscaling belong to the caller (Vision.ImageCodec).
+    /// </summary>
+    public List<McpContentItem> GetImageItems()
+    {
+        var images = new List<McpContentItem>();
+        foreach (var c in Content)
+        {
+            if (c == null) continue;
+            if (c.Type == "image" && !string.IsNullOrEmpty(c.Data))
+                images.Add(c);
+            else if (c.Type == "resource" && c.Resource is { Blob: { Length: > 0 } blob } r
+                     && (r.MimeType ?? "").StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                images.Add(new McpContentItem { Type = "image", Data = blob, MimeType = r.MimeType, Uri = r.Uri });
+        }
+        return images;
+    }
+
+    /// <summary>Items the model cannot be given (audio, a non-image binary resource): type and mime, so the
+    /// result can say what was left out instead of dropping it silently.</summary>
+    public List<string> GetUnsupportedItemKinds()
+    {
+        var kinds = new List<string>();
+        foreach (var c in Content)
+        {
+            if (c == null) continue;
+            if (c.Type == "audio")
+                kinds.Add("audio" + (string.IsNullOrEmpty(c.MimeType) ? "" : $" ({c.MimeType})"));
+            else if (c.Type == "resource" && c.Resource is { Blob: { Length: > 0 } } r
+                     && !(r.MimeType ?? "").StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                kinds.Add($"binary resource {r.Uri ?? ""}{(string.IsNullOrEmpty(r.MimeType) ? "" : $" ({r.MimeType})")}".TrimEnd());
+        }
+        return kinds;
     }
 }
 

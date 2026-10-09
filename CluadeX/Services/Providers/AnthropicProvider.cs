@@ -523,6 +523,16 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
             ["name"] = block.Name ?? "",
             ["input"] = block.Input ?? _emptyJsonObject,
         },
+        // No images: the plain string form, byte-for-byte what it always was, so prompt-cache prefixes built before
+        // tool images existed still match. With images: [text, image…] — the Messages API accepts image blocks
+        // inside a tool_result.
+        "tool_result" when block.Images is { Count: > 0 } images => new Dictionary<string, object>
+        {
+            ["type"] = "tool_result",
+            ["tool_use_id"] = block.ToolUseId ?? "",
+            ["content"] = ToolResultParts(block.Content, images),
+            ["is_error"] = block.IsError ?? false,
+        },
         "tool_result" => new Dictionary<string, object>
         {
             ["type"] = "tool_result",
@@ -544,6 +554,30 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
         },
         _ => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
     };
+
+    /// <summary>tool_result content with images: the text first (never an empty text block — the API rejects
+    /// those), then one base64 image block per image, in order.</summary>
+    private static List<object> ToolResultParts(string? text, List<ToolImage> images)
+    {
+        var parts = new List<object>();
+        if (!string.IsNullOrEmpty(text))
+            parts.Add(new Dictionary<string, object> { ["type"] = "text", ["text"] = text });
+        foreach (var img in images)
+            parts.Add(new Dictionary<string, object>
+            {
+                ["type"] = "image",
+                ["source"] = new Dictionary<string, object>
+                {
+                    ["type"] = "base64",
+                    ["media_type"] = img.MediaType,
+                    ["data"] = img.Base64,
+                },
+            });
+        return parts;
+    }
+
+    /// <summary>Every Claude model the API serves sees images.</summary>
+    public override bool SupportsToolResultImages(string modelId) => true;
 
     /// <summary>One content block being assembled from the stream.</summary>
     private sealed class StreamBlock
@@ -621,6 +655,22 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
+            // A broken or oversized tool image must not end the turn: retry ONCE without images, telling the
+            // model the API refused it. Only for a 400 that names the image — an overflow or a bad key is not
+            // about the picture.
+            if ((int)response.StatusCode == 400 && HasToolImages(messages)
+                && error.Contains("image", StringComparison.OrdinalIgnoreCase)
+                && !error.Contains("too long", StringComparison.OrdinalIgnoreCase))
+            {
+                string why = ShortApiMessage(error, config.ApiKey);
+                var retried = await ChatWithToolsAsync(WithoutImages(messages, why),
+                    systemPrompt, tools, onTextDelta, ct, toolChoice);
+                // Tell the loop, so it drops the refused image from its conversation instead of resending it (and
+                // retrying) on every later step.
+                retried.ImagesRefused = true;
+                retried.ImagesRefusedReason = why;
+                return retried;
+            }
             throw new HttpRequestException(
                 DescribeApiError((int)response.StatusCode, error, config, model),
                 null,

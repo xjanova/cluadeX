@@ -209,8 +209,42 @@ public class OpenAiProvider : ApiProviderBase, IModelLister
 
     public override bool SupportsNativeToolUse => NativeToolsUsable;
 
+    /// <summary>How tool images go out on the Responses API.</summary>
+    public enum ResponsesImageForm
+    {
+        /// <summary>function_call_output.output = [input_text, input_image…] (documented; the default).</summary>
+        OutputArray,
+        /// <summary>output stays text; one following user message carries the input_image items (the fallback when
+        /// the API refuses the array form).</summary>
+        UserMessage,
+        /// <summary>No image is sent; the output says the model could not see it.</summary>
+        Omit,
+    }
+
+    // Vision-capable families (the Responses API takes input_image for these): gpt-4o / 4.1 / 4.5 / 5 / 6,
+    // gpt-4-turbo, o1 (not o1-mini / o1-preview), o3, o4, computer-use-preview — deep-research models included.
+    // Audio / realtime / transcribe / tts and the search-preview models are text-only, as are o3-mini and
+    // gpt-4-turbo-preview (the older text-only turbo).
+    private static readonly Regex VisionModelId = new(
+        @"^(gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-5|gpt-6|o1(?!-mini|-preview)|o3|o4|chatgpt-4o|computer-use-preview)",
+        RegexOptions.IgnoreCase);
+    private static readonly Regex NonVisionModelId = new(
+        @"(audio|realtime|transcribe|tts|-search-|search-preview|^o3-mini|^gpt-4-turbo-preview)", RegexOptions.IgnoreCase);
+
+    /// <summary>Images this provider's API refused for a model this session — it is blind from then on.</summary>
+    private readonly HashSet<string> _imagesRefused = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The API refused the output-array form once: use the user-message form from then on.</summary>
+    private bool _outputArrayRefused;
+
+    public override bool SupportsToolResultImages(string modelId)
+    {
+        string m = string.IsNullOrWhiteSpace(modelId) ? ModelOf(GetConfig()) : modelId.Trim();
+        lock (_imagesRefused) if (_imagesRefused.Contains(m)) return false;
+        return VisionModelId.IsMatch(m) && !NonVisionModelId.IsMatch(m);
+    }
+
     /// <summary>Responses API input items from the provider-neutral conversation.</summary>
-    public static List<object> BuildResponsesInput(List<NativeMessage> messages)
+    public static List<object> BuildResponsesInput(List<NativeMessage> messages, ResponsesImageForm imageForm = ResponsesImageForm.OutputArray)
     {
         var input = new List<object>();
         foreach (var msg in messages)
@@ -249,24 +283,71 @@ public class OpenAiProvider : ApiProviderBase, IModelLister
             else
             {
                 // Tool outputs first (they answer the calls right before them), then any text the loop added.
+                var followImages = new List<ToolImage>();
                 foreach (var b in msg.Content.Where(b => b.Type == "tool_result"))
+                {
+                    string outText = (b.IsError == true ? "ERROR: " : "") + (b.Content ?? "");
+                    object output = outText;
+                    if (b.Images is { Count: > 0 } imgs)
+                    {
+                        switch (imageForm)
+                        {
+                            case ResponsesImageForm.OutputArray:
+                                var items = new List<object>();
+                                if (outText.Length > 0) items.Add(new Dictionary<string, object> { ["type"] = "input_text", ["text"] = outText });
+                                items.AddRange(imgs.Select(InputImage));
+                                output = items;
+                                break;
+                            case ResponsesImageForm.UserMessage:
+                                followImages.AddRange(imgs);
+                                break;
+                            default:
+                                output = Vision.ToolImageWire.AppendNote(outText, Vision.ToolImageWire.OmittedForBlindModel(imgs, null, "image"));
+                                break;
+                        }
+                    }
                     input.Add(new Dictionary<string, object>
                     {
                         ["type"] = "function_call_output",
                         ["call_id"] = b.ToolUseId ?? "",
-                        ["output"] = (b.IsError == true ? "ERROR: " : "") + (b.Content ?? ""),
+                        ["output"] = output,
                     });
+                }
                 string text = string.Join("\n\n", msg.Content.Where(b => b.Type == "text" && !string.IsNullOrEmpty(b.Text)).Select(b => b.Text));
-                if (text.Length > 0)
+                if (followImages.Count > 0)
+                {
+                    // One user message: what the images are, the images, then the loop's own text.
+                    var parts = new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "input_text",
+                            ["text"] = followImages.Count == 1
+                                ? "[The image returned by the tool call above]"
+                                : $"[The {followImages.Count} images returned by the tool calls above, in order]",
+                        },
+                    };
+                    parts.AddRange(followImages.Select(InputImage));
+                    if (text.Length > 0) parts.Add(new Dictionary<string, object> { ["type"] = "input_text", ["text"] = text });
+                    input.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = parts });
+                }
+                else if (text.Length > 0)
                     input.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = text });
             }
         }
         return input;
     }
 
+    private static object InputImage(ToolImage img) => new Dictionary<string, object>
+    {
+        ["type"] = "input_image",
+        ["image_url"] = Vision.ToolImageWire.DataUrl(img),
+        ["detail"] = "auto",
+    };
+
     /// <summary>The request body for one native tool turn (public for the contract harness).</summary>
     public Dictionary<string, object> BuildResponsesRequest(List<NativeMessage> messages, string systemPrompt,
-        List<ToolSchema> tools, string? toolChoice)
+        List<ToolSchema> tools, string? toolChoice, ResponsesImageForm imageForm = ResponsesImageForm.OutputArray)
     {
         string model = ModelOf(GetConfig());
         var settings = _settingsService.Settings;
@@ -274,7 +355,7 @@ public class OpenAiProvider : ApiProviderBase, IModelLister
         var req = new Dictionary<string, object>
         {
             ["model"] = model,
-            ["input"] = BuildResponsesInput(messages),
+            ["input"] = BuildResponsesInput(messages, imageForm),
             ["stream"] = true,
             ["store"] = false,
             ["max_output_tokens"] = reasoning ? Math.Max(settings.MaxTokens, ReasoningMaxTokensFloor) : settings.MaxTokens,
@@ -325,26 +406,69 @@ public class OpenAiProvider : ApiProviderBase, IModelLister
     {
         var config = GetConfig();
         string model = ModelOf(config);
-        var body = JsonSerializer.Serialize(BuildResponsesRequest(messages, systemPrompt, tools, toolChoice));
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/responses");
-        request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        // Tool images: the documented output array first; if the API refuses it, the same images in a following
+        // user message (remembered for the session); if it refuses images altogether, text only — the model is
+        // told it could not see them, and this model counts as blind from then on.
+        bool hasImages = HasToolImages(messages);
+        var form = !hasImages ? ResponsesImageForm.OutputArray
+            : !SupportsToolResultImages(model) ? ResponsesImageForm.Omit
+            : _outputArrayRefused ? ResponsesImageForm.UserMessage
+            : ResponsesImageForm.OutputArray;
 
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        UsageMeter.Report(UsageMeter.FromOpenAi(response, model));
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage response;
+        string? refusedWhy = null;
+        while (true)
         {
+            var body = JsonSerializer.Serialize(BuildResponsesRequest(messages, systemPrompt, tools, toolChoice, form));
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/responses");
+            request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            UsageMeter.Report(UsageMeter.FromOpenAi(response, model));
+            if (response.IsSuccessStatusCode) break;
+
             var error = await response.Content.ReadAsStringAsync(ct);
-            string explained = DescribeHttpError("OpenAI", (int)response.StatusCode, error, config.ApiKey, model, KeysUrl, BillingUrl);
-            if (DisableNativeToolsIfRejected((int)response.StatusCode, explained) is { } fallback) return fallback;
-            throw new HttpRequestException(explained, null, response.StatusCode);
+            int status = (int)response.StatusCode;
+            response.Dispose();
+            // The array form refused: only a 400 that is about the output or the image. A context_length_exceeded
+            // (or any other 400) goes on to the agent loop, whose overflow path drops images first — it must not
+            // switch the whole session to the fallback form.
+            if (status == 400 && hasImages && form == ResponsesImageForm.OutputArray
+                && (error.Contains("output", StringComparison.OrdinalIgnoreCase)
+                    || error.Contains("image", StringComparison.OrdinalIgnoreCase)))
+            {
+                _outputArrayRefused = true;
+                form = ResponsesImageForm.UserMessage;
+                continue;
+            }
+            if (status == 400 && hasImages && form == ResponsesImageForm.UserMessage
+                && error.Contains("image", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_imagesRefused) _imagesRefused.Add(model);
+                refusedWhy = ShortApiMessage(error, config.ApiKey);
+                messages = WithoutImages(messages, refusedWhy);
+                hasImages = false;
+                form = ResponsesImageForm.OutputArray;
+                continue;
+            }
+            string explained = DescribeHttpError("OpenAI", status, error, config.ApiKey, model, KeysUrl, BillingUrl);
+            if (DisableNativeToolsIfRejected(status, explained) is { } fallback) return fallback;
+            throw new HttpRequestException(explained, null, (System.Net.HttpStatusCode)status);
         }
 
+        using var ownedResponse = response;
         var result = await ParseResponsesStreamAsync(response.Content, onTextDelta, ct);
         if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0))
             _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, 0, 0);
         ConfirmNativeTools();
+        if (refusedWhy != null)
+        {
+            // Answered from the text-only retry: the loop drops the refused images from its conversation.
+            result.ImagesRefused = true;
+            result.ImagesRefusedReason = refusedWhy;
+        }
         return result;
     }
 

@@ -41,6 +41,7 @@
             <Setter Property="HorizontalAlignment" Value="Left"/>
         </Style>
         <vm:TaskStatusLabelConverter x:Key="TaskStatusLabel"/>
+        <vm:TaskKindLabelConverter x:Key="TaskKindLabel"/>
     </UserControl.Resources>
 
     <Grid Background="{StaticResource BaseBrush}">
@@ -65,10 +66,16 @@
                     <TextBlock Text="{services:Loc tasks.subtitle}"
                                Foreground="{StaticResource Subtext0Brush}" FontSize="13"/>
                 </StackPanel>
-                <Button Grid.Column="1" Content="{services:Loc tasks.clearCompleted}"
-                        Style="{StaticResource SecondaryButton}"
-                        Command="{Binding ClearCompletedCommand}"
-                        VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Asks first: the agent's dev servers are in this list too. -->
+                    <Button Content="{services:Loc tasks.stopAll}"
+                            Style="{StaticResource SecondaryButton}"
+                            Command="{Binding StopAllCommand}"
+                            Margin="0,0,8,0"/>
+                    <Button Content="{services:Loc tasks.clearCompleted}"
+                            Style="{StaticResource SecondaryButton}"
+                            Command="{Binding ClearCompletedCommand}"/>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -117,11 +124,12 @@
                         </GridViewColumn>
 
                         <!-- Name Column -->
-                        <GridViewColumn Header="{services:Loc tasks.colName}" Width="180">
+                        <GridViewColumn Header="{services:Loc tasks.colName}" Width="160">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}"
                                                FontFamily="{StaticResource MainFont}" FontSize="12"
+                                               ToolTip="{Binding Cwd}"
                                                TextTrimming="CharacterEllipsis" Margin="4,2"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
@@ -181,8 +189,57 @@
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
 
+                        <!-- Kind Column (command / file server) -->
+                        <GridViewColumn Header="{services:Loc tasks.colKind}" Width="100">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Kind, Converter={StaticResource TaskKindLabel}}"
+                                               Foreground="{StaticResource Subtext0Brush}"
+                                               FontFamily="{StaticResource MainFont}" FontSize="11"
+                                               TextTrimming="CharacterEllipsis" Margin="4,2"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+
+                        <!-- Port Column -->
+                        <GridViewColumn Header="{services:Loc tasks.colPort}" Width="60">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding PortText}" Foreground="{StaticResource Subtext0Brush}"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="11" Margin="4,2"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+
+                        <!-- URL Column: opens in the user's browser (loopback URLs only) -->
+                        <GridViewColumn Header="{services:Loc tasks.colUrl}" Width="200">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Margin="4,2" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                               TextTrimming="CharacterEllipsis">
+                                        <Hyperlink Command="{Binding DataContext.OpenUrlCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                   CommandParameter="{Binding}"
+                                                   Foreground="{StaticResource BlueBrush}"
+                                                   ToolTip="{services:Loc tasks.openUrlTip}">
+                                            <Run Text="{Binding Url, Mode=OneWay}"/>
+                                        </Hyperlink>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+
+                        <!-- Exit code Column -->
+                        <GridViewColumn Header="{services:Loc tasks.colExit}" Width="56">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding ExitCodeText}" Foreground="{StaticResource Overlay1Brush}"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="11" Margin="4,2"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+
                         <!-- Command Column -->
-                        <GridViewColumn Header="{services:Loc tasks.colCommand}" Width="300">
+                        <GridViewColumn Header="{services:Loc tasks.colCommand}" Width="260">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Command}" Foreground="{StaticResource Subtext0Brush}"
@@ -240,6 +297,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <TextBox Grid.Column="0"
@@ -262,6 +320,11 @@
                 <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Margin="2,6,0,0" FontSize="11"
                            Text="{Binding WorkingDirectoryText}"
                            Foreground="{StaticResource Overlay0Brush}" TextTrimming="CharacterEllipsis"/>
+
+                <!-- Why a start was refused / what Stop all did — empty most of the time. -->
+                <TextBlock Grid.Row="2" Grid.ColumnSpan="3" Margin="2,4,0,0" FontSize="11"
+                           Text="{Binding StatusText}" TextWrapping="Wrap"
+                           Foreground="{StaticResource YellowBrush}"/>
             </Grid>
         </Border>
 

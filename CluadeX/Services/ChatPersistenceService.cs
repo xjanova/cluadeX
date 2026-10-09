@@ -9,10 +9,13 @@ namespace CluadeX.Services;
 public class ChatPersistenceService
 {
     private readonly DatabaseService _db;
+    /// <summary>For the chat's saved screenshots (DataRoot\screens\&lt;chat&gt;); null = not wired (old callers).</summary>
+    private readonly SettingsService? _settings;
 
-    public ChatPersistenceService(DatabaseService db)
+    public ChatPersistenceService(DatabaseService db, SettingsService? settings = null)
     {
         _db = db;
+        _settings = settings;
     }
 
     /// <summary>Save a single chat session.</summary>
@@ -55,14 +58,23 @@ public class ChatPersistenceService
         }
     }
 
-    /// <summary>Delete a session.</summary>
+    /// <summary>Delete a session — and the screenshots its agent turns saved (browsing data: page captures of
+    /// possibly logged-in sites must not outlive the chat the user deleted).</summary>
     public void DeleteSession(string sessionId)
     {
+        bool deleted = false;
         try
         {
             _db.DeleteSession(sessionId);
+            deleted = true;
         }
         catch { }
+        // Only once the chat is really gone — a failed delete leaves the chat AND its screenshots.
+        if (deleted && _settings != null && !string.IsNullOrWhiteSpace(sessionId))
+        {
+            try { Vision.ToolImageWire.DeleteSessionImages(Vision.ToolImageWire.StoreFor(_settings), sessionId); }
+            catch { /* best-effort: the 7-day prune still removes them */ }
+        }
     }
 
     /// <summary>False when the chat database failed its integrity check (automatic cleanup is then off).</summary>

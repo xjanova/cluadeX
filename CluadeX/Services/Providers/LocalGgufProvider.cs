@@ -238,6 +238,11 @@ public class LocalGgufProvider : IAiProvider
     public bool SupportsNativeToolUse
         => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsNativeToolUse;
 
+    /// <summary>Tool images: only through the llama-server backend, and only when it has a vision projector —
+    /// false today (LLamaSharp in-process never sees images).</summary>
+    public bool SupportsToolResultImages(string modelId)
+        => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsToolResultImages(modelId);
+
     public Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages,
         string systemPrompt,

@@ -38,6 +38,8 @@
        harness never writes the user's real ~/.cluadex. The API key is only READ from there. -->
   <ItemGroup>
     <None Include="portable.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- ImageWire: the no-image Anthropic request bodies captured from the build before tool images existed. -->
+    <None Include="fixtures\*.golden.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

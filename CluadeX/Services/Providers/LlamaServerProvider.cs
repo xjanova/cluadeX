@@ -162,6 +162,8 @@ public class LlamaServerProvider : ApiProviderBase
         {
             args.AddRange(new[] { "--tensor-split", tensorSplit });
         }
+        // Vision needs a multimodal projector; without one, tool images are omitted (and the model is told).
+        _launchedWithMmproj = args.Any(a => a.StartsWith("--mmproj", StringComparison.OrdinalIgnoreCase));
 
         string fileName = Path.GetFileName(modelPath);
         progress?.Report($"Starting llama-server with {fileName}...");
@@ -526,6 +528,14 @@ public class LlamaServerProvider : ApiProviderBase
     // Gated on a setting so users with non-tool GGUFs can fall back to the [ACTION:] text loop.
     public override bool SupportsNativeToolUse => _settingsService.Settings.LocalNativeToolUseEnabled;
 
+    // ─── Tool images: only with a multimodal projector (--mmproj), which CluadeX does not pass today ───
+    private bool _launchedWithMmproj;
+
+    public override bool SupportsToolResultImages(string modelId) => _launchedWithMmproj && IsServerRunning;
+
+    protected override ChatToolImageMode ToolImageMode =>
+        SupportsToolResultImages("") ? ChatToolImageMode.ImageUrlMessage : ChatToolImageMode.Omit;
+
     /// <summary>
     /// Native tool-calling via llama-server's OpenAI-compatible endpoint. Requires the loaded model's
     /// chat template to support tools (Qwen2.5-Coder, Llama 3.x, Hermes, Mistral…) — we already start
@@ -564,7 +574,8 @@ public class LlamaServerProvider : ApiProviderBase
 
         // Clamp AFTER assembling messages+tools so the estimate reflects the real prompt footprint (tool
         // schemas are rendered into the prompt by --jinja, so they count toward the window too).
-        int approxPromptTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj));
+        int approxPromptTokens = Math.Max(0, CluadeX.Helpers.TokenBudget.EstimateTokens(JsonSerializer.Serialize(requestObj))
+            + ToolImageTokenAdjustment(messages));
         requestObj["max_tokens"] = CluadeX.Helpers.TokenBudget.ClampMaxTokens((int)settings.ContextSize, approxPromptTokens, settings.MaxTokens);
 
         var body = JsonSerializer.Serialize(requestObj);

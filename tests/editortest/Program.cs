@@ -612,10 +612,14 @@ internal static class Program
                 $"alias={buildAlias}/{testAlias} build={rb.ExitCode} {rb.Message} | tests={rt.ExitCode} {rt.Message} | none={rbOk.ExitCode} {rbOk.Message}");
             var editorKeys = (Dictionary<string, Dictionary<string, string>>)typeof(LocalizationService).Assembly
                 .GetType("CluadeX.Services.Localization.EditorKeys")!.GetField("Keys", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
-            Check("H10g", "the four shell-safety descriptions (en + th, and the English fallback) name every tool they cover",
-                shellIds.All(id => new[] { "en", "th" }.All(lang =>
-                    new[] { "run_command", "task_create", "powershell", "run_build", "run_tests" }.All(editorKeys[$"hookb.{id}.desc"][lang].Contains)))
-                && shellIds.All(id => catalog.First(b => b.Id == id).Description.Contains("run_build / run_tests")));
+            // bg_start (a background dev server; task_create is its alias) is matched too since T2 — HookBundleService.ShellCommandTools.
+            var coveredTools = HookBundleService.ShellCommandTools.Split('|');
+            Check("H10g", "the four shell-safety descriptions (en + th, and the English fallback) name every tool they cover (bg_start included)",
+                coveredTools.Contains("bg_start")
+                && shellIds.All(id => new[] { "en", "th" }.All(lang => coveredTools.All(editorKeys[$"hookb.{id}.desc"][lang].Contains)))
+                && shellIds.All(id => coveredTools.All(catalog.First(b => b.Id == id).Description.Contains)),
+                string.Join(" | ", shellIds.SelectMany(id => new[] { "en", "th" }.Select(lang =>
+                    $"{id}.{lang} missing [{string.Join(",", coveredTools.Where(t => !editorKeys[$"hookb.{id}.desc"][lang].Contains(t)))}]"))));
 
             var t = await RunBundled("pretool-dangerous-cmd-warn", Shell("task_create", "command", "rm -rf /"));
             var ps = await RunBundled("pretool-dangerous-cmd-warn", Shell("powershell", "script", "Format-Volume -DriveLetter D"));
