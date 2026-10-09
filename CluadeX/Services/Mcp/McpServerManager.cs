@@ -158,11 +158,86 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     public McpToolRegistry ToolRegistry => _toolRegistry;
     public IReadOnlyDictionary<string, McpServerConfig> Configs => _configs;
 
-    public McpServerManager(SettingsService settingsService, DebugLogService? log = null)
+    public McpServerManager(SettingsService settingsService, DebugLogService? log = null, IServiceProvider? services = null)
     {
         _settingsService = settingsService;
         _log = log;
+        _services = services;
         _toolRegistry = new McpToolRegistry();
+    }
+
+    // ─── Launch resolvers (S0 seam) ───────────────────────────────────
+    // Resolved from DI on the first start, not injected: a resolver (the Chrome connector) itself depends on this
+    // manager to write its managed entry, and constructor injection would make that a dependency cycle.
+    private readonly IServiceProvider? _services;
+    private IMcpLaunchResolver[]? _diLaunchResolvers;
+    private readonly List<IMcpLaunchResolver> _addedLaunchResolvers = new();
+    // A resolver refused to spawn this server (no executable, too old): retrying cannot help, so the supervisor stops
+    // and the refusal — not "gave up after N attempts" — stays the state's message.
+    private readonly ConcurrentDictionary<string, string> _launchRefusals = new();
+
+    /// <summary>Add a launch resolver by hand (a harness, or a manager built without DI).</summary>
+    public void AddLaunchResolver(IMcpLaunchResolver resolver)
+    {
+        ArgumentNullException.ThrowIfNull(resolver);
+        lock (_addedLaunchResolvers) _addedLaunchResolvers.Add(resolver);
+    }
+
+    private List<IMcpLaunchResolver> LaunchResolvers()
+    {
+        var fromDi = _diLaunchResolvers;
+        if (fromDi == null)
+        {
+            try
+            {
+                fromDi = _services == null ? Array.Empty<IMcpLaunchResolver>()
+                    : ((IEnumerable<IMcpLaunchResolver>?)_services.GetService(typeof(IEnumerable<IMcpLaunchResolver>)) ?? Array.Empty<IMcpLaunchResolver>())
+                        .Where(r => r != null).ToArray();
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("MCP", "MCP launch resolvers could not be created", ex);
+                fromDi = Array.Empty<IMcpLaunchResolver>();
+            }
+            _diLaunchResolvers = fromDi;
+        }
+        var all = new List<IMcpLaunchResolver>(fromDi);
+        lock (_addedLaunchResolvers) all.AddRange(_addedLaunchResolvers);
+        return all;
+    }
+
+    /// <summary>What to spawn for <paramref name="name"/> this time: the first resolver with an answer decides;
+    /// none → the configured command line. The configured entry itself is never changed.</summary>
+    private async Task<(McpServerConfig Launch, string? Refusal)> ResolveLaunchAsync(string name, McpServerConfig configured, CancellationToken ct)
+    {
+        foreach (var resolver in LaunchResolvers())
+        {
+            McpLaunchResolution? answer;
+            try { answer = await resolver.ResolveAsync(name, configured, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _log?.Warn("MCP", $"[{name}] launch resolver failed", ex);
+                return (configured, string.Format(L("mcp.launch.failed"), name));
+            }
+            if (answer == null) continue;
+            if (!string.IsNullOrWhiteSpace(answer.Refusal)) return (configured, answer.Refusal);
+            if (answer.Launch is { } launch)
+            {
+                return (new McpServerConfig
+                {
+                    Name = name,
+                    Command = launch.Command ?? "",
+                    Args = launch.Args != null ? new List<string>(launch.Args) : new List<string>(),
+                    Env = launch.Env != null ? new Dictionary<string, string>(launch.Env) : null,
+                    Enabled = configured.Enabled,
+                    ManagedBy = configured.ManagedBy,
+                    StartupTimeoutSeconds = launch.StartupTimeoutSeconds ?? configured.StartupTimeoutSeconds,
+                }, null);
+            }
+            return (configured, null);
+        }
+        return (configured, null);
     }
 
     // ─── "Which server is the brain?" — ONE definition ────────────────
@@ -786,7 +861,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     public bool SaveConfig(params string[] names) => WriteConfig(names);
 
     /// <summary>
-    /// The one writer. Each name is written if it is in memory (its known fields: command/args/env/enabled) or
+    /// The one writer. Each name is written if it is in memory (its known fields: command/args/env/enabled, plus
+    /// managedBy/startupTimeoutSeconds when set) or
     /// deleted from the file if it is a pending removal; nothing else in the file changes. Before the first write
     /// of a session — and before any write over a file that has // comments, which a re-serialized file loses —
     /// the file is copied to mcp_servers.json.bak.
@@ -866,6 +942,15 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                 else
                     RemoveCaseInsensitive(entry, "env");
                 Put("enabled", JsonValue.Create(cfg.Enabled), cfg.Enabled);
+                // Written when set, removed when cleared — so an entry that never had them gains nothing.
+                if (!string.IsNullOrEmpty(cfg.ManagedBy))
+                    SetKnown(entry, "managedBy", JsonValue.Create(cfg.ManagedBy));
+                else
+                    RemoveCaseInsensitive(entry, "managedBy");
+                if (cfg.StartupTimeoutSeconds is int startupSeconds && startupSeconds > 0)
+                    SetKnown(entry, "startupTimeoutSeconds", JsonValue.Create(startupSeconds));
+                else
+                    RemoveCaseInsensitive(entry, "startupTimeoutSeconds");
             }
 
             string json = root.ToJsonString(ConfigWriteOpts);
@@ -1098,9 +1183,37 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         await gate.WaitAsync(ct);
         try
         {
-            return await StartServerCoreAsync(name, config, ct);
+            // Every start — first start, Restart, supervisor respawn — asks the launch resolvers what to spawn.
+            var (launch, refusal) = await ResolveLaunchAsync(name, config, ct);
+            if (refusal != null)
+            {
+                _launchRefusals[name] = refusal;
+                await RetireRefusedServerAsync(name);
+                Log(name, refusal);
+                SetState(name, McpServerState.Failed, refusal);
+                return false;
+            }
+            _launchRefusals.TryRemove(name, out _);
+            return await StartServerCoreAsync(name, launch, ct);
         }
         finally { gate.Release(); }
+    }
+
+    /// <summary>A start was refused: whatever was running under this name stops, with its tools, so the state
+    /// (Failed + the reason) is the truth.</summary>
+    private async Task RetireRefusedServerAsync(string name)
+    {
+        _supervised.TryRemove(name, out _);
+        if (_transports.TryRemove(name, out var running))
+        {
+            try { await running.StopAsync(); } catch { }
+            try { running.Dispose(); } catch { }
+        }
+        if (_toolRegistry.GetToolsForServer(name).Count > 0)
+        {
+            _toolRegistry.RemoveServer(name);
+            try { OnToolsChanged?.Invoke(); } catch { }
+        }
     }
 
     private async Task<bool> StartServerCoreAsync(string name, McpServerConfig config, CancellationToken ct)
@@ -1324,6 +1437,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                     Log(name, $"Reconnected after {attempt} attempt(s)");
                     return;
                 }
+                // A launch resolver refused (no executable, too old): more attempts cannot change that, and its
+                // reason — already the state's message — says what to do.
+                if (_launchRefusals.ContainsKey(name)) return;
             }
 
             string give = string.Format(L("mcp.supervisor.gaveUp"), MaxReconnectAttempts, RestartRoute(name));

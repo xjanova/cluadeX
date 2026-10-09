@@ -112,7 +112,7 @@ public class FeaturesViewModel : ViewModelBase
     public static readonly HashSet<string> GatedFeatures = new(StringComparer.Ordinal)
     {
         "feature.openai", "feature.anthropic", "feature.gemini", "feature.multiProvider",
-        "feature.github", "feature.webFetch", "feature.taskManager",
+        "feature.github", "feature.webFetch", "feature.taskManager", "feature.devPreview",
     };
 
     private bool IsUnlockedForDisplay(string key) => !GatedFeatures.Contains(key) || _activation.IsFeatureUnlocked(key);

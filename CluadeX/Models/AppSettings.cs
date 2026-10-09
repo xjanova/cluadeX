@@ -62,8 +62,35 @@ public class AppSettings
     // Agent settings
     public bool AutoExecuteCode { get; set; } = false;
     public int MaxAutoFixAttempts { get; set; } = 3;
-    /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks.</summary>
-    public int MaxAgentIterations { get; set; } = 25;
+    /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks —
+    /// 50, not 25: serve → open → check the console → fix → re-check a web page alone takes a dozen steps.</summary>
+    public int MaxAgentIterations { get; set; } = 50;
+
+    /// <summary>Start every chat in "Accept edits" mode: write_file / edit_file / multi_edit / create_directory
+    /// INSIDE the open project run without a prompt (never execute, MCP, browse or paths outside the project).</summary>
+    public bool AcceptEditsDefault { get; set; } = false;
+
+    // ─── Dev Preview: background processes + built-in browser (feature.devPreview) ───
+    /// <summary>Built-in browser engine: "auto" (WebView2, else an installed Edge/Chrome over CDP), "webview2" or "cdp".</summary>
+    public string BrowserEngine { get; set; } = "auto";
+    /// <summary>Longest edge, in pixels, of a screenshot sent to a model (also capped at ~1.15 MP).</summary>
+    public int BrowserScreenshotMaxEdge { get; set; } = 1568;
+    /// <summary>Pages outside localhost / the open project: "ask" (default), "allow" or "deny".</summary>
+    public string BrowserAllowExternal { get; set; } = "ask";
+    /// <summary>Most background processes (dev servers, watchers) running at once.</summary>
+    public int BgMaxProcesses { get; set; } = 8;
+    /// <summary>Tool images kept in the conversation sent to the model; older ones become a text note with the file path.</summary>
+    public int KeepRecentImages { get; set; } = 2;
+
+    // ─── Claude in Chrome connector (through Claude Code) ───
+    /// <summary>The user switched the "Browser (Claude in Chrome)" connector on.</summary>
+    public bool ChromeConnectorEnabled { get; set; } = false;
+    /// <summary>Full path of claude.exe (or cli.js) to use instead of the one CluadeX finds. Empty = find it.</summary>
+    public string ClaudeCodePathOverride { get; set; } = "";
+    /// <summary>The browser the connector drives when several are connected (the extension's device id). Empty = ask.</summary>
+    public string ChromePairedDeviceId { get; set; } = "";
+    /// <summary>Let Claude in Chrome act without its own per-action prompts — only honoured in bypass mode.</summary>
+    public bool ChromeActWithoutAsking { get; set; } = false;
     /// <summary>IDLE timeout (seconds) for an interactive model call in the chat/agent loop: the window
     /// resets on every streamed token, so a healthy (even slow) generation is never cut off — only a
     /// connection that produces NOTHING for this long is aborted, surfacing a clean "timed out" error
@@ -294,6 +321,10 @@ public class FeatureToggles
 
     // MCP Servers
     public bool McpServers { get; set; } = true;
+
+    // Dev Preview — bg_* background processes and browser_* built-in browser. On by default; the license gate
+    // (feature.devPreview, see Services/Tools/DevPreviewGate) decides separately whether it may run.
+    public bool DevPreview { get; set; } = true;
 
     // Security
     public bool PermissionSystem { get; set; } = true;

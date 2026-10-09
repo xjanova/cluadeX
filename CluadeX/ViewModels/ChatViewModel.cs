@@ -1097,6 +1097,8 @@ public class ChatViewModel : ViewModelBase
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _turnSession = CurrentSession;
         _turnDone = done;
+        // Per-chat tool state (saved screenshots, "allow once for this site") follows the chat that owns the turn.
+        _agentToolService.SessionKey = CurrentSession?.Id ?? "default";
         return done;
     }
 

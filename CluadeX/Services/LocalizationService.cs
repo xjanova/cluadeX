@@ -17,7 +17,8 @@ public class LocalizationService
     static LocalizationService()
     {
         foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys,
-                                      Localization.SparkKeys.Keys, Localization.BrainKeys.Keys })
+                                      Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
+                                      Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }
@@ -390,6 +391,35 @@ public class LocalizationService
         ["feature.plugins.desc"] = new() { ["en"] = "Extend CluadeX with custom plugins. Browse, install, enable/disable from Plugin Manager.", ["th"] = "ขยายความสามารถด้วยปลั๊กอิน เรียกดู ติดตั้ง เปิด/ปิด จาก Plugin Manager" },
         ["feature.taskManager"] = new() { ["en"] = "Task Manager", ["th"] = "จัดการงาน" },
         ["feature.taskManager.desc"] = new() { ["en"] = "Run background shell commands with status tracking, output capture, and stop/kill.", ["th"] = "รันคำสั่ง Shell เบื้องหลังพร้อมติดตามสถานะ บันทึกผลลัพธ์ และหยุด/ฆ่ากระบวนการ" },
+        // Dev Preview (bg_* background processes + browser_* built-in browser) — gated by DevPreviewGate.
+        ["feature.devPreview"] = new() { ["en"] = "Dev Preview", ["th"] = "Dev Preview (พรีวิวงานเว็บ)" },
+        ["feature.devPreview.desc"] = new() { ["en"] = "The agent runs your dev server in the background, then opens, sees and tests the page in CluadeX's built-in browser — console, screenshots, clicks and keys.", ["th"] = "เอเจนต์รันเซิร์ฟเวอร์ dev เบื้องหลัง แล้วเปิด ดู และทดสอบหน้าเว็บในเบราว์เซอร์ในตัวของ CluadeX — อ่าน console ถ่ายภาพหน้าจอ คลิก และกดแป้นได้" },
+        ["devPreview.locked.trial"] = new()
+        {
+            ["en"] = "{0} is part of Dev Preview, which needs an activated license — this PC has none yet. Start the free trial: click \"{1}\" in the title bar, then \"{2}\" (free and time-limited, no payment). Already have a key? Enter it in the same window.",
+            ["th"] = "{0} เป็นส่วนหนึ่งของ Dev Preview ซึ่งต้องเปิดใช้งานไลเซนส์ก่อน — เครื่องนี้ยังไม่มี เริ่มทดลองใช้ฟรีได้เลย: คลิก \"{1}\" ที่แถบด้านบน แล้วกด \"{2}\" (ฟรี มีระยะเวลาจำกัด ไม่ต้องจ่ายเงิน) — ถ้ามีคีย์อยู่แล้ว ใส่คีย์ในหน้าต่างเดียวกันได้เลย",
+        },
+        ["devPreview.locked.trialUsed"] = new()
+        {
+            ["en"] = "{0} is part of Dev Preview, which needs an activated license. This PC has already used its free trial — click \"{1}\" in the title bar to enter a key or get one.",
+            ["th"] = "{0} เป็นส่วนหนึ่งของ Dev Preview ซึ่งต้องเปิดใช้งานไลเซนส์ก่อน — เครื่องนี้ใช้สิทธิ์ทดลองฟรีไปแล้ว คลิก \"{1}\" ที่แถบด้านบนเพื่อใส่คีย์หรือซื้อคีย์",
+        },
+        ["tool.module.unavailable"] = new()
+        {
+            ["en"] = "{0} is not available right now — the {1} component did not answer. Try again; if it keeps happening, restart CluadeX.",
+            ["th"] = "{0} ใช้งานไม่ได้ในขณะนี้ — ส่วน {1} ไม่ตอบสนอง ลองใหม่อีกครั้ง ถ้ายังเป็นอยู่ให้เปิด CluadeX ใหม่",
+        },
+        ["mcp.policy.hidden"] = new() { ["en"] = "{0} is not available to the agent.", ["th"] = "{0} ไม่ได้เปิดให้เอเจนต์ใช้งาน" },
+        ["mcp.launch.failed"] = new()
+        {
+            ["en"] = "Could not prepare \"{0}\" to start. Press Restart on the MCP Servers page to try again — details are in the Debug Log.",
+            ["th"] = "เตรียมเริ่ม \"{0}\" ไม่สำเร็จ — กด Restart ในหน้าเซิร์ฟเวอร์ MCP เพื่อลองใหม่ (รายละเอียดอยู่ใน Debug Log)",
+        },
+        ["devPreview.off"] = new()
+        {
+            ["en"] = "{0} is part of Dev Preview, which is switched off. Turn on \"{1}\" on the Features page to use it.",
+            ["th"] = "{0} เป็นส่วนหนึ่งของ Dev Preview ซึ่งถูกปิดไว้ — เปิด \"{1}\" ในหน้าฟีเจอร์ (Features) ก่อนจึงจะใช้ได้",
+        },
 
         // ═══════ PLUGIN MANAGER ═══════
         ["plugins.title"] = new() { ["en"] = "Plugin Manager", ["th"] = "จัดการปลั๊กอิน" },

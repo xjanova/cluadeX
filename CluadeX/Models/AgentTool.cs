@@ -109,6 +109,32 @@ public enum ToolType
 
     // Instinct maintenance
     InstinctEvolve,  // Merge near-duplicate learned instincts (semantic clustering)
+
+    // ── Members below are executed by tool MODULES (Services/Tools/IAgentToolModule), not by
+    //    AgentToolService itself. Appended at the end so no existing member changes its value. ──
+
+    // Background processes and dev servers (Services/Background — feature.devPreview)
+    BgStart,         // Start a command in the background (dev server, watcher) and report when it is ready
+    BgServe,         // Serve a folder over http://localhost with the built-in static file server
+    BgOutput,        // Read a background process's output (tail / since last read)
+    BgStop,          // Stop a background process with its whole process tree
+    BgList,          // List background processes (id, port, url, status)
+
+    // Built-in browser (Services/Browser — feature.devPreview)
+    BrowserOpen,       // Open / navigate the built-in browser
+    BrowserScreenshot, // Capture the page (image for vision models + a pixel digest in text)
+    BrowserConsole,    // Read console messages and page errors
+    BrowserNetwork,    // Read network requests
+    BrowserRead,       // Read the page as text / element tree
+    BrowserFind,       // Find elements and return refs
+    BrowserClick,      // Click an element or a point
+    BrowserPointer,    // Low-level pointer / touch sequences (press, hold, drag)
+    BrowserType,       // Type text into the focused element
+    BrowserKey,        // Press keys
+    BrowserScroll,     // Scroll the page or an element
+    BrowserEval,       // Run JavaScript in the page
+    BrowserResize,     // Emulate a viewport (mobile / tablet / desktop)
+    BrowserClose,      // Close the browser session
 }
 
 /// <summary>
@@ -142,7 +168,10 @@ public class ToolCall
         or ToolType.TaskList or ToolType.TaskOutput
         or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
         or ToolType.LspDiagnostics or ToolType.CodebaseSearch
-        or ToolType.ListSymbols or ToolType.FindSymbol => true,
+        or ToolType.ListSymbols or ToolType.FindSymbol
+        or ToolType.BgOutput or ToolType.BgList
+        or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
+        or ToolType.BrowserRead or ToolType.BrowserFind => true,
         _ => false,
     };
 
@@ -157,7 +186,10 @@ public class ToolCall
         or ToolType.TaskList or ToolType.TaskOutput
         or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
         or ToolType.LspDiagnostics or ToolType.CodebaseSearch
-        or ToolType.ListSymbols or ToolType.FindSymbol => true,
+        or ToolType.ListSymbols or ToolType.FindSymbol
+        or ToolType.BgOutput or ToolType.BgList
+        or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
+        or ToolType.BrowserRead or ToolType.BrowserFind => true,
         _ => false,
     };
 }
@@ -182,6 +214,15 @@ public class ToolResult
 
     /// <summary>For file-mutating tools: the (relative) path that changed — drives the live editor follow.</summary>
     public string? FilePath { get; set; }
+
+    /// <summary>
+    /// Images the tool produced, for models that can see them (null = none). The base64 lives ONLY here:
+    /// <see cref="Output"/> carries a short "[image N: WxH attached, saved at …]" marker, so the text budgets
+    /// can never cut an image in half and nothing that persists Output (chat history, codex.db) stores image
+    /// bytes. Never serialized.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ToolImage>? Images { get; set; }
 }
 
 /// <summary>Payload for a human-in-the-loop permission prompt (carries an optional preview diff).</summary>

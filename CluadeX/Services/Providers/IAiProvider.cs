@@ -104,6 +104,12 @@ public class ContentBlock
     public string? ToolUseId { get; set; }
     public string? Content { get; set; }
     public bool? IsError { get; set; }
+
+    /// <summary>tool_result: images that go with <see cref="Content"/> (null = text only). Each provider
+    /// serializes them in its own wire format; a provider that cannot see images drops them and says so in
+    /// text. Kept apart from Content so the text budgets never touch the base64.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ToolImage>? Images { get; set; }
 }
 
 /// <summary>Response from a native tool_use API call.</summary>

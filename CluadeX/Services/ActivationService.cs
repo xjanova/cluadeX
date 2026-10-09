@@ -386,6 +386,10 @@ public class ActivationService
             "feature.github" => false,
             "feature.webFetch" => false,
             "feature.taskManager" => false,
+            // Dev Preview (bg_* + browser_* tools) mirrors feature.taskManager: locked on the free tier, unlocked by
+            // every activated license INCLUDING the free time-limited trial key (owner's decision). DevPreviewGate
+            // turns the lock into a refusal that says how to start the trial.
+            "feature.devPreview" => false,
             _ => false,
         };
     }

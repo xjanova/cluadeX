@@ -1245,7 +1245,19 @@ public class HookService
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".cluadex", "hooks-bundled.json");
         if (File.Exists(bundledHooksFile))
-            hooks.AddRange(ParseHooksFile(bundledHooksFile));
+        {
+            // The projection may have been written by an OLDER CluadeX on this PC (the installed app and a dev build
+            // share ~/.cluadex) with 3000 ms PreToolUse timeouts. A PreToolUse timeout BLOCKS the tool, and a bundled
+            // hook's PowerShell cold start alone can pass 3 s on a loaded machine — so a bundled PreToolUse hook never
+            // gets less than the catalog's floor, whoever wrote the file.
+            foreach (var bundled in ParseHooksFile(bundledHooksFile))
+            {
+                if (string.Equals(bundled.Phase, "PreToolUse", StringComparison.OrdinalIgnoreCase)
+                    && bundled.TimeoutMs < HookBundleService.PreToolUseTimeoutMs)
+                    bundled.TimeoutMs = HookBundleService.PreToolUseTimeoutMs;
+                hooks.Add(bundled);
+            }
+        }
 
         // Enabled plugin hooks (from {plugins_dir}/{plugin_id}/hooks.json)
         try

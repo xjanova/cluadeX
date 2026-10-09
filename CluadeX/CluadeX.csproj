@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.69</Version>
+    <Version>3.0.70</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -79,6 +79,9 @@
     <!-- Real self-update: delta packages, atomic swap, rollback. Same version the
          BrainX client ships, so both apps behave identically under `vpk`. -->
     <PackageReference Include="Velopack" Version="1.1.1" />
+    <!-- Dev Preview built-in browser (Services/Browser). WebView2 runtime ships with Windows 10/11; the loader
+         lands in runtimes\win-x64|x86|arm64\native\WebView2Loader.dll for this AnyCPU build (root on publish -r). -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
   </ItemGroup>
 
   <!--

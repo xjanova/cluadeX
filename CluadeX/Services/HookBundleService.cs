@@ -335,6 +335,12 @@ public class HookBundleService
     /// payload's "command" — or, for powershell, "script".</summary>
     public const string ShellCommandTools = "run_command|task_create|powershell|run_build|run_tests";
 
+    /// <summary>Timeout of every bundled PreToolUse hook. A PreToolUse timeout BLOCKS the tool, and a bundled hook
+    /// is a PowerShell process whose cold start alone can pass 3 s on a loaded machine — at 3000 ms the advisory
+    /// dangerous-command check timed out and blocked a plain run_build (tooltest B2). 10 s covers a cold start
+    /// with room to spare; a hook that really hangs is still stopped.</summary>
+    public const int PreToolUseTimeoutMs = 10000;
+
     // ── Catalog — the 15 Sprint-3-#2 bundles ───────────────────────────
 
     private static List<HookBundle> BuildCatalog() => new()
@@ -348,7 +354,7 @@ public class HookBundleService
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-block-dev-server.ps1",
             SubstitutionTokens = new() { "{command}", "{cwd}" },
-            Category = "safety", Risk = "med", TimeoutMs = 5000,
+            Category = "safety", Risk = "med", TimeoutMs = PreToolUseTimeoutMs,
         },
         new HookBundle
         {
@@ -358,7 +364,7 @@ public class HookBundleService
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-git-push-confirm.ps1",
             SubstitutionTokens = new() { "{command}" },
-            Category = "safety", Risk = "high", TimeoutMs = 5000,
+            Category = "safety", Risk = "high", TimeoutMs = PreToolUseTimeoutMs,
         },
         new HookBundle
         {
@@ -368,7 +374,7 @@ public class HookBundleService
             Phase = "PreToolUse", Matcher = FileWriteTools,
             ScriptFile = "pretool-secret-scan.ps1",
             SubstitutionTokens = new() { "{path}", "{arguments}" },
-            Category = "safety", Risk = "high", TimeoutMs = 8000,
+            Category = "safety", Risk = "high", TimeoutMs = PreToolUseTimeoutMs,
             DefaultEnabled = true,
         },
         new HookBundle
@@ -379,7 +385,7 @@ public class HookBundleService
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-pre-commit-quality.ps1",
             SubstitutionTokens = new() { "{command}", "{cwd}" },
-            Category = "safety", Risk = "med", TimeoutMs = 8000,
+            Category = "safety", Risk = "med", TimeoutMs = PreToolUseTimeoutMs,
         },
         new HookBundle
         {
@@ -389,7 +395,7 @@ public class HookBundleService
             Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-dangerous-cmd-warn.ps1",
             SubstitutionTokens = new() { "{command}" },
-            Category = "safety", Risk = "high", TimeoutMs = 3000,
+            Category = "safety", Risk = "high", TimeoutMs = PreToolUseTimeoutMs,
             DefaultEnabled = true,
         },
 

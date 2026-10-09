@@ -29,6 +29,23 @@ public class McpServerConfig
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;
 
+    /// <summary>
+    /// Set when CluadeX itself owns this entry (e.g. "cluadex-chrome" for the Claude in Chrome connector): its
+    /// command/args are re-resolved by an <see cref="CluadeX.Services.Mcp.IMcpLaunchResolver"/> before every
+    /// start and the UI shows it as managed. Null for every server the user added. Omitted from the file when null.
+    /// </summary>
+    [JsonPropertyName("managedBy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ManagedBy { get; set; }
+
+    /// <summary>How long the initialize handshake may take, in seconds (null = the manager's default). Slow first
+    /// starts (npx/uvx downloading a package, a CLI that signs in) need more than the default. Omitted when null;
+    /// "30" written as a string by hand is read as 30.</summary>
+    [JsonPropertyName("startupTimeoutSeconds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int? StartupTimeoutSeconds { get; set; }
+
     /// <summary>Runtime: server name (key from config).</summary>
     [JsonIgnore]
     public string Name { get; set; } = "";
@@ -340,7 +357,9 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
         OnPropertyChanged(nameof(CommandLineDisplay));
     }
 
-    /// <summary>Convert back to McpServerConfig for persistence. Untouched args/env are copied verbatim.</summary>
+    /// <summary>Convert back to McpServerConfig for persistence. Untouched args/env are copied verbatim, and the
+    /// fields the page doesn't edit (ManagedBy, StartupTimeoutSeconds) are carried over — a Toggle on the MCP page
+    /// must not turn a CluadeX-managed entry into an ordinary one.</summary>
     public McpServerConfig ToConfig() => new()
     {
         Name = Name,
@@ -348,6 +367,8 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
         Args = ArgsFromText(ArgsText, _loadedArgsText, Original.Args),
         Env = EnvFromText(EnvString, _loadedEnvString, Original.Env),
         Enabled = Enabled,
+        ManagedBy = Original.ManagedBy,
+        StartupTimeoutSeconds = Original.StartupTimeoutSeconds,
     };
 
     /// <summary>Create a display item from config + runtime status.</summary>

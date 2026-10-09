@@ -4,6 +4,9 @@ using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using CluadeX.Models;
 using CluadeX.Services;
+using CluadeX.Services.Background;
+using CluadeX.Services.Browser;
+using CluadeX.Services.Chrome;
 using CluadeX.Services.Mcp;
 using CluadeX.ViewModels;
 
@@ -756,6 +759,16 @@ public partial class App : Application
         services.AddSingleton<Services.Providers.LlamaServerProvider>();
         services.AddSingleton<Services.Providers.LocalGgufProvider>();
 
+        // Tool images on disk (DataRoot\screens\<chat>\NNN.jpg) — screenshots and MCP images, pruned per chat.
+        services.AddSingleton(sp => new Services.Vision.ToolImageStore(sp.GetRequiredService<SettingsService>()));
+
+        // Extension seams. Each team registers its own services in its own file (tool modules as
+        // Services.Tools.IAgentToolModule, MCP policies / launch resolvers, shell interceptors, prompt sections,
+        // exit work as IAppShutdownHook) — this list is the only line here that names them.
+        services.AddBackgroundModule();
+        services.AddBrowserModule();
+        services.AddChromeConnector();
+
         // ViewModels
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<ChatViewModel>();
@@ -797,10 +810,32 @@ public partial class App : Application
             System.Diagnostics.Debug.WriteLine($"OnExit flush failed: {ex.Message}");
         }
 
+        // Exit work registered by the modules (stop background dev servers, close the browser engine) — each hook
+        // on its own, so one that throws can't keep the rest from running. Before the container is disposed.
+        RunShutdownHooks(_serviceProvider);
+
         if (_serviceProvider is IDisposable disposable)
             disposable.Dispose();
 
         base.OnExit(e);
+    }
+
+    /// <summary>Run every registered <see cref="IAppShutdownHook"/> once. Never throws.</summary>
+    internal static void RunShutdownHooks(IServiceProvider? provider)
+    {
+        if (provider == null) return;
+        IEnumerable<IAppShutdownHook> hooks;
+        try { hooks = provider.GetServices<IAppShutdownHook>().ToList(); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"OnExit: shutdown hooks could not be resolved: {ex.Message}");
+            return;
+        }
+        foreach (var hook in hooks)
+        {
+            try { hook?.OnAppShutdown(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"OnExit: {hook?.GetType().Name} failed: {ex.Message}"); }
+        }
     }
 
     // ─── Global Exception Handlers ───

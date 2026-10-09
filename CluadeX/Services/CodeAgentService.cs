@@ -182,12 +182,15 @@ public class CodeAgentService
     /// by the caller, never guessed: a hardcoded fraction under-reserved a Thai system prompt and the
     /// request overflowed at n_prompt_tokens=12729 against a 12288 window.
     /// </param>
+    /// <param name="moduleCoreNames">Tool-module names that join the core set (a module's LocalCoreToolNames —
+    /// e.g. bg_serve / browser_open in a web project).</param>
     private static List<Services.Providers.ToolSchema> FitLocalToolSchemas(
         List<Services.Providers.ToolSchema> all, int ctxTokens, int reservedTokens,
-        out int mcpKept, out int mcpDropped)
+        out int mcpKept, out int mcpDropped, IReadOnlySet<string>? moduleCoreNames = null)
     {
         var builtIns = all.Where(t => !IsMcpToolName(t.Name)).ToList();
         var mcp = all.Where(t => IsMcpToolName(t.Name)).ToList();
+        moduleCoreNames ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Brain recall goes to the front of the whole queue. The brain-first rule in
         // the system prompt tells the model to search BrainX before starting work,
         // and at ctx=12288 the fit was dropping 63 of the brain's 83 schemas in
@@ -197,7 +200,7 @@ public class CodeAgentService
         var pinned = mcp.Where(t => IsPinnedMcpTool(t.Name)).ToList();
         mcp = mcp.Where(t => !IsPinnedMcpTool(t.Name)).ToList();
 
-        var core = builtIns.Where(t => CoreLocalToolNames.Contains(t.Name)).ToList();
+        var core = builtIns.Where(t => CoreLocalToolNames.Contains(t.Name) || moduleCoreNames.Contains(t.Name)).ToList();
         if (core.Count == 0) core = builtIns; // guard: never nuke all tools on a name mismatch
         var tail = ctxTokens < 16000
             ? new List<Services.Providers.ToolSchema>()          // small ctx: core built-ins only
@@ -945,8 +948,10 @@ public class CodeAgentService
         CostTrackingService? costTrackingService = null,
         BrainSyncService? brainSync = null,
         RepoMapService? repoMap = null,
-        DebugLogService? debugLog = null)
+        DebugLogService? debugLog = null,
+        IEnumerable<Tools.IPromptSectionProvider>? promptSections = null)
     {
+        _promptSections = promptSections?.Where(p => p != null).ToArray() ?? Array.Empty<Tools.IPromptSectionProvider>();
         _debugLog = debugLog;
         _brainSync = brainSync;
         _repoMap = repoMap;
@@ -967,6 +972,83 @@ public class CodeAgentService
     // Agent-loop tracing: when the user reports "it just doesn't work", the daily log file must be
     // able to answer WHAT the model returned and WHERE the turn died. Startup lines alone can't.
     private readonly DebugLogService? _debugLog;
+
+    // ─── Tool-group prompt sections (S0 seam) ───
+    private readonly Tools.IPromptSectionProvider[] _promptSections;
+
+    /// <summary>Names the registered tool modules add to the small-context CORE set this turn.</summary>
+    private HashSet<string> ModuleCoreToolNames()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var module in _agentToolService.ToolModules)
+        {
+            try { if (module.LocalCoreToolNames is { } core) names.UnionWith(core); }
+            catch (Exception ex) { _debugLog?.Warn("Agent", $"tool module {module.Id}: LocalCoreToolNames threw", ex); }
+        }
+        return names;
+    }
+
+    /// <summary>
+    /// The prompt sections of the tool groups the model is actually offered this turn — a tool module's section
+    /// when one of its tools is in the catalogue, an IPromptSectionProvider's when it owns an offered tool. A model
+    /// is never taught about tools it does not have. Same offer rules as the tool list: nothing on a tool-less
+    /// local turn, the core set (plus module core names, plus MCP) on a small native local window.
+    /// </summary>
+    private void AppendToolGroupSections(StringBuilder sb, bool isLocalProvider, int contextTokens, bool includeToolDefs, bool localNativeTools)
+    {
+        var modules = _agentToolService.ToolModules;
+        if (modules.Count == 0 && _promptSections.Length == 0) return;
+        if (isLocalProvider && !includeToolDefs && !localNativeTools) return;
+
+        List<string> offered;
+        try { offered = _agentToolService.BuildNativeToolSchemas().Select(t => t.Name).ToList(); }
+        catch (Exception ex) { _debugLog?.Warn("Agent", "tool sections: catalogue build failed", ex); return; }
+        if (isLocalProvider && localNativeTools && contextTokens < 16000)
+        {
+            var moduleCore = ModuleCoreToolNames();
+            offered = offered.Where(n => IsMcpToolName(n) || CoreLocalToolNames.Contains(n) || moduleCore.Contains(n)).ToList();
+        }
+        if (offered.Count == 0) return;
+
+        var context = new Tools.PromptSectionContext
+        {
+            OfferedToolNames = offered,
+            IsLocalModel = isLocalProvider,
+            ContextTokens = contextTokens,
+            NativeTools = isLocalProvider ? localNativeTools : ActiveProviderHasNativeTools(),
+            Language = _localizationService.CurrentLanguage,
+            HasProject = _fileSystemService.HasWorkingDirectory,
+        };
+
+        void Append(string id, Func<string?> build)
+        {
+            string? text;
+            try { text = build(); }
+            catch (Exception ex) { _debugLog?.Warn("Agent", $"prompt section {id} threw", ex); return; }
+            if (string.IsNullOrWhiteSpace(text)) return;
+            sb.AppendLine();
+            sb.AppendLine(text.TrimEnd());
+        }
+
+        foreach (var module in modules)
+        {
+            bool mine = offered.Any(n =>
+            {
+                try { return _agentToolService.ResolveToolTypePublic(n) is { } t && module.ToolTypes.Contains(t); }
+                catch { return false; }
+            });
+            if (mine) Append(module.Id, () => module.GetPromptSection(context));
+        }
+        foreach (var provider in _promptSections)
+        {
+            bool mine = offered.Any(n =>
+            {
+                try { return provider.OwnsTool(n); }
+                catch { return false; }
+            });
+            if (mine) Append(provider.Id, () => provider.BuildSection(context));
+        }
+    }
 
     /// <summary>Gets system prompt with or without tool definitions based on whether a project is open.</summary>
     public string GetSystemPrompt()
@@ -1155,9 +1237,10 @@ public class CodeAgentService
                 // are building right now. Only the token BUDGET is unknown here — which built-ins qualify,
                 // and which servers exist, is not — so the NOTE stays truthful without the circularity.
                 var catalogue = _agentToolService.BuildNativeToolSchemas();
+                var moduleCore = ModuleCoreToolNames();
                 var builtInNames = catalogue.Where(t => !IsMcpToolName(t.Name))
                     .Select(t => t.Name)
-                    .Where(n => contextTokens >= 16000 || CoreLocalToolNames.Contains(n))
+                    .Where(n => contextTokens >= 16000 || CoreLocalToolNames.Contains(n) || moduleCore.Contains(n))
                     .ToList();
                 // git_* names reach the set only when the Git feature actually emitted their schemas —
                 // advertising them unconditionally offered tools IsToolAllowed denies.
@@ -1337,6 +1420,10 @@ public class CodeAgentService
                 sb.AppendLine($"DETECTED PROJECT TYPE: {projType}");
             }
         }
+
+        // ─── Tool-group sections (background processes, built-in browser, Claude in Chrome) ───
+        // Only for groups whose tools are offered this turn; nothing at all when none are registered.
+        AppendToolGroupSections(sb, isLocalProvider, contextTokens, includeToolDefs, localNativeTools);
 
         // ═══════════════════════════════════════════
         // Dynamic Section: Memory (MEMORY.md from global + project)
@@ -2298,7 +2385,8 @@ public class CodeAgentService
                 + CluadeX.Helpers.TokenBudget.EstimateTokens(userMessage)
                 + relevantHistory.Sum(m => CluadeX.Helpers.TokenBudget.EstimateTokens(m.Content))
                 + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
-            toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped);
+            toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped,
+                ModuleCoreToolNames());
         }
         else if (loopProvider.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
         {
