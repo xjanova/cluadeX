@@ -85,7 +85,10 @@ foreach ($r in $rules) {
 }
 
 if ($findings.Count -gt 0) {
-  Write-Error ("Secret pattern(s) detected in write target - blocked: " + ($findings -join ', '))
-  exit 1
+  # Exit 2 = deliberate block (never mistaken for a broken script). Not Write-Error: under
+  # $ErrorActionPreference = "Stop" it throws and the script ends with exit 1. Only rule names
+  # are reported — never the matched text or the path.
+  [Console]::Error.WriteLine("Secret pattern(s) detected in write target - blocked: " + ($findings -join ', '))
+  exit 2
 }
 exit 0

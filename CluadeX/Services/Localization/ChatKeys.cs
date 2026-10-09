@@ -107,6 +107,19 @@ internal static class ChatKeys
         ["chat.perm.denied"] = new() { ["en"] = "✗ Denied", ["th"] = "✗ ปฏิเสธแล้ว" },
         ["chat.perm.cancelled"] = new() { ["en"] = "Cancelled — the reply was stopped", ["th"] = "ยกเลิก — หยุดการตอบแล้ว" },
         ["chat.perm.dismissed"] = new() { ["en"] = "Dismissed — the chat was cleared or switched", ["th"] = "ปิดไปแล้ว — ล้างหรือสลับแชท" },
+        ["chat.perm.hookBlocked"] = new() { ["en"] = "A PreToolUse hook blocked this tool: {0}", ["th"] = "ฮุก PreToolUse บล็อกเครื่องมือนี้: {0}" },
+        ["chat.perm.redirect"] = new() { ["en"] = "follow a redirect from {0} to {1} (another site)", ["th"] = "ตามการเปลี่ยนเส้นทางจาก {0} ไปยัง {1} (เว็บไซต์อื่น)" },
+
+        // ─── Agent tool results (web_fetch, repl) ───
+        ["chat.web.invalidUrl"] = new() { ["en"] = "Only http:// and https:// URLs can be fetched: {0}", ["th"] = "ดึงข้อมูลได้เฉพาะ URL แบบ http:// และ https:// เท่านั้น: {0}" },
+        ["chat.web.httpError"] = new() { ["en"] = "{0} answered HTTP {1} {2}.", ["th"] = "{0} ตอบกลับ HTTP {1} {2}" },
+        ["chat.web.redirectNotFollowed"] = new() { ["en"] = "{0} redirects to {1} — another site, and following it was not allowed, so nothing was sent there. To read it, fetch that URL directly; it gets the same permission check.", ["th"] = "{0} เปลี่ยนเส้นทางไปที่ {1} ซึ่งเป็นเว็บไซต์อื่นและไม่ได้รับอนุญาตให้ตามไป จึงไม่มีการส่งคำขอไปที่นั่น ถ้าต้องการอ่าน ให้เรียก web_fetch กับ URL นั้นโดยตรง ซึ่งจะผ่านการตรวจสิทธิ์แบบเดียวกัน" },
+        ["chat.web.redirectNotWeb"] = new() { ["en"] = "{0} redirects to {1}, which is not a web address — not followed.", ["th"] = "{0} เปลี่ยนเส้นทางไปที่ {1} ซึ่งไม่ใช่ที่อยู่เว็บ — ไม่ได้ตามไป" },
+        ["chat.web.tooManyRedirects"] = new() { ["en"] = "Stopped after {0} redirects (last page: {1}).", ["th"] = "หยุดหลังจากเปลี่ยนเส้นทาง {0} ครั้ง (หน้าสุดท้าย: {1})" },
+        ["chat.web.timedOut"] = new() { ["en"] = "Fetching {0} timed out ({1} s) — the site was too slow to send the page.", ["th"] = "ดึงข้อมูลจาก {0} หมดเวลา ({1} วินาที) — เว็บไซต์ส่งหน้าเว็บช้าเกินไป" },
+        ["chat.web.failed"] = new() { ["en"] = "Couldn't fetch {0} — the site couldn't be reached (details are in the Debug Log).", ["th"] = "ดึงข้อมูลจาก {0} ไม่สำเร็จ — ติดต่อเว็บไซต์ไม่ได้ (ดูรายละเอียดที่หน้า Debug Log)" },
+        ["chat.web.cancelled"] = new() { ["en"] = "The fetch was stopped.", ["th"] = "หยุดการดึงข้อมูลแล้ว" },
+        ["chat.repl.unsupported"] = new() { ["en"] = "Unsupported REPL language '{0}' — use python or node. For shell commands use run_command.", ["th"] = "ไม่รองรับภาษา REPL '{0}' — ใช้ python หรือ node · สำหรับคำสั่ง shell ให้ใช้ run_command" },
 
         // ─── Toggles (project bar / bottom bar) ───
         ["chat.agentLabel"] = new() { ["en"] = "Agent", ["th"] = "เอเจนต์" },
@@ -151,6 +164,7 @@ internal static class ChatKeys
         ["chat.clone.done"] = new() { ["en"] = "Cloned {0}", ["th"] = "โคลน {0} เสร็จแล้ว" },
         ["chat.clone.failed"] = new() { ["en"] = "Clone failed — check the URL and that you have access to the repository.", ["th"] = "โคลนไม่สำเร็จ — ตรวจสอบ URL และสิทธิ์การเข้าถึง repository" },
         ["chat.clone.failedStatus"] = new() { ["en"] = "Clone failed", ["th"] = "โคลนไม่สำเร็จ" },
+        ["chat.clone.badTarget"] = new() { ["en"] = "The clone target folder isn't a valid path: \"{0}\"", ["th"] = "โฟลเดอร์ปลายทางของการโคลนไม่ใช่พาธที่ถูกต้อง: \"{0}\"" },
 
         // ─── Running code ───
         ["chat.exec.running"] = new() { ["en"] = "Running {0} code…", ["th"] = "กำลังรันโค้ด {0}…" },
@@ -163,6 +177,8 @@ internal static class ChatKeys
         ["chat.exec.cancelled"] = new() { ["en"] = "Execution stopped.", ["th"] = "หยุดการรันแล้ว" },
         ["chat.exec.couldNotRun"] = new() { ["en"] = "Couldn't run the code — details are in the Debug Log.", ["th"] = "รันโค้ดไม่ได้ — ดูรายละเอียดที่หน้า Debug Log" },
         ["chat.exec.hadIssues"] = new() { ["en"] = "Code execution had issues", ["th"] = "การรันโค้ดมีปัญหา" },
+        ["chat.exec.blocked"] = new() { ["en"] = "Blocked for safety — this line matches the dangerous-command list, so the block was not run:\n{0}\n(To allow it, turn off Dangerous Command Blocking on the Features page.)", ["th"] = "บล็อกไว้เพื่อความปลอดภัย — บรรทัดนี้ตรงกับรายการคำสั่งอันตราย จึงไม่ได้รันโค้ดบล็อกนี้:\n{0}\n(ถ้าต้องการอนุญาต ให้ปิด \"บล็อกคำสั่งอันตราย\" ที่หน้าฟีเจอร์)" },
+        ["chat.auto.verifyBlocked"] = new() { ["en"] = "The build / test command was blocked for safety, so nothing was run: {0}\nChange it in Settings (Build / test command), or turn off Dangerous Command Blocking on the Features page.", ["th"] = "คำสั่ง build / test ถูกบล็อกเพื่อความปลอดภัย จึงไม่ได้รันอะไรเลย: {0}\nแก้ได้ที่หน้าตั้งค่า (คำสั่ง build / test) หรือปิด \"บล็อกคำสั่งอันตราย\" ที่หน้าฟีเจอร์" },
 
         // ─── Local model picker ───
         ["chat.model.ready"] = new() { ["en"] = "Ready: {0}", ["th"] = "พร้อม: {0}" },

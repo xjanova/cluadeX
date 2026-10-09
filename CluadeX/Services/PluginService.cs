@@ -27,7 +27,7 @@ public class PluginService
 
         // The catalog is the source of truth for a built-in plugin's hooks. Installed copies
         // persist hooks.json at install time, so a later bug-fix to a hook command (e.g. the
-        // branch-protector's batch `%%b` → cmd `findstr`) would otherwise never reach machines
+        // branch-protector's findstr one-liner, which never matched git's LF output → a script) would otherwise never reach machines
         // that already installed it. Re-materialize hooks.json for installed catalog plugins.
         try { ResyncInstalledCatalogHooks(); } catch { /* best-effort — never block startup */ }
     }
@@ -422,14 +422,12 @@ public class PluginService
             Version = "1.0.0", Category = "git", Icon = "\U0001F6A7",
             Author = "CluadeX Team", Tags = ["git", "branch", "protection"],
             HookEvents = ["PreToolUse"],
-            HookSummary = "Before BashTool git commit/push, checks current branch. Blocks if on protected branch (main, master, develop).",
-            HookSummaryTh = "ก่อน git commit/push จะตรวจ branch ปัจจุบัน บล็อกถ้าอยู่บน branch ที่ป้องกัน",
-            // Runs via `cmd /c` (HookService), so use findstr — NOT batch `for /f %%b`, which is
-            // .bat-only syntax and errors with "%%b was unexpected at this time" on the command line.
-            // findstr /x /i matches the current branch exactly (case-insensitive) against the
-            // protected set; a match blocks (exit 1) with a clear stderr message, else allows (exit 0).
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit", Command = "git branch --show-current | findstr /x /i \"main master develop\" >nul && (echo [branch-protector] Blocked: don't commit directly to a protected branch. Create a feature branch first. 1>&2 & exit 1) || exit 0" },
-                     new() { Phase = "PreToolUse", Matcher = "git_push", Command = "git branch --show-current | findstr /x /i \"main master develop\" >nul && (echo [branch-protector] Blocked: don't push directly to a protected branch. Open a PR from a feature branch. 1>&2 & exit 1) || exit 0" }],
+            HookSummary = "Before git_commit / git_push, checks the current branch. Blocks (exit 2) if it is a protected branch (main, master, develop).",
+            HookSummaryTh = "ก่อน git_commit / git_push จะตรวจ branch ปัจจุบัน บล็อก (exit 2) ถ้าเป็น branch ที่ป้องกันไว้ (main, master, develop)",
+            // A script, not the old one-liner  git branch --show-current | findstr /x /i "main master develop" :
+            // git prints the branch with a bare LF, findstr /x never matches a line that does not end in CRLF,
+            // so that hook never blocked anything.
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit|git_push", Command = PsHook("branch-protect.ps1") }],
         },
         new CatalogPlugin
         {
@@ -643,7 +641,10 @@ public class PluginService
             return $j
         }
 
-        function Write-HookBlock([string]$message) { [Console]::Error.WriteLine($message) }
+        # A refusal: the reason goes to stderr and the script ends with exit 2, the deliberate-block code
+        # (CluadeX / Claude Code contract) - never reclassified as a broken script. The reason never quotes a
+        # value the model chose (a path, the content): stderr is handed back to the model.
+        function Write-HookBlock([string]$message) { [Console]::Error.WriteLine($message); exit 2 }
 
         # Characters cmd.exe re-reads when Windows hands arguments to a .cmd shim (npx, prettier.cmd, tsc.cmd).
         $CmdMeta = '[&|<>^%!()"]'
@@ -692,7 +693,7 @@ public class PluginService
             foreach ($c in $checks.GetEnumerator()) {
                 if ([regex]::IsMatch($t, $c.Value)) {
                     Write-HookBlock ("[secret-scanner] Blocked: the new content contains what looks like {0}. Keep secrets in an environment variable or an untracked .env file, not in source." -f $c.Key)
-                    exit 1
+                    exit 2
                 }
             }
         }
@@ -720,7 +721,7 @@ public class PluginService
         }
         if ($bytes -gt $limit) {
             Write-HookBlock ("[size-guard] Blocked: the new file would be {0} KB; the limit is {1} KB. Split it into smaller files, or raise CLUADEX_SIZE_GUARD_KB." -f [math]::Ceiling($bytes / 1024), [math]::Floor($limit / 1024))
-            exit 1
+            exit 2
         }
         exit 0
         """;
@@ -762,10 +763,10 @@ public class PluginService
         if ([string]::IsNullOrWhiteSpace($env:CLUADEX_HOOK_CWD)) { exit 0 }   # no project folder to guard
         $root = (Get-HookCwd).TrimEnd('\') + '\'
         $full = Resolve-HookPath
-        if ($null -eq $full) { Write-HookBlock '[path-guard] Blocked: that is not a valid file path.'; exit 1 }
+        if ($null -eq $full) { Write-HookBlock '[path-guard] Blocked: that is not a valid file path.'; exit 2 }
         if (-not ($full.TrimEnd('\') + '\').StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
-            Write-HookBlock ("[path-guard] Blocked: {0} is outside the project folder {1}." -f $full, $root.TrimEnd('\'))
-            exit 1
+            Write-HookBlock ("[path-guard] Blocked: the path is outside the project folder {0}. Work on files inside the project." -f $root.TrimEnd('\'))
+            exit 2
         }
         # A symlink or junction inside the project can still lead outside it.
         try {
@@ -778,8 +779,8 @@ public class PluginService
                         if ($target) {
                             $t = [IO.Path]::GetFullPath([IO.Path]::Combine([IO.Path]::GetDirectoryName($cur), ([string]$target).Replace('\??\', '')))
                             if (-not ($t.TrimEnd('\') + '\').StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
-                                Write-HookBlock ("[path-guard] Blocked: {0} goes through a link that points outside the project ({1})." -f $full, $t)
-                                exit 1
+                                Write-HookBlock '[path-guard] Blocked: the path goes through a link (symlink or junction) that points outside the project folder.'
+                                exit 2
                             }
                         }
                     }
@@ -787,6 +788,21 @@ public class PluginService
                 $cur = [IO.Path]::GetDirectoryName($cur)
             }
         } catch { }
+        exit 0
+        """;
+
+    private const string BranchProtectScript = """
+        $ErrorActionPreference = 'Continue'   # git writes to stderr outside a repository; under 'Stop' PS 5.1 would abort on it
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) { exit 0 }   # no git, nothing to protect
+        $branch = ''
+        try { $branch = [string](& git branch --show-current 2>$null | Select-Object -First 1) } catch { exit 0 }
+        $branch = $branch.Trim()
+        # Compared in PowerShell, not with findstr /x: git ends the line with a bare LF and findstr /x never
+        # matched it, so the old one-liner never blocked. -contains is case-insensitive.
+        if (@('main', 'master', 'develop') -contains $branch) {
+            Write-HookBlock "[branch-protector] Blocked: the current branch is protected (main / master / develop). Create a feature branch, commit there and open a pull request."
+            exit 2
+        }
         exit 0
         """;
 
@@ -843,6 +859,7 @@ public class PluginService
         ["path-guard"] = new() { ["path-guard.ps1"] = PathGuardScript },
         ["backup-before-edit"] = new() { ["backup.ps1"] = BackupScript },
         ["size-guard"] = new() { ["size-guard.ps1"] = SizeGuardScript },
+        ["branch-protector"] = new() { ["branch-protect.ps1"] = BranchProtectScript },
     };
 
     private List<string> LoadEnabledPluginNames()

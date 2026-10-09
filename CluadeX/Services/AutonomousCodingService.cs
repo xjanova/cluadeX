@@ -48,6 +48,17 @@ public class AutonomousCodingService
             : s.AutoVerifyCommand.Trim();
         result.VerifyCommand = verifyCmd;
 
+        // The verify command runs in a shell, unprompted, after every iteration — the same blocklist as
+        // run_command. Refused up front: feeding "blocked" back as a build failure would only send the
+        // model round the loop trying to "fix" code that was never the problem.
+        if (VerifyCommandBlockReason(verifyCmd) is { } blocked)
+        {
+            // The chat posts Summary as the reply when there is no FinalResponse — one message, no banner.
+            result.LastVerifyOutput = blocked;
+            result.Summary = blocked;
+            return result;
+        }
+
         // ── Phase 1: implement → verify → fix, until green ──
         string task = goal;
         for (int i = 1; i <= maxFix; i++)
@@ -179,9 +190,27 @@ public class AutonomousCodingService
         catch { return false; }
     }
 
+    /// <summary>
+    /// Why <paramref name="verifyCmd"/> must not run (localized, names the offending line), or null. The
+    /// dangerous-command blocklist, when Dangerous Command Blocking is on — public so the contract harness
+    /// can prove it without starting an autonomous run.
+    /// </summary>
+    public string? VerifyCommandBlockReason(string? verifyCmd)
+    {
+        if (string.IsNullOrWhiteSpace(verifyCmd) || !_settings.Settings.Features.DangerousCommandBlocking) return null;
+        // RunCommandAsync runs it with cmd.exe /c on Windows, bash elsewhere.
+        var dialect = OperatingSystem.IsWindows() ? DangerousCommandCheck.Dialect.Cmd : DangerousCommandCheck.Dialect.Posix;
+        return DangerousCommandCheck.FindBlocked(verifyCmd, dialect) is { } line
+            ? string.Format(LocalizedResources.Instance["chat.auto.verifyBlocked"], line)
+            : null;
+    }
+
     /// <summary>Run a shell command in the working dir, capturing stdout+stderr; 10-minute hard cap.</summary>
     private async Task<(bool ok, string output)> RunCommandAsync(string command, CancellationToken ct)
     {
+        // Checked again here, not only where the run starts: nothing reaches the shell past the blocklist.
+        if (VerifyCommandBlockReason(command) is { } blocked) return (false, blocked);
+
         Process? proc = null;
         try
         {

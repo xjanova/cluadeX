@@ -395,7 +395,7 @@ internal static class Program
             var r = RunHook(cmd, proj, "write_file", evil, new { path = evil, content = "hello" });
             Check("P1b", "a file named a'+(New-Item …)+'.txt runs nothing and is allowed", r.Exit == 0 && !File.Exists(Path.Combine(proj, "pwned.txt")), r.StdErr);
             var big = RunHook(cmd, proj, "write_file", "big.txt", new { path = "big.txt", content = new string('x', 600 * 1024) });
-            Check("P1c", "600 KB of NEW content is blocked (the old guard measured the file on disk)", big.Exit == 1 && big.StdErr.Contains("size-guard"), big.StdErr);
+            Check("P1c", "600 KB of NEW content is blocked with exit 2 (the old guard measured the file on disk)", big.Exit == 2 && big.StdErr.Contains("size-guard"), big.StdErr);
         });
 
         CaseSync("P2", () =>
@@ -408,11 +408,11 @@ internal static class Program
             var task = RunHook(cmd, proj, "write_file", "t.md", new { path = "t.md", content = "run task-1234567890abcdefghijkl then disk-cleanup-abcdefghijklmnopqrst" });
             Check("P2b", "\"task-…\" / \"disk-…\" are not mistaken for sk- API keys", task.Exit == 0, task.StdErr);
             var key = RunHook(cmd, proj, "write_file", "cfg.js", new { path = "cfg.js", content = "const k = 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx0123';" });
-            Check("P2c", "a real sk- key in the new content is blocked", key.Exit == 1 && key.StdErr.Contains("secret-scanner"), key.StdErr);
+            Check("P2c", "a real sk- key in the new content is blocked with exit 2", key.Exit == 2 && key.StdErr.Contains("secret-scanner"), key.StdErr);
             var removing = RunHook(cmdEdit, proj, "edit_file", "old.txt", new { path = "old.txt", find = "AKIAABCDEFGHIJKLMNOP", replace = "REDACTED" });
             Check("P2d", "an edit that REMOVES a key is not blocked (old text is not new content)", removing.Exit == 0, removing.StdErr);
             var adding = RunHook(cmdEdit, proj, "edit_file", "old.txt", new { path = "old.txt", find = "x", replace = "ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
-            Check("P2e", "an edit that ADDS a GitHub token is blocked", adding.Exit == 1, adding.StdErr);
+            Check("P2e", "an edit that ADDS a GitHub token is blocked with exit 2", adding.Exit == 2, adding.StdErr);
         });
 
         CaseSync("P3", () =>
@@ -437,8 +437,8 @@ internal static class Program
             var outside = RunHook(cmd, proj, "read_file", @"..\secret.txt", new { path = @"..\secret.txt" });
             var inside = RunHook(cmd, proj, "read_file", @"src\a.cs", new { path = @"src\a.cs" });
             var weird = RunHook(cmd, proj, "read_file", "a'+(calc)+'.txt", new { path = "a'+(calc)+'.txt" });
-            Check("P4", "path-guard blocks ..\\ outside the project and allows paths inside it (odd names included)",
-                outside.Exit == 1 && inside.Exit == 0 && weird.Exit == 0, $"{outside.Exit} {inside.Exit} {weird.Exit} {outside.StdErr}");
+            Check("P4", "path-guard blocks ..\\ outside the project with exit 2 (without quoting the path) and allows paths inside it (odd names included)",
+                outside.Exit == 2 && !outside.StdErr.Contains("secret.txt") && inside.Exit == 0 && weird.Exit == 0, $"{outside.Exit} {inside.Exit} {weird.Exit} {outside.StdErr}");
         });
 
         CaseSync("P5", () =>

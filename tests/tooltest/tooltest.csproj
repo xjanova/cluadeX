@@ -24,6 +24,16 @@
     </Reference>
   </ItemGroup>
 
+  <!-- The differential check (DIFF) compares the blocklist with a BASELINE build of CluadeX — the last
+       committed version, built into its own folder: -p:CluadeXBaselineBin=<dir>\ (or set CLUADEX_BASELINE_BIN).
+       Only CluadeX.dll is loaded from there, into its own AssemblyLoadContext; nothing in it is run but the check. -->
+  <ItemGroup Condition="'$(CluadeXBaselineBin)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>CluadeXBaselineBin</_Parameter1>
+      <_Parameter2>$(CluadeXBaselineBin)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <!-- Versions must match what CluadeX was COMPILED against (Abstractions is unified to 10.x). -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
