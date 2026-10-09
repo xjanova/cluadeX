@@ -58,6 +58,14 @@ public interface IAiProvider : IDisposable
 // Native Tool Use Models
 // ═══════════════════════════════════════════
 
+/// <summary>A cloud provider that can list the models its key can call (Settings fills the model
+/// dropdown from this after Test Connection, so new releases appear without a code change).</summary>
+public interface IModelLister
+{
+    /// <summary>Model IDs, newest first; null when the listing fails (keep the built-in list).</summary>
+    Task<List<string>?> ListModelsAsync(CancellationToken ct = default);
+}
+
 /// <summary>Tool schema for native API tool definitions.</summary>
 public class ToolSchema
 {
@@ -76,8 +84,12 @@ public class NativeMessage
 /// <summary>A content block in a native API message.</summary>
 public class ContentBlock
 {
-    public string Type { get; set; } = "text"; // text, tool_use, tool_result, thinking
-    public string? Text { get; set; }
+    public string Type { get; set; } = "text"; // text, tool_use, tool_result, thinking, redacted_thinking
+    public string? Text { get; set; }          // also the reasoning text of a thinking block
+
+    // For thinking / redacted_thinking blocks — must be sent back byte-for-byte
+    public string? Signature { get; set; }
+    public string? Data { get; set; }
 
     // For tool_use blocks
     public string? Id { get; set; }
@@ -96,9 +108,35 @@ public class NativeToolResponse
     public string? TextContent { get; set; }
     public string? ThinkingContent { get; set; }
     public List<NativeToolCall> ToolCalls { get; set; } = new();
-    public string StopReason { get; set; } = "end_turn"; // end_turn, tool_use, max_tokens
+    public string StopReason { get; set; } = "end_turn"; // end_turn, tool_use, max_tokens, refusal
     public int InputTokens { get; set; }
     public int OutputTokens { get; set; }
+
+    /// <summary>Every block the model emitted, in order (thinking, redacted_thinking, text, tool_use).
+    /// Empty for providers that don't report blocks. Anthropic rejects a continued tool loop whose
+    /// thinking blocks were dropped or altered, so the assistant turn must be rebuilt from these.</summary>
+    public List<ContentBlock> Blocks { get; set; } = new();
+
+    /// <summary>The assistant turn to append to the conversation: the emitted blocks in order when the
+    /// provider reported them, otherwise the text then the tool calls. With
+    /// <paramref name="includeToolUse"/> false the tool_use blocks are left out, for a caller that adds
+    /// each one as it executes it.</summary>
+    public NativeMessage ToAssistantMessage(bool includeToolUse = true)
+    {
+        var msg = new NativeMessage { Role = "assistant" };
+        if (Blocks.Count > 0)
+        {
+            foreach (var b in Blocks)
+                if (includeToolUse || b.Type != "tool_use") msg.Content.Add(b);
+            return msg;
+        }
+        if (!string.IsNullOrEmpty(TextContent))
+            msg.Content.Add(new ContentBlock { Type = "text", Text = TextContent });
+        if (includeToolUse)
+            foreach (var c in ToolCalls)
+                msg.Content.Add(new ContentBlock { Type = "tool_use", Id = c.Id, Name = c.Name, Input = c.Input });
+        return msg;
+    }
 }
 
 /// <summary>A tool call extracted from the native API response.</summary>

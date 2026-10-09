@@ -65,6 +65,31 @@ public class ChatPersistenceService
         catch { }
     }
 
+    /// <summary>False when the chat database failed its integrity check (automatic cleanup is then off).</summary>
+    public bool IsDatabaseHealthy
+    {
+        get { try { return _db.IsHealthy; } catch { return false; } }
+    }
+
+    /// <summary>Remove sessions with no messages (all, or just <paramref name="sessionId"/>).</summary>
+    public int DeleteEmptySessions(string? sessionId = null)
+    {
+        try { return _db.DeleteEmptySessions(sessionId); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to prune empty sessions: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// <summary>True when the session has stored messages. On a DB error answers true — the caller
+    /// then leaves the session alone, which is the safe side.</summary>
+    public bool SessionHasMessages(string sessionId)
+    {
+        try { return _db.SessionHasMessages(sessionId); }
+        catch { return true; }
+    }
+
     /// <summary>Auto-generate a title from the first user message.</summary>
     public static string GenerateTitle(List<ChatMessage> messages)
     {

@@ -3,11 +3,12 @@ using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CluadeX.Models;
 
 namespace CluadeX.Services.Providers;
 
-public class AnthropicProvider : ApiProviderBase
+public class AnthropicProvider : ApiProviderBase, IModelLister
 {
     private readonly CostTrackingService? _costTracker;
 
@@ -18,70 +19,113 @@ public class AnthropicProvider : ApiProviderBase
     public override string ProviderId => "Anthropic";
     public override string DisplayName => "Anthropic Claude";
 
-    // Newest first — the Claude 5 family + Opus 4.8 lead. IDs are the exact strings the API expects
-    // (no date suffix on the current-gen aliases). Fable 5 is Anthropic's most capable widely-released
-    // model; Opus 4.8 is the default high tier; Sonnet 5 / Haiku 4.5 trade down for speed/cost.
+    /// <summary>Used when no model is picked. Claude Opus 5.5 is the current Opus.</summary>
+    public const string DefaultModel = "claude-opus-5-5";
+
+    // Newest first. IDs are the exact strings the API expects (no date suffix). This is only the offline
+    // starting list: once a key connects, Settings replaces it with GET /v1/models, so a new release shows
+    // up without a code change.
     public static readonly string[] KnownModels =
     [
-        "claude-fable-5",          // most capable (1M ctx) — "มหาเทพ"
-        "claude-opus-4-8",         // top Opus tier (default for hard work)
-        "claude-opus-4-7",
-        "claude-sonnet-5",         // near-Opus quality at Sonnet cost
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",        // fastest / cheapest
-        // legacy (still callable)
-        "claude-opus-4-5", "claude-sonnet-4-5",
-        "claude-sonnet-4-20250514", "claude-opus-4-20250514",
+        "claude-opus-5-5",         // default — current Opus ($4/$20 per MTok)
+        "claude-fable-5-1",        // most capable (1M ctx, $10/$50) — "มหาเทพ"
+        "claude-sonnet-5-5",       // near-Opus quality, faster ($2/$10)
+        "claude-haiku-5-5",        // fastest / cheapest ($0.10/$0.50)
+        // previous generation (still served)
+        "claude-opus-5", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-5",
+        "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
     ];
 
-    /// <summary>Claude 5 family + Opus 4.8/4.7 use ADAPTIVE thinking only and REJECT (HTTP 400)
-    /// temperature/top_p/top_k and thinking.budget_tokens. Sending the legacy request shape to these
-    /// models fails outright — so they need a different payload than Opus 4.6 / Sonnet 4.5 and older.</summary>
-    private static bool IsModernThinkingModel(string model)
+    // thinking.block_binding is only accepted with this beta; without the header the field is a 400.
+    private const string ThinkingBindingBeta = "thinking-binding-controls-2026-08-01";
+    private const string InterleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+    // Thinking tokens count against max_tokens. The shared MaxTokens setting is sized for local models
+    // (4096) and would cut a thinking model off mid-answer; streaming means a high cap costs nothing.
+    private const int ThinkingMaxTokensFloor = 32000;
+
+    /// <summary>What a model's request surface accepts. Every Claude generation moved these — sampling
+    /// removed (4.7+), adaptive thinking (4.6+), thinking that can't be switched off (Opus 5+, Fable,
+    /// Sonnet/Haiku 5.5), forced tool_choice rejected (Fable 5.1, Opus/Sonnet 5.5) — and each wrong guess
+    /// is an HTTP 400 the user sees as "my key doesn't work". Derived from the ID, so a model released
+    /// after this build (listed live from /v1/models) gets the newest family's rules, not the oldest.</summary>
+    public readonly record struct ModelTraits(
+        bool Adaptive,           // thinking:{type:"adaptive"}; otherwise legacy enabled + budget_tokens
+        bool AlwaysThinks,       // keeps thinking when the toggle is off — disabling it is a 400 or misbehaves
+        bool ExplicitDisable,    // toggle off → thinking:{type:"disabled"} (otherwise the field is omitted)
+        bool Sampling,           // accepts temperature
+        bool OmitsThinkingText,  // display defaults to "omitted" — ask for "summarized" to see the reasoning
+        bool ForcedToolChoice,   // accepts tool_choice any / tool
+        int EffortSupport);      // output_config.effort: 0 none, 1 low–high (Opus 4.5), 2 + max (4.6), 3 + xhigh
+
+    public static ModelTraits Traits(string? model)
     {
-        if (string.IsNullOrEmpty(model)) return false;
-        string m = model.ToLowerInvariant();
-        return m.StartsWith("claude-fable-") || m.StartsWith("claude-mythos-")
-            || m.StartsWith("claude-opus-4-8") || m.StartsWith("claude-opus-4-7")
-            || m.StartsWith("claude-sonnet-5");
+        // claude-<family>-<major>[-<minor>][-<date>]; a date (claude-sonnet-4-20250514) is not a minor.
+        var m = Regex.Match(model?.ToLowerInvariant() ?? "", @"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d)(?!\d))?");
+        if (!m.Success)   // custom / unrecognised name: the oldest, most permissive shape
+            return new(Adaptive: false, AlwaysThinks: false, ExplicitDisable: false,
+                       Sampling: true, OmitsThinkingText: false, ForcedToolChoice: true, EffortSupport: 0);
+
+        string family = m.Groups[1].Value;
+        int v = int.Parse(m.Groups[2].Value) * 10 + (m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0);
+        bool fableTier = family is "fable" or "mythos";
+        bool modern = fableTier || v >= 47;
+        bool alwaysThinks = fableTier
+            || (family == "opus" && v >= 50)
+            || ((family is "sonnet" or "haiku") && v >= 55);
+        bool forced = fableTier ? v < 51 : !((family is "opus" or "sonnet") && v >= 55);
+        int effort = modern ? 3 : v == 46 ? 2 : (family == "opus" && v == 45) ? 1 : 0;
+        return new(Adaptive: fableTier || v >= 46, AlwaysThinks: alwaysThinks,
+                   ExplicitDisable: modern && !alwaysThinks, Sampling: !modern,
+                   OmitsThinkingText: modern, ForcedToolChoice: forced, EffortSupport: effort);
     }
 
-    /// <summary>Fable 5 / Mythos 5 reject an explicit thinking:{type:disabled} — the thinking param
-    /// must be omitted entirely to run without visible thinking.</summary>
-    private static bool ThinkingMustBeOmittedWhenOff(string model)
+    /// <summary>The user's effort pick as this model accepts it, or null to leave the field out ("auto",
+    /// or a model without effort — Sonnet/Haiku 4.5 reject it). A level the model lacks rounds down.
+    /// <paramref name="capAtHigh"/>: thinking is explicitly disabled, which isn't accepted above high.</summary>
+    public static string? EffortFor(ModelTraits t, string? pick, bool capAtHigh = false)
     {
-        if (string.IsNullOrEmpty(model)) return false;
-        string m = model.ToLowerInvariant();
-        return m.StartsWith("claude-fable-") || m.StartsWith("claude-mythos-");
+        string p = EffortLevels.Normalize(pick);
+        if (t.EffortSupport == 0 || p == EffortLevels.Auto) return null;
+        if (p == "xhigh" && (t.EffortSupport < 3 || capAtHigh)) p = "high";
+        if (p == "max" && (t.EffortSupport < 2 || capAtHigh)) p = "high";
+        return p;
     }
 
-    /// <summary>Build the thinking + sampling parameters correctly for the target model. Modern models
-    /// (Claude 5 family, Opus 4.8/4.7) use adaptive thinking + effort and REJECT temperature/top_p/top_k
-    /// and budget_tokens; older models keep the legacy enabled/budget_tokens + temperature/top_p shape.
-    /// Mutates <paramref name="requestObj"/> in place (may raise max_tokens for the legacy budget path).</summary>
-    private static void ApplyThinkingAndSampling(Dictionary<string, object> requestObj, string model, AppSettings settings)
+    private static void SetEffort(Dictionary<string, object> requestObj, string? effort)
     {
-        if (IsModernThinkingModel(model))
+        if (effort != null) requestObj["output_config"] = new Dictionary<string, object> { ["effort"] = effort };
+    }
+
+    /// <summary>Set thinking, effort and sampling for the target model (see <see cref="Traits"/>).
+    /// Returns true when the request thinks: forced tool_choice is a 400 alongside thinking, and the
+    /// adaptive shape needs the block-binding beta header.</summary>
+    private static bool ApplyThinkingAndSampling(Dictionary<string, object> requestObj, string model, AppSettings settings)
+    {
+        var t = Traits(model);
+        bool wantThinking = settings.ExtendedThinkingEnabled;
+
+        if (t.Adaptive && (wantThinking || t.AlwaysThinks))
         {
-            // No temperature/top_p/top_k on these models (400). Thinking is adaptive or omitted.
-            if (settings.ExtendedThinkingEnabled)
+            var thinking = new Dictionary<string, object>
             {
-                requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "adaptive" };
-                // Depth is controlled by effort, not a token budget, on the modern surface.
-                requestObj["output_config"] = new Dictionary<string, object> { ["effort"] = "high" };
-            }
-            else if (!ThinkingMustBeOmittedWhenOff(model))
-            {
-                // Opus 4.8/4.7 / Sonnet 5 accept an explicit disable; Fable/Mythos must omit entirely.
-                requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
-            }
-            return;
+                ["type"] = "adaptive",
+                // A thinking block is bound to the exact history that produced it. Microcompact trims old
+                // turns, which on enforced accounts (created on/after 2026-08-31) fails the whole request —
+                // drop the stale blocks instead and keep going.
+                ["block_binding"] = new Dictionary<string, object> { ["prefix_mismatch_behavior"] = "drop_block" },
+            };
+            if (wantThinking && t.OmitsThinkingText) thinking["display"] = "summarized";
+            requestObj["thinking"] = thinking;
+            // Depth is effort, not a token budget. "auto": high when the user asked for thinking, else the
+            // model's own default (an always-thinking model with the toggle off).
+            SetEffort(requestObj, EffortFor(t, settings.ReasoningEffort) ?? (wantThinking ? "high" : null));
+            requestObj["max_tokens"] = Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor);
+            return true;
         }
 
-        // Legacy models: enabled+budget_tokens (disables sampling), else temperature/top_p.
-        if (settings.ExtendedThinkingEnabled)
+        if (!t.Adaptive && wantThinking)
         {
-            int budgetTokens = settings.ThinkingBudgetTokens;
+            int budgetTokens = Math.Max(1024, settings.ThinkingBudgetTokens);
             int maxTokens = settings.MaxTokens;
             if (maxTokens <= budgetTokens) maxTokens = budgetTokens + 4096; // API requires max_tokens > budget
             requestObj["max_tokens"] = maxTokens;
@@ -90,12 +134,94 @@ public class AnthropicProvider : ApiProviderBase
                 ["type"] = "enabled",
                 ["budget_tokens"] = budgetTokens,
             };
+            SetEffort(requestObj, EffortFor(t, settings.ReasoningEffort));
+            return true;
         }
-        else
+
+        if (t.ExplicitDisable)
+            requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
+        SetEffort(requestObj, EffortFor(t, settings.ReasoningEffort, capAtHigh: t.ExplicitDisable));
+        // temperature only: Opus 4.1+ / Sonnet 4.5+ / Haiku 4.5 reject temperature and top_p together.
+        if (t.Sampling)   // the API's range is 0–1; the shared slider goes to 2 for other providers
+            requestObj["temperature"] = Math.Min((double)settings.Temperature, 1.0);
+        return false;
+    }
+
+    private static string BaseUrlOf(ProviderConfig config) =>
+        string.IsNullOrWhiteSpace(config.BaseUrl) ? "https://api.anthropic.com" : config.BaseUrl.TrimEnd('/');
+
+    private static string ModelOf(ProviderConfig config) =>
+        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim();
+
+    /// <summary>The workspace to run in: the configured one, else ANTHROPIC_WORKSPACE_ID.</summary>
+    internal static string? ResolveWorkspaceId(ProviderConfig config)
+    {
+        string? ws = config.WorkspaceId?.Trim();
+        if (string.IsNullOrEmpty(ws)) ws = Environment.GetEnvironmentVariable("ANTHROPIC_WORKSPACE_ID")?.Trim();
+        return string.IsNullOrEmpty(ws) ? null : ws;
+    }
+
+    /// <summary>Auth + version headers for every call. A key that isn't scoped to one workspace (keys made
+    /// without picking a workspace) is rejected unless each request names the workspace.</summary>
+    private static void AddAuthHeaders(HttpRequestMessage request, ProviderConfig config)
+    {
+        request.Headers.Add("x-api-key", config.ApiKey);
+        request.Headers.Add("anthropic-version", "2023-06-01");
+        if (ResolveWorkspaceId(config) is { } ws)
         {
-            requestObj["temperature"] = (double)settings.Temperature;
-            requestObj["top_p"] = (double)settings.TopP;
+            // A stray non-ASCII character (Thai keyboard layout left on) makes Headers.Add throw a raw
+            // FormatException; say what is actually wrong instead.
+            if (ws.Any(c => c < '!' || c > '~'))
+                throw new ConfigException(Loc("anthropic.err.workspaceInvalid"));
+            request.Headers.Add("anthropic-workspace-id", ws);
         }
+    }
+
+    /// <summary>A settings value the request can't be built from; the message is already user-facing.</summary>
+    private sealed class ConfigException(string message) : Exception(message);
+
+    private static void AddBetaHeader(HttpRequestMessage request, string model, bool thinking)
+    {
+        if (!thinking) return;
+        // Adaptive requests carry block_binding; legacy budget thinking needs interleaving to think between tools.
+        request.Headers.Add("anthropic-beta", Traits(model).Adaptive ? ThinkingBindingBeta : InterleavedThinkingBeta);
+    }
+
+    private static string Loc(string key) => LocalizedResources.Instance[key];
+
+    /// <summary>Turn an API error into something the user can act on. The API's own message stays in the
+    /// text (key redacted) so nothing is hidden, and so callers that look for "too long" still match.</summary>
+    public static string DescribeApiError(int status, string body, ProviderConfig config, string model)
+    {
+        if (!string.IsNullOrEmpty(config.ApiKey)) body = body.Replace(config.ApiKey, "[REDACTED]");
+        string apiMsg = body;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var err) && err.TryGetProperty("message", out var em)
+                && em.GetString() is { Length: > 0 } s)
+                apiMsg = s;
+        }
+        catch (JsonException) { /* not JSON — keep the raw body */ }
+
+        string? hint =
+            apiMsg.Contains("not scoped to a workspace", StringComparison.OrdinalIgnoreCase)
+            || apiMsg.Contains("anthropic-workspace-id is required", StringComparison.OrdinalIgnoreCase)
+                ? Loc("anthropic.err.workspaceRequired")
+            : apiMsg.Contains("anthropic-workspace-id header must be", StringComparison.OrdinalIgnoreCase)
+              || (status == 404 && apiMsg.StartsWith("Workspace", StringComparison.Ordinal))
+                ? Loc("anthropic.err.workspaceInvalid")
+            : status == 401 ? Loc("anthropic.err.badKey")
+            : apiMsg.Contains("credit balance", StringComparison.OrdinalIgnoreCase) ? Loc("anthropic.err.credit")
+            : status == 404 && apiMsg.Contains("model", StringComparison.OrdinalIgnoreCase)
+                ? string.Format(Loc("anthropic.err.model"), model)
+            : status == 403 ? Loc("anthropic.err.permission")
+            : status == 429 ? Loc("anthropic.err.rateLimit")
+            : status >= 500 ? Loc("anthropic.err.overloaded")
+            : null;
+
+        string head = $"HTTP {status}: {apiMsg}";
+        return hint == null ? head : $"{hint}\n({head})";
     }
 
     public AnthropicProvider(SettingsService settingsService, CostTrackingService? costTracker = null)
@@ -119,9 +245,7 @@ public class AnthropicProvider : ApiProviderBase
         {
             var (success, msg) = await TestConnectionAsync(ct);
             IsReady = success;
-            SetStatus(success
-                ? $"Claude ready ({config.EffectiveModelId ?? "claude-sonnet-4-20250514"})"
-                : msg);
+            SetStatus(success ? $"Claude ready ({ModelOf(config)})" : msg);
         }
         finally
         {
@@ -218,6 +342,21 @@ public class AnthropicProvider : ApiProviderBase
         return messages;
     }
 
+    private static object BuildSystem(string? systemPrompt, AppSettings settings)
+    {
+        // Prompt caching is GA — cache_control needs no beta header.
+        if (!settings.PromptCachingEnabled) return systemPrompt!;
+        return new[]
+        {
+            new Dictionary<string, object>
+            {
+                ["type"] = "text",
+                ["text"] = systemPrompt!,
+                ["cache_control"] = new Dictionary<string, string> { ["type"] = "ephemeral" },
+            },
+        };
+    }
+
     public override async IAsyncEnumerable<string> ChatAsync(
         List<ChatMessage> history,
         string userMessage,
@@ -225,8 +364,7 @@ public class AnthropicProvider : ApiProviderBase
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var config = GetConfig();
-        string baseUrl = config.BaseUrl?.TrimEnd('/') ?? "https://api.anthropic.com";
-        string model = config.EffectiveModelId ?? "claude-sonnet-4-20250514";
+        string model = ModelOf(config);
         var settings = _settingsService.Settings;
 
         var messages = BuildAnthropicMessages(history, userMessage);
@@ -239,55 +377,25 @@ public class AnthropicProvider : ApiProviderBase
             ["stream"] = true,
         };
 
-        ApplyThinkingAndSampling(requestObj, model, settings);
+        bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
 
-        // Prompt caching: wrap system prompt in cache_control blocks
         if (!string.IsNullOrWhiteSpace(systemPrompt))
-        {
-            if (settings.PromptCachingEnabled)
-            {
-                requestObj["system"] = new[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["type"] = "text",
-                        ["text"] = systemPrompt,
-                        ["cache_control"] = new Dictionary<string, string> { ["type"] = "ephemeral" },
-                    },
-                };
-            }
-            else
-            {
-                requestObj["system"] = systemPrompt;
-            }
-        }
+            requestObj["system"] = BuildSystem(systemPrompt, settings);
 
         var body = JsonSerializer.Serialize(requestObj);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
-        request.Headers.Add("x-api-key", config.ApiKey);
-        request.Headers.Add("anthropic-version", "2023-06-01");
-        {
-            var betaFeatures = new List<string>();
-            // interleaved-thinking is a legacy beta; adaptive thinking (modern models) enables it
-            // automatically, and the modern models don't accept the flag path — only send it for legacy.
-            if (settings.ExtendedThinkingEnabled && !IsModernThinkingModel(model))
-                betaFeatures.Add("interleaved-thinking-2025-05-14");
-            if (settings.PromptCachingEnabled)
-                betaFeatures.Add("prompt-caching-2024-07-31");
-            if (betaFeatures.Count > 0)
-                request.Headers.Add("anthropic-beta", string.Join(",", betaFeatures));
-        }
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/v1/messages");
+        AddAuthHeaders(request, config);
+        AddBetaHeader(request, model, thinking);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        UsageMeter.Report(UsageMeter.FromAnthropic(response, model));   // rate-limit headroom for the usage strip
 
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrEmpty(config.ApiKey))
-                error = error.Replace(config.ApiKey, "[REDACTED]");
-            RaiseError($"Anthropic API error {response.StatusCode}: {error}");
+            RaiseError(DescribeApiError((int)response.StatusCode, error, config, model));
             yield break;
         }
 
@@ -297,6 +405,7 @@ public class AnthropicProvider : ApiProviderBase
         // Anthropic sends output_tokens in message_delta as a CUMULATIVE running total and may emit
         // multiple message_delta frames — track the last recorded value so we bill only the increment.
         int recordedOutputTokens = 0;
+        bool anyText = false;
 
         while (!reader.EndOfStream)
         {
@@ -327,24 +436,31 @@ public class AnthropicProvider : ApiProviderBase
                         {
                             // Extended thinking content — emit with marker for UI
                             content = thinkingProp.GetString();
-                            if (content != null)
+                            if (!string.IsNullOrEmpty(content))
                                 content = $"<thinking>{content}</thinking>";
                         }
-                        else if (delta.TryGetProperty("text", out var textProp))
+                        else if (deltaType == "text_delta" && delta.TryGetProperty("text", out var textProp))
                         {
                             content = textProp.GetString();
+                            if (!string.IsNullOrEmpty(content)) anyText = true;
                         }
                     }
-                    else if (type == "message_delta" && root.TryGetProperty("usage", out var usageDelta))
+                    else if (type == "message_delta")
                     {
-                        // output_tokens here is CUMULATIVE — record only the increment since the last
-                        // frame so multiple message_delta events don't multiply-count cost.
-                        int cumulative = usageDelta.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var otv) ? otv : recordedOutputTokens;
-                        int outDelta = cumulative - recordedOutputTokens;
-                        if (_costTracker != null && outDelta > 0)
+                        if (!anyText && root.TryGetProperty("delta", out var md)
+                            && md.TryGetProperty("stop_reason", out var sr) && sr.GetString() == "refusal")
+                            RaiseError(Loc("anthropic.err.refusal"));
+                        if (root.TryGetProperty("usage", out var usageDelta))
                         {
-                            _costTracker.RecordUsage(model, 0, outDelta, isNewRequest: false);
-                            recordedOutputTokens = cumulative;
+                            // output_tokens here is CUMULATIVE — record only the increment since the last
+                            // frame so multiple message_delta events don't multiply-count cost.
+                            int cumulative = usageDelta.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var otv) ? otv : recordedOutputTokens;
+                            int outDelta = cumulative - recordedOutputTokens;
+                            if (_costTracker != null && outDelta > 0)
+                            {
+                                _costTracker.RecordUsage(model, 0, outDelta, isNewRequest: false);
+                                recordedOutputTokens = cumulative;
+                            }
                         }
                     }
                     else if (type == "message_start" && root.TryGetProperty("message", out var msgStart))
@@ -355,7 +471,7 @@ public class AnthropicProvider : ApiProviderBase
                             int inTokens = startUsage.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var itv) ? itv : 0;
                             int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) && cr.TryGetInt32(out var crv) ? crv : 0;
                             int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) && cc.TryGetInt32(out var ccv) ? ccv : 0;
-                            if (_costTracker != null && inTokens > 0)
+                            if (_costTracker != null && (inTokens > 0 || cacheRead > 0 || cacheCreate > 0))
                                 _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate);
                         }
                     }
@@ -366,8 +482,7 @@ public class AnthropicProvider : ApiProviderBase
                     else if (type == "error")
                     {
                         var errorMsg = root.TryGetProperty("error", out var err)
-                            ? err.GetProperty("message").GetString() ?? "Unknown error"
-                            : "Unknown error";
+                            && err.TryGetProperty("message", out var em) ? em.GetString() ?? "Unknown error" : "Unknown error";
                         RaiseError($"Anthropic error: {errorMsg}");
                         yield break;
                     }
@@ -399,6 +514,46 @@ public class AnthropicProvider : ApiProviderBase
 
     public override bool SupportsNativeToolUse => true;
 
+    private static object SerializeBlock(ContentBlock block) => block.Type switch
+    {
+        "tool_use" => new Dictionary<string, object>
+        {
+            ["type"] = "tool_use",
+            ["id"] = block.Id ?? "",
+            ["name"] = block.Name ?? "",
+            ["input"] = block.Input ?? _emptyJsonObject,
+        },
+        "tool_result" => new Dictionary<string, object>
+        {
+            ["type"] = "tool_result",
+            ["tool_use_id"] = block.ToolUseId ?? "",
+            ["content"] = block.Content ?? "",
+            ["is_error"] = block.IsError ?? false,
+        },
+        // Echoed exactly as received — an altered or unsigned thinking block fails the request.
+        "thinking" => new Dictionary<string, object>
+        {
+            ["type"] = "thinking",
+            ["thinking"] = block.Text ?? "",
+            ["signature"] = block.Signature ?? "",
+        },
+        "redacted_thinking" => new Dictionary<string, object>
+        {
+            ["type"] = "redacted_thinking",
+            ["data"] = block.Data ?? "",
+        },
+        _ => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
+    };
+
+    /// <summary>One content block being assembled from the stream.</summary>
+    private sealed class StreamBlock
+    {
+        public string Type = "";
+        public readonly StringBuilder Text = new();
+        public readonly StringBuilder Json = new();
+        public string? Id, Name, Signature, Data;
+    }
+
     public override async Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages,
         string systemPrompt,
@@ -408,8 +563,7 @@ public class AnthropicProvider : ApiProviderBase
         string? toolChoice = null)
     {
         var config = GetConfig();
-        string baseUrl = config.BaseUrl?.TrimEnd('/') ?? "https://api.anthropic.com";
-        string model = config.EffectiveModelId ?? "claude-sonnet-4-20250514";
+        string model = ModelOf(config);
         var settings = _settingsService.Settings;
 
         // Build tool definitions
@@ -427,95 +581,47 @@ public class AnthropicProvider : ApiProviderBase
             ["messages"] = messages.Select(m => new Dictionary<string, object>
             {
                 ["role"] = m.Role,
-                ["content"] = m.Content.Select<ContentBlock, object>(block => block.Type switch
-                {
-                    "text" => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
-                    "tool_use" => new Dictionary<string, object>
-                    {
-                        ["type"] = "tool_use",
-                        ["id"] = block.Id ?? "",
-                        ["name"] = block.Name ?? "",
-                        ["input"] = block.Input ?? _emptyJsonObject,
-                    },
-                    "tool_result" => new Dictionary<string, object>
-                    {
-                        ["type"] = "tool_result",
-                        ["tool_use_id"] = block.ToolUseId ?? "",
-                        ["content"] = block.Content ?? "",
-                        ["is_error"] = block.IsError ?? false,
-                    },
-                    _ => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
-                }).ToList(),
+                ["content"] = m.Content.Select(SerializeBlock).ToList(),
             }).ToList(),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,
             ["stream"] = true,
         };
 
-        // Extended thinking for native tool use (model-aware — see ApplyThinkingAndSampling)
-        ApplyThinkingAndSampling(requestObj, model, settings);
+        bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
 
-        // Prompt caching for system prompt
         if (!string.IsNullOrWhiteSpace(systemPrompt))
-        {
-            if (settings.PromptCachingEnabled)
-            {
-                requestObj["system"] = new[]
-                {
-                    new Dictionary<string, object>
-                    {
-                        ["type"] = "text",
-                        ["text"] = systemPrompt,
-                        ["cache_control"] = new Dictionary<string, string> { ["type"] = "ephemeral" },
-                    },
-                };
-            }
-            else
-            {
-                requestObj["system"] = systemPrompt;
-            }
-        }
+            requestObj["system"] = BuildSystem(systemPrompt, settings);
 
-        // Honor a forced tool choice (planner / forced-retry). Default (null/"auto") leaves Claude free.
+        // Forced tool choice (planner / forced recovery). Forcing is a 400 while the model thinks and on
+        // models that dropped it — there the loop's own instruction steers instead, under "auto".
         if (tools.Count > 0 && !string.IsNullOrWhiteSpace(toolChoice)
             && !toolChoice.Equals("auto", StringComparison.OrdinalIgnoreCase))
         {
-            requestObj["tool_choice"] =
-                toolChoice.Equals("required", StringComparison.OrdinalIgnoreCase) || toolChoice.Equals("any", StringComparison.OrdinalIgnoreCase)
-                    ? new Dictionary<string, object> { ["type"] = "any" }
-                : toolChoice.Equals("none", StringComparison.OrdinalIgnoreCase)
-                    ? new Dictionary<string, object> { ["type"] = "auto" } // Anthropic: no "none" → leave unforced
-                    : new Dictionary<string, object> { ["type"] = "tool", ["name"] = toolChoice };
+            if (toolChoice.Equals("none", StringComparison.OrdinalIgnoreCase))
+                requestObj["tool_choice"] = new Dictionary<string, object> { ["type"] = "none" };
+            else if (!thinking && Traits(model).ForcedToolChoice)
+                requestObj["tool_choice"] =
+                    toolChoice.Equals("required", StringComparison.OrdinalIgnoreCase) || toolChoice.Equals("any", StringComparison.OrdinalIgnoreCase)
+                        ? new Dictionary<string, object> { ["type"] = "any" }
+                        : new Dictionary<string, object> { ["type"] = "tool", ["name"] = toolChoice };
         }
 
         var body = JsonSerializer.Serialize(requestObj, new JsonSerializerOptions { WriteIndented = false });
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
-        request.Headers.Add("x-api-key", config.ApiKey);
-        request.Headers.Add("anthropic-version", "2023-06-01");
-        {
-            var betaFeatures = new List<string>();
-            // interleaved-thinking is a legacy beta; adaptive thinking (modern models) enables it
-            // automatically, and the modern models don't accept the flag path — only send it for legacy.
-            if (settings.ExtendedThinkingEnabled && !IsModernThinkingModel(model))
-                betaFeatures.Add("interleaved-thinking-2025-05-14");
-            if (settings.PromptCachingEnabled)
-                betaFeatures.Add("prompt-caching-2024-07-31");
-            if (betaFeatures.Count > 0)
-                request.Headers.Add("anthropic-beta", string.Join(",", betaFeatures));
-        }
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/v1/messages");
+        AddAuthHeaders(request, config);
+        AddBetaHeader(request, model, thinking);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        UsageMeter.Report(UsageMeter.FromAnthropic(response, model));   // rate-limit headroom for the usage strip
 
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrEmpty(config.ApiKey))
-                error = error.Replace(config.ApiKey, "[REDACTED]");
-
             throw new HttpRequestException(
-                $"Anthropic API error: {error}",
+                DescribeApiError((int)response.StatusCode, error, config, model),
                 null,
                 response.StatusCode);
         }
@@ -523,16 +629,14 @@ public class AnthropicProvider : ApiProviderBase
         // ─── Streaming parse (SSE) ───
         // We request stream:true so text appears live via onTextDelta instead of the user staring at a
         // spinner until the whole turn lands. Anthropic emits each block as
-        // content_block_start → content_block_delta* → content_block_stop, interleaving text, thinking,
-        // and tool_use. tool_use arguments arrive as input_json_delta fragments we concatenate per block
-        // index, then parse once at the end.
+        // content_block_start → content_block_delta* → content_block_stop, interleaving thinking, text and
+        // tool_use. Every block is kept by stream index: thinking blocks (with their signature) have to go
+        // back verbatim and in place when the tool loop continues.
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
         var result = new NativeToolResponse();
-        var textParts = new List<string>();
-        var thinkingParts = new List<string>();
-        var toolBlocks = new Dictionary<int, (string Id, string Name, StringBuilder Json)>();
+        var blocks = new SortedDictionary<int, StreamBlock>();
         int finalOutputTokens = 0;
         bool streamEnded = false;
 
@@ -572,48 +676,49 @@ public class AnthropicProvider : ApiProviderBase
                             && root.TryGetProperty("content_block", out var cb)
                             && cb.TryGetProperty("type", out var cbTypeEl))
                         {
-                            string cbType = cbTypeEl.GetString() ?? "";
-                            if (cbType == "tool_use")
+                            var sb = new StreamBlock { Type = cbTypeEl.GetString() ?? "" };
+                            switch (sb.Type)
                             {
-                                string id = cb.TryGetProperty("id", out var idp) ? idp.GetString() ?? "" : "";
-                                string name = cb.TryGetProperty("name", out var np) ? np.GetString() ?? "" : "";
-                                toolBlocks[sIdx] = (id, name, new StringBuilder());
+                                case "tool_use":
+                                    sb.Id = cb.TryGetProperty("id", out var idp) ? idp.GetString() ?? "" : "";
+                                    sb.Name = cb.TryGetProperty("name", out var np) ? np.GetString() ?? "" : "";
+                                    break;
+                                case "text":
+                                    if (cb.TryGetProperty("text", out var tp) && tp.GetString() is { Length: > 0 } t0)
+                                    { sb.Text.Append(t0); onTextDelta?.Invoke(t0); }
+                                    break;
+                                case "thinking":
+                                    if (cb.TryGetProperty("thinking", out var thp)) sb.Text.Append(thp.GetString());
+                                    if (cb.TryGetProperty("signature", out var sgp)) sb.Signature = sgp.GetString();
+                                    break;
+                                case "redacted_thinking":
+                                    sb.Data = cb.TryGetProperty("data", out var dp) ? dp.GetString() : null;
+                                    break;
                             }
-                            else if (cbType == "text" && cb.TryGetProperty("text", out var tp))
-                            {
-                                string t = tp.GetString() ?? "";
-                                if (t.Length > 0) { textParts.Add(t); onTextDelta?.Invoke(t); }
-                            }
-                            else if (cbType == "thinking" && cb.TryGetProperty("thinking", out var thp))
-                            {
-                                string th = thp.GetString() ?? "";
-                                if (th.Length > 0) thinkingParts.Add(th);
-                            }
+                            blocks[sIdx] = sb;
                         }
                         break;
 
                     case "content_block_delta":
                         if (root.TryGetProperty("index", out var dIdxEl) && dIdxEl.TryGetInt32(out int dIdx)
+                            && blocks.TryGetValue(dIdx, out var blk)
                             && root.TryGetProperty("delta", out var delta)
                             && delta.TryGetProperty("type", out var dtEl))
                         {
                             switch (dtEl.GetString())
                             {
                                 case "text_delta":
-                                    if (delta.TryGetProperty("text", out var txt))
-                                    {
-                                        string s = txt.GetString() ?? "";
-                                        if (s.Length > 0) { textParts.Add(s); onTextDelta?.Invoke(s); }
-                                    }
+                                    if (delta.TryGetProperty("text", out var txt) && txt.GetString() is { Length: > 0 } s)
+                                    { blk.Text.Append(s); onTextDelta?.Invoke(s); }
                                     break;
                                 case "thinking_delta":
-                                    if (delta.TryGetProperty("thinking", out var thd))
-                                        thinkingParts.Add(thd.GetString() ?? "");
+                                    if (delta.TryGetProperty("thinking", out var thd)) blk.Text.Append(thd.GetString());
+                                    break;
+                                case "signature_delta":
+                                    if (delta.TryGetProperty("signature", out var sig)) blk.Signature = sig.GetString();
                                     break;
                                 case "input_json_delta":
-                                    if (delta.TryGetProperty("partial_json", out var pj)
-                                        && toolBlocks.TryGetValue(dIdx, out var tb))
-                                        tb.Json.Append(pj.GetString() ?? "");
+                                    if (delta.TryGetProperty("partial_json", out var pj)) blk.Json.Append(pj.GetString());
                                     break;
                             }
                         }
@@ -646,18 +751,39 @@ public class AnthropicProvider : ApiProviderBase
             catch (JsonException) { /* skip a malformed SSE chunk */ }
         }
 
-        // Assemble tool calls in the index order Claude emitted them.
-        foreach (var idx in toolBlocks.Keys.OrderBy(k => k))
+        // Assemble the emitted blocks in stream order.
+        var textParts = new List<string>();
+        var thinkingParts = new List<string>();
+        foreach (var b in blocks.Values)
         {
-            var (id, name, json) = toolBlocks[idx];
-            string raw = json.ToString();
-            JsonElement input = _emptyJsonObject;
-            if (!string.IsNullOrWhiteSpace(raw))
+            switch (b.Type)
             {
-                try { using var d = JsonDocument.Parse(raw); input = d.RootElement.Clone(); }
-                catch { input = _emptyJsonObject; }
+                case "text":
+                    if (b.Text.Length == 0) break;   // the API rejects an empty text block on the way back
+                    textParts.Add(b.Text.ToString());
+                    result.Blocks.Add(new ContentBlock { Type = "text", Text = b.Text.ToString() });
+                    break;
+                case "thinking":
+                    if (b.Text.Length > 0) thinkingParts.Add(b.Text.ToString());
+                    if (!string.IsNullOrEmpty(b.Signature))   // unsigned = cut off mid-stream; can't be replayed
+                        result.Blocks.Add(new ContentBlock { Type = "thinking", Text = b.Text.ToString(), Signature = b.Signature });
+                    break;
+                case "redacted_thinking":
+                    if (!string.IsNullOrEmpty(b.Data))
+                        result.Blocks.Add(new ContentBlock { Type = "redacted_thinking", Data = b.Data });
+                    break;
+                case "tool_use":
+                    string raw = b.Json.ToString();
+                    JsonElement input = _emptyJsonObject;
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        try { using var d = JsonDocument.Parse(raw); input = d.RootElement.Clone(); }
+                        catch { input = _emptyJsonObject; }
+                    }
+                    result.ToolCalls.Add(new NativeToolCall { Id = b.Id ?? "", Name = b.Name ?? "", Input = input });
+                    result.Blocks.Add(new ContentBlock { Type = "tool_use", Id = b.Id, Name = b.Name, Input = input });
+                    break;
             }
-            result.ToolCalls.Add(new NativeToolCall { Id = id, Name = name, Input = input });
         }
 
         result.TextContent = textParts.Count > 0 ? string.Concat(textParts) : null;
@@ -668,6 +794,9 @@ public class AnthropicProvider : ApiProviderBase
 
         if (string.IsNullOrEmpty(result.StopReason))
             result.StopReason = result.ToolCalls.Count > 0 ? "tool_use" : "end_turn";
+        // A safety classifier declined (HTTP 200, stop_reason "refusal"): say so instead of an empty turn.
+        if (result.StopReason == "refusal" && result.TextContent == null && result.ToolCalls.Count == 0)
+            result.TextContent = Loc("anthropic.err.refusal");
 
         return result;
     }
@@ -676,13 +805,13 @@ public class AnthropicProvider : ApiProviderBase
     {
         var config = GetConfig();
         if (string.IsNullOrWhiteSpace(config.ApiKey))
-            return (false, "API key is required");
+            return (false, Loc("anthropic.err.noKey"));
 
+        string model = ModelOf(config);
         try
         {
-            string baseUrl = config.BaseUrl?.TrimEnd('/') ?? "https://api.anthropic.com";
-            string model = config.EffectiveModelId ?? "claude-sonnet-4-20250514";
-
+            // A real (1-token) message, not just /v1/models: it also proves the model is enabled for this
+            // workspace and that billing works — the two things a listing call can't tell you.
             var requestObj = new Dictionary<string, object>
             {
                 ["model"] = model,
@@ -690,21 +819,25 @@ public class AnthropicProvider : ApiProviderBase
                 ["max_tokens"] = 1,
             };
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v1/messages");
-            request.Headers.Add("x-api-key", config.ApiKey);
-            request.Headers.Add("anthropic-version", "2023-06-01");
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/v1/messages");
+            AddAuthHeaders(request, config);
             request.Content = new StringContent(
                 JsonSerializer.Serialize(requestObj), Encoding.UTF8, "application/json");
 
             using var response = await _httpClient.SendAsync(request, ct);
+            UsageMeter.Report(UsageMeter.FromAnthropic(response, model));
             if (response.IsSuccessStatusCode)
-                return (true, $"Connected to Anthropic ({model})");
+            {
+                // Name the workspace the call actually ran in, so the user can see which one is billed.
+                string ws = response.Headers.TryGetValues("anthropic-workspace-id", out var wsv) ? wsv.FirstOrDefault() ?? "" : "";
+                return (true, ws.Length > 0 ? $"Connected to Anthropic ({model}) · {ws}" : $"Connected to Anthropic ({model})");
+            }
 
             var error = await response.Content.ReadAsStringAsync(ct);
-            if (!string.IsNullOrEmpty(config.ApiKey))
-                error = error.Replace(config.ApiKey, "[REDACTED]");
-            return (false, $"HTTP {(int)response.StatusCode}: {error}");
+            return (false, DescribeApiError((int)response.StatusCode, error, config, model));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (ConfigException ex) { return (false, ex.Message); }   // already explained (bad workspace ID)
         catch (Exception ex)
         {
             var msg = ex.Message;
@@ -712,5 +845,41 @@ public class AnthropicProvider : ApiProviderBase
                 msg = msg.Replace(config.ApiKey, "[REDACTED]");
             return (false, $"Connection failed: {msg}");
         }
+    }
+
+    /// <summary>Model IDs this key can call (GET /v1/models), newest first. Null when the listing fails,
+    /// so the caller keeps the built-in <see cref="KnownModels"/>.</summary>
+    public async Task<List<string>?> ListModelsAsync(CancellationToken ct = default)
+    {
+        var config = GetConfig();
+        if (string.IsNullOrWhiteSpace(config.ApiKey)) return null;
+        try
+        {
+            var ids = new List<string>();
+            string? afterId = null;
+            for (int page = 0; page < 10; page++)
+            {
+                string url = $"{BaseUrlOf(config)}/v1/models?limit=100"
+                             + (afterId != null ? $"&after_id={Uri.EscapeDataString(afterId)}" : "");
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                AddAuthHeaders(request, config);
+                using var response = await _httpClient.SendAsync(request, ct);
+                if (!response.IsSuccessStatusCode) return null;
+
+                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                var root = doc.RootElement;
+                if (root.TryGetProperty("data", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    foreach (var m in arr.EnumerateArray())
+                        if (m.TryGetProperty("id", out var id) && id.GetString() is { Length: > 0 } s)
+                            ids.Add(s);
+
+                bool hasMore = root.TryGetProperty("has_more", out var hm) && hm.ValueKind == JsonValueKind.True;
+                afterId = root.TryGetProperty("last_id", out var li) && li.ValueKind == JsonValueKind.String ? li.GetString() : null;
+                if (!hasMore || afterId == null) break;
+            }
+            return ids;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return null; }
     }
 }

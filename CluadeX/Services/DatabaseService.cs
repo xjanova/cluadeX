@@ -282,6 +282,54 @@ public sealed class DatabaseService : IDisposable
         return session;
     }
 
+    private bool? _healthy;
+
+    /// <summary>PRAGMA quick_check passed (checked once per run). Automatic deletes only run on a healthy
+    /// file: on a damaged one "has no messages" can be wrong — a broken index finds none — and the
+    /// empty-chat cleanup would delete real conversations (measured on 2026-10-09: a corrupt codex.db
+    /// answered EXISTS=false for every session while 5 of them held messages).</summary>
+    public bool IsHealthy
+    {
+        get
+        {
+            if (_healthy is { } known) return known;
+            try
+            {
+                using var conn = Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA quick_check(1);";
+                _healthy = cmd.ExecuteScalar() as string == "ok";
+            }
+            catch { _healthy = false; }   // "database disk image is malformed" lands here
+            return _healthy.Value;
+        }
+    }
+
+    /// <summary>Delete sessions that never got a message — an opened-but-unused "New Chat". With
+    /// <paramref name="sessionId"/>, only that one. The emptiness test runs against the messages table
+    /// itself, so a session whose messages merely failed to load can never match. Returns rows removed.</summary>
+    public int DeleteEmptySessions(string? sessionId = null)
+    {
+        if (!IsHealthy) return 0;
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM sessions WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = sessions.id)"
+                          + (sessionId != null ? " AND id = $id;" : ";");
+        if (sessionId != null) cmd.Parameters.AddWithValue("$id", sessionId);
+        return cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>True when the session has at least one stored message.</summary>
+    public bool SessionHasMessages(string sessionId)
+    {
+        if (!IsHealthy) return true;   // can't trust the answer — treat every session as worth keeping
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM messages WHERE session_id = $id);";
+        cmd.Parameters.AddWithValue("$id", sessionId);
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
+    }
+
     /// <summary>Delete a session and all its messages (cascade).</summary>
     public void DeleteSession(string sessionId)
     {

@@ -167,6 +167,11 @@ public class ClaudeDevProvider : IAiProvider
             && !model.Equals("default", StringComparison.OrdinalIgnoreCase)
             && !model.Equals("auto", StringComparison.OrdinalIgnoreCase))
             args.Append(" --model ").Append(Quote(model));
+        // Claude Code takes low/medium/high (newer builds also max); xhigh/max round down to high so an
+        // older CLI never rejects the flag. "auto" leaves the CLI on its own setting.
+        string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
+        if (effort != Models.EffortLevels.Auto)
+            args.Append(" --effort ").Append(effort is "xhigh" or "max" ? "high" : effort);
 
         var psi = new ProcessStartInfo(_cliPath, args.ToString())
         {

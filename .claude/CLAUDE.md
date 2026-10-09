@@ -133,7 +133,9 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - [ ] The 7B two-file ceiling: a weak local model reliably does single-file+build, but a coordinated
       two-file change is at its limit. Options: escalate-to-API on stall (`EscalationEnabled` has UI)
       or plan → per-file subtask decomposition in the agent loop.
-- [ ] Run full integration test with Anthropic API (real keys, multi-turn agentic session)
+- [x] Anthropic API live: 4 models × chat / tools / thinking / effort pass (`tests/apitest`, 2026-10-09).
+      The owner's key is not workspace-scoped — Settings ▸ AI Provider ▸ Workspace ID must stay filled.
+- [ ] A full multi-turn agentic session with the Anthropic API in the running app
 - [ ] Re-verify a real local-model coding task on BOTH local backends — llama-server (native tool_use)
       and in-process LLamaSharp ([ACTION:] loop) — since the prompt now follows the loaded backend's
       real tool protocol. Before this fix the LLamaSharp path made zero tool calls. Ask + check VRAM first.
@@ -158,6 +160,14 @@ descriptions match the behaviour). It drives the real `AgentToolService` through
 resolver the native tool loop uses, phrasing every call the way a model does, in a throwaway git repo;
 `portable.txt` keeps it off the real `~/.cluadex`. Run: `dotnet build CluadeX/CluadeX.csproj`, then
 `cd tests/tooltest && dotnet run` (report: `bin/Debug/net8.0-windows/tool-report.md`).
+The provider contract lives in `tests/apitest`. Offline (free, no key): per-model request rules for
+Claude / OpenAI / Gemini (thinking, sampling, effort, forced tool_choice), error explanations, the
+assistant-turn rebuild that carries thinking blocks, rate-limit header parsing, and the OpenAI + Gemini
+wire format against a localhost mock. Live (costs cents, key + Workspace ID read from settings):
+Test Connection, chat, tool round trips with/without thinking, edited history, effort levels, model
+listing. `dotnet run -- --offline` · `dotnet run -- claude-opus-5-5,claude-haiku-5-5` · and
+`dotnet run -- --offline --db-health <copy of codex.db>` proves the empty-chat cleanup refuses to touch
+a damaged chat database. Run it whenever a model list or request shape changes.
 The older IDE harness `navtest` (132 assertions: search, navigation, rename, completion, diff, merge
 conflicts, live debugpy) lived in a session scratchpad and its source is gone — **harnesses belong in
 `tests/`, never in a scratchpad.** These harnesses have repeatedly caught bugs the compiler could not:

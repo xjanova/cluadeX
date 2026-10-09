@@ -2850,20 +2850,11 @@ public class CodeAgentService
                 break;
             }
 
-            // Build assistant message with text + tool_use blocks
-            var assistantMsg = new Services.Providers.NativeMessage { Role = "assistant" };
-            if (!string.IsNullOrEmpty(response.TextContent))
-            {
-                assistantMsg.Content.Add(new Services.Providers.ContentBlock
-                {
-                    Type = "text",
-                    Text = response.TextContent,
-                });
-
-                // Show the text to UI
-                if (!string.IsNullOrWhiteSpace(response.TextContent))
-                    OnThinkingUpdate?.Invoke(response.TextContent, iteration + 1);
-            }
+            // Assistant turn = what the model emitted (thinking + text, in order); each tool_use block is added
+            // as its call executes, below. Anthropic rejects a continued tool loop whose thinking was dropped.
+            var assistantMsg = response.ToAssistantMessage(includeToolUse: false);
+            if (!string.IsNullOrWhiteSpace(response.TextContent))
+                OnThinkingUpdate?.Invoke(response.TextContent, iteration + 1);   // show the text to UI
 
             // Execute tool calls and build tool_result blocks
             // Partition into read-only (safe for parallel) and write tools

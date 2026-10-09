@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using CluadeX.Models;
 using CluadeX.Services;
+using CluadeX.Services.Providers;
 
 namespace CluadeX.ViewModels;
 
@@ -98,7 +99,8 @@ public class ChatViewModel : ViewModelBase
     public bool AutonomousMode
     {
         get => _autonomousMode;
-        set => SetProperty(ref _autonomousMode, value);
+        // Persisted like Think / Auto-run: this switch is the only control for it (Settings has none).
+        set { if (SetProperty(ref _autonomousMode, value)) _settingsService.UpdateSettings(s => s.AutonomousLoopEnabled = value); }
     }
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
     public ChatSession? CurrentSession { get => _currentSession; set => SetProperty(ref _currentSession, value); }
@@ -210,6 +212,106 @@ public class ChatViewModel : ViewModelBase
         {
             if (SetProperty(ref _extendedThinkingEnabled, value))
                 _settingsService.UpdateSettings(s => s.ExtendedThinkingEnabled = value);
+        }
+    }
+
+    // ─── Effort (how hard the model works per reply — see EffortLevels) ───
+    public IReadOnlyList<string> EffortOptions { get; } = EffortLevels.All;
+    private string _reasoningEffort = EffortLevels.Auto;
+    public string ReasoningEffort
+    {
+        get => _reasoningEffort;
+        set
+        {
+            string v = EffortLevels.Normalize(value);
+            if (SetProperty(ref _reasoningEffort, v))
+                _settingsService.UpdateSettings(s => s.ReasoningEffort = v);
+        }
+    }
+
+    // ─── Usage strip (top of the chat): what is answering, rate limit left, what it cost ───
+    private string _activeProviderLabel = "", _activeModelLabel = "", _rateLimitText = "", _rateLimitTip = "";
+    private string _sessionCostText = "$0.00";
+    private double _rateLimitFraction, _rateLimitUsedPercent;
+    private bool _hasRateLimit;
+    public string ActiveProviderLabel { get => _activeProviderLabel; set => SetProperty(ref _activeProviderLabel, value); }
+    public string ActiveModelLabel { get => _activeModelLabel; set => SetProperty(ref _activeModelLabel, value); }
+    /// <summary>0–1 of the rate limit still available this minute (drives the gauge's fill).</summary>
+    public double RateLimitFraction { get => _rateLimitFraction; set => SetProperty(ref _rateLimitFraction, value); }
+    /// <summary>100 − percent left: feeds the same green→red brush the context bar uses.</summary>
+    public double RateLimitUsedPercent { get => _rateLimitUsedPercent; set => SetProperty(ref _rateLimitUsedPercent, value); }
+    public bool HasRateLimit { get => _hasRateLimit; set => SetProperty(ref _hasRateLimit, value); }
+    public string RateLimitText { get => _rateLimitText; set => SetProperty(ref _rateLimitText, value); }
+    public string RateLimitTip { get => _rateLimitTip; set => SetProperty(ref _rateLimitTip, value); }
+    public string SessionCostText { get => _sessionCostText; set => SetProperty(ref _sessionCostText, value); }
+    /// <summary>The provider's billing / usage page — the only place an account's credit balance is shown.</summary>
+    public string? BillingUrl => _providerManager.ActiveProviderType switch
+    {
+        AiProviderType.Anthropic => "https://platform.claude.com/settings/billing",
+        AiProviderType.OpenAI => "https://platform.openai.com/settings/organization/billing",
+        AiProviderType.Gemini => "https://aistudio.google.com/usage",
+        AiProviderType.ClaudeDev => "https://claude.ai/settings/usage",
+        _ => null,
+    };
+    public bool HasBillingPage => BillingUrl != null;
+    public ICommand OpenBillingCommand { get; private set; } = null!;
+
+    private static string Loc(string key) => LocalizedResources.Instance[key];
+
+    /// <summary>Recompute the usage strip from the active provider, its saved model, the latest
+    /// rate-limit snapshot and the session's cost. Cheap; called on every change and every 5 s.</summary>
+    private void RefreshUsageStrip()
+    {
+        var type = _providerManager.ActiveProviderType;
+        var s = _settingsService.Settings;
+        string? configured = s.ProviderConfigs.TryGetValue(type.ToString(), out var cfg) && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId)
+            ? cfg.EffectiveModelId!.Trim() : null;
+        ActiveProviderLabel = _providerManager.ActiveProvider.DisplayName;
+        ActiveModelLabel = type switch
+        {
+            AiProviderType.Local or AiProviderType.LlamaServer =>
+                string.IsNullOrWhiteSpace(s.SelectedModelName) ? Loc("chat.usage.noModel") : s.SelectedModelName,
+            AiProviderType.Anthropic => configured ?? AnthropicProvider.DefaultModel,
+            AiProviderType.OpenAI => configured ?? OpenAiProvider.DefaultModel,
+            AiProviderType.Gemini => configured ?? GeminiProvider.DefaultModel,
+            AiProviderType.ClaudeDev => configured is null or "default" or "auto" ? Loc("chat.usage.cliDefault") : configured,
+            _ => configured ?? Loc("chat.usage.noModel"),
+        };
+        OnPropertyChanged(nameof(BillingUrl));
+        OnPropertyChanged(nameof(HasBillingPage));
+
+        SessionCostText = _costTracker.TotalRequests == 0 ? "$0.00" : $"${_costTracker.TotalCostUsd:0.0000}";
+
+        bool local = type is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        var snap = UsageMeter.Latest;
+        if (snap != null && snap.Provider == type.ToString() && snap.PercentLeft is { } left)
+        {
+            HasRateLimit = true;
+            RateLimitFraction = left / 100.0;
+            RateLimitUsedPercent = 100 - left;
+            RateLimitText = $"{left:0}%";
+            var lines = new List<string>();
+            void Line(string label, long? rem, long? lim)
+            {
+                if (rem is { } r && lim is { } l) lines.Add($"  {label}: {r:N0} / {l:N0}");
+            }
+            Line(Loc("chat.usage.tokens"), snap.TokensRemaining, snap.TokensLimit);
+            Line(Loc("chat.usage.inputTokens"), snap.InputTokensRemaining, snap.InputTokensLimit);
+            Line(Loc("chat.usage.outputTokens"), snap.OutputTokensRemaining, snap.OutputTokensLimit);
+            Line(Loc("chat.usage.requests"), snap.RequestsRemaining, snap.RequestsLimit);
+            string reset = snap.Reset is { } r2 ? r2.ToLocalTime().ToString("HH:mm:ss") : "—";
+            RateLimitTip = string.Format(Loc("chat.usage.tip"), snap.Provider, snap.Model,
+                string.Join("\n", lines), reset, snap.At.ToString("HH:mm:ss"));
+        }
+        else
+        {
+            HasRateLimit = false;
+            RateLimitFraction = 0;
+            RateLimitUsedPercent = 0;
+            RateLimitText = local ? Loc("chat.usage.local") : Loc("chat.usage.unknown");
+            RateLimitTip = local ? Loc("chat.usage.localTip")
+                : type == AiProviderType.ClaudeDev ? Loc("chat.usage.cliTip")
+                : Loc("chat.usage.unknownTip");
         }
     }
 
@@ -392,6 +494,7 @@ public class ChatViewModel : ViewModelBase
 
         AutoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
+        _reasoningEffort = EffortLevels.Normalize(settingsService.Settings.ReasoningEffort);
         _showThinking = settingsService.Settings.ShowThinkingSteps;
         _showAgentInternals = settingsService.Settings.ShowAgentInternals;
 
@@ -433,6 +536,17 @@ public class ChatViewModel : ViewModelBase
         // API auth/rate errors). These used to be raised into the void — NOTHING subscribed — so the
         // user just saw "no response" with no clue why. Show a clean, sanitized message and clear any
         // dangling thinking indicator.
+        OpenBillingCommand = new RelayCommand(() =>
+        {
+            if (BillingUrl is { } url)
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+                catch { /* no browser registered */ }
+        });
+        UsageMeter.Updated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
+        _providerManager.OnProviderChanged += _ => App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
+        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
+        RefreshUsageStrip();
+
         _providerManager.OnError += msg =>
         {
             App.Current?.Dispatcher.Invoke(() =>
@@ -554,6 +668,7 @@ public class ChatViewModel : ViewModelBase
             UpdateContextInfo();
             UpdateGpuStats();
             CostText = _costTracker.FormatCost();
+            RefreshUsageStrip();
         };
         _memoryTimer.Start();
 
@@ -587,7 +702,11 @@ public class ChatViewModel : ViewModelBase
             // 1. Scan model directories (file I/O — can be slow on HDD/network drives)
             var models = _huggingFaceService.GetLocalModels();
 
-            // 2. Load sessions from SQLite
+            // 2. Load sessions from SQLite — first dropping chats that never got a message. Older builds
+            //    saved every "New Chat" the moment it was opened, and those piled up in the sidebar.
+            _persistenceService.DeleteEmptySessions();   // no-op when the DB fails its integrity check
+            bool dbHealthy = _persistenceService.IsDatabaseHealthy;
+            if (!dbHealthy) Debug.WriteLine("codex.db failed PRAGMA quick_check — empty-chat cleanup disabled");
             List<ChatSession> savedSessions;
             try { savedSessions = _persistenceService.LoadSessionList(); }
             catch { savedSessions = new(); }
@@ -651,16 +770,15 @@ public class ChatViewModel : ViewModelBase
                         StatusText = $"Restored session: {lastSession.Title}";
                     }
                 }
-                else if (savedSessions.Count > 0)
-                {
-                    CurrentSession = lastSession ?? savedSessions.First();
-                    StatusText = "Ready";
-                }
                 else
                 {
+                    // Nothing to restore, or the last session failed to load. Never adopt that session
+                    // as the open chat: its messages are still in the DB but not on screen, and the next
+                    // save would overwrite them with whatever the user types now.
                     NewSession();
                 }
                 _isDirty = false;
+                if (!dbHealthy) StatusText = Loc("chat.dbDamaged");
 
                 // DB stats
                 string sizeText = stats.sizeBytes < 1024 * 1024
@@ -866,6 +984,16 @@ public class ChatViewModel : ViewModelBase
         {
             _isDirty = true;
             AutoSave();
+        }
+        // Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved
+        // empty) instead of leaving a stray "New Chat". The DB check keeps a session whose messages
+        // exist but aren't on screen.
+        else if (CurrentSession != null && !_persistenceService.SessionHasMessages(CurrentSession.Id))
+        {
+            string emptyId = CurrentSession.Id;
+            _persistenceService.DeleteEmptySessions(emptyId);
+            for (int i = Sessions.Count - 1; i >= 0; i--)
+                if (Sessions[i].Id == emptyId) Sessions.RemoveAt(i);
         }
 
         // Load from database (full session with messages)
@@ -1319,6 +1447,23 @@ public class ChatViewModel : ViewModelBase
     /// </summary>
     public void NewSession()
     {
+        string projectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+
+        // Already on an untouched chat → reuse it instead of stacking another empty "New Chat".
+        if (CurrentSession != null && Messages.Count == 0
+            && !_persistenceService.SessionHasMessages(CurrentSession.Id))
+        {
+            CurrentSession.ProjectPath = projectPath;
+            int at = -1;
+            for (int i = 0; i < Sessions.Count; i++)
+                if (Sessions[i].Id == CurrentSession.Id) { at = i; break; }
+            if (at < 0) Sessions.Insert(0, CurrentSession);
+            else if (at > 0) Sessions.Move(at, 0);
+            RebuildVisibleSessions();   // the project tag may have changed
+            StatusText = "Ready";
+            return;
+        }
+
         // Save current session before creating new
         if (CurrentSession != null && CurrentSession.Messages.Count > 0)
         {
@@ -1332,10 +1477,7 @@ public class ChatViewModel : ViewModelBase
 
         // Create new session — tag with the current project path so the sidebar can
         // filter to "just this project" instead of mixing every project's sessions together.
-        var session = new ChatSession
-        {
-            ProjectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "",
-        };
+        var session = new ChatSession { ProjectPath = projectPath };
         CurrentSession = session;
         ResolvePendingPermissionPrompts();
         Messages.Clear();
@@ -1343,10 +1485,8 @@ public class ChatViewModel : ViewModelBase
         _isDirty = false;
         RebuildVisibleSessions();
 
-        // Persist immediately so LoadSession can find it later
-        try { _persistenceService.SaveSession(session); }
-        catch { /* ignore */ }
-
+        // Not written to the DB yet: AutoSave stores it once it has a message, so a chat that is opened
+        // and never used leaves nothing behind (LoadSession falls back to the in-memory entry).
         StatusText = "Ready";
     }
 

@@ -258,6 +258,17 @@ public class NullToCollapsedConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
+/// <summary>Visible when the bound value's text equals ConverterParameter, else Collapsed
+/// (shows one settings category at a time).</summary>
+public class EqualsToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value?.ToString() == parameter?.ToString() ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
 public class NavItemConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)

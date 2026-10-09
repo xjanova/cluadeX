@@ -68,6 +68,46 @@ public abstract class ApiProviderBase : IAiProvider
         OnError?.Invoke(message);
     }
 
+    /// <summary>Turn an HTTP error from a cloud API into what to do about it, keeping the API's own message
+    /// (key redacted) after the explanation. Never words a hint with "context" or "too long": the agent
+    /// loop reads those in a 400 as prompt overflow and compacts.</summary>
+    /// <param name="keysUrl">Where to get a new key.</param>
+    /// <param name="billingUrl">Where to add credit / quota.</param>
+    protected static string DescribeHttpError(string provider, int status, string body, string? apiKey,
+        string model, string keysUrl, string billingUrl)
+    {
+        if (!string.IsNullOrEmpty(apiKey)) body = body.Replace(apiKey, "[REDACTED]");
+        string apiMsg = body;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            // OpenAI {error:{message}}, Gemini {error:{message,status}}; some proxies send [ {error:…} ]
+            var root = doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0
+                ? doc.RootElement[0] : doc.RootElement;
+            if (root.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.Object
+                && err.TryGetProperty("message", out var em) && em.GetString() is { Length: > 0 } s)
+                apiMsg = s;
+        }
+        catch (JsonException) { /* not JSON — keep the raw body */ }
+
+        string L(string key) => LocalizedResources.Instance[key];
+        bool Has(string word) => apiMsg.Contains(word, StringComparison.OrdinalIgnoreCase);
+        string? hint =
+            status == 401 || Has("api key not valid") || Has("incorrect api key") || Has("API_KEY_INVALID")
+                ? string.Format(L("api.err.badKey"), provider, keysUrl)
+            : Has("insufficient_quota") || Has("exceeded your current quota") || Has("billing") || Has("credit")
+                ? string.Format(L("api.err.quota"), provider, billingUrl)
+            : status == 404 || Has("model_not_found") || (Has("model") && Has("not found"))
+                ? string.Format(L("api.err.model"), provider, model)
+            : status == 403 ? string.Format(L("api.err.permission"), provider)
+            : status == 429 ? string.Format(L("api.err.rateLimit"), provider)
+            : status >= 500 ? string.Format(L("api.err.overloaded"), provider)
+            : null;
+
+        string head = $"HTTP {status}: {apiMsg}";
+        return hint == null ? head : $"{hint}\n({head})";
+    }
+
     // Simple record to avoid reflection on anonymous types
     protected record ChatMsg(string role, string content);
 

@@ -176,6 +176,8 @@ public class AppSettings
     // When thinking is on, MaxTokens is auto-raised to 16384 if lower.
     public bool ExtendedThinkingEnabled { get; set; } = false;
     public int ThinkingBudgetTokens { get; set; } = 10000; // default 10K thinking tokens
+    /// <summary>"auto" or low / medium / high / xhigh / max — see <see cref="EffortLevels"/>.</summary>
+    public string ReasoningEffort { get; set; } = EffortLevels.Auto;
     public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
     public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 

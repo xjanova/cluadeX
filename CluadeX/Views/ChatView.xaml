@@ -87,8 +87,65 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <StackPanel Grid.Row="0">
+        <!-- USAGE STRIP — always visible: what answers this chat, rate limit left, what it cost -->
+        <Border Background="{StaticResource MantleBrush}" Padding="12,5"
+                BorderThickness="0,0,0,1" BorderBrush="{StaticResource Surface0Brush}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" ToolTip="{services:Loc chat.usage.modelTip}">
+                    <Ellipse Width="7" Height="7" Fill="{StaticResource GreenBrush}" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding ActiveProviderLabel}" Foreground="{StaticResource Subtext0Brush}"
+                               FontSize="11" VerticalAlignment="Center" Margin="6,0,8,0"/>
+                    <Border CornerRadius="4" Padding="7,1" Background="#22A672FF" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding ActiveModelLabel}" Foreground="{StaticResource MauveBrush}"
+                                   FontSize="11" FontFamily="{StaticResource MonoFont}"/>
+                    </Border>
+                </StackPanel>
+
+                <!-- Quota gauge: rate-limit headroom from the last response's headers -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0"
+                            ToolTip="{Binding RateLimitTip}" Background="Transparent">
+                    <TextBlock Text="{services:Loc chat.usage.quota}" Foreground="{StaticResource Overlay0Brush}"
+                               FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Grid Width="110" Height="6" VerticalAlignment="Center"
+                          Visibility="{Binding HasRateLimit, Converter={StaticResource BoolVis}}">
+                        <Border Background="{StaticResource Surface1Brush}" CornerRadius="3"/>
+                        <Border CornerRadius="3" RenderTransformOrigin="0,0.5"
+                                Background="{Binding RateLimitUsedPercent, Converter={StaticResource CtxBrush}}">
+                            <Border.RenderTransform>
+                                <ScaleTransform ScaleX="{Binding RateLimitFraction}"/>
+                            </Border.RenderTransform>
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding RateLimitText}" Foreground="{StaticResource Subtext0Brush}"
+                               FontSize="10" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding SessionCostText}" Foreground="{StaticResource MauveBrush}"
+                               FontSize="10" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center"
+                               ToolTip="{Binding CostText}"/>
+                    <Button Style="{StaticResource IconButton}" Command="{Binding OpenBillingCommand}"
+                            Padding="6,1" Margin="8,0,0,0" ToolTip="{services:Loc chat.usage.creditTip}"
+                            Visibility="{Binding HasBillingPage, Converter={StaticResource BoolVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{services:Loc chat.usage.credit}" FontSize="10" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="9" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- PROJECT BAR -->
-        <Border Grid.Row="0" Background="{StaticResource Surface0Brush}"
+        <Border Background="{StaticResource Surface0Brush}"
                 Padding="12,8"
                 Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
             <Grid>
@@ -158,6 +215,7 @@
                         FontSize="11" Padding="6,4"/>
             </Grid>
         </Border>
+        </StackPanel>
 
         <!-- ═══ IN-CHAT SEARCH BAR (Ctrl+F) ═══ -->
         <Border Grid.Row="1" VerticalAlignment="Top" Panel.ZIndex="10"
@@ -1374,13 +1432,6 @@
                            VerticalAlignment="Center" Margin="6,0"
                            ToolTip="{services:Loc chat.lastTurnTip}"/>
 
-                <!-- API Cost -->
-                <TextBlock Grid.Column="3" Text="{Binding CostText}"
-                           Foreground="{StaticResource MauveBrush}"
-                           FontSize="9" FontFamily="{StaticResource MonoFont}"
-                           VerticalAlignment="Center" Margin="6,0"
-                           ToolTip="{services:Loc chat.costTip}"/>
-
                 <!-- Review + Auto-Execute -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource IconButton}"
@@ -1411,6 +1462,12 @@
                             <TextBlock Text="{services:Loc chat.think}" VerticalAlignment="Center"/>
                         </StackPanel>
                     </CheckBox>
+                    <TextBlock Text="{services:Loc chat.effort}" Foreground="{StaticResource Subtext0Brush}"
+                               FontSize="9" VerticalAlignment="Center" Margin="10,0,4,0"
+                               ToolTip="{services:Loc chat.effortTip}"/>
+                    <ComboBox ItemsSource="{Binding EffortOptions}" SelectedItem="{Binding ReasoningEffort}"
+                              FontSize="9" Padding="6,1" MinWidth="62" Height="18" VerticalAlignment="Center"
+                              ToolTip="{services:Loc chat.effortTip}"/>
                 </StackPanel>
 
                 <Button Grid.Column="5" Style="{StaticResource IconButton}"

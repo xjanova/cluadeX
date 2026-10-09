@@ -44,9 +44,9 @@ public class AiProviderManager : IDisposable
         // server processes when the user toggles between them.
         _providers[AiProviderType.Local] = localProvider;
         _providers[AiProviderType.LlamaServer] = serverProvider;
-        _providers[AiProviderType.OpenAI] = new OpenAiProvider(settingsService);
+        _providers[AiProviderType.OpenAI] = new OpenAiProvider(settingsService, costTracker);
         _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService, costTracker);
-        _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService);
+        _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService, costTracker);
         _providers[AiProviderType.Ollama] = new OllamaProvider(settingsService);
         // The installed Claude Code CLI as a model — needs the working directory so
         // the CLI runs in (and reads) the user's actual project.

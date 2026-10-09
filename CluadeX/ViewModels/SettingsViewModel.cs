@@ -3,7 +3,6 @@ using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Providers;
-using Microsoft.Win32;
 
 namespace CluadeX.ViewModels;
 
@@ -17,142 +16,184 @@ public class SettingsViewModel : ViewModelBase
     private readonly ActivationService _activationService;
     private readonly System.Windows.Threading.DispatcherTimer _autoSaveDebounce;
 
-    private string _modelDirectory = string.Empty;
-    private string _cacheDirectory = string.Empty;
-    private string _logDirectory = string.Empty;
-    private string _tempDirectory = string.Empty;
-    private uint _contextSize;
-    private int _gpuLayerCount;
-    private float _temperature;
-    private float _topP;
+    private string T(string key) => _localizationService.T(key);
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  Page navigation — one category at a time
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    private string _selectedCategory = "provider";
+    /// <summary>provider · model · agent · autonomous · memory · local · general</summary>
+    public string SelectedCategory { get => _selectedCategory; set => SetProperty(ref _selectedCategory, value); }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  Persisted settings
+    //  Auto-save writes ONLY what the user changed on this page since the last save. Writing the
+    //  whole page back used to (a) rewrite settings.json every ~2 s forever — the save-status text
+    //  restarted its own debounce — and (b) overwrite changes made elsewhere (chat-bar Think /
+    //  Auto-run, GPU layers from the Models page, MCP model switches) with this page's stale copy.
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    private static readonly Dictionary<string, Action<SettingsViewModel, AppSettings>> Writers = new()
+    {
+        // Model & output
+        [nameof(MaxTokens)] = (vm, s) => s.MaxTokens = Math.Clamp(vm.MaxTokens, 256, 128000),
+        [nameof(Temperature)] = (vm, s) => s.Temperature = Math.Clamp(vm.Temperature, 0f, 2f),
+        [nameof(TopP)] = (vm, s) => s.TopP = Math.Clamp(vm.TopP, 0f, 1f),
+        [nameof(PromptCachingEnabled)] = (vm, s) => s.PromptCachingEnabled = vm.PromptCachingEnabled,
+        [nameof(ThinkingBudgetTokens)] = (vm, s) => s.ThinkingBudgetTokens = Math.Clamp(vm.ThinkingBudgetTokens, 1024, 64000),
+        // Agent
+        [nameof(MaxAgentIterations)] = (vm, s) => s.MaxAgentIterations = Math.Clamp(vm.MaxAgentIterations, 1, 100),
+        [nameof(InteractiveRequestTimeoutSeconds)] = (vm, s) => s.InteractiveRequestTimeoutSeconds = Math.Clamp(vm.InteractiveRequestTimeoutSeconds, 0, 3600),
+        [nameof(EnforceReadBeforeEdit)] = (vm, s) => s.EnforceReadBeforeEdit = vm.EnforceReadBeforeEdit,
+        [nameof(AutoVerifyAfterEditEnabled)] = (vm, s) => s.AutoVerifyAfterEditEnabled = vm.AutoVerifyAfterEditEnabled,
+        [nameof(AutoVerifyCommand)] = (vm, s) => s.AutoVerifyCommand = vm.AutoVerifyCommand?.Trim() ?? "",
+        [nameof(MaxAutoFixAttempts)] = (vm, s) => s.MaxAutoFixAttempts = Math.Clamp(vm.MaxAutoFixAttempts, 0, 20),
+        [nameof(EscalationEnabled)] = (vm, s) =>
+        {
+            s.EscalationEnabled = vm.EscalationEnabled;
+            s.EscalationProviderName = nameof(AiProviderType.Anthropic);   // the only provider the native loop can hand off to
+        },
+        [nameof(BrainAutoRecallEnabled)] = (vm, s) => s.BrainAutoRecallEnabled = vm.BrainAutoRecallEnabled,
+        [nameof(SemanticSearchEnabled)] = (vm, s) => s.SemanticSearchEnabled = vm.SemanticSearchEnabled,
+        [nameof(EmbeddingModel)] = (vm, s) => s.EmbeddingModel = vm.EmbeddingModel?.Trim() ?? "",
+        [nameof(InstinctLearningEnabled)] = (vm, s) => s.InstinctLearningEnabled = vm.InstinctLearningEnabled,
+        // Autonomous loop
+        [nameof(AutoFixMaxIterations)] = (vm, s) => s.AutoFixMaxIterations = Math.Clamp(vm.AutoFixMaxIterations, 1, 50),
+        [nameof(AutoReviewEnabled)] = (vm, s) => s.AutoReviewEnabled = vm.AutoReviewEnabled,
+        [nameof(AutoReviewMode)] = (vm, s) => s.AutoReviewMode = vm.AutoReviewMode is "fixed_rounds" ? "fixed_rounds" : "until_clean",
+        [nameof(AutoReviewMaxRounds)] = (vm, s) => s.AutoReviewMaxRounds = Math.Clamp(vm.AutoReviewMaxRounds, 1, 20),
+        // Context & memory
+        [nameof(MicrocompactEnabled)] = (vm, s) => s.MicrocompactEnabled = vm.MicrocompactEnabled,
+        [nameof(MicrocompactKeepRecentTurns)] = (vm, s) => s.MicrocompactKeepRecentTurns = Math.Clamp(vm.MicrocompactKeepRecentTurns, 1, 100),
+        [nameof(MicrocompactMaxOldResultChars)] = (vm, s) => s.MicrocompactMaxOldResultChars = Math.Clamp(vm.MicrocompactMaxOldResultChars, 50, 20000),
+        [nameof(SessionMemoryEnabled)] = (vm, s) => s.SessionMemoryEnabled = vm.SessionMemoryEnabled,
+        [nameof(EnableStrategicCompactionToast)] = (vm, s) => s.EnableStrategicCompactionToast = vm.EnableStrategicCompactionToast,
+        // Local models
+        [nameof(GpuBackend)] = (vm, s) => s.GpuBackend = vm.GpuBackend,
+        [nameof(GpuLayerCount)] = (vm, s) => s.GpuLayerCount = Math.Clamp(vm.GpuLayerCount, -1, 1000),
+        [nameof(BatchSize)] = (vm, s) => s.BatchSize = vm.BatchSize,
+        [nameof(ThreadCount)] = (vm, s) => s.ThreadCount = Math.Clamp(vm.ThreadCount, 0, 512),
+        [nameof(ContextSize)] = (vm, s) => s.ContextSize = vm.ContextSize,
+        [nameof(RepeatPenalty)] = (vm, s) => s.RepeatPenalty = Math.Clamp(vm.RepeatPenalty, 1f, 2f),
+        [nameof(LocalNativeToolUseEnabled)] = (vm, s) => s.LocalNativeToolUseEnabled = vm.LocalNativeToolUseEnabled,
+        [nameof(LocalToolCallRepairEnabled)] = (vm, s) => s.LocalToolCallRepairEnabled = vm.LocalToolCallRepairEnabled,
+        [nameof(PlanFirstForceToolEnabled)] = (vm, s) => s.PlanFirstForceToolEnabled = vm.PlanFirstForceToolEnabled,
+        [nameof(MidLoopReminderEnabled)] = (vm, s) => s.MidLoopReminderEnabled = vm.MidLoopReminderEnabled,
+        [nameof(MidLoopReminderEvery)] = (vm, s) => s.MidLoopReminderEvery = Math.Clamp(vm.MidLoopReminderEvery, 2, 50),
+        [nameof(TopK)] = (vm, s) => s.TopK = Math.Clamp(vm.TopK, 0, 200),
+        [nameof(MinP)] = (vm, s) => s.MinP = Math.Clamp(vm.MinP, 0f, 1f),
+        [nameof(RepeatPenaltyTokens)] = (vm, s) => s.RepeatPenaltyTokens = Math.Clamp(vm.RepeatPenaltyTokens, 0, 2048),
+        [nameof(ToolCallTemperature)] = (vm, s) => s.ToolCallTemperature = Math.Clamp(vm.ToolCallTemperature, 0f, 2f),
+        [nameof(CustomLlamaCppBackendPath)] = (vm, s) => s.CustomLlamaCppBackendPath = vm.CustomLlamaCppBackendPath?.Trim() ?? "",
+        [nameof(ModelDirectory)] = (vm, s) => s.ModelDirectory = vm.ModelDirectory,
+        [nameof(HuggingFaceToken)] = (vm, s) => s.HuggingFaceToken = string.IsNullOrWhiteSpace(vm.HuggingFaceToken) ? null : vm.HuggingFaceToken.Trim(),
+        // General
+        [nameof(LiveEditFollow)] = (vm, s) => s.LiveEditFollow = vm.LiveEditFollow,
+        [nameof(AutoOpenEditorOnAgentEdit)] = (vm, s) => s.AutoOpenEditorOnAgentEdit = vm.AutoOpenEditorOnAgentEdit,
+        [nameof(LiveCodingAnimationEnabled)] = (vm, s) => s.LiveCodingAnimationEnabled = vm.LiveCodingAnimationEnabled,
+        [nameof(TempDirectory)] = (vm, s) => s.TempDirectory = vm.TempDirectory,
+    };
+
+    /// <summary>The provider card's fields — saved together as ProviderConfigs[SelectedProvider].</summary>
+    private static readonly HashSet<string> ProviderFields =
+    [
+        nameof(ProviderApiKey), nameof(ProviderBaseUrl), nameof(ProviderModel),
+        nameof(ProviderCustomModel), nameof(UseCustomModel), nameof(ProviderWorkspaceId),
+    ];
+
+    private readonly HashSet<string> _dirty = new();
+    private bool _loading;   // values are being loaded from settings, not edited by the user
+    private bool _saving;    // our own write — don't reload from it
+
+    // ── Model & output ──
     private int _maxTokens;
-    private float _repeatPenalty;
-    private bool _autoExecuteCode;
-    private int _maxAutoFixAttempts;
-    private string _preferredLanguage = "C#";
-    private double _fontSize;
-    private bool _streamOutput;
-    private string _huggingFaceToken = string.Empty;
-    private string _gpuInfoDisplay = "Detecting...";
-    private string _vramRecommendation = "";
-    private string _saveStatus = "";
-    private string _gpuBackend = "Auto";
-    private int _batchSize = 512;
-    private int _threadCount = 0;
-    private string _uiLanguage = "English";
-
-    // AI Provider fields
-    private AiProviderType _selectedProvider;
-    private string _providerApiKey = string.Empty;
-    private string _providerBaseUrl = string.Empty;
-    private string _providerModel = string.Empty;
-    private string _providerCustomModel = string.Empty;
-    private bool _useCustomModel;
-    private string _connectionTestResult = string.Empty;
-    private bool _isTestingConnection;
-
-    public string ModelDirectory { get => _modelDirectory; set => SetProperty(ref _modelDirectory, value); }
-    public string CacheDirectory { get => _cacheDirectory; set => SetProperty(ref _cacheDirectory, value); }
-    public string LogDirectory { get => _logDirectory; set => SetProperty(ref _logDirectory, value); }
-    public string TempDirectory { get => _tempDirectory; set => SetProperty(ref _tempDirectory, value); }
-    public uint ContextSize { get => _contextSize; set => SetProperty(ref _contextSize, value); }
-    public int GpuLayerCount { get => _gpuLayerCount; set => SetProperty(ref _gpuLayerCount, value); }
+    private float _temperature, _topP;
+    private bool _promptCachingEnabled = true;
+    private int _thinkingBudgetTokens = 10000;
+    public int MaxTokens { get => _maxTokens; set => SetProperty(ref _maxTokens, value); }
     public float Temperature { get => _temperature; set => SetProperty(ref _temperature, value); }
     public float TopP { get => _topP; set => SetProperty(ref _topP, value); }
-    public int MaxTokens { get => _maxTokens; set => SetProperty(ref _maxTokens, value); }
-    public float RepeatPenalty { get => _repeatPenalty; set => SetProperty(ref _repeatPenalty, value); }
-    // Anthropic Advanced
-    private bool _extendedThinkingEnabled;
-    private int _thinkingBudgetTokens = 10000;
-    private bool _promptCachingEnabled = true;
-    public bool ExtendedThinkingEnabled { get => _extendedThinkingEnabled; set => SetProperty(ref _extendedThinkingEnabled, value); }
-    public int ThinkingBudgetTokens { get => _thinkingBudgetTokens; set => SetProperty(ref _thinkingBudgetTokens, value); }
     public bool PromptCachingEnabled { get => _promptCachingEnabled; set => SetProperty(ref _promptCachingEnabled, value); }
+    public int ThinkingBudgetTokens { get => _thinkingBudgetTokens; set => SetProperty(ref _thinkingBudgetTokens, value); }
 
-    // ── Agent behaviour + local-model knobs ──
-    // These all drive real code paths but had NO UI, so the only way to change them was to
-    // hand-edit settings.json. Everything below is read in LoadFromSettings and written in Save.
-    private int _maxAgentIterations = 15;
-    private int _interactiveTimeoutSeconds = 120;
-    private bool _enforceReadBeforeEdit = true;
-    private bool _autoVerifyAfterEdit = true;
-    private bool _localNativeToolUse = true;
-    private bool _localToolCallRepair = true;
-    private bool _planFirstForceTool = true;
-    private bool _midLoopReminder = true;
-    private int _midLoopReminderEvery = 4;
-    private bool _escalationEnabled;
-    private bool _instinctLearningEnabled = true;
-    private bool _brainAutoRecallEnabled = true;
-    private bool _semanticSearchEnabled;
-    private int _topK;
-    private float _minP;
-    private int _repeatPenaltyTokens = 64;
-    private float _toolCallTemperature = 0.2f;
-    private string _embeddingModel = "";
-    private string _escalationProviderName = "";
-    private int _microcompactKeepRecentTurns = 6;
-    private int _microcompactMaxOldResultChars = 400;
-    private string _customLlamaCppBackendPath = "";
-    private string _sessionDirectory = "";
-
+    // ── Agent ──
+    private int _maxAgentIterations = 25, _interactiveTimeoutSeconds = 120, _maxAutoFixAttempts;
+    private bool _enforceReadBeforeEdit = true, _autoVerifyAfterEdit = true, _escalationEnabled;
+    private bool _brainAutoRecallEnabled = true, _semanticSearchEnabled, _instinctLearningEnabled;
+    private string _autoVerifyCommand = "", _embeddingModel = "";
     public int MaxAgentIterations { get => _maxAgentIterations; set => SetProperty(ref _maxAgentIterations, value); }
     public int InteractiveRequestTimeoutSeconds { get => _interactiveTimeoutSeconds; set => SetProperty(ref _interactiveTimeoutSeconds, value); }
     public bool EnforceReadBeforeEdit { get => _enforceReadBeforeEdit; set => SetProperty(ref _enforceReadBeforeEdit, value); }
     public bool AutoVerifyAfterEditEnabled { get => _autoVerifyAfterEdit; set => SetProperty(ref _autoVerifyAfterEdit, value); }
+    public string AutoVerifyCommand { get => _autoVerifyCommand; set => SetProperty(ref _autoVerifyCommand, value); }
+    public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
+    public bool EscalationEnabled { get => _escalationEnabled; set => SetProperty(ref _escalationEnabled, value); }
+    public bool BrainAutoRecallEnabled { get => _brainAutoRecallEnabled; set => SetProperty(ref _brainAutoRecallEnabled, value); }
+    public bool SemanticSearchEnabled { get => _semanticSearchEnabled; set => SetProperty(ref _semanticSearchEnabled, value); }
+    public string EmbeddingModel { get => _embeddingModel; set => SetProperty(ref _embeddingModel, value); }
+    public bool InstinctLearningEnabled { get => _instinctLearningEnabled; set => SetProperty(ref _instinctLearningEnabled, value); }
+
+    // ── Autonomous loop ──
+    private int _autoFixMaxIterations = 5, _autoReviewMaxRounds = 3;
+    private bool _autoReviewEnabled = true;
+    private string _autoReviewMode = "until_clean";
+    public int AutoFixMaxIterations { get => _autoFixMaxIterations; set => SetProperty(ref _autoFixMaxIterations, value); }
+    public bool AutoReviewEnabled { get => _autoReviewEnabled; set => SetProperty(ref _autoReviewEnabled, value); }
+    public string AutoReviewMode { get => _autoReviewMode; set => SetProperty(ref _autoReviewMode, value); }
+    public int AutoReviewMaxRounds { get => _autoReviewMaxRounds; set => SetProperty(ref _autoReviewMaxRounds, value); }
+
+    // ── Context & memory ──
+    private bool _microcompactEnabled = true, _sessionMemoryEnabled, _compactionToast = true;
+    private int _microcompactKeepRecentTurns = 3, _microcompactMaxOldResultChars = 800;
+    public bool MicrocompactEnabled { get => _microcompactEnabled; set => SetProperty(ref _microcompactEnabled, value); }
+    public int MicrocompactKeepRecentTurns { get => _microcompactKeepRecentTurns; set => SetProperty(ref _microcompactKeepRecentTurns, value); }
+    public int MicrocompactMaxOldResultChars { get => _microcompactMaxOldResultChars; set => SetProperty(ref _microcompactMaxOldResultChars, value); }
+    public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
+    public bool EnableStrategicCompactionToast { get => _compactionToast; set => SetProperty(ref _compactionToast, value); }
+
+    // ── Local models ──
+    private string _gpuBackend = "Auto", _customLlamaCppBackendPath = "", _modelDirectory = "", _huggingFaceToken = "";
+    private int _gpuLayerCount, _batchSize = 512, _threadCount, _topK, _repeatPenaltyTokens = 64, _midLoopReminderEvery = 4;
+    private uint _contextSize;
+    private float _repeatPenalty, _minP, _toolCallTemperature = 0.2f;
+    private bool _localNativeToolUse = true, _localToolCallRepair = true, _planFirstForceTool = true, _midLoopReminder = true;
+    public string GpuBackend { get => _gpuBackend; set => SetProperty(ref _gpuBackend, value); }
+    public int GpuLayerCount { get => _gpuLayerCount; set => SetProperty(ref _gpuLayerCount, value); }
+    public int BatchSize { get => _batchSize; set => SetProperty(ref _batchSize, value); }
+    public int ThreadCount { get => _threadCount; set => SetProperty(ref _threadCount, value); }
+    public uint ContextSize { get => _contextSize; set => SetProperty(ref _contextSize, value); }
+    public float RepeatPenalty { get => _repeatPenalty; set => SetProperty(ref _repeatPenalty, value); }
     public bool LocalNativeToolUseEnabled { get => _localNativeToolUse; set => SetProperty(ref _localNativeToolUse, value); }
     public bool LocalToolCallRepairEnabled { get => _localToolCallRepair; set => SetProperty(ref _localToolCallRepair, value); }
     public bool PlanFirstForceToolEnabled { get => _planFirstForceTool; set => SetProperty(ref _planFirstForceTool, value); }
     public bool MidLoopReminderEnabled { get => _midLoopReminder; set => SetProperty(ref _midLoopReminder, value); }
     public int MidLoopReminderEvery { get => _midLoopReminderEvery; set => SetProperty(ref _midLoopReminderEvery, value); }
-    public bool EscalationEnabled { get => _escalationEnabled; set => SetProperty(ref _escalationEnabled, value); }
-    public bool InstinctLearningEnabled { get => _instinctLearningEnabled; set => SetProperty(ref _instinctLearningEnabled, value); }
-    public bool BrainAutoRecallEnabled { get => _brainAutoRecallEnabled; set => SetProperty(ref _brainAutoRecallEnabled, value); }
-    public bool SemanticSearchEnabled { get => _semanticSearchEnabled; set => SetProperty(ref _semanticSearchEnabled, value); }
     public int TopK { get => _topK; set => SetProperty(ref _topK, value); }
     public float MinP { get => _minP; set => SetProperty(ref _minP, value); }
     public int RepeatPenaltyTokens { get => _repeatPenaltyTokens; set => SetProperty(ref _repeatPenaltyTokens, value); }
     public float ToolCallTemperature { get => _toolCallTemperature; set => SetProperty(ref _toolCallTemperature, value); }
-    public string EmbeddingModel { get => _embeddingModel; set => SetProperty(ref _embeddingModel, value); }
-    public string EscalationProviderName { get => _escalationProviderName; set => SetProperty(ref _escalationProviderName, value); }
-    public int MicrocompactKeepRecentTurns { get => _microcompactKeepRecentTurns; set => SetProperty(ref _microcompactKeepRecentTurns, value); }
-    public int MicrocompactMaxOldResultChars { get => _microcompactMaxOldResultChars; set => SetProperty(ref _microcompactMaxOldResultChars, value); }
     public string CustomLlamaCppBackendPath { get => _customLlamaCppBackendPath; set => SetProperty(ref _customLlamaCppBackendPath, value); }
-    public string SessionDirectory { get => _sessionDirectory; set => SetProperty(ref _sessionDirectory, value); }
+    public string ModelDirectory { get => _modelDirectory; set => SetProperty(ref _modelDirectory, value); }
+    public string HuggingFaceToken
+    {
+        get => _huggingFaceToken;
+        set { if (SetProperty(ref _huggingFaceToken, value)) OnPropertyChanged(nameof(MaskedHuggingFaceToken)); }
+    }
+    public string MaskedHuggingFaceToken => Mask(_huggingFaceToken);
+    private bool _showHuggingFaceToken;
+    public bool ShowHuggingFaceToken { get => _showHuggingFaceToken; set => SetProperty(ref _showHuggingFaceToken, value); }
 
-    private bool _microcompactEnabled = true;
-    private bool _sessionMemoryEnabled;
-    public bool MicrocompactEnabled { get => _microcompactEnabled; set => SetProperty(ref _microcompactEnabled, value); }
-    public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
+    // ── General ──
+    private bool _liveEditFollow = true, _autoOpenEditor = true, _liveCodingAnimation = true;
+    private string _tempDirectory = "";
+    public bool LiveEditFollow { get => _liveEditFollow; set => SetProperty(ref _liveEditFollow, value); }
+    public bool AutoOpenEditorOnAgentEdit { get => _autoOpenEditor; set => SetProperty(ref _autoOpenEditor, value); }
+    public bool LiveCodingAnimationEnabled { get => _liveCodingAnimation; set => SetProperty(ref _liveCodingAnimation, value); }
+    public string TempDirectory { get => _tempDirectory; set => SetProperty(ref _tempDirectory, value); }
 
-    // Autonomous build-test-fix-review loop
-    private bool _autonomousLoopEnabled;
-    private int _autoFixMaxIterations = 5;
-    private string _autoVerifyCommand = "";
-    private bool _autoReviewEnabled = true;
-    private string _autoReviewMode = "until_clean";
-    private int _autoReviewMaxRounds = 3;
-    public bool AutonomousLoopEnabled { get => _autonomousLoopEnabled; set => SetProperty(ref _autonomousLoopEnabled, value); }
-    public int AutoFixMaxIterations { get => _autoFixMaxIterations; set => SetProperty(ref _autoFixMaxIterations, value); }
-    public string AutoVerifyCommand { get => _autoVerifyCommand; set => SetProperty(ref _autoVerifyCommand, value); }
-    public bool AutoReviewEnabled { get => _autoReviewEnabled; set => SetProperty(ref _autoReviewEnabled, value); }
-    public string AutoReviewMode { get => _autoReviewMode; set => SetProperty(ref _autoReviewMode, value); }
-    public int AutoReviewMaxRounds { get => _autoReviewMaxRounds; set => SetProperty(ref _autoReviewMaxRounds, value); }
-
-    public bool AutoExecuteCode { get => _autoExecuteCode; set => SetProperty(ref _autoExecuteCode, value); }
-    public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
-    public string PreferredLanguage { get => _preferredLanguage; set => SetProperty(ref _preferredLanguage, value); }
-    public double FontSize { get => _fontSize; set => SetProperty(ref _fontSize, value); }
-    public bool StreamOutput { get => _streamOutput; set => SetProperty(ref _streamOutput, value); }
-    public string HuggingFaceToken { get => _huggingFaceToken; set => SetProperty(ref _huggingFaceToken, value); }
-    public string GpuInfoDisplay { get => _gpuInfoDisplay; set => SetProperty(ref _gpuInfoDisplay, value); }
-    public string VramRecommendation { get => _vramRecommendation; set => SetProperty(ref _vramRecommendation, value); }
-    public string SaveStatus { get => _saveStatus; set => SetProperty(ref _saveStatus, value); }
-    public string GpuBackend { get => _gpuBackend; set => SetProperty(ref _gpuBackend, value); }
-    public int BatchSize { get => _batchSize; set => SetProperty(ref _batchSize, value); }
-    public int ThreadCount { get => _threadCount; set => SetProperty(ref _threadCount, value); }
-
-    /// <summary>UI language: "English" or "ไทย". Changes LocalizationService and saves to settings.</summary>
+    private string _uiLanguage = "English";
+    /// <summary>UI language: "English" or "ไทย". Applied and saved immediately.</summary>
     public string UiLanguage
     {
         get => _uiLanguage;
@@ -162,12 +203,28 @@ public class SettingsViewModel : ViewModelBase
             {
                 string lang = value == "ไทย" ? "th" : "en";
                 _localizationService.SetLanguage(lang);
-                _settingsService.UpdateSettings(s => s.Language = lang);
+                _saving = true;
+                try { _settingsService.UpdateSettings(s => s.Language = lang); }
+                finally { _saving = false; }
+                OnPropertyChanged(nameof(ApiKeyLinkText));
             }
         }
     }
+    public List<string> UiLanguageOptions { get; } = ["English", "ไทย"];
 
-    public List<string> UiLanguageOptions { get; } = new() { "English", "ไทย" };
+    public bool IsPortable => _settingsService.IsPortable;
+    public string DataRootDisplay => _settingsService.DataRoot;
+
+    // ── Display-only state (never saved) ──
+    private string _gpuInfoDisplay = "", _vramRecommendation = "", _saveStatus = "";
+    public string GpuInfoDisplay { get => _gpuInfoDisplay; set => SetProperty(ref _gpuInfoDisplay, value); }
+    public string VramRecommendation { get => _vramRecommendation; set => SetProperty(ref _vramRecommendation, value); }
+    public string SaveStatus { get => _saveStatus; set => SetProperty(ref _saveStatus, value); }
+
+    public List<string> BackendOptions { get; } = ["Auto", "CUDA12", "CPU"];
+    public List<int> BatchSizeOptions { get; } = [128, 256, 512, 1024, 2048];
+    /// <summary>12K is the floor: the agent's prompt + tool schemas alone are ~8.2K tokens.</summary>
+    public ObservableCollection<uint> ContextSizeOptions { get; } = [12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072];
 
     // ─── Memory Management ───
     public ObservableCollection<MemoryEntry> Memories { get; } = new();
@@ -184,10 +241,16 @@ public class SettingsViewModel : ViewModelBase
     public string SelectedMemoryContent => _selectedMemory?.Content ?? "";
     private string _memoryStatusText = "";
     public string MemoryStatusText { get => _memoryStatusText; set => SetProperty(ref _memoryStatusText, value); }
-    public ICommand RefreshMemoriesCommand { get; private set; } = null!;
-    public ICommand DeleteMemoryCommand { get; private set; } = null!;
 
-    // AI Provider properties
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  AI provider card
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    private AiProviderType _selectedProvider;
+    private string _providerApiKey = "", _providerBaseUrl = "", _providerModel = "", _providerCustomModel = "";
+    private string _providerWorkspaceId = "", _connectionTestResult = "";
+    private bool _useCustomModel, _isTestingConnection, _showApiKey;
+
     public AiProviderType SelectedProvider
     {
         get => _selectedProvider;
@@ -199,7 +262,10 @@ public class SettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(NeedsApiKey));
                 OnPropertyChanged(nameof(SupportsBaseUrl));
                 OnPropertyChanged(nameof(IsOllamaSelected));
+                OnPropertyChanged(nameof(IsAnthropicSelected));
+                OnPropertyChanged(nameof(CanRefreshModels));
                 OnPropertyChanged(nameof(IsLocalSelected));
+                OnPropertyChanged(nameof(CanTestConnection));
                 OnPropertyChanged(nameof(ApiKeyLink));
                 OnPropertyChanged(nameof(ApiKeyLinkText));
             }
@@ -209,98 +275,76 @@ public class SettingsViewModel : ViewModelBase
     public string ProviderApiKey
     {
         get => _providerApiKey;
-        set
-        {
-            if (SetProperty(ref _providerApiKey, value))
-                OnPropertyChanged(nameof(MaskedApiKey));
-        }
+        set { if (SetProperty(ref _providerApiKey, value)) OnPropertyChanged(nameof(MaskedApiKey)); }
     }
 
-    /// <summary>Masked display of the API key — shows dots + last 4 chars for verification.</summary>
-    public string MaskedApiKey
+    /// <summary>Masked display of the API key — dots + last 4 chars for verification.</summary>
+    public string MaskedApiKey => Mask(_providerApiKey);
+
+    private static string Mask(string? secret)
     {
-        get
-        {
-            if (string.IsNullOrEmpty(_providerApiKey)) return "";
-            if (_providerApiKey.Length <= 4) return new string('\u2022', _providerApiKey.Length);
-            return new string('\u2022', Math.Max(8, _providerApiKey.Length - 4)) + _providerApiKey[^4..];
-        }
+        if (string.IsNullOrEmpty(secret)) return "";
+        if (secret.Length <= 4) return new string('•', secret.Length);
+        return new string('•', Math.Max(8, secret.Length - 4)) + secret[^4..];
     }
 
-    private bool _showApiKey;
-    /// <summary>When true, API key TextBox is shown; when false, only a masked label is visible.</summary>
-    public bool ShowApiKey
-    {
-        get => _showApiKey;
-        set => SetProperty(ref _showApiKey, value);
-    }
+    /// <summary>When true, the API key TextBox is shown; otherwise only the masked text.</summary>
+    public bool ShowApiKey { get => _showApiKey; set => SetProperty(ref _showApiKey, value); }
     public string ProviderBaseUrl { get => _providerBaseUrl; set => SetProperty(ref _providerBaseUrl, value); }
     public string ProviderModel { get => _providerModel; set => SetProperty(ref _providerModel, value); }
     public string ProviderCustomModel { get => _providerCustomModel; set => SetProperty(ref _providerCustomModel, value); }
+    /// <summary>Anthropic anthropic-workspace-id — required by keys that aren't scoped to one workspace.</summary>
+    public string ProviderWorkspaceId { get => _providerWorkspaceId; set => SetProperty(ref _providerWorkspaceId, value); }
     public bool UseCustomModel { get => _useCustomModel; set => SetProperty(ref _useCustomModel, value); }
     public string ConnectionTestResult { get => _connectionTestResult; set => SetProperty(ref _connectionTestResult, value); }
     public bool IsTestingConnection { get => _isTestingConnection; set => SetProperty(ref _isTestingConnection, value); }
+
+    /// <summary>The provider chat is using right now (may differ from the one being configured).</summary>
+    public string ActiveProviderName => _providerManager.ActiveProvider.DisplayName;
 
     public ObservableCollection<string> AvailableModels { get; } = new();
 
     public bool NeedsApiKey => SelectedProvider is AiProviderType.OpenAI
         or AiProviderType.Anthropic or AiProviderType.Gemini;
-    public bool SupportsBaseUrl => SelectedProvider is not AiProviderType.Local;
+    /// <summary>Only providers that actually read BaseUrl (llama-server uses its own port, ClaudeDev runs the CLI).</summary>
+    public bool SupportsBaseUrl => SelectedProvider is AiProviderType.OpenAI or AiProviderType.Anthropic
+        or AiProviderType.Gemini or AiProviderType.Ollama;
     public bool IsOllamaSelected => SelectedProvider == AiProviderType.Ollama;
+    public bool IsAnthropicSelected => SelectedProvider == AiProviderType.Anthropic;
+    /// <summary>Providers whose model list can be fetched live (Ollama: local tags; cloud: the key's model list).</summary>
+    public bool CanRefreshModels => SelectedProvider is AiProviderType.Ollama or AiProviderType.Anthropic
+        or AiProviderType.OpenAI or AiProviderType.Gemini;
+    public bool CanTestConnection => SelectedProvider != AiProviderType.Local;
+    public string WorkspacesLink => "https://platform.claude.com/settings/workspaces";
     public bool IsLocalSelected => SelectedProvider == AiProviderType.Local;
 
     public string ApiKeyLink => SelectedProvider switch
     {
         AiProviderType.OpenAI => "https://platform.openai.com/api-keys",
-        AiProviderType.Anthropic => "https://console.anthropic.com/settings/keys",
+        AiProviderType.Anthropic => "https://platform.claude.com/settings/keys",
         AiProviderType.Gemini => "https://aistudio.google.com/apikey",
         _ => "",
     };
 
-    public string ApiKeyLinkText => SelectedProvider switch
-    {
-        AiProviderType.OpenAI => "Get your API key at platform.openai.com",
-        AiProviderType.Anthropic => "Get your API key at console.anthropic.com",
-        AiProviderType.Gemini => "Get your API key at aistudio.google.com",
-        _ => "",
-    };
-
-    public bool IsPortable => _settingsService.IsPortable;
-    public string DataRootDisplay => _settingsService.DataRoot;
+    public string ApiKeyLinkText => ApiKeyLink.Length == 0 ? "" : $"{T("settings.apiKey")} → {ApiKeyLink.Replace("https://", "")}";
 
     public List<AiProviderType> ProviderOptions { get; } = Enum.GetValues<AiProviderType>().ToList();
 
-    public List<string> LanguageOptions { get; } = new()
-    {
-        "C#", "Python", "JavaScript", "TypeScript", "Java", "C++", "Go", "Rust", "PHP", "Ruby"
-    };
-
-    public List<string> BackendOptions { get; } = new()
-    {
-        "Auto", "CUDA12", "CPU"
-    };
-
-    public List<uint> ContextSizeOptions { get; } = new()
-    {
-        2048, 4096, 8192, 16384, 32768
-    };
-
-    public List<int> BatchSizeOptions { get; } = new()
-    {
-        128, 256, 512, 1024, 2048
-    };
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  Commands
+    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     public ICommand BrowseModelDirCommand { get; }
-    public ICommand BrowseCacheDirCommand { get; }
-    public ICommand BrowseLogDirCommand { get; }
     public ICommand BrowseTempDirCommand { get; }
-    public ICommand SaveCommand { get; }
+    public ICommand BrowseBackendDirCommand { get; }
     public ICommand ResetDefaultsCommand { get; }
     public ICommand RefreshGpuCommand { get; }
     public ICommand OpenDirectoryCommand { get; }
     public ICommand TestConnectionCommand { get; }
     public ICommand ApplyProviderCommand { get; }
-    public ICommand RefreshOllamaModelsCommand { get; }
+    public ICommand RefreshModelsCommand { get; }
+    public ICommand RefreshMemoriesCommand { get; }
+    public ICommand DeleteMemoryCommand { get; }
 
     public SettingsViewModel(
         SettingsService settingsService,
@@ -317,128 +361,278 @@ public class SettingsViewModel : ViewModelBase
         _memoryService = memoryService;
         _activationService = activationService;
 
-        BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder("Model Directory", ModelDirectory); if (p != null) ModelDirectory = p; });
-        BrowseCacheDirCommand = new RelayCommand(() => { var p = BrowseFolder("Cache Directory", CacheDirectory); if (p != null) CacheDirectory = p; });
-        BrowseLogDirCommand = new RelayCommand(() => { var p = BrowseFolder("Log Directory", LogDirectory); if (p != null) LogDirectory = p; });
-        BrowseTempDirCommand = new RelayCommand(() => { var p = BrowseFolder("Temp Directory", TempDirectory); if (p != null) TempDirectory = p; });
-        SaveCommand = new RelayCommand(Save);
+        BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.modelStorageDir"), ModelDirectory); if (p != null) ModelDirectory = p; });
+        BrowseTempDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.tempDir"), TempDirectory); if (p != null) TempDirectory = p; });
+        BrowseBackendDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.customBackend"), CustomLlamaCppBackendPath); if (p != null) CustomLlamaCppBackendPath = p; });
         ResetDefaultsCommand = new RelayCommand(ResetDefaults);
         RefreshGpuCommand = new RelayCommand(RefreshGpu);
         OpenDirectoryCommand = new RelayCommand<string>(OpenDirectory);
         TestConnectionCommand = new AsyncRelayCommand(TestConnection);
         ApplyProviderCommand = new AsyncRelayCommand(ApplyProvider);
-        RefreshOllamaModelsCommand = new AsyncRelayCommand(RefreshOllamaModels);
+        RefreshModelsCommand = new AsyncRelayCommand(RefreshModels);
         RefreshMemoriesCommand = new RelayCommand(RefreshMemories);
         DeleteMemoryCommand = new RelayCommand(DeleteSelectedMemory);
 
-        // Debounced auto-save: persist settings 2s after last property change
-        _autoSaveDebounce = new System.Windows.Threading.DispatcherTimer
+        // Debounced auto-save, 1 s after the user's last edit — and only for user edits.
+        _autoSaveDebounce = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _autoSaveDebounce.Tick += (_, _) => { _autoSaveDebounce.Stop(); Save(); };
+        PropertyChanged += (_, e) =>
         {
-            Interval = TimeSpan.FromSeconds(2)
-        };
-        _autoSaveDebounce.Tick += (_, _) =>
-        {
+            if (_loading || e.PropertyName == null) return;
+            if (!Writers.ContainsKey(e.PropertyName) && !ProviderFields.Contains(e.PropertyName)) return;   // display-only
+            _dirty.Add(e.PropertyName);
             _autoSaveDebounce.Stop();
-            Save();
+            _autoSaveDebounce.Start();
         };
-        PropertyChanged += (_, _) => { _autoSaveDebounce.Stop(); _autoSaveDebounce.Start(); };
 
-        LoadFromSettings();
+        // Settings changed somewhere else (chat bar, Models page, MCP host) → show it here, unless the
+        // user has unsaved edits on this page (theirs win once the debounce fires).
+        _settingsService.SettingsChanged += () =>
+        {
+            if (_saving) return;
+            App.Current?.Dispatcher.BeginInvoke(() => { if (_dirty.Count == 0) LoadPageValues(_settingsService.Settings); });
+        };
+        _providerManager.OnProviderChanged += _ =>
+            App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(ActiveProviderName)));
+
+        LoadPageValues(_settingsService.Settings);
+        _uiLanguage = _settingsService.Settings.Language == "th" ? "ไทย" : "English";
+        _loading = true;
+        try { SelectedProvider = _settingsService.Settings.ActiveProvider; }
+        finally { _loading = false; }
         DetectGpuInfo();
         RefreshMemories();
     }
 
-    private void LoadProviderConfig(AiProviderType type)
+    /// <summary>Show <paramref name="src"/>'s values on the page without marking anything as edited.
+    /// The provider card is not touched (it has its own load).</summary>
+    private void LoadPageValues(AppSettings src)
     {
-        var configs = _settingsService.Settings.ProviderConfigs;
-        var key = type.ToString();
-
-        if (configs.TryGetValue(key, out var config))
-        {
-            ProviderApiKey = config.ApiKey ?? "";
-            ProviderBaseUrl = config.BaseUrl ?? "";
-            ProviderModel = config.SelectedModel ?? "";
-            ProviderCustomModel = config.CustomModelId ?? "";
-            UseCustomModel = config.UseCustomModel;
-        }
-        else
-        {
-            ProviderApiKey = "";
-            ProviderBaseUrl = "";
-            ProviderModel = "";
-            ProviderCustomModel = "";
-            UseCustomModel = false;
-        }
-
-        // Populate model dropdown
-        AvailableModels.Clear();
-        var models = type switch
-        {
-            AiProviderType.OpenAI => OpenAiProvider.KnownModels,
-            AiProviderType.Anthropic => AnthropicProvider.KnownModels,
-            AiProviderType.Gemini => GeminiProvider.KnownModels,
-            _ => Array.Empty<string>(),
-        };
-        foreach (var m in models)
-            AvailableModels.Add(m);
-
-        // For Ollama, show cached models then auto-detect fresh ones
-        if (type == AiProviderType.Ollama)
-        {
-            var ollamaProvider = _providerManager.GetProvider(AiProviderType.Ollama) as OllamaProvider;
-            if (ollamaProvider != null)
-            {
-                foreach (var m in ollamaProvider.AvailableModels)
-                    AvailableModels.Add(m);
-
-                // Auto-detect: fetch fresh models in background
-                _ = AutoDetectOllamaAsync(ollamaProvider);
-            }
-        }
-
-        // Auto-select first model if none selected
-        if (string.IsNullOrEmpty(ProviderModel) && AvailableModels.Count > 0)
-            ProviderModel = AvailableModels[0];
-
-        ConnectionTestResult = "";
+        bool wasLoading = _loading;
+        _loading = true;
+        try { ApplyPageValues(src, includeStorage: true); }
+        finally { _loading = wasLoading; }
     }
 
+    /// <summary>Copy <paramref name="src"/> into the page's properties. Under <c>_loading</c> this is a
+    /// display refresh; outside it (Reset) every change becomes an edit that auto-save writes.</summary>
+    private void ApplyPageValues(AppSettings src, bool includeStorage)
+    {
+        MaxTokens = src.MaxTokens;
+        Temperature = src.Temperature;
+        TopP = src.TopP;
+        PromptCachingEnabled = src.PromptCachingEnabled;
+        ThinkingBudgetTokens = src.ThinkingBudgetTokens;
+
+        MaxAgentIterations = src.MaxAgentIterations;
+        InteractiveRequestTimeoutSeconds = src.InteractiveRequestTimeoutSeconds;
+        EnforceReadBeforeEdit = src.EnforceReadBeforeEdit;
+        AutoVerifyAfterEditEnabled = src.AutoVerifyAfterEditEnabled;
+        AutoVerifyCommand = src.AutoVerifyCommand ?? "";
+        MaxAutoFixAttempts = src.MaxAutoFixAttempts;
+        EscalationEnabled = src.EscalationEnabled;
+        BrainAutoRecallEnabled = src.BrainAutoRecallEnabled;
+        SemanticSearchEnabled = src.SemanticSearchEnabled;
+        EmbeddingModel = src.EmbeddingModel ?? "";
+        InstinctLearningEnabled = src.InstinctLearningEnabled;
+
+        AutoFixMaxIterations = src.AutoFixMaxIterations;
+        AutoReviewEnabled = src.AutoReviewEnabled;
+        AutoReviewMode = src.AutoReviewMode;
+        AutoReviewMaxRounds = src.AutoReviewMaxRounds;
+
+        MicrocompactEnabled = src.MicrocompactEnabled;
+        MicrocompactKeepRecentTurns = src.MicrocompactKeepRecentTurns;
+        MicrocompactMaxOldResultChars = src.MicrocompactMaxOldResultChars;
+        SessionMemoryEnabled = src.SessionMemoryEnabled;
+        EnableStrategicCompactionToast = src.EnableStrategicCompactionToast;
+
+        GpuBackend = src.GpuBackend;
+        GpuLayerCount = src.GpuLayerCount;
+        BatchSize = src.BatchSize;
+        ThreadCount = src.ThreadCount;
+        if (!ContextSizeOptions.Contains(src.ContextSize))   // a hand-picked size still shows in the box
+        {
+            int at = 0;
+            while (at < ContextSizeOptions.Count && ContextSizeOptions[at] < src.ContextSize) at++;
+            ContextSizeOptions.Insert(at, src.ContextSize);
+        }
+        ContextSize = src.ContextSize;
+        RepeatPenalty = src.RepeatPenalty;
+        LocalNativeToolUseEnabled = src.LocalNativeToolUseEnabled;
+        LocalToolCallRepairEnabled = src.LocalToolCallRepairEnabled;
+        PlanFirstForceToolEnabled = src.PlanFirstForceToolEnabled;
+        MidLoopReminderEnabled = src.MidLoopReminderEnabled;
+        MidLoopReminderEvery = src.MidLoopReminderEvery;
+        TopK = src.TopK;
+        MinP = src.MinP;
+        RepeatPenaltyTokens = src.RepeatPenaltyTokens;
+        ToolCallTemperature = src.ToolCallTemperature;
+        CustomLlamaCppBackendPath = src.CustomLlamaCppBackendPath ?? "";
+
+        LiveEditFollow = src.LiveEditFollow;
+        AutoOpenEditorOnAgentEdit = src.AutoOpenEditorOnAgentEdit;
+        LiveCodingAnimationEnabled = src.LiveCodingAnimationEnabled;
+
+        if (includeStorage)
+        {
+            ModelDirectory = src.ModelDirectory;
+            TempDirectory = src.TempDirectory;
+            HuggingFaceToken = src.HuggingFaceToken ?? "";
+        }
+    }
+
+    private void Save()
+    {
+        if (_dirty.Count == 0) return;
+        var changed = _dirty.ToList();
+        _dirty.Clear();
+        bool providerChanged = changed.Any(ProviderFields.Contains);
+
+        _saving = true;
+        try
+        {
+            _settingsService.UpdateSettings(s =>
+            {
+                foreach (var name in changed)
+                    if (Writers.TryGetValue(name, out var write)) write(this, s);
+                // Never ActiveProvider: AiProviderManager.SwitchProviderAsync owns "which provider is in use".
+                if (providerChanged) s.ProviderConfigs[SelectedProvider.ToString()] = BuildProviderConfig();
+            });
+        }
+        finally { _saving = false; }
+
+        SaveStatus = T("settings.savedTick");
+        _ = Task.Delay(1500).ContinueWith(_ =>
+        {
+            try { App.Current?.Dispatcher.BeginInvoke(() => SaveStatus = ""); }
+            catch { /* app may be shutting down */ }
+        });
+    }
+
+    private void ResetDefaults()
+    {
+        var confirm = System.Windows.MessageBox.Show(
+            T("settings.resetConfirm"), T("settings.resetDefaults"),
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+        // Outside _loading, every value that differs becomes an edit — then write them all now.
+        ApplyPageValues(new AppSettings(), includeStorage: false);
+        _autoSaveDebounce.Stop();
+        Save();
+        SaveStatus = T("settings.resetDone");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  Provider card logic
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    private void LoadProviderConfig(AiProviderType type)
+    {
+        bool wasLoading = _loading;
+        _loading = true;   // showing a saved config is not an edit
+        try
+        {
+            string savedModel = "";
+            if (_settingsService.Settings.ProviderConfigs.TryGetValue(type.ToString(), out var config))
+            {
+                ProviderApiKey = config.ApiKey ?? "";
+                ProviderBaseUrl = config.BaseUrl ?? "";
+                savedModel = config.SelectedModel ?? "";
+                ProviderCustomModel = config.CustomModelId ?? "";
+                ProviderWorkspaceId = config.WorkspaceId ?? "";
+                UseCustomModel = config.UseCustomModel;
+            }
+            else
+            {
+                ProviderApiKey = "";
+                ProviderBaseUrl = "";
+                ProviderCustomModel = "";
+                ProviderWorkspaceId = "";
+                UseCustomModel = false;
+            }
+
+            // Populate model dropdown (Ollama: the cached tags now, fresh ones from the auto-detect below)
+            var ollamaProvider = type == AiProviderType.Ollama
+                ? _providerManager.GetProvider(AiProviderType.Ollama) as OllamaProvider : null;
+            IEnumerable<string> models = type switch
+            {
+                AiProviderType.OpenAI => OpenAiProvider.KnownModels,
+                AiProviderType.Anthropic => AnthropicProvider.KnownModels,
+                AiProviderType.Gemini => GeminiProvider.KnownModels,
+                AiProviderType.Ollama => ollamaProvider?.AvailableModels ?? new List<string>(),
+                _ => Array.Empty<string>(),
+            };
+            SetModelList(models, savedModel);
+            ConnectionTestResult = "";
+
+            if (ollamaProvider != null)
+                _ = AutoDetectOllamaAsync(ollamaProvider);
+        }
+        finally { _loading = wasLoading; }
+    }
+
+    /// <summary>Swap the model dropdown's items without losing the pick. Clearing the list makes the
+    /// ComboBox push null into ProviderModel, which silently replaced the user's model with the first
+    /// entry. A saved model missing from the list (a custom or retired ID) is kept at the top so the box
+    /// shows what will actually be used.</summary>
+    private void SetModelList(IEnumerable<string> models, string? desired)
+    {
+        var list = models.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct().ToList();
+        if (!string.IsNullOrWhiteSpace(desired) && !list.Contains(desired)) list.Insert(0, desired);
+        AvailableModels.Clear();
+        foreach (var m in list)
+            AvailableModels.Add(m);
+        ProviderModel = !string.IsNullOrWhiteSpace(desired) ? desired : list.FirstOrDefault() ?? "";
+    }
+
+    private ProviderConfig BuildProviderConfig() => new()
+    {
+        ApiKey = string.IsNullOrWhiteSpace(ProviderApiKey) ? null : ProviderApiKey.Trim(),
+        BaseUrl = string.IsNullOrWhiteSpace(ProviderBaseUrl) ? null : ProviderBaseUrl.Trim(),
+        SelectedModel = ProviderModel,
+        CustomModelId = ProviderCustomModel,
+        UseCustomModel = UseCustomModel,
+        WorkspaceId = string.IsNullOrWhiteSpace(ProviderWorkspaceId) ? null : ProviderWorkspaceId.Trim(),
+    };
+
+    /// <summary>Write the provider card now — a test or switch must use exactly what is on screen.</summary>
     private void SaveProviderConfig()
     {
         var key = SelectedProvider.ToString();
-        var config = new ProviderConfig
-        {
-            ApiKey = string.IsNullOrWhiteSpace(ProviderApiKey) ? null : ProviderApiKey,
-            BaseUrl = string.IsNullOrWhiteSpace(ProviderBaseUrl) ? null : ProviderBaseUrl,
-            SelectedModel = ProviderModel,
-            CustomModelId = ProviderCustomModel,
-            UseCustomModel = UseCustomModel,
-        };
-
-        // Don't write ActiveProvider here — see comment in Save() above.
-        // SwitchProviderAsync owns ActiveProvider; this VM only owns the
-        // per-provider knobs.
-        _settingsService.UpdateSettings(s =>
-        {
-            s.ProviderConfigs[key] = config;
-        });
+        var config = BuildProviderConfig();
+        foreach (var f in ProviderFields) _dirty.Remove(f);
+        _saving = true;
+        try { _settingsService.UpdateSettings(s => s.ProviderConfigs[key] = config); }
+        finally { _saving = false; }
     }
 
     private async Task TestConnection()
     {
         IsTestingConnection = true;
-        ConnectionTestResult = "Testing...";
+        ConnectionTestResult = T("settings.testing");
         try
         {
-            // Apply config to provider without persisting to disk (Save button does that)
-            ApplyProviderConfigInMemory();
-            var provider = _providerManager.GetProvider(SelectedProvider);
+            SaveProviderConfig();
+            var testedType = SelectedProvider;
+            var provider = _providerManager.GetProvider(testedType);
             var (success, message) = await provider.TestConnectionAsync();
-            ConnectionTestResult = success ? $"Connected: {message}" : $"Failed: {message}";
+            if (SelectedProvider != testedType) return;   // user switched provider while we waited
+            ConnectionTestResult = $"{T(success ? "settings.connectedPrefix" : "settings.failedPrefix")}: {message}";
+
+            // Same key + workspace → also load the models this key can actually call. Done even when the
+            // test failed: a "model not available" failure is exactly when the user needs the real list.
+            if (provider is IModelLister lister)
+            {
+                int found = await LoadLiveModelsAsync(lister, testedType);
+                if (found > 0 && SelectedProvider == testedType)
+                    ConnectionTestResult += "\n" + string.Format(T("settings.modelsFound"), found);
+            }
         }
         catch (Exception ex)
         {
-            ConnectionTestResult = $"Error: {ex.Message}";
+            ConnectionTestResult = $"{T("settings.failedPrefix")}: {ex.Message}";
         }
         finally
         {
@@ -446,172 +640,121 @@ public class SettingsViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Apply current UI values to config and persist to disk immediately.
-    /// Previously this was in-memory only, causing settings loss on restart.
-    /// </summary>
-    private void ApplyProviderConfigInMemory()
-    {
-        SaveProviderConfig();
-    }
-
     private async Task ApplyProvider()
     {
-        // Enforce activation for cloud providers
+        // Cloud providers are part of the paid tier
         bool requiresActivation = SelectedProvider is AiProviderType.OpenAI
             or AiProviderType.Anthropic or AiProviderType.Gemini;
-
         if (requiresActivation && !_activationService.IsActivated)
         {
-            ConnectionTestResult = "Activation required for cloud providers. Enter a license key in Features page.";
+            ConnectionTestResult = T("settings.activationRequired");
             return;
         }
 
         SaveProviderConfig();
-        ConnectionTestResult = "Switching provider...";
+        ConnectionTestResult = T("settings.switching");
         try
         {
-            await _providerManager.SwitchProviderAsync(SelectedProvider);
-            ConnectionTestResult = $"Active: {_providerManager.ActiveProvider.DisplayName}";
-            if (_providerManager.ActiveProvider.IsReady)
-                ConnectionTestResult += " (ready)";
-            SaveStatus = "Provider applied!";
-            _ = Task.Delay(2000).ContinueWith(_ => App.Current?.Dispatcher.Invoke(() => SaveStatus = ""));
+            // Already the active provider (e.g. after fixing its key): switching is a no-op, so
+            // re-initialise instead — otherwise the new key/workspace is never tested.
+            if (_providerManager.ActiveProviderType == SelectedProvider
+                && ReferenceEquals(_providerManager.ActiveProvider, _providerManager.GetProvider(SelectedProvider)))
+                await _providerManager.ReinitializeActiveAsync();
+            else
+                await _providerManager.SwitchProviderAsync(SelectedProvider);
+
+            var active = _providerManager.ActiveProvider;
+            ConnectionTestResult = string.Format(T("settings.nowUsing"), active.DisplayName)
+                + (active.IsReady ? T("settings.readySuffix") : $"\n{active.StatusMessage}");
+            OnPropertyChanged(nameof(ActiveProviderName));
         }
         catch (Exception ex)
         {
-            ConnectionTestResult = $"Error: {ex.Message}";
+            ConnectionTestResult = $"{T("settings.failedPrefix")}: {ex.Message}";
         }
     }
 
-    private async Task RefreshOllamaModels()
+    /// <summary>Replace the dropdown with the models this key can call, keeping the current pick.
+    /// Returns how many were found; 0 = the listing failed and the built-in list stays.</summary>
+    private async Task<int> LoadLiveModelsAsync(IModelLister lister, AiProviderType forType)
     {
-        var ollamaProvider = _providerManager.GetProvider(AiProviderType.Ollama) as OllamaProvider;
-        if (ollamaProvider == null) return;
+        string keep = ProviderModel;
+        var models = await lister.ListModelsAsync();
+        if (models == null || models.Count == 0 || SelectedProvider != forType) return 0;
+        SetModelList(models, string.IsNullOrEmpty(ProviderModel) ? keep : ProviderModel);
+        return models.Count;
+    }
 
-        ConnectionTestResult = "Fetching models...";
+    private async Task RefreshModels()
+    {
+        var forType = SelectedProvider;
+        if (forType != AiProviderType.Ollama && _providerManager.GetProvider(forType) is IModelLister lister)
+        {
+            SaveProviderConfig();
+            ConnectionTestResult = T("settings.fetchingModels");
+            int found = await LoadLiveModelsAsync(lister, forType);
+            if (SelectedProvider != forType) return;
+            if (found > 0)
+            {
+                ConnectionTestResult = string.Format(T("settings.modelsFound"), found);
+                return;
+            }
+            // The listing failed — Test Connection says why (workspace, key, credit…) in words.
+            var (_, why) = await _providerManager.GetProvider(forType).TestConnectionAsync();
+            if (SelectedProvider == forType) ConnectionTestResult = $"{T("settings.failedPrefix")}: {why}";
+            return;
+        }
+
+        if (_providerManager.GetProvider(AiProviderType.Ollama) is not OllamaProvider ollamaProvider) return;
+        ConnectionTestResult = T("settings.fetchingModels");
         try
         {
-            // Apply base URL in memory so the provider can reach the right host
-            ApplyProviderConfigInMemory();
+            SaveProviderConfig();   // the base URL decides which host is asked
+            string keep = ProviderModel;
             var models = await ollamaProvider.GetAvailableModelsAsync();
-
-            AvailableModels.Clear();
-            foreach (var m in models)
-                AvailableModels.Add(m);
-
-            if (AvailableModels.Count > 0 && string.IsNullOrEmpty(ProviderModel))
-                ProviderModel = AvailableModels[0];
-
-            ConnectionTestResult = $"Found {models.Count} model(s)";
+            if (SelectedProvider != AiProviderType.Ollama) return;
+            SetModelList(models, keep);
+            ConnectionTestResult = string.Format(T("settings.modelsFound"), models.Count);
         }
         catch (Exception ex)
         {
-            ConnectionTestResult = $"Error: {ex.Message}";
+            ConnectionTestResult = $"{T("settings.failedPrefix")}: {ex.Message}";
         }
     }
 
-    /// <summary>
-    /// Auto-detect Ollama running locally — silently fetch models when user selects Ollama provider.
-    /// </summary>
+    /// <summary>Auto-detect Ollama running locally — silently fetch models when Ollama is selected.</summary>
     private async Task AutoDetectOllamaAsync(OllamaProvider ollamaProvider)
     {
+        string keep = ProviderModel;
         try
         {
-            ApplyProviderConfigInMemory();
-            ConnectionTestResult = "Detecting Ollama...";
+            ConnectionTestResult = T("settings.detecting");
             var models = await ollamaProvider.GetAvailableModelsAsync();
-
             App.Current?.Dispatcher.Invoke(() =>
             {
-                AvailableModels.Clear();
-                foreach (var m in models)
-                    AvailableModels.Add(m);
-
-                if (models.Count > 0)
-                {
-                    if (string.IsNullOrEmpty(ProviderModel))
-                        ProviderModel = AvailableModels[0];
-                    ConnectionTestResult = $"Ollama detected — {models.Count} model(s) available";
-                }
-                else
-                {
-                    ConnectionTestResult = "Ollama connected but no models found. Run: ollama pull llama3";
-                }
+                if (SelectedProvider != AiProviderType.Ollama) return;   // user moved on while we probed
+                bool wasLoading = _loading;
+                _loading = true;
+                try { SetModelList(models, keep); }
+                finally { _loading = wasLoading; }
+                ConnectionTestResult = models.Count > 0
+                    ? string.Format(T("settings.modelsFound"), models.Count)
+                    : "Ollama is running but has no models — run: ollama pull qwen2.5-coder";
             });
         }
         catch
         {
             App.Current?.Dispatcher.Invoke(() =>
             {
-                ConnectionTestResult = "Ollama not detected. Install from ollama.com and run 'ollama serve'";
+                if (SelectedProvider == AiProviderType.Ollama)
+                    ConnectionTestResult = "Ollama not detected — install it from ollama.com and run 'ollama serve'.";
             });
         }
     }
 
-    private void LoadFromSettings()
-    {
-        var s = _settingsService.Settings;
-        ModelDirectory = s.ModelDirectory;
-        CacheDirectory = s.CacheDirectory;
-        LogDirectory = s.LogDirectory;
-        TempDirectory = s.TempDirectory;
-        ContextSize = s.ContextSize;
-        GpuLayerCount = s.GpuLayerCount;
-        Temperature = s.Temperature;
-        TopP = s.TopP;
-        MaxTokens = s.MaxTokens;
-        RepeatPenalty = s.RepeatPenalty;
-        AutoExecuteCode = s.AutoExecuteCode;
-        MaxAutoFixAttempts = s.MaxAutoFixAttempts;
-        PreferredLanguage = s.PreferredLanguage;
-        _uiLanguage = s.Language == "th" ? "ไทย" : "English"; // don't trigger setter during load
-        OnPropertyChanged(nameof(UiLanguage));
-        FontSize = s.FontSize;
-        StreamOutput = s.StreamOutput;
-        HuggingFaceToken = s.HuggingFaceToken ?? "";
-        GpuBackend = s.GpuBackend;
-        BatchSize = s.BatchSize;
-        ThreadCount = s.ThreadCount;
-        ExtendedThinkingEnabled = s.ExtendedThinkingEnabled;
-        ThinkingBudgetTokens = s.ThinkingBudgetTokens;
-        PromptCachingEnabled = s.PromptCachingEnabled;
-
-        MaxAgentIterations = s.MaxAgentIterations;
-        InteractiveRequestTimeoutSeconds = s.InteractiveRequestTimeoutSeconds;
-        EnforceReadBeforeEdit = s.EnforceReadBeforeEdit;
-        AutoVerifyAfterEditEnabled = s.AutoVerifyAfterEditEnabled;
-        LocalNativeToolUseEnabled = s.LocalNativeToolUseEnabled;
-        LocalToolCallRepairEnabled = s.LocalToolCallRepairEnabled;
-        PlanFirstForceToolEnabled = s.PlanFirstForceToolEnabled;
-        MidLoopReminderEnabled = s.MidLoopReminderEnabled;
-        MidLoopReminderEvery = s.MidLoopReminderEvery;
-        EscalationEnabled = s.EscalationEnabled;
-        InstinctLearningEnabled = s.InstinctLearningEnabled;
-        BrainAutoRecallEnabled = s.BrainAutoRecallEnabled;
-        SemanticSearchEnabled = s.SemanticSearchEnabled;
-        TopK = s.TopK;
-        MinP = s.MinP;
-        RepeatPenaltyTokens = s.RepeatPenaltyTokens;
-        ToolCallTemperature = s.ToolCallTemperature;
-        EmbeddingModel = s.EmbeddingModel;
-        EscalationProviderName = s.EscalationProviderName;
-        MicrocompactKeepRecentTurns = s.MicrocompactKeepRecentTurns;
-        MicrocompactMaxOldResultChars = s.MicrocompactMaxOldResultChars;
-        CustomLlamaCppBackendPath = s.CustomLlamaCppBackendPath ?? "";
-        SessionDirectory = s.SessionDirectory ?? "";
-        MicrocompactEnabled = s.MicrocompactEnabled;
-        SessionMemoryEnabled = s.SessionMemoryEnabled;
-        AutonomousLoopEnabled = s.AutonomousLoopEnabled;
-        AutoFixMaxIterations = s.AutoFixMaxIterations;
-        AutoVerifyCommand = s.AutoVerifyCommand;
-        AutoReviewEnabled = s.AutoReviewEnabled;
-        AutoReviewMode = s.AutoReviewMode;
-        AutoReviewMaxRounds = s.AutoReviewMaxRounds;
-
-        // Load provider settings
-        SelectedProvider = s.ActiveProvider;
-    }
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  GPU, folders, memories
+    // ═══════════════════════════════════════════════════════════════════════════════════════
 
     private void DetectGpuInfo()
     {
@@ -621,24 +764,22 @@ public class SettingsViewModel : ViewModelBase
             var rec = gpu.GetRecommendation();
             App.Current?.Dispatcher.Invoke(() =>
             {
-                if (gpu.VramTotalBytes > 0)
-                {
-                    GpuInfoDisplay = $"{gpu.Name}\n"
-                        + $"Brand: {gpu.GpuBrand}\n"
-                        + $"VRAM: {gpu.VramTotalGB:F1} GB total / {gpu.VramFreeGB:F1} GB free\n"
-                        + $"Driver: {gpu.DriverVersion}\n"
-                        + $"CUDA: {(gpu.IsCudaAvailable ? "Available" : "Not available")}";
-                }
-                else
-                {
-                    GpuInfoDisplay = "No dedicated GPU detected.\nModels will run on CPU (slower but works with any system).";
-                }
-
-                VramRecommendation = rec.Description
-                    + $"\nRecommended: up to {rec.RecommendedParameterBillions}B parameters"
-                    + $"\nQuantization: {rec.RecommendedQuantization}";
+                GpuInfoDisplay = gpu.VramTotalBytes > 0
+                    ? string.Format(T("settings.gpuDetails"), gpu.Name, gpu.VramTotalGB, gpu.VramFreeGB,
+                        gpu.DriverVersion, T(gpu.IsCudaAvailable ? "settings.yes" : "settings.no"))
+                    : T("settings.gpuNone");
+                VramRecommendation = string.Format(T("settings.gpuRecommend"),
+                    rec.RecommendedParameterBillions, rec.RecommendedQuantization);
             });
         });
+    }
+
+    private void RefreshGpu()
+    {
+        _gpuDetectionService.ClearCache();
+        GpuInfoDisplay = T("settings.detecting");
+        VramRecommendation = "";
+        DetectGpuInfo();
     }
 
     private static string? BrowseFolder(string title, string currentPath)
@@ -646,123 +787,6 @@ public class SettingsViewModel : ViewModelBase
         // Owner-aware COM picker — a plain OpenFolderDialog with no owner opens behind the borderless
         // (WindowStyle=None) main window and the app looks frozen. Mirrors ModelManager/PluginManager.
         return CluadeX.Services.Helpers.FolderPicker.ShowDialog(title, currentPath);
-    }
-
-    private void Save()
-    {
-        // Save everything in a single UpdateSettings call to avoid double-write
-        _settingsService.UpdateSettings(s =>
-        {
-            s.ModelDirectory = ModelDirectory;
-            s.CacheDirectory = CacheDirectory;
-            s.LogDirectory = LogDirectory;
-            s.TempDirectory = TempDirectory;
-            s.ContextSize = ContextSize;
-            s.GpuLayerCount = GpuLayerCount;
-            s.Temperature = Temperature;
-            s.TopP = TopP;
-            s.MaxTokens = MaxTokens;
-            s.RepeatPenalty = RepeatPenalty;
-            s.AutoExecuteCode = AutoExecuteCode;
-            s.MaxAutoFixAttempts = MaxAutoFixAttempts;
-            s.PreferredLanguage = PreferredLanguage;
-            s.FontSize = FontSize;
-            s.StreamOutput = StreamOutput;
-            s.HuggingFaceToken = string.IsNullOrWhiteSpace(HuggingFaceToken) ? null : HuggingFaceToken;
-            s.GpuBackend = GpuBackend;
-            s.BatchSize = BatchSize;
-            s.ThreadCount = ThreadCount;
-            s.ExtendedThinkingEnabled = ExtendedThinkingEnabled;
-            s.ThinkingBudgetTokens = ThinkingBudgetTokens;
-            s.PromptCachingEnabled = PromptCachingEnabled;
-
-            // Clamp the numeric knobs so a typo can't wedge the agent (0 iterations = it never acts).
-            s.MaxAgentIterations = Math.Clamp(MaxAgentIterations, 1, 200);
-            s.InteractiveRequestTimeoutSeconds = Math.Clamp(InteractiveRequestTimeoutSeconds, 0, 3600);
-            s.EnforceReadBeforeEdit = EnforceReadBeforeEdit;
-            s.AutoVerifyAfterEditEnabled = AutoVerifyAfterEditEnabled;
-            s.LocalNativeToolUseEnabled = LocalNativeToolUseEnabled;
-            s.LocalToolCallRepairEnabled = LocalToolCallRepairEnabled;
-            s.PlanFirstForceToolEnabled = PlanFirstForceToolEnabled;
-            s.MidLoopReminderEnabled = MidLoopReminderEnabled;
-            s.MidLoopReminderEvery = Math.Clamp(MidLoopReminderEvery, 1, 50);
-            s.EscalationEnabled = EscalationEnabled;
-            s.InstinctLearningEnabled = InstinctLearningEnabled;
-            s.BrainAutoRecallEnabled = BrainAutoRecallEnabled;
-            s.SemanticSearchEnabled = SemanticSearchEnabled;
-            s.TopK = Math.Clamp(TopK, 0, 200);
-            s.MinP = Math.Clamp(MinP, 0f, 1f);
-            s.RepeatPenaltyTokens = Math.Clamp(RepeatPenaltyTokens, 0, 2048);
-            s.ToolCallTemperature = Math.Clamp(ToolCallTemperature, 0f, 2f);
-            s.EmbeddingModel = EmbeddingModel ?? "";
-            s.EscalationProviderName = EscalationProviderName ?? "";
-            s.MicrocompactKeepRecentTurns = Math.Clamp(MicrocompactKeepRecentTurns, 1, 100);
-            s.MicrocompactMaxOldResultChars = Math.Clamp(MicrocompactMaxOldResultChars, 50, 20000);
-            s.CustomLlamaCppBackendPath = CustomLlamaCppBackendPath ?? "";
-            s.SessionDirectory = SessionDirectory ?? "";
-            s.MicrocompactEnabled = MicrocompactEnabled;
-            s.SessionMemoryEnabled = SessionMemoryEnabled;
-            s.AutonomousLoopEnabled = AutonomousLoopEnabled;
-            s.AutoFixMaxIterations = AutoFixMaxIterations;
-            s.AutoVerifyCommand = AutoVerifyCommand;
-            s.AutoReviewEnabled = AutoReviewEnabled;
-            s.AutoReviewMode = AutoReviewMode;
-            s.AutoReviewMaxRounds = AutoReviewMaxRounds;
-
-            // Provider CONFIG (api key, base url, default model) for the
-            // currently-edited provider. Do NOT touch s.ActiveProvider here:
-            // AiProviderManager.SwitchProviderAsync is the single source of
-            // truth for "which provider is active right now". Writing it
-            // back from this VM stomped on programmatic switches done via
-            // the named-pipe MCP host (set_model alignment) and reverted
-            // them ~2s after they ran.
-            s.ProviderConfigs[SelectedProvider.ToString()] = new ProviderConfig
-            {
-                ApiKey = string.IsNullOrWhiteSpace(ProviderApiKey) ? null : ProviderApiKey,
-                BaseUrl = string.IsNullOrWhiteSpace(ProviderBaseUrl) ? null : ProviderBaseUrl,
-                SelectedModel = ProviderModel,
-                CustomModelId = ProviderCustomModel,
-                UseCustomModel = UseCustomModel,
-            };
-        });
-
-        SaveStatus = "Settings saved!";
-        _ = Task.Delay(2000).ContinueWith(_ =>
-        {
-            try { App.Current?.Dispatcher.BeginInvoke(() => SaveStatus = ""); }
-            catch { /* app may be shutting down */ }
-        });
-    }
-
-    private void ResetDefaults()
-    {
-        var defaults = new AppSettings();
-        _settingsService.UpdateSettings(s =>
-        {
-            s.ContextSize = defaults.ContextSize;
-            s.GpuLayerCount = defaults.GpuLayerCount;
-            s.Temperature = defaults.Temperature;
-            s.TopP = defaults.TopP;
-            s.MaxTokens = defaults.MaxTokens;
-            s.RepeatPenalty = defaults.RepeatPenalty;
-            s.AutoExecuteCode = defaults.AutoExecuteCode;
-            s.MaxAutoFixAttempts = defaults.MaxAutoFixAttempts;
-            s.FontSize = defaults.FontSize;
-            s.StreamOutput = defaults.StreamOutput;
-            s.GpuBackend = defaults.GpuBackend;
-            s.BatchSize = defaults.BatchSize;
-            s.ThreadCount = defaults.ThreadCount;
-        });
-        LoadFromSettings();
-        SaveStatus = "Settings reset to defaults.";
-    }
-
-    private void RefreshGpu()
-    {
-        _gpuDetectionService.ClearCache();
-        GpuInfoDisplay = "Detecting...";
-        VramRecommendation = "";
-        DetectGpuInfo();
     }
 
     private void OpenDirectory(string? path)
@@ -779,8 +803,6 @@ public class SettingsViewModel : ViewModelBase
         catch { }
     }
 
-    // ─── Memory Management ───
-
     private void RefreshMemories()
     {
         try
@@ -789,43 +811,46 @@ public class SettingsViewModel : ViewModelBase
             var all = _memoryService.ListAllMemories();
             foreach (var m in all)
                 Memories.Add(m);
-            MemoryStatusText = all.Count > 0 ? $"{all.Count} memories" : "No memories saved";
+            MemoryStatusText = all.Count > 0 ? string.Format(T("settings.memCount"), all.Count) : T("settings.memNone");
         }
         catch (Exception ex)
         {
-            MemoryStatusText = $"Error: {ex.Message}";
+            MemoryStatusText = $"{T("settings.failedPrefix")}: {ex.Message}";
         }
     }
 
     private void DeleteSelectedMemory()
     {
-        if (SelectedMemory == null) return;
+        if (SelectedMemory is not { } mem) return;
 
-        // Confirmation dialog for destructive operation
         var confirm = System.Windows.MessageBox.Show(
-            $"Delete memory '{SelectedMemory.Name}'?\n\nThis cannot be undone.",
-            "Delete Memory",
-            System.Windows.MessageBoxButton.YesNo,
-            System.Windows.MessageBoxImage.Warning);
+            string.Format(T("settings.memDeleteConfirm"), mem.Name), T("settings.memDeleteTitle"),
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
         if (confirm != System.Windows.MessageBoxResult.Yes) return;
 
         try
         {
-            bool isProject = SelectedMemory.Scope == "project";
-            bool deleted = _memoryService.RemoveMemory(SelectedMemory.Name, isProject);
-            if (deleted)
+            // The entry's own file first: its display name may come from front-matter and not match the
+            // file name, which made RemoveMemory(name) report failure for a memory that exists.
+            bool deleted = false;
+            if (!string.IsNullOrEmpty(mem.FilePath) && System.IO.File.Exists(mem.FilePath))
             {
-                MemoryStatusText = $"Deleted: {SelectedMemory.Name}";
-                RefreshMemories();
+                string stem = System.IO.Path.GetFileNameWithoutExtension(mem.FilePath);
+                deleted = _memoryService.RemoveMemory(stem, mem.Scope == "project");
+                if (!deleted && System.IO.File.Exists(mem.FilePath))
+                {
+                    System.IO.File.Delete(mem.FilePath);
+                    deleted = true;
+                }
             }
-            else
-            {
-                MemoryStatusText = $"Could not delete: {SelectedMemory.Name}";
-            }
+            if (!deleted) deleted = _memoryService.RemoveMemory(mem.Name, mem.Scope == "project");
+
+            MemoryStatusText = string.Format(T(deleted ? "settings.memDeleted" : "settings.memDeleteFailed"), mem.Name);
+            if (deleted) RefreshMemories();
         }
         catch (Exception ex)
         {
-            MemoryStatusText = $"Error: {ex.Message}";
+            MemoryStatusText = $"{T("settings.failedPrefix")}: {ex.Message}";
         }
     }
 }
