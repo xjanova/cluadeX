@@ -84,12 +84,16 @@ public class NativeMessage
 /// <summary>A content block in a native API message.</summary>
 public class ContentBlock
 {
-    public string Type { get; set; } = "text"; // text, tool_use, tool_result, thinking, redacted_thinking
+    public string Type { get; set; } = "text"; // text, tool_use, tool_result, thinking, redacted_thinking, provider_item
     public string? Text { get; set; }          // also the reasoning text of a thinking block
 
     // For thinking / redacted_thinking blocks — must be sent back byte-for-byte
     public string? Signature { get; set; }
     public string? Data { get; set; }
+
+    /// <summary>provider_item: which provider's raw JSON <see cref="Data"/> holds ("openai" reasoning
+    /// item, "gemini" model parts). Echoed verbatim by that provider; every other provider skips it.</summary>
+    public string? Provider { get; set; }
 
     // For tool_use blocks
     public string? Id { get; set; }

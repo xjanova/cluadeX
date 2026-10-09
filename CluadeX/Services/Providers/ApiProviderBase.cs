@@ -68,6 +68,38 @@ public abstract class ApiProviderBase : IAiProvider
         OnError?.Invoke(message);
     }
 
+    // ── Native tool calling safety net ──
+    // OpenAI's Responses API and Gemini function calling are driven from documented wire formats that
+    // can't be exercised without a key. If the API rejects the very first native tool request, switch
+    // this provider to the [ACTION:] text protocol (SupportsNativeToolUse → false, which also rebuilds
+    // the system prompt) instead of failing every agent turn.
+    private bool _nativeToolsConfirmed, _nativeToolsRejected;
+
+    /// <summary>False once the API rejected a native tool request that had never worked before.</summary>
+    protected bool NativeToolsUsable => !_nativeToolsRejected;
+
+    /// <summary>Call after a native tool request succeeds.</summary>
+    protected void ConfirmNativeTools() => _nativeToolsConfirmed = true;
+
+    /// <summary>For a failed native tool request: when it looks like "this endpoint/model doesn't take
+    /// these tool fields" (400/422 before any success), turn native tools off and return the turn's
+    /// error; otherwise null and the caller reports the error normally.</summary>
+    protected NativeToolResponse? DisableNativeToolsIfRejected(int status, string explained)
+    {
+        if (_nativeToolsConfirmed || status is not (400 or 422)) return null;
+        // Overflow and quota problems are not about the tool format.
+        if (explained.Contains("too long", StringComparison.OrdinalIgnoreCase)
+            || explained.Contains("context", StringComparison.OrdinalIgnoreCase)
+            || explained.Contains("quota", StringComparison.OrdinalIgnoreCase))
+            return null;
+        _nativeToolsRejected = true;
+        return new NativeToolResponse
+        {
+            StopReason = "error",
+            TextContent = LocalizedResources.Instance["api.err.nativeToolsOff"] + "\n" + explained,
+        };
+    }
+
     /// <summary>Turn an HTTP error from a cloud API into what to do about it, keeping the API's own message
     /// (key redacted) after the explanation. Never words a hint with "context" or "too long": the agent
     /// loop reads those in a 400 as prompt overflow and compacts.</summary>

@@ -136,6 +136,10 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - [x] Anthropic API live: 4 models × chat / tools / thinking / effort pass (`tests/apitest`, 2026-10-09).
       The owner's key is not workspace-scoped — Settings ▸ AI Provider ▸ Workspace ID must stay filled.
 - [ ] A full multi-turn agentic session with the Anthropic API in the running app
+- [ ] OpenAI (Responses API) and Gemini (function calling + thoughtSignature echo) native tool loops are
+      built from the documented wire formats and pass the localhost mock in `tests/apitest`, but have
+      never met the live APIs (no keys on the dev machine). If the API rejects the first tool request the
+      provider switches itself to the [ACTION:] text protocol — run `tests/apitest` live once a key exists.
 - [ ] Re-verify a real local-model coding task on BOTH local backends — llama-server (native tool_use)
       and in-process LLamaSharp ([ACTION:] loop) — since the prompt now follows the loaded backend's
       real tool protocol. Before this fix the LLamaSharp path made zero tool calls. Ask + check VRAM first.

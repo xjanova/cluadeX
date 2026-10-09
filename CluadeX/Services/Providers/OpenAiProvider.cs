@@ -200,6 +200,258 @@ public class OpenAiProvider : ApiProviderBase, IModelLister
         return sb.ToString();
     }
 
+    // ═══════════════════════════════════════════
+    // Native tool use — Responses API
+    // Chat Completions can't combine tools with reasoning on GPT-5.4+ (and GPT-6 Astra / 6.1 Sol take no
+    // tools there at all), so the agent loop talks to POST /v1/responses. Stateless: store:false, and the
+    // encrypted reasoning items come back (include) so they can be echoed on the next tool turn.
+    // ═══════════════════════════════════════════
+
+    public override bool SupportsNativeToolUse => NativeToolsUsable;
+
+    /// <summary>Responses API input items from the provider-neutral conversation.</summary>
+    public static List<object> BuildResponsesInput(List<NativeMessage> messages)
+    {
+        var input = new List<object>();
+        foreach (var msg in messages)
+        {
+            if (msg.Role == "assistant")
+            {
+                // A turn the model produced: its output items go back untouched and in order — reasoning
+                // (encrypted state under store:false), message (with its phase), function_call (with id).
+                // The text/tool_use blocks in the same message are views of those items, so skip them.
+                var raw = msg.Content.Where(b => b.Type == "provider_item" && b.Provider == "openai" && !string.IsNullOrEmpty(b.Data)).ToList();
+                if (raw.Count > 0)
+                {
+                    foreach (var b in raw) input.Add(JsonDocument.Parse(b.Data!).RootElement.Clone());
+                    continue;
+                }
+                // A turn the agent loop wrote itself (recovery prompts, synthetic calls): rebuild it.
+                foreach (var b in msg.Content)
+                {
+                    switch (b.Type)
+                    {
+                        case "text" when !string.IsNullOrEmpty(b.Text):
+                            input.Add(new Dictionary<string, object> { ["role"] = "assistant", ["content"] = b.Text! });
+                            break;
+                        case "tool_use":
+                            input.Add(new Dictionary<string, object>
+                            {
+                                ["type"] = "function_call",
+                                ["call_id"] = b.Id ?? "",
+                                ["name"] = b.Name ?? "",
+                                ["arguments"] = b.Input?.GetRawText() ?? "{}",
+                            });
+                            break;
+                    }
+                }
+            }
+            else
+            {
+                // Tool outputs first (they answer the calls right before them), then any text the loop added.
+                foreach (var b in msg.Content.Where(b => b.Type == "tool_result"))
+                    input.Add(new Dictionary<string, object>
+                    {
+                        ["type"] = "function_call_output",
+                        ["call_id"] = b.ToolUseId ?? "",
+                        ["output"] = (b.IsError == true ? "ERROR: " : "") + (b.Content ?? ""),
+                    });
+                string text = string.Join("\n\n", msg.Content.Where(b => b.Type == "text" && !string.IsNullOrEmpty(b.Text)).Select(b => b.Text));
+                if (text.Length > 0)
+                    input.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = text });
+            }
+        }
+        return input;
+    }
+
+    /// <summary>The request body for one native tool turn (public for the contract harness).</summary>
+    public Dictionary<string, object> BuildResponsesRequest(List<NativeMessage> messages, string systemPrompt,
+        List<ToolSchema> tools, string? toolChoice)
+    {
+        string model = ModelOf(GetConfig());
+        var settings = _settingsService.Settings;
+        bool reasoning = MaxEffort(model) != null;
+        var req = new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["input"] = BuildResponsesInput(messages),
+            ["stream"] = true,
+            ["store"] = false,
+            ["max_output_tokens"] = reasoning ? Math.Max(settings.MaxTokens, ReasoningMaxTokensFloor) : settings.MaxTokens,
+        };
+        if (!string.IsNullOrWhiteSpace(systemPrompt)) req["instructions"] = systemPrompt;
+        if (tools.Count > 0)
+        {
+            req["tools"] = tools.Select(t => (object)new Dictionary<string, object>
+            {
+                ["type"] = "function",
+                ["name"] = t.Name,
+                ["description"] = t.Description,
+                ["parameters"] = t.InputSchema.ValueKind == JsonValueKind.Object
+                    ? t.InputSchema
+                    : JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement.Clone(),
+                ["strict"] = false,   // our schemas aren't all strict-mode compatible (optional fields, MCP tools)
+            }).ToList();
+            req["tool_choice"] = (toolChoice?.Trim().ToLowerInvariant()) switch
+            {
+                null or "" or "auto" => "auto",
+                "none" => "none",
+                "required" or "any" => "required",
+                _ => new Dictionary<string, object> { ["type"] = "function", ["name"] = toolChoice! },
+            };
+        }
+        if (reasoning)
+        {
+            var r = new Dictionary<string, object>();
+            if (EffortFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } e) r["effort"] = e;
+            if (settings.ExtendedThinkingEnabled) r["summary"] = "auto";
+            if (r.Count > 0) req["reasoning"] = r;
+            req["include"] = new[] { "reasoning.encrypted_content" };
+        }
+        else
+        {
+            req["temperature"] = (double)settings.Temperature;
+        }
+        return req;
+    }
+
+    public override async Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages,
+        string systemPrompt,
+        List<ToolSchema> tools,
+        Action<string>? onTextDelta = null,
+        CancellationToken ct = default,
+        string? toolChoice = null)
+    {
+        var config = GetConfig();
+        string model = ModelOf(config);
+        var body = JsonSerializer.Serialize(BuildResponsesRequest(messages, systemPrompt, tools, toolChoice));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/responses");
+        request.Headers.Add("Authorization", $"Bearer {config.ApiKey}");
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        UsageMeter.Report(UsageMeter.FromOpenAi(response, model));
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            string explained = DescribeHttpError("OpenAI", (int)response.StatusCode, error, config.ApiKey, model, KeysUrl, BillingUrl);
+            if (DisableNativeToolsIfRejected((int)response.StatusCode, explained) is { } fallback) return fallback;
+            throw new HttpRequestException(explained, null, response.StatusCode);
+        }
+
+        var result = await ParseResponsesStreamAsync(response.Content, onTextDelta, ct);
+        if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0))
+            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, 0, 0);
+        ConfirmNativeTools();
+        return result;
+    }
+
+    /// <summary>Parse a Responses API SSE stream into a NativeToolResponse. Text streams live through
+    /// <paramref name="onTextDelta"/>; the authoritative content is each response.output_item.done item.
+    /// Public so the contract harness can feed it recorded streams.</summary>
+    public static async Task<NativeToolResponse> ParseResponsesStreamAsync(HttpContent content, Action<string>? onTextDelta, CancellationToken ct)
+    {
+        using var stream = await content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+        var result = new NativeToolResponse();
+        var items = new SortedDictionary<int, JsonElement>();   // output_index → finished item
+        var summary = new StringBuilder();
+        string? stop = null;
+
+        while (!reader.EndOfStream)
+        {
+            ct.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(ct);
+            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
+            var data = line["data: ".Length..];
+            if (data == "[DONE]") break;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(data); } catch (JsonException) { continue; }
+            using (doc)
+            {
+                var root = doc.RootElement;
+                string type = root.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "";
+                switch (type)
+                {
+                    case "response.output_text.delta":
+                        if (root.TryGetProperty("delta", out var d) && d.GetString() is { Length: > 0 } s)
+                            onTextDelta?.Invoke(s);
+                        break;
+                    case "response.reasoning_summary_text.delta":
+                        if (root.TryGetProperty("delta", out var rd)) summary.Append(rd.GetString());
+                        break;
+                    case "response.output_item.done":
+                        if (root.TryGetProperty("item", out var item) && root.TryGetProperty("output_index", out var oi)
+                            && oi.TryGetInt32(out int idx))
+                            items[idx] = item.Clone();
+                        break;
+                    case "response.completed":
+                    case "response.incomplete":
+                        if (root.TryGetProperty("response", out var resp))
+                        {
+                            if (resp.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
+                            {
+                                int cached = u.TryGetProperty("input_tokens_details", out var itd)
+                                             && itd.TryGetProperty("cached_tokens", out var ctk) && ctk.TryGetInt32(out var cv) ? cv : 0;
+                                result.InputTokens = (u.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var iv) ? iv : 0) - cached;
+                                result.OutputTokens = u.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var ov) ? ov : 0;
+                            }
+                            if (type == "response.incomplete")
+                                stop = resp.TryGetProperty("incomplete_details", out var det) && det.TryGetProperty("reason", out var why)
+                                       && why.GetString() == "max_output_tokens" ? "max_tokens" : "end_turn";
+                        }
+                        break;
+                    case "response.failed":
+                    case "error":
+                        string msg = (root.TryGetProperty("response", out var fr) && fr.TryGetProperty("error", out var fe) ? fe
+                                      : root.TryGetProperty("error", out var ee) ? ee : root) is { ValueKind: JsonValueKind.Object } eo
+                                     && eo.TryGetProperty("message", out var m) ? m.GetString() ?? "unknown error" : "unknown error";
+                        throw new HttpRequestException($"OpenAI streaming error: {msg}");
+                }
+            }
+        }
+
+        var text = new StringBuilder();
+        foreach (var item in items.Values)
+        {
+            // Every output item is echoed verbatim on the next turn (OpenAI: pass back everything since the
+            // last user message untouched); the text / tool_use blocks below are views for the agent loop.
+            result.Blocks.Add(new ContentBlock { Type = "provider_item", Provider = "openai", Data = item.GetRawText() });
+            string kind = item.TryGetProperty("type", out var k) ? k.GetString() ?? "" : "";
+            switch (kind)
+            {
+                case "message":
+                    if (item.TryGetProperty("content", out var parts) && parts.ValueKind == JsonValueKind.Array)
+                        foreach (var p in parts.EnumerateArray())
+                            if (p.TryGetProperty("text", out var pt) && pt.GetString() is { Length: > 0 } s)
+                            {
+                                text.Append(s);
+                                result.Blocks.Add(new ContentBlock { Type = "text", Text = s });
+                            }
+                    break;
+                case "function_call":
+                    string callId = item.TryGetProperty("call_id", out var cid) ? cid.GetString() ?? "" : "";
+                    string name = item.TryGetProperty("name", out var nm) ? nm.GetString() ?? "" : "";
+                    string args = item.TryGetProperty("arguments", out var ar) ? ar.GetString() ?? "" : "";
+                    JsonElement input;
+                    try { input = string.IsNullOrWhiteSpace(args) ? EmptyObjectElement() : JsonDocument.Parse(args).RootElement.Clone(); }
+                    catch (JsonException) { input = EmptyObjectElement(); }
+                    if (input.ValueKind != JsonValueKind.Object) input = EmptyObjectElement();
+                    result.ToolCalls.Add(new NativeToolCall { Id = callId, Name = name, Input = input });
+                    result.Blocks.Add(new ContentBlock { Type = "tool_use", Id = callId, Name = name, Input = input });
+                    break;
+            }
+        }
+
+        result.TextContent = text.Length > 0 ? text.ToString() : null;
+        result.ThinkingContent = summary.Length > 0 ? summary.ToString() : null;
+        result.StopReason = stop ?? (result.ToolCalls.Count > 0 ? "tool_use" : "end_turn");
+        return result;
+    }
+
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)
     {
         var config = GetConfig();

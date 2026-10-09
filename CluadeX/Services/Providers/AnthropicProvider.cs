@@ -581,7 +581,8 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
             ["messages"] = messages.Select(m => new Dictionary<string, object>
             {
                 ["role"] = m.Role,
-                ["content"] = m.Content.Select(SerializeBlock).ToList(),
+                // provider_item blocks are another provider's raw state (OpenAI reasoning, Gemini parts)
+                ["content"] = m.Content.Where(b => b.Type != "provider_item").Select(SerializeBlock).ToList(),
             }).ToList(),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,

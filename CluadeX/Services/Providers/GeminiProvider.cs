@@ -124,6 +124,25 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         }
     }
 
+    private static Dictionary<string, object> BuildGenerationConfig(string model, AppSettings settings)
+    {
+        var thinking = ThinkingOf(model);
+        var generationConfig = new Dictionary<string, object>
+        {
+            ["maxOutputTokens"] = thinking == ThinkingControl.None
+                ? settings.MaxTokens : Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor),
+        };
+        // Sampling is ignored by Gemini 3 and announced to become a 400 — only older models get it.
+        if (thinking != ThinkingControl.Level)
+        {
+            generationConfig["temperature"] = (double)settings.Temperature;
+            generationConfig["topP"] = (double)settings.TopP;
+        }
+        if (ThinkingConfigFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } tc)
+            generationConfig["thinkingConfig"] = tc;
+        return generationConfig;
+    }
+
     /// <summary>
     /// Build Gemini request with strictly alternating user/model roles.
     /// Gemini API requires alternating roles — merge consecutive same-role messages.
@@ -216,25 +235,10 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             });
         }
 
-        var thinking = ThinkingOf(model);
-        var generationConfig = new Dictionary<string, object>
-        {
-            ["maxOutputTokens"] = thinking == ThinkingControl.None
-                ? settings.MaxTokens : Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor),
-        };
-        // Sampling is ignored by Gemini 3 and announced to become a 400 — only older models get it.
-        if (thinking != ThinkingControl.Level)
-        {
-            generationConfig["temperature"] = (double)settings.Temperature;
-            generationConfig["topP"] = (double)settings.TopP;
-        }
-        if (ThinkingConfigFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } tc)
-            generationConfig["thinkingConfig"] = tc;
-
         var request = new Dictionary<string, object>
         {
             ["contents"] = contents,
-            ["generationConfig"] = generationConfig,
+            ["generationConfig"] = BuildGenerationConfig(model, settings),
         };
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
@@ -355,6 +359,267 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         await foreach (var token in ChatAsync(history, userMessage, systemPrompt, ct))
             sb.Append(token);
         return sb.ToString();
+    }
+
+    // ═══════════════════════════════════════════
+    // Native tool use — function calling
+    // Gemini 3 binds its reasoning to the call through a thoughtSignature on the first functionCall part
+    // of each step; a follow-up that drops it is a 400. So the model's parts are kept raw and echoed back
+    // exactly; responses go in the next user turn as functionResponse parts (calls first, then results).
+    // ═══════════════════════════════════════════
+
+    public override bool SupportsNativeToolUse => NativeToolsUsable;
+
+    /// <summary>Prefix for call ids CluadeX makes up when the model sent none (older models).</summary>
+    private const string SyntheticCallPrefix = "gemini_call_";
+    /// <summary>Documented bypass for function calls the client injected itself (no model signature).</summary>
+    private const string SkipSignature = "skip_thought_signature_validator";
+
+    /// <summary>generateContent contents for a native tool conversation (public for the contract harness).</summary>
+    public static List<object> BuildToolContents(List<NativeMessage> messages)
+    {
+        // tool_use id → name, for functionResponse parts (the API wants the call's exact name back)
+        var callNames = messages.SelectMany(m => m.Content).Where(b => b.Type == "tool_use" && b.Id != null)
+            .GroupBy(b => b.Id!).ToDictionary(g => g.Key, g => g.First().Name ?? "");
+        var contents = new List<object>();
+        string? lastRole = null;
+
+        void Add(string role, List<object> parts)
+        {
+            if (parts.Count == 0) return;
+            if (role == lastRole && contents[^1] is Dictionary<string, object> prev && prev["parts"] is List<object> prevParts)
+                prevParts.AddRange(parts);   // two turns of the same role in a row: merge
+            else
+                contents.Add(new Dictionary<string, object> { ["role"] = role, ["parts"] = parts });
+            lastRole = role;
+        }
+
+        foreach (var msg in messages)
+        {
+            var parts = new List<object>();
+            if (msg.Role == "assistant")
+            {
+                var raw = msg.Content.FirstOrDefault(b => b.Type == "provider_item" && b.Provider == "gemini" && !string.IsNullOrEmpty(b.Data));
+                if (raw != null)
+                {
+                    // The model's own parts, untouched — thoughtSignature included.
+                    foreach (var part in JsonDocument.Parse(raw.Data!).RootElement.EnumerateArray())
+                        parts.Add(part.Clone());
+                }
+                else
+                {
+                    // A turn the agent loop wrote itself: no model signature exists, so injected calls carry
+                    // the documented bypass value on the first functionCall.
+                    bool first = true;
+                    foreach (var b in msg.Content)
+                    {
+                        if (b.Type == "text" && !string.IsNullOrEmpty(b.Text))
+                            parts.Add(new Dictionary<string, object> { ["text"] = b.Text! });
+                        else if (b.Type == "tool_use")
+                        {
+                            var call = new Dictionary<string, object> { ["name"] = b.Name ?? "", ["args"] = b.Input ?? EmptyObjectElement() };
+                            if (b.Id != null && !b.Id.StartsWith(SyntheticCallPrefix)) call["id"] = b.Id;
+                            var part = new Dictionary<string, object> { ["functionCall"] = call };
+                            if (first) { part["thoughtSignature"] = SkipSignature; first = false; }
+                            parts.Add(part);
+                        }
+                    }
+                }
+                Add("model", parts);
+            }
+            else
+            {
+                // Every functionResponse first, then any text the loop added.
+                foreach (var b in msg.Content.Where(b => b.Type == "tool_result"))
+                {
+                    string id = b.ToolUseId ?? "";
+                    var fr = new Dictionary<string, object>
+                    {
+                        ["name"] = callNames.TryGetValue(id, out var n) ? n : "",
+                        ["response"] = new Dictionary<string, object> { [b.IsError == true ? "error" : "result"] = b.Content ?? "" },
+                    };
+                    if (id.Length > 0 && !id.StartsWith(SyntheticCallPrefix)) fr["id"] = id;
+                    parts.Add(new Dictionary<string, object> { ["functionResponse"] = fr });
+                }
+                foreach (var b in msg.Content.Where(b => b.Type == "text" && !string.IsNullOrEmpty(b.Text)))
+                    parts.Add(new Dictionary<string, object> { ["text"] = b.Text! });
+                Add("user", parts);
+            }
+        }
+        return contents;
+    }
+
+    /// <summary>The request body for one native tool turn (public for the contract harness).</summary>
+    public Dictionary<string, object> BuildToolRequest(List<NativeMessage> messages, string systemPrompt,
+        List<ToolSchema> tools, string? toolChoice)
+    {
+        string model = ModelOf(GetConfig());
+        var req = new Dictionary<string, object>
+        {
+            ["contents"] = BuildToolContents(messages),
+            ["generationConfig"] = BuildGenerationConfig(model, _settingsService.Settings),
+        };
+        if (!string.IsNullOrWhiteSpace(systemPrompt))
+            req["systemInstruction"] = new Dictionary<string, object>
+            {
+                ["parts"] = new List<object> { new Dictionary<string, object> { ["text"] = systemPrompt } },
+            };
+        if (tools.Count > 0)
+        {
+            req["tools"] = new List<object>
+            {
+                new Dictionary<string, object>
+                {
+                    // parametersJsonSchema takes plain JSON Schema (additionalProperties etc.), unlike the
+                    // OpenAPI-subset `parameters`, which lacks keywords MCP tool schemas use.
+                    ["functionDeclarations"] = tools.Select(t => (object)new Dictionary<string, object>
+                    {
+                        ["name"] = t.Name,
+                        ["description"] = t.Description,
+                        ["parametersJsonSchema"] = t.InputSchema.ValueKind == JsonValueKind.Object
+                            ? t.InputSchema
+                            : JsonDocument.Parse("{\"type\":\"object\",\"properties\":{}}").RootElement.Clone(),
+                    }).ToList(),
+                },
+            };
+            string choice = toolChoice?.Trim() ?? "";
+            string lower = choice.ToLowerInvariant();
+            var fcc = new Dictionary<string, object>
+            {
+                ["mode"] = lower switch
+                {
+                    "" or "auto" => "AUTO",
+                    "none" => "NONE",
+                    _ => "ANY",          // "required"/"any", or one named tool
+                },
+            };
+            if (lower is not ("" or "auto" or "none" or "required" or "any"))
+                fcc["allowedFunctionNames"] = new[] { choice };
+            req["toolConfig"] = new Dictionary<string, object> { ["functionCallingConfig"] = fcc };
+        }
+        return req;
+    }
+
+    public override async Task<NativeToolResponse> ChatWithToolsAsync(
+        List<NativeMessage> messages,
+        string systemPrompt,
+        List<ToolSchema> tools,
+        Action<string>? onTextDelta = null,
+        CancellationToken ct = default,
+        string? toolChoice = null)
+    {
+        var config = GetConfig();
+        string model = ModelOf(config);
+        var body = JsonSerializer.Serialize(BuildToolRequest(messages, systemPrompt, tools, toolChoice));
+
+        string url = $"{BaseUrlOf(config)}/v1beta/models/{Uri.EscapeDataString(model)}:streamGenerateContent?alt=sse";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Add("x-goog-api-key", config.ApiKey);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(ct);
+            string explained = DescribeHttpError("Gemini", (int)response.StatusCode, error, config.ApiKey, model, KeysUrl, BillingUrl);
+            if (DisableNativeToolsIfRejected((int)response.StatusCode, explained) is { } fallback) return fallback;
+            throw new HttpRequestException(explained, null, response.StatusCode);
+        }
+
+        var result = await ParseToolStreamAsync(response.Content, onTextDelta, ct);
+        if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0))
+            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, 0, 0);
+        ConfirmNativeTools();
+        return result;
+    }
+
+    /// <summary>Parse a streamed function-calling response. Every non-thought part is kept raw, in order,
+    /// for the verbatim echo; thought parts become the thinking text. Public for the contract harness.</summary>
+    public static async Task<NativeToolResponse> ParseToolStreamAsync(HttpContent content, Action<string>? onTextDelta, CancellationToken ct)
+    {
+        using var stream = await content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+        var result = new NativeToolResponse();
+        var echo = new List<JsonElement>();
+        var text = new StringBuilder();
+        var thinking = new StringBuilder();
+        string? finish = null, block = null;
+        JsonElement? usage = null;
+        int synthetic = 0;
+
+        while (!reader.EndOfStream)
+        {
+            ct.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(ct);
+            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(line["data: ".Length..]); } catch (JsonException) { continue; }
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.TryGetProperty("usageMetadata", out var um)) usage = um.Clone();
+                if (root.TryGetProperty("promptFeedback", out var pf) && pf.TryGetProperty("blockReason", out var br))
+                    block = br.GetString();
+                if (!root.TryGetProperty("candidates", out var cands) || cands.GetArrayLength() == 0) continue;
+                var cand = cands[0];
+                if (cand.TryGetProperty("finishReason", out var fr)) finish = fr.GetString();
+                if (!cand.TryGetProperty("content", out var c) || !c.TryGetProperty("parts", out var parts)
+                    || parts.ValueKind != JsonValueKind.Array) continue;
+
+                foreach (var part in parts.EnumerateArray())
+                {
+                    bool thought = part.TryGetProperty("thought", out var th) && th.ValueKind == JsonValueKind.True;
+                    if (thought)
+                    {
+                        if (part.TryGetProperty("text", out var tt)) thinking.Append(tt.GetString());
+                        continue;   // summaries aren't sent back
+                    }
+                    echo.Add(part.Clone());   // incl. empty-text parts that only carry a thoughtSignature
+                    if (part.TryGetProperty("text", out var tp) && tp.GetString() is { Length: > 0 } s)
+                    {
+                        text.Append(s);
+                        onTextDelta?.Invoke(s);
+                    }
+                    else if (part.TryGetProperty("functionCall", out var fc))
+                    {
+                        string name = fc.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                        string id = fc.TryGetProperty("id", out var i) && i.GetString() is { Length: > 0 } gid
+                            ? gid : SyntheticCallPrefix + synthetic++;
+                        JsonElement args = fc.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object
+                            ? a.Clone() : EmptyObjectElement();
+                        result.ToolCalls.Add(new NativeToolCall { Id = id, Name = name, Input = args });
+                    }
+                }
+            }
+        }
+
+        if (echo.Count > 0)
+            result.Blocks.Add(new ContentBlock { Type = "provider_item", Provider = "gemini", Data = JsonSerializer.Serialize(echo) });
+        if (text.Length > 0)
+            result.Blocks.Add(new ContentBlock { Type = "text", Text = text.ToString() });
+        foreach (var call in result.ToolCalls)
+            result.Blocks.Add(new ContentBlock { Type = "tool_use", Id = call.Id, Name = call.Name, Input = call.Input });
+
+        if (usage is { } u)
+        {
+            int Get(string name) => u.TryGetProperty(name, out var v) && v.TryGetInt32(out var x) ? x : 0;
+            int cached = Get("cachedContentTokenCount");
+            result.InputTokens = Math.Max(0, Get("promptTokenCount") - cached);
+            result.OutputTokens = Get("candidatesTokenCount") + Get("thoughtsTokenCount");
+        }
+        result.TextContent = text.Length > 0 ? text.ToString() : null;
+        result.ThinkingContent = thinking.Length > 0 ? thinking.ToString() : null;
+
+        string? why = block ?? finish;
+        if (result.ToolCalls.Count == 0 && text.Length == 0
+            && why is "SAFETY" or "RECITATION" or "BLOCKLIST" or "PROHIBITED_CONTENT" or "SPII")
+        {
+            result.TextContent = string.Format(LocalizedResources.Instance["api.err.blocked"], "Gemini", why);
+            result.StopReason = "refusal";
+            return result;
+        }
+        result.StopReason = result.ToolCalls.Count > 0 ? "tool_use" : finish == "MAX_TOKENS" ? "max_tokens" : "end_turn";
+        return result;
     }
 
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)

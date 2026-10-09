@@ -177,6 +177,7 @@ public class LocalizationService
         ["api.err.rateLimit"] = new() { ["en"] = "{0} rate limit reached — wait a moment and try again.", ["th"] = "ส่งคำขอถึง {0} ถี่เกินกำหนด — รอสักครู่แล้วลองใหม่" },
         ["api.err.overloaded"] = new() { ["en"] = "{0}'s servers are busy or having a problem — try again shortly.", ["th"] = "เซิร์ฟเวอร์ {0} ไม่ว่างหรือมีปัญหา — ลองใหม่อีกครั้งในอีกสักครู่" },
         ["api.err.blocked"] = new() { ["en"] = "{0} declined this request ({1}). Rephrase it, or switch to another model.", ["th"] = "{0} ปฏิเสธคำขอนี้ ({1}) — ลองเรียบเรียงใหม่ หรือเปลี่ยนโมเดล" },
+        ["api.err.nativeToolsOff"] = new() { ["en"] = "This model rejected structured tool calls, so CluadeX switched to its text tool protocol for this provider. Send your message again.", ["th"] = "โมเดลนี้ไม่รับการเรียกเครื่องมือแบบมีโครงสร้าง CluadeX จึงเปลี่ยนไปใช้โปรโตคอลเครื่องมือแบบข้อความสำหรับผู้ให้บริการนี้ — กรุณาส่งข้อความอีกครั้ง" },
         ["api.err.modelMissing"] = new() { ["en"] = "Connected, but {0} isn't in this key's model list — pick one from the list.", ["th"] = "เชื่อมต่อได้ แต่ไม่พบโมเดล {0} ในรายชื่อของคีย์นี้ — เลือกจากรายการแทน" },
         ["settings.gpuInfo"] = new() { ["en"] = "GPU Information", ["th"] = "ข้อมูล GPU" },
         ["settings.refreshGpu"] = new() { ["en"] = "Refresh GPU info", ["th"] = "รีเฟรชข้อมูล GPU" },
