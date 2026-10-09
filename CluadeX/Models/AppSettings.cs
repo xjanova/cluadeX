@@ -236,6 +236,16 @@ public class AppSettings
 
     // Activation Key — unlocks advanced features
     public string? ActivationKey { get; set; }
+    /// <summary>Server license_type of <see cref="ActivationKey"/> (demo, yearly, lifetime, …).</summary>
+    public string? LicenseType { get; set; }
+    /// <summary>When the saved key stops working (UTC); null = never.</summary>
+    public DateTime? LicenseExpiresUtc { get; set; }
+    /// <summary>Last time the server confirmed the saved key (UTC) — bounds how long it keeps working offline.</summary>
+    public DateTime? LicenseValidatedUtc { get; set; }
+    /// <summary>This install already asked the server for its one free trial key — never ask again.</summary>
+    public bool LicenseTrialRequested { get; set; }
+    /// <summary>The "your free trial has ended" invitation has been shown.</summary>
+    public bool LicenseTrialEndedNoticeShown { get; set; }
 
     // Feature Toggles — users can enable/disable optional features
     public FeatureToggles Features { get; set; } = new();

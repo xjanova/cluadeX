@@ -148,7 +148,7 @@ public class FeaturesViewModel : ViewModelBase
         ActivationMessage = "Activating...";
         ActivationSuccess = false;
 
-        var (success, message) = await _activation.ActivateAsync(ActivationKeyInput);
+        var (success, message, _) = await _activation.ActivateAsync(ActivationKeyInput);
         ActivationMessage = message;
         ActivationSuccess = success;
         if (success) { ActivationKeyInput = ""; ShowForceActivate = false; }
@@ -179,6 +179,12 @@ public class FeaturesViewModel : ViewModelBase
 
     private void DoDeactivate()
     {
+        // Destructive: Pro switches off on this PC — ask first.
+        var answer = System.Windows.MessageBox.Show(_loc.T("license.deactivateConfirm"), "CluadeX",
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question,
+            System.Windows.MessageBoxResult.No);
+        if (answer != System.Windows.MessageBoxResult.Yes) return;
+
         _activation.Deactivate();
         ActivationMessage = _loc.CurrentLanguage == "th"
             ? "ปิดการใช้งานแล้ว กลับสู่โหมดฟรี"

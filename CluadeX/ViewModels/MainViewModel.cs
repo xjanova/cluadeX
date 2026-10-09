@@ -15,6 +15,10 @@ public class MainViewModel : ViewModelBase
     private readonly BuddyService _buddyService;
     private readonly LocalizationService _loc;
     private readonly AutoUpdateService _autoUpdate;
+    private readonly ActivationService? _activation;
+    private readonly XmanLicenseService? _license;
+    private Views.LicenseWindow? _licenseWindow;
+    private DispatcherTimer? _licenseTimer;
 
     private ViewModelBase? _currentView;
     private string _selectedNavItem = "Chat";
@@ -281,6 +285,14 @@ public class MainViewModel : ViewModelBase
     public ICommand InstallUpdateCommand { get; }
     public ICommand DismissUpdateCommand { get; }
     public ICommand CheckUpdateCommand { get; }
+    public ICommand OpenLicenseCommand { get; }
+
+    // ── License chip (title bar): invites a key when there is none, counts a trial down, says Pro when bought ──
+    private string _licenseChipText = "", _licenseChipTip = "", _licenseChipState = "none";
+    public string LicenseChipText { get => _licenseChipText; private set => SetProperty(ref _licenseChipText, value); }
+    public string LicenseChipTip { get => _licenseChipTip; private set => SetProperty(ref _licenseChipTip, value); }
+    /// <summary>none | trial | active — picks the chip's look.</summary>
+    public string LicenseChipState { get => _licenseChipState; private set => SetProperty(ref _licenseChipState, value); }
 
     public MainViewModel(
         ChatViewModel chatVM,
@@ -306,9 +318,13 @@ public class MainViewModel : ViewModelBase
         AiProviderManager providerManager,
         BuddyService buddyService,
         LocalizationService loc,
-        AutoUpdateService autoUpdate)
+        AutoUpdateService autoUpdate,
+        ActivationService? activation = null,
+        XmanLicenseService? license = null)
     {
         _autoUpdate = autoUpdate;
+        _activation = activation;
+        _license = license;
         ChatVM = chatVM;
         ModelManagerVM = modelManagerVM;
         SettingsVM = settingsVM;
@@ -381,6 +397,7 @@ public class MainViewModel : ViewModelBase
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
         DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
         CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
+        OpenLicenseCommand = new RelayCommand(() => OpenLicense(null));
 
         // Wire up auto-update events
         _autoUpdate.OnDownloadProgress += (percent, status) =>
@@ -427,6 +444,18 @@ public class MainViewModel : ViewModelBase
         // Forward buddy changes to UI
         _buddyService.BuddyChanged += () =>
             App.Current?.Dispatcher.Invoke(() => OnPropertyChanged(nameof(BuddyService)));
+
+        if (_activation != null)
+        {
+            _activation.ActivationChanged += () => App.Current?.Dispatcher.BeginInvoke(RefreshLicenseChip);
+            _activation.Notice += notice => App.Current?.Dispatcher.BeginInvoke(() => OnLicenseNotice(notice));
+            _loc.LanguageChanged += RefreshLicenseChip;
+            RefreshLicenseChip();
+            // A trial runs out while the app is open: the chip counts down and the gate closes on time.
+            _licenseTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+            _licenseTimer.Tick += (_, _) => { _activation.CheckExpiry(); RefreshLicenseChip(); };
+            _licenseTimer.Start();
+        }
 
         Task.Run(DetectGpu);
         InitializeBuddy();
@@ -481,6 +510,79 @@ public class MainViewModel : ViewModelBase
         {
             App.Current?.Dispatcher.Invoke(() => GpuStatus = "GPU detection failed");
         }
+    }
+
+    private string L(string key) => _loc.T(key);
+
+    private void RefreshLicenseChip()
+    {
+        if (_activation == null) return;
+        if (_activation.IsTrial)
+        {
+            string left = LicenseViewModel.TimeLeft(_activation.ExpiresAtUtc, _loc);
+            LicenseChipState = "trial";
+            LicenseChipText = string.Format(L("license.chip.trial"), left);
+            LicenseChipTip = string.Format(L("license.chip.tipTrial"), LicenseViewModel.LocalTime(_activation.ExpiresAtUtc));
+        }
+        else if (_activation.IsActivated)
+        {
+            LicenseChipState = "active";
+            LicenseChipText = _activation.TierDisplayName;
+            LicenseChipTip = string.Format(L("license.chip.tipActive"), _activation.TierDisplayName);
+        }
+        else
+        {
+            LicenseChipState = "none";
+            LicenseChipText = L("license.chip.none");
+            LicenseChipTip = L("license.chip.tipNone");
+        }
+    }
+
+    private void OnLicenseNotice(LicenseNotice notice)
+    {
+        RefreshLicenseChip();
+        if (_activation == null) return;
+        switch (notice)
+        {
+            case LicenseNotice.TrialStarted:
+                OpenLicense(string.Format(L("license.banner.trialStarted"), _activation.MaskedKey ?? "",
+                    LicenseViewModel.TimeLeft(_activation.ExpiresAtUtc, _loc)));
+                break;
+            case LicenseNotice.TrialEnded:
+                OpenLicense(L("license.banner.trialEnded"));
+                break;
+            case LicenseNotice.Restored:
+                // Nothing to ask — the chip already shows the license is back.
+                break;
+        }
+    }
+
+    /// <summary>Open the license dialog (one at a time; a second call brings it forward with the new banner).</summary>
+    public void OpenLicense(string? banner)
+    {
+        if (_activation == null || _license == null) return;
+        if (_licenseWindow != null)
+        {
+            if (!string.IsNullOrEmpty(banner))
+            {
+                _licenseWindow.Close();
+            }
+            else
+            {
+                _licenseWindow.Activate();
+                return;
+            }
+        }
+
+        var vm = new LicenseViewModel(_activation, _license, _loc, banner);
+        var win = new Views.LicenseWindow(vm);
+        var owner = App.Current?.MainWindow;
+        if (owner != null && owner.IsLoaded && owner != win) win.Owner = owner;
+        else win.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
+        win.Closed += (_, _) => { if (_licenseWindow == win) _licenseWindow = null; };
+        _licenseWindow = win;
+        win.Show();
+        win.Activate();
     }
 
     private void NavigateTo(string? target)

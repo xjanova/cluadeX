@@ -98,17 +98,25 @@ public partial class App : Application
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
-            try
+            // License on its own task: up to four calls to xman4289.com (15 s timeout each when the network is
+            // bad) must not hold up the MCP servers below.
+            _ = Task.Run(async () =>
             {
-                // Validate license key against online API
-                var activation = _serviceProvider.GetRequiredService<ActivationService>();
-                await activation.ValidateOnlineAsync();
-                dbg?.Debug("Activation", "License validation finished");
-            }
-            catch (Exception ex)
-            {
-                dbg?.Warn("Activation", "License validate threw (offline?)", ex);
-            }
+                try
+                {
+                    var activation = _serviceProvider!.GetRequiredService<ActivationService>();
+                    // Validate license key against online API
+                    await activation.ValidateOnlineAsync();
+                    dbg?.Debug("Activation", "License validation finished");
+                    // Register this PC with xman4289.com, take back a license it already holds, and give a
+                    // brand-new PC its free trial key straight away.
+                    await activation.AutoProvisionAsync();
+                }
+                catch (Exception ex)
+                {
+                    dbg?.Warn("Activation", "License check threw (offline?)", ex);
+                }
+            });
 
             try
             {

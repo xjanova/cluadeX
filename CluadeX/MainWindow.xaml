@@ -184,8 +184,11 @@
                             <ColumnDefinition Width="Auto"/>  <!-- Traffic lights -->
                             <ColumnDefinition Width="Auto"/>  <!-- Project / branch -->
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>  <!-- Cmd palette pill -->
+                            <!-- The palette pill is the one thing that gives way on a narrow window: star-sized, so the
+                                 caption buttons on the right are never pushed off-screen (they were at 1280 px). -->
+                            <ColumnDefinition Width="6*"/>    <!-- Cmd palette pill -->
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>  <!-- License chip -->
                             <ColumnDefinition Width="Auto"/>  <!-- New Chat -->
                             <ColumnDefinition Width="Auto"/>  <!-- Open folder -->
                             <ColumnDefinition Width="Auto"/>  <!-- Bell -->
@@ -262,7 +265,7 @@
 
                         <!-- Command palette pill — opens the real Ctrl+K palette -->
                         <Button Grid.Column="3" Style="{StaticResource CommandPalettePill}"
-                                MinWidth="340" Margin="20,8"
+                                MaxWidth="440" Margin="12,8"
                                 Command="{Binding OpenPaletteCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 ToolTip="{services:Loc nav.paletteTip}">
@@ -271,11 +274,14 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
+                                <!-- DockPanel, not StackPanel: the pill shrinks on a narrow window and the text must
+                                     trim instead of running under the Ctrl K badge -->
+                                <DockPanel LastChildFill="True" Margin="0,0,8,0">
+                                    <TextBlock DockPanel.Dock="Left" Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
                                                FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{services:Loc nav.searchPlaceholder}" VerticalAlignment="Center"/>
-                                </StackPanel>
+                                    <TextBlock Text="{services:Loc nav.searchPlaceholder}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
                                 <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="3" Padding="6,1">
                                     <TextBlock Text="Ctrl K" FontFamily="{StaticResource NeonMonoFont}"
                                                FontSize="9" Foreground="{StaticResource NeonInk2Brush}"/>
@@ -283,8 +289,83 @@
                             </Grid>
                         </Button>
 
+                        <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
+                             during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
+                        <Button Grid.Column="5" Height="26" Margin="4,0,2,0"
+                                Command="{Binding OpenLicenseCommand}" Cursor="Hand"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{Binding LicenseChipTip}">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Foreground" Value="White"/>
+                                    <Setter Property="BorderBrush" Value="#99FFFFFF"/>
+                                    <Setter Property="Background">
+                                        <Setter.Value>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                <GradientStop Color="#FF5CA8" Offset="0"/>
+                                                <GradientStop Color="#A672FF" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="13" Padding="12,0">
+                                                    <Border.Effect>
+                                                        <DropShadowEffect Color="#FF5CA8" BlurRadius="14" ShadowDepth="0" Opacity="0.75"/>
+                                                    </Border.Effect>
+                                                    <ContentPresenter VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                                        <Setter TargetName="bd" Property="Effect">
+                                                            <Setter.Value>
+                                                                <DropShadowEffect Color="#FFD166" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                            <Setter Property="Foreground" Value="#1E1E2E"/>
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                        <GradientStop Color="#FFD166" Offset="0"/>
+                                                        <GradientStop Color="#FFA94D" Offset="1"/>
+                                                    </LinearGradientBrush>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                            <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
+                                            <Setter Property="BorderBrush" Value="#665CFFB0"/>
+                                            <Setter Property="Background" Value="#1F5CFFB0"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                           FontFamily="{StaticResource MainFont}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+
                         <!-- New Chat (icon button) -->
-                        <Button Grid.Column="5" Width="32" Height="32" Margin="6,0,0,0"
+                        <Button Grid.Column="6" Width="32" Height="32" Margin="6,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding ChatVM.NewSessionCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -306,7 +387,7 @@
                         </Button>
 
                         <!-- Open folder (icon button) -->
-                        <Button Grid.Column="6" Width="32" Height="32" Margin="2,0,0,0"
+                        <Button Grid.Column="7" Width="32" Height="32" Margin="2,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding ChatVM.OpenFolderCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -328,7 +409,7 @@
                         </Button>
 
                         <!-- Notification bell -->
-                        <Button Grid.Column="7" Width="32" Height="32" Margin="6,0,0,0"
+                        <Button Grid.Column="8" Width="32" Height="32" Margin="6,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding CheckUpdateCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -350,7 +431,7 @@
                         </Button>
 
                         <!-- Buddy chip -->
-                        <Border Grid.Column="8" Margin="10,6,12,6" Padding="4,0,12,0"
+                        <Border Grid.Column="9" Margin="10,6,12,6" Padding="4,0,12,0"
                                 CornerRadius="14"
                                 Background="#7028326E"
                                 BorderBrush="#665CFFB0" BorderThickness="1"
@@ -388,7 +469,7 @@
                         </Border>
 
                         <!-- Caption buttons (min/max/close) -->
-                        <StackPanel Grid.Column="9" Orientation="Horizontal"
+                        <StackPanel Grid.Column="10" Orientation="Horizontal"
                                     WindowChrome.IsHitTestVisibleInChrome="True">
                             <Button x:Name="BtnMinimize" Style="{StaticResource NeonCaptionButton}"
                                     Content="&#xE921;" Click="BtnMinimize_Click"/>

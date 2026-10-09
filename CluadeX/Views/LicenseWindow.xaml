@@ -1,0 +1,243 @@
+<Window x:Class="CluadeX.Views.LicenseWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:CluadeX.Services"
+        Title="CluadeX License" Width="620" SizeToContent="Height"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        FontFamily="{StaticResource MainFont}" Foreground="{StaticResource TextBrush}">
+
+    <Window.Resources>
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource NeonInk2Brush}"/>
+            <Setter Property="FontFamily" Value="{StaticResource NeonMonoFont}"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+        <Style x:Key="Benefit" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Margin="18" CornerRadius="16" BorderThickness="1" BorderBrush="#55A672FF">
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0.4,1">
+                <GradientStop Color="#FA171B42" Offset="0"/>
+                <GradientStop Color="#FA0A0C22" Offset="1"/>
+            </LinearGradientBrush>
+        </Border.Background>
+        <Border.Effect>
+            <DropShadowEffect Color="Black" BlurRadius="30" ShadowDepth="0" Opacity="0.65"/>
+        </Border.Effect>
+
+        <StackPanel Margin="26,22,26,20">
+
+            <!-- ── Header (drag handle) ── -->
+            <Grid Background="Transparent" MouseLeftButtonDown="Header_MouseLeftButtonDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Width="48" Height="48" CornerRadius="24" VerticalAlignment="Top">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#FF5CA8" Offset="0"/>
+                            <GradientStop Color="#A672FF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.Effect>
+                        <DropShadowEffect Color="#FF5CA8" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
+                    </Border.Effect>
+                    <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="White"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="14,2,10,0">
+                    <TextBlock Text="{Binding Title}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextBrush}"/>
+                    <TextBlock Text="{Binding Subtitle}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Foreground="{StaticResource Subtext0Brush}"/>
+                    <TextBlock Text="{Binding StatusKey}" FontSize="11.5" Margin="0,6,0,0"
+                               FontFamily="{StaticResource NeonMonoFont}" Foreground="{StaticResource NeonMintBrush}"
+                               Visibility="{Binding StatusKey, Converter={StaticResource BoolVis}}"/>
+                </StackPanel>
+                <Button Grid.Column="2" Width="30" Height="30" VerticalAlignment="Top" Cursor="Hand"
+                        Click="Close_Click" ToolTip="{services:Loc license.close}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="15">
+                                <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{StaticResource NeonInk2Brush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+
+            <!-- ── Why the dialog opened by itself ── -->
+            <Border Margin="0,16,0,0" CornerRadius="10" Padding="14,10" BorderThickness="1"
+                    Background="#1F5CFFB0" BorderBrush="#665CFFB0"
+                    Visibility="{Binding HasBanner, Converter={StaticResource BoolVis}}">
+                <TextBlock Text="{Binding Banner}" TextWrapping="Wrap" FontSize="12.5"
+                           Foreground="{StaticResource TextBrush}"/>
+            </Border>
+
+            <!-- ── What Pro unlocks ── -->
+            <StackPanel Margin="0,18,0,0" Visibility="{Binding ShowPurchase, Converter={StaticResource BoolVis}}">
+                <TextBlock Text="{services:Loc license.benefitsTitle}" Style="{StaticResource SectionLabel}"/>
+                <UniformGrid Columns="2">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
+                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="{services:Loc license.benefit1}" Style="{StaticResource Benefit}" MaxWidth="235"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="{services:Loc license.benefit2}" Style="{StaticResource Benefit}" MaxWidth="235"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,10,0">
+                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="{services:Loc license.benefit3}" Style="{StaticResource Benefit}" MaxWidth="235"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="{services:Loc license.benefit4}" Style="{StaticResource Benefit}" MaxWidth="235"/>
+                    </StackPanel>
+                </UniformGrid>
+            </StackPanel>
+
+            <!-- ── Plans ── -->
+            <StackPanel Margin="0,18,0,0" Visibility="{Binding ShowPurchase, Converter={StaticResource BoolVis}}">
+                <TextBlock Text="{services:Loc license.plansTitle}" Style="{StaticResource SectionLabel}"/>
+                <ItemsControl ItemsSource="{Binding Plans}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,10,0" CornerRadius="12" Padding="16,12" BorderThickness="1">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="#14FFFFFF"/>
+                                        <Setter Property="BorderBrush" Value="#22FFFFFF"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsBest}" Value="True">
+                                                <Setter Property="Background" Value="#26A672FF"/>
+                                                <Setter Property="BorderBrush" Value="#AAFF5CA8"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel>
+                                    <Grid>
+                                        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource Subtext0Brush}"/>
+                                        <Border HorizontalAlignment="Right" CornerRadius="8" Padding="7,1"
+                                                Background="#FF5CA8"
+                                                Visibility="{Binding IsBest, Converter={StaticResource BoolVis}}">
+                                            <TextBlock Text="{Binding BestLabel}" FontSize="10" FontWeight="Bold" Foreground="#1E1E2E"/>
+                                        </Border>
+                                    </Grid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Text="{Binding Price}" FontSize="26" FontWeight="Bold"
+                                                   Foreground="{StaticResource TextBrush}"/>
+                                        <TextBlock Text="{Binding Per}" FontSize="11.5" Margin="8,0,0,5" VerticalAlignment="Bottom"
+                                                   Foreground="{StaticResource Overlay0Brush}"/>
+                                    </StackPanel>
+                                    <Button Content="{services:Loc license.buy}" Style="{StaticResource PrimaryButton}"
+                                            Margin="0,10,0,0" Padding="12,7"
+                                            Command="{Binding DataContext.BuyCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Text="{services:Loc license.buyHint}" FontSize="11" Margin="0,6,0,0"
+                           Foreground="{StaticResource Overlay0Brush}"/>
+            </StackPanel>
+
+            <!-- ── Enter a key ── -->
+            <StackPanel Margin="0,18,0,0" Visibility="{Binding ShowPurchase, Converter={StaticResource BoolVis}}">
+                <TextBlock Text="{services:Loc license.haveKey}" Style="{StaticResource SectionLabel}"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Background="#33000000" CornerRadius="8" BorderBrush="#44A672FF" BorderThickness="1" Padding="12,0">
+                        <Grid>
+                            <TextBlock Text="XXXX-XXXX-XXXX-XXXX" FontFamily="{StaticResource NeonMonoFont}" FontSize="14"
+                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" IsHitTestVisible="False"
+                                       Visibility="{Binding KeyInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                            <TextBox x:Name="KeyBox" Text="{Binding KeyInput, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="Transparent" BorderThickness="0" CharacterCasing="Upper"
+                                     Foreground="{StaticResource TextBrush}" CaretBrush="{StaticResource MauveBrush}"
+                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="14" Padding="0,9"
+                                     VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                    <Button Grid.Column="1" Content="{services:Loc activation.activate}" Style="{StaticResource PrimaryButton}"
+                            Margin="8,0,0,0" Padding="18,8" IsDefault="True"
+                            Command="{Binding ActivateCommand}"/>
+                </Grid>
+                <Button Content="{services:Loc activation.transfer}" Margin="0,8,0,0" HorizontalAlignment="Left"
+                        Padding="12,6" FontSize="12" Command="{Binding TransferCommand}"
+                        Visibility="{Binding ShowTransfer, Converter={StaticResource BoolVis}}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                            <Setter Property="Background" Value="#44FAB387"/>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </StackPanel>
+
+            <!-- ── Result of the last action ── -->
+            <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="12.5" Margin="0,10,0,0"
+                       Visibility="{Binding HasMessage, Converter={StaticResource BoolVis}}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding MessageIsError}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <!-- ── The one free trial, when the server would still grant it ── -->
+            <Button Content="{services:Loc license.trialButton}" Style="{StaticResource SecondaryButton}"
+                    HorizontalAlignment="Left" Margin="0,12,0,0" Padding="14,7"
+                    Command="{Binding StartTrialCommand}"
+                    Visibility="{Binding CanStartTrial, Converter={StaticResource BoolVis}}"/>
+
+            <!-- ── Footer ── -->
+            <Grid Margin="0,20,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding DeviceId}" FontFamily="{StaticResource NeonMonoFont}" FontSize="10.5"
+                           Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="{services:Loc license.deactivate}" Style="{StaticResource SecondaryButton}"
+                            Padding="12,6" FontSize="12" Margin="0,0,8,0"
+                            Command="{Binding DeactivateCommand}"
+                            Visibility="{Binding IsPaid, Converter={StaticResource BoolVis}}"/>
+                    <Button Content="{services:Loc license.close}" Style="{StaticResource SecondaryButton}"
+                            Padding="16,6" FontSize="12" IsCancel="True" Click="Close_Click"/>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

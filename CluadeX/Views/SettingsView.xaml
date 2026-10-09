@@ -311,7 +311,7 @@
                                 <TextBlock Text="{Binding ConnectionTestResult}" Foreground="{StaticResource TealBrush}"
                                            FontSize="12" TextWrapping="Wrap"/>
                                 <Button Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0"
-                                        Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="Features"
+                                        Command="{Binding DataContext.OpenLicenseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         Visibility="{Binding ShowLicenseShortcut, Converter={StaticResource BoolVis}}">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
@@ -932,7 +932,7 @@
                                         <TextBlock Text="{services:Loc settings.licenseDesc}" Style="{StaticResource SettingDesc}"/>
                                     </StackPanel>
                                     <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" VerticalAlignment="Center" Margin="16,0,0,0"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="Features">
+                                            Command="{Binding DataContext.OpenLicenseCommand, RelativeSource={RelativeSource AncestorType=Window}}">
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                             <TextBlock Text="{services:Loc settings.licenseOpen}" VerticalAlignment="Center"/>

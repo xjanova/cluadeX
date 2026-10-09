@@ -480,6 +480,7 @@ internal static class Program
         Check("cap", "original order kept", capped.Select(t => many.IndexOf(t)).SequenceEqual(capped.Select(t => many.IndexOf(t)).OrderBy(i => i)), "");
 
         await MockProviders.Run(Check, Section);
+        await MockLicense.Run(Check, Section);
 
         Section("offline · assistant turn rebuild");
         var resp = new NativeToolResponse

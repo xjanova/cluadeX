@@ -172,6 +172,11 @@ Test Connection, chat, tool round trips with/without thinking, edited history, e
 listing. `dotnet run -- --offline` · `dotnet run -- claude-opus-5-5,claude-haiku-5-5` · and
 `dotnet run -- --offline --db-health <copy of codex.db>` proves the empty-chat cleanup refuses to touch
 a damaged chat database. Run it whenever a model list or request shape changes.
+The license flow (register PC → check-machine → one free `/demo` key → expiry → restore after reinstall,
+rate-limit/5xx never wiping a key) runs in the same `--offline` pass against a localhost copy of the
+xmanstudio `ProductLicenseController` rules (`tests/apitest/MockLicense.cs`) — never against xman4289.com:
+**a PC that calls `/demo` again after its trial gets flagged as trial abuse on the real server.** The client
+reads the mock's URL from `CLUADEX_LICENSE_API`, which only Debug builds honour.
 The older IDE harness `navtest` (132 assertions: search, navigation, rename, completion, diff, merge
 conflicts, live debugpy) lived in a session scratchpad and its source is gone — **harnesses belong in
 `tests/`, never in a scratchpad.** These harnesses have repeatedly caught bugs the compiler could not:
