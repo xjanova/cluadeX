@@ -136,16 +136,21 @@ public partial class App : Application
                 await mcpManager.InitializeAsync();
                 dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
 
+                if (mcpManager.ConfigLoadFailed)
+                    dbg?.Warn("MCP", "mcp_servers.json could not be read — it is left untouched and nothing is written to it this session");
+
                 // BrainX installed but not in our MCP list (installed after CluadeX, or before it existed):
-                // connect it without asking — that is what installing it meant. Not installed: invite, once.
-                var brainInstall = mcpManager.GetBrainInstallState();
-                if (brainInstall == Services.Mcp.McpServerManager.BrainInstall.InstalledNotConfigured)
+                // connect it without asking — that is what installing it meant — unless the user removed it /
+                // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
+                // Not installed: invite, once.
+                var auto = await mcpManager.AutoConnectInstalledBrainAsync();
+                var brainSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
+                if (auto != Services.Mcp.McpServerManager.BrainAutoConnect.NotNeeded)
                 {
-                    bool ok = await mcpManager.ConnectInstalledBrainAsync();
-                    dbg?.Info("MCP", $"installed BrainX found and connected={ok} · {mcpManager.BrainStatusText}");
+                    dbg?.Info("MCP", $"installed BrainX startup check: {auto} · {mcpManager.BrainStatusText}");
                 }
-                else if (brainInstall == Services.Mcp.McpServerManager.BrainInstall.NotInstalled
-                         && !_serviceProvider.GetRequiredService<SettingsService>().Settings.BrainXInviteDismissed)
+                else if (mcpManager.GetBrainInstallState() == Services.Mcp.McpServerManager.BrainInstall.NotInstalled
+                         && !brainSettings.BrainXInviteDismissed && !brainSettings.BrainXAutoConnectDeclined)
                 {
                     _ = Dispatcher.BeginInvoke(() => _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>().ScheduleBrainXInvite());
                 }

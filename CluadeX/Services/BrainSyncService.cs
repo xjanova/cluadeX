@@ -111,9 +111,11 @@ public class BrainSyncService
         var server = FindBrainServer();
         if (server == null)
         {
+            // Shown on the Instincts page — localized. (Ctrl+5 is the Code Editor; the MCP page is reached from
+            // the Ctrl+K palette or the 🧠 chip.)
             return new BrainSyncResult
             {
-                Message = "ObsidianX brain MCP server is not running. Configure one in MCP Servers (Ctrl+5)."
+                Message = LocalizedResources.Instance["brain.sync.notRunning"]
             };
         }
 
@@ -233,7 +235,7 @@ public class BrainSyncService
 
         var server = FindBrainServer();
         if (server == null)
-            return "(BrainX not connected — configure a brain MCP server in MCP Servers, Ctrl+5)";
+            return "(BrainX not connected — configure a brain MCP server in MCP Servers: Ctrl+K → MCP Servers, or click the 🧠 chip)";
 
         try
         {

@@ -20,6 +20,8 @@ public sealed class SparkModelRow : ViewModelBase
     private double _progress;
     private string _pullStatus = "";
     internal CancellationTokenSource? PullCts;
+    /// <summary>Which download this row is running (new for every start) — a "stop it" answer covers these ids only.</summary>
+    internal long PullId;
 
     public bool IsInstalled { get => _isInstalled; set { if (SetProperty(ref _isInstalled, value)) Notify(); } }
     public bool IsPulling { get => _isPulling; set { if (SetProperty(ref _isPulling, value)) Notify(); } }
@@ -56,14 +58,21 @@ public class DgxSparkViewModel : ViewModelBase
         _loc = loc;
         _hostInput = settings.Settings.DgxSparkHost ?? "";
 
-        ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsProbing && !AnyPulling);
-        PullCommand = new AsyncRelayCommand<SparkModelRow>(PullAsync, r => r is { CanPull: true } && IsConnected);
+        // Connecting again rebuilds the rows, which would orphan a running download — so not while one runs.
+        ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsProbing && !IsAnyPulling);
+        // One download per row, several rows at once: the row's own IsPulling is the guard (CanPull). An
+        // AsyncRelayCommand here was a single command for every row, and its "executing" flag disabled them all.
+        PullCommand = new RelayCommand<SparkModelRow>(r => _ = PullAsync(r), r => r is { CanPull: true } && IsConnected && !IsProbing);
         CancelPullCommand = new RelayCommand<SparkModelRow>(r => r?.PullCts?.Cancel());
         UseCommand = new AsyncRelayCommand<SparkModelRow>(UseAsync, r => r is { CanUse: true } && IsConnected && !IsSwitching);
         OpenCampaignCommand = new RelayCommand(OpenCampaign);
 
         ShowRows([]);
         RefreshActive();
+        // CluadeX leaving the Spark shrinks the context window again — say so here, also when it happened before
+        // this window opened.
+        _spark.ContextRestored += OnContextRestored;
+        if (!_spark.IsActive && _spark.LastContextRestore is { } earlier) ContextNote = DescribeRestore(earlier);
         // A remembered Spark is looked up straight away, so the window opens on its real state.
         if (!string.IsNullOrWhiteSpace(_hostInput)) _ = ConnectAsync();
     }
@@ -86,8 +95,50 @@ public class DgxSparkViewModel : ViewModelBase
     public string ActiveLine { get => _activeLine; private set { if (SetProperty(ref _activeLine, value)) OnPropertyChanged(nameof(HasActiveLine)); } }
     public bool HasActiveLine => !string.IsNullOrEmpty(_activeLine);
 
+    private string _contextNote = "";
+    /// <summary>Why the context window is smaller again: CluadeX left the Spark and gave the old size back.
+    /// Empty while on the Spark.</summary>
+    public string ContextNote { get => _contextNote; private set { if (SetProperty(ref _contextNote, value)) OnPropertyChanged(nameof(HasContextNote)); } }
+    public bool HasContextNote => !string.IsNullOrEmpty(_contextNote);
+
     public ObservableCollection<SparkModelRow> Models { get; } = [];
-    private bool AnyPulling => Models.Any(m => m.IsPulling);
+    /// <summary>A download onto the Spark is running (closing the window would stop it).</summary>
+    public bool IsAnyPulling => Models.Any(m => m.IsPulling);
+
+    private long _pullSeq;
+    /// <summary>The downloads the user already agreed to stop (by id). A download started after that answer is not
+    /// covered — closing asks again.</summary>
+    private readonly HashSet<long> _stopAgreed = [];
+    private bool _closingForRestart;
+
+    /// <summary>What to ask before the window closes while downloads run; null when nothing is downloading, when the
+    /// user already agreed to stop every download that is running, or while the app restarts for an update.</summary>
+    public (string Title, string Body, string Stop, string Keep)? CloseQuestion()
+    {
+        if (_closingForRestart) return null;
+        var running = Models.Where(m => m.IsPulling).ToList();
+        if (running.Count == 0 || running.All(m => _stopAgreed.Contains(m.PullId))) return null;
+        var names = running.Select(m => "  • " + m.Name);
+        return (T("spark.closeTitle"), T("spark.closeBody", string.Join("\n", names)), T("spark.closeStop"), T("spark.closeKeep"));
+    }
+
+    /// <summary>The user answered "stop and close": that covers the downloads running now — not later ones.</summary>
+    public void AgreeToStopRunningDownloads()
+    {
+        foreach (var m in Models)
+            if (m.IsPulling) _stopAgreed.Add(m.PullId);
+    }
+
+    /// <summary>The close the answer was for didn't happen (an update that failed or was cancelled): the next close asks again.</summary>
+    public void ResetCloseConfirmation()
+    {
+        _stopAgreed.Clear();
+        _closingForRestart = false;
+    }
+
+    /// <summary>The app is shutting down for an update right now (Application.Shutdown ignores Cancel): the user has
+    /// answered for the downloads already, so closing must not ask again.</summary>
+    public void SetClosingForRestart(bool restarting) => _closingForRestart = restarting;
 
     public ICommand ConnectCommand { get; }
     public ICommand PullCommand { get; }
@@ -99,9 +150,28 @@ public class DgxSparkViewModel : ViewModelBase
     public void Detach()
     {
         _closed = true;
+        _spark.ContextRestored -= OnContextRestored;
         _probeCts?.Cancel();
         foreach (var m in Models) m.PullCts?.Cancel();
     }
+
+    /// <summary>Raised on whatever thread left the Spark; the window's state is updated on the UI thread.</summary>
+    private void OnContextRestored(SparkContextRestore restore)
+    {
+        void Apply()
+        {
+            if (_closed) return;
+            MarkInUse();
+            RefreshActive();
+            ContextNote = DescribeRestore(restore);
+        }
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) Apply();
+        else dispatcher.BeginInvoke(Apply);
+    }
+
+    private string DescribeRestore(SparkContextRestore r) => T("spark.contextRestored",
+        r.To.ToString("N0", CultureInfo.CurrentCulture), r.From.ToString("N0", CultureInfo.CurrentCulture));
 
     private async Task ConnectAsync()
     {
@@ -135,6 +205,13 @@ public class DgxSparkViewModel : ViewModelBase
                 Say(T("spark.notOllama", probe.Backend!, probe.Port ?? 0), error: true);
                 return;
             }
+            if (probe.ModelListFailed)
+            {
+                // Ollama answered, but what it has installed is unknown — rows marked "not installed" would be a guess.
+                ShowRows([]);
+                Say(T("spark.listFailed", host, T("spark.err.server")), error: true);
+                return;
+            }
 
             _connectedHost = host;
             IsConnected = true;
@@ -142,10 +219,11 @@ public class DgxSparkViewModel : ViewModelBase
             ShowRows(probe.Models);
             Say(T("spark.found", probe.Backend, probe.Version ?? "", host, probe.Models.Count), error: false);
         }
-        catch (OperationCanceledException) { /* a newer lookup or the window closing replaced this one */ }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { /* a newer lookup or the window closing replaced this one */ }
         catch (Exception ex)
         {
-            if (!_closed) Say(T("spark.unreachable", host) + " (" + ex.Message + ")", error: true);
+            _spark.LogFailure($"looking up {host} failed", ex);
+            if (!_closed) Say(T("spark.unreachable", host), error: true);
         }
         finally
         {
@@ -178,7 +256,7 @@ public class DgxSparkViewModel : ViewModelBase
     }
 
     /// <summary>"llama3" and "llama3:latest" are the same Ollama model.</summary>
-    private static string Canonical(string tag) => tag.Contains(':') ? tag : tag + ":latest";
+    private static string Canonical(string tag) => DgxSparkService.CanonicalTag(tag);
 
     private void MarkInUse()
     {
@@ -195,8 +273,10 @@ public class DgxSparkViewModel : ViewModelBase
         ActiveLine = _spark.IsActive && s.ProviderConfigs.TryGetValue("Ollama", out var cfg) && cfg?.EffectiveModelId is { } model
             ? T("spark.active", model, s.DgxSparkHost ?? "")
             : "";
+        if (_spark.IsActive) ContextNote = "";   // back on the Spark: the old note no longer applies
     }
 
+    /// <summary>Started fire-and-forget by <see cref="PullCommand"/>, one per row — so it must never throw.</summary>
     private async Task PullAsync(SparkModelRow? row)
     {
         if (row == null || !row.CanPull) return;
@@ -207,31 +287,39 @@ public class DgxSparkViewModel : ViewModelBase
         }
 
         var cts = row.PullCts = new CancellationTokenSource();
+        row.PullId = ++_pullSeq;
         row.IsPulling = true;
         row.Progress = 0;
         row.PullStatus = "";
         CommandManager.InvalidateRequerySuggested();
-        var progress = new Progress<(string Status, double? Fraction)>(p =>
-        {
-            if (p.Fraction is double f) row.Progress = f;
-            row.PullStatus = p.Fraction is double pct
-                ? $"{p.Status} · {pct.ToString("P0", CultureInfo.CurrentCulture)}"
-                : p.Status;
-        });
         try
         {
+            var progress = new Progress<(string Status, double? Fraction)>(p =>
+            {
+                if (p.Fraction is double f) row.Progress = f;
+                row.PullStatus = p.Fraction is double pct
+                    ? $"{p.Status} · {pct.ToString("P0", CultureInfo.CurrentCulture)}"
+                    : p.Status;
+            });
             await _spark.PullAsync(host, row.Tag, progress, cts.Token);
             row.IsInstalled = true;
             row.Progress = 1;
             if (!_closed) Say(T("spark.pullDone", row.Name), error: false);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             if (!_closed) Say(T("spark.pullCancelled"), error: false);
         }
+        catch (OllamaErrorException ex)
+        {
+            // Ollama's own sentence ("pull model manifest: file does not exist") — the one text shown as is.
+            _spark.LogFailure($"{host}: Ollama refused to pull {row.Tag}", ex);
+            if (!_closed) Say(T("spark.pullFailed", ex.Message), error: true);
+        }
         catch (Exception ex)
         {
-            if (!_closed) Say(T("spark.pullFailed", ex.Message), error: true);
+            _spark.LogFailure($"{host}: pulling {row.Tag} failed", ex);
+            if (!_closed) Say(T("spark.pullFailed", Describe(DgxSparkService.Classify(ex))), error: true);
         }
         finally
         {
@@ -255,14 +343,21 @@ public class DgxSparkViewModel : ViewModelBase
         IsSwitching = true;
         try
         {
-            await _spark.UseOllamaModelAsync(host, row.Tag);
+            var result = await _spark.UseOllamaModelAsync(host, row.Tag);
             MarkInUse();
             RefreshActive();
-            Say(T("spark.used", row.Name, host, _settings.Settings.ContextSize.ToString("N0", CultureInfo.CurrentCulture)), error: false);
+            if (result.Ok)
+                Say(T("spark.used", row.Name, host, _settings.Settings.ContextSize.ToString("N0", CultureInfo.CurrentCulture)), error: false);
+            else if (result.Failure == SparkFailure.Unreachable)
+                Say(T("spark.unreachable", host), error: true);
+            else
+                Say(T("spark.useFailed", result.Failure == SparkFailure.ModelMissing
+                    ? T("spark.err.modelMissing", row.Name) : Describe(result.Failure)), error: true);
         }
         catch (Exception ex)
         {
-            Say(T("spark.useFailed", ex.Message), error: true);
+            _spark.LogFailure($"{host}: using {row.Tag} failed", ex);
+            Say(T("spark.useFailed", Describe(DgxSparkService.Classify(ex))), error: true);
         }
         finally
         {
@@ -271,10 +366,26 @@ public class DgxSparkViewModel : ViewModelBase
         }
     }
 
+    /// <summary>A failure in the UI language. The exception text never reaches this window (it is in the Debug Log).</summary>
+    private string Describe(SparkFailure failure) => failure switch
+    {
+        SparkFailure.Network or SparkFailure.Unreachable => T("spark.err.network"),
+        SparkFailure.Timeout => T("spark.err.timeout"),
+        SparkFailure.Server or SparkFailure.Ollama => T("spark.err.server"),
+        SparkFailure.BadResponse => T("spark.err.badResponse"),
+        SparkFailure.Busy => T("spark.err.busy"),
+        SparkFailure.NotReady => T("spark.err.notReady"),
+        _ => T("spark.err.generic"),
+    };
+
     private void OpenCampaign()
     {
         try { Process.Start(new ProcessStartInfo(DgxSparkService.CampaignUrl) { UseShellExecute = true }); }
-        catch (Exception ex) { Say(ex.Message, error: true); }
+        catch (Exception ex)
+        {
+            _spark.LogFailure("opening the campaign page failed", ex);
+            Say(T("spark.err.openLink", DgxSparkService.CampaignUrl), error: true);
+        }
     }
 
     private void Say(string text, bool error)

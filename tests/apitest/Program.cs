@@ -39,6 +39,10 @@ internal static class Program
 
     static int Main(string[] args)
     {
+        // Child-process mode for McpConfigSafety: a "server" that never answers (must run before anything else).
+        if (args.Length > 0 && args[0] == McpConfigSafety.SleepStubFlag) return McpConfigSafety.SleepStub(args);
+        if (args.Length > 0 && args[0] == McpConfigSafety.ServerStubFlag) return McpConfigSafety.ServerStub(args);
+
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
         try { return Run(args).GetAwaiter().GetResult(); }
@@ -495,6 +499,7 @@ internal static class Program
         await MockProviders.Run(Check, Section);
         await MockLicense.Run(Check, Section);
         await MockSpark.Run(Check, Section);
+        await McpConfigSafety.Run(Check, Section);
 
         Section("offline · assistant turn rebuild");
         var resp = new NativeToolResponse

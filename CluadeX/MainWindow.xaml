@@ -1118,10 +1118,11 @@
                                                  brain the agent cannot call. -->
                                             <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding McpServers.BrainState}" Value="Starting">
-                                                    <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding McpServers.BrainState}" Value="Reconnecting">
+                                                <!-- Amber while starting OR while the supervisor is between two
+                                                     respawn attempts (an attempt just failed, the next is due): the
+                                                     same IsBrainStarting the BrainX window asks, so the chip no
+                                                     longer goes red in the gap while the window says "starting". -->
+                                                <DataTrigger Binding="{Binding McpServers.IsBrainStarting}" Value="True">
                                                     <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
                                                 </DataTrigger>
                                                 <!-- Last, so it wins: bound to the BOOL, not the enum, because a

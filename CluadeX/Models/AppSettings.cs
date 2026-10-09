@@ -251,6 +251,11 @@ public class AppSettings
     /// itself again (the brain chip still opens it on request).</summary>
     public bool BrainXInviteDismissed { get; set; }
 
+    /// <summary>The user removed BrainX on the MCP Servers page or pressed "Not interested": an installed BrainX is
+    /// no longer registered and started by itself at launch. Cleared only by pressing Connect / Install in the
+    /// BrainX window.</summary>
+    public bool BrainXAutoConnectDeclined { get; set; }
+
     /// <summary>Host name or IP of the NVIDIA DGX Spark on the local network that serves models (null = none).</summary>
     public string? DgxSparkHost { get; set; }
 

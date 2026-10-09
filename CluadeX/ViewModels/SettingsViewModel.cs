@@ -105,7 +105,10 @@ public class SettingsViewModel : ViewModelBase
 
     private readonly HashSet<string> _dirty = new();
     private bool _loading;   // values are being loaded from settings, not edited by the user
-    private bool _saving;    // our own write — don't reload from it
+    /// <summary>Our own writes — not reloaded from, except for what others changed during them (see
+    /// <see cref="CluadeX.Helpers.OwnSettingsWrite"/>: leaving the DGX Spark gives the context size back inside
+    /// this page's own save of the Ollama address).</summary>
+    private readonly CluadeX.Helpers.OwnSettingsWrite _ownWrite = new();
 
     // ── Model & output ──
     private int _maxTokens;
@@ -204,9 +207,7 @@ public class SettingsViewModel : ViewModelBase
             {
                 string lang = value == "ไทย" ? "th" : "en";
                 _localizationService.SetLanguage(lang);
-                _saving = true;
-                try { _settingsService.UpdateSettings(s => s.Language = lang); }
-                finally { _saving = false; }
+                WriteOwn(s => s.Language = lang);
                 OnPropertyChanged(nameof(ApiKeyLinkText));
                 OnPropertyChanged(nameof(LicenseStatus));
             }
@@ -403,11 +404,16 @@ public class SettingsViewModel : ViewModelBase
         };
 
         // Settings changed somewhere else (chat bar, Models page, MCP host) → show it here, unless the
-        // user has unsaved edits on this page (theirs win once the debounce fires).
+        // user has unsaved edits on this page (theirs win once the debounce fires). An event raised during this
+        // page's own write is counted instead; the write reloads afterwards if it wasn't only its own.
         _settingsService.SettingsChanged += () =>
         {
-            if (_saving) return;
-            App.Current?.Dispatcher.BeginInvoke(() => { if (_dirty.Count == 0) LoadPageValues(_settingsService.Settings); });
+            if (_ownWrite.Observe()) return;
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                if (_dirty.Count == 0) LoadPageValues(_settingsService.Settings);
+                else _reloadPending = true;   // shown after the pending edits are saved (WriteOwn)
+            });
         };
         _activationService.ActivationChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -430,13 +436,34 @@ public class SettingsViewModel : ViewModelBase
 
     /// <summary>Show <paramref name="src"/>'s values on the page without marking anything as edited.
     /// The provider card is not touched (it has its own load).</summary>
-    private void LoadPageValues(AppSettings src)
+    private void LoadPageValues(AppSettings src, bool includeStorage = true)
     {
         bool wasLoading = _loading;
         _loading = true;
-        try { ApplyPageValues(src, includeStorage: true); }
+        try { ApplyPageValues(src, includeStorage); }
         finally { _loading = wasLoading; }
     }
+
+    /// <summary>Write and save as this page. When something else changed the settings during the save (a
+    /// SettingsChanged handler writing in turn), show the settings as they are now — the outer event of the save
+    /// itself is still not reloaded from — unless the user has edits pending (theirs win, as for any outside change).
+    /// <paramref name="reloadStorage"/> false keeps the folder boxes as typed (a path that was refused stays visible
+    /// next to its reason).</summary>
+    private bool WriteOwn(Action<AppSettings> update, bool reloadStorage = true, Action? onFailed = null)
+    {
+        var (ok, othersChanged) = _ownWrite.Run(_settingsService, update);
+        if (!ok) onFailed?.Invoke();
+        if (othersChanged) _reloadPending = true;
+        if (_reloadPending && _dirty.Count == 0)
+        {
+            _reloadPending = false;
+            LoadPageValues(_settingsService.Settings, reloadStorage);
+        }
+        return ok;
+    }
+
+    /// <summary>An outside change arrived while the user had edits pending; shown once those are saved.</summary>
+    private bool _reloadPending;
 
     /// <summary>Copy <paramref name="src"/> into the page's properties. Under <c>_loading</c> this is a
     /// display refresh; outside it (Reset) every change becomes an edit that auto-save writes.</summary>
@@ -564,25 +591,21 @@ public class SettingsViewModel : ViewModelBase
         }
         bool providerChanged = changed.Any(ProviderFields.Contains);
 
-        bool ok;
-        _saving = true;
-        try
-        {
-            ok = _settingsService.UpdateSettings(s =>
+        // Keep the edits pending when the save fails, so the next change (or reopening the page) tries again — and
+        // so the page isn't reloaded over them.
+        bool ok = WriteOwn(s =>
             {
                 foreach (var name in changed)
                     if (Writers.TryGetValue(name, out var write)) write(this, s);
                 // Never ActiveProvider: AiProviderManager.SwitchProviderAsync owns "which provider is in use".
                 if (providerChanged) s.ProviderConfigs[SelectedProvider.ToString()] = BuildProviderConfig();
-            });
-        }
-        finally { _saving = false; }
+            },
+            reloadStorage: pathProblem == null,
+            onFailed: () => { foreach (var name in changed) _dirty.Add(name); });
 
         if (!ok)
         {
-            // Keep the edits pending so the next change (or reopening the page) tries again — and say so instead
-            // of the "Saved ✓" this used to show for a write that never happened.
-            foreach (var name in changed) _dirty.Add(name);
+            // Say so instead of the "Saved ✓" this used to show for a write that never happened.
             _log?.Error("Settings", $"Saving settings.json failed: {_settingsService.LastSaveError}");
             SaveStatusIsError = true;
             SaveStatus = T("settingsm.saveFailed");
@@ -701,9 +724,7 @@ public class SettingsViewModel : ViewModelBase
         var key = SelectedProvider.ToString();
         var config = BuildProviderConfig();
         foreach (var f in ProviderFields) _dirty.Remove(f);
-        _saving = true;
-        try { _settingsService.UpdateSettings(s => s.ProviderConfigs[key] = config); }
-        finally { _saving = false; }
+        WriteOwn(s => s.ProviderConfigs[key] = config);
     }
 
     private async Task TestConnection()

@@ -735,8 +735,55 @@ internal static class Program
                 s.UpdateSettings(x => x.ModelDirectory = ghost);
                 Check("S3", "saving a folder path no longer creates the folder (typed half-paths like D:\\Mod used to appear)", !Directory.Exists(ghost));
             });
+            CaseSync("S4", () => SparkContextReloadTest(shared));
         }
         finally { File.WriteAllText(path, original); shared.Load(); }
+    }
+
+    /// <summary>
+    /// The Settings page ignores the SettingsChanged event of its own save. Leaving the DGX Spark gives the context
+    /// window back from INSIDE that save (a SettingsChanged handler writing in turn), so the page kept showing 32768
+    /// while the setting was 12288. The real page (the app's singleton) and the real DgxSparkService, no network:
+    /// the hosts are .invalid and the page is saved through its own Save().
+    /// </summary>
+    static void SparkContextReloadTest(SettingsService shared)
+    {
+        _ = Sp.GetRequiredService<DgxSparkService>();   // listens for "left the Spark", as in the app
+        var vm = Sp.GetRequiredService<SettingsViewModel>();
+        var save = typeof(SettingsViewModel).GetMethod("Save", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var load = typeof(SettingsViewModel).GetMethod("LoadPageValues", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        // On the Spark: Ollama active, its address the remembered Spark, the window raised to 32k (12k remembered).
+        shared.UpdateSettings(x =>
+        {
+            x.ActiveProvider = AiProviderType.Ollama;
+            x.DgxSparkHost = "spark-s4.invalid";
+            x.ProviderConfigs["Ollama"] = new ProviderConfig { BaseUrl = "http://spark-s4.invalid:11434", SelectedModel = "llama3" };
+            x.ContextSize = 32768;
+            x.DgxSparkSavedContextSize = 12288;
+        });
+        load.Invoke(vm, new object[] { shared.Settings, true });   // the page as it would show after that change
+        if (vm.SelectedProvider == AiProviderType.Ollama) vm.SelectedProvider = AiProviderType.Local;
+        vm.SelectedProvider = AiProviderType.Ollama;               // loads the Ollama card from the settings
+        Check("S4", "the page shows the Spark's 32k before the edit", vm.ContextSize == 32768 && vm.ProviderBaseUrl == "http://spark-s4.invalid:11434",
+            $"{vm.ContextSize} {vm.ProviderBaseUrl}");
+
+        // Control: an own save nothing else reacts to does not reload the page (a value changed behind its back,
+        // with no event, stays as the page shows it).
+        int pageMaxTokens = vm.MaxTokens;
+        shared.Settings.MaxTokens = pageMaxTokens + 1;   // in memory only — no SettingsChanged
+        vm.Temperature = vm.Temperature == 0.5f ? 0.6f : 0.5f;
+        save.Invoke(vm, null);
+        Check("S4b", "an own save with no outside change does not reload the page (control)", vm.MaxTokens == pageMaxTokens,
+            $"page MaxTokens {vm.MaxTokens}, settings {shared.Settings.MaxTokens}");
+        shared.Settings.MaxTokens = pageMaxTokens;
+
+        // Ollama re-pointed at this PC on the page, then saved: the window is given back inside that save.
+        vm.ProviderBaseUrl = "http://127.0.0.1:11434";
+        save.Invoke(vm, null);
+        Check("S4c", "saving the Ollama address off the Spark gives the window back in the settings", shared.Settings.ContextSize == 12288
+            && shared.Settings.DgxSparkSavedContextSize == null, $"{shared.Settings.ContextSize} saved={shared.Settings.DgxSparkSavedContextSize}");
+        Check("S4d", "…and the page shows it (it used to keep showing 32768)", vm.ContextSize == 12288, vm.ContextSize.ToString());
     }
 
     // ════════════════════════════ TASKS ════════════════════════════

@@ -59,8 +59,10 @@
                     <TextBlock Text="{Binding Subtitle}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
                                Foreground="{StaticResource Subtext0Brush}"/>
                 </StackPanel>
+                <!-- IsCancel: Esc closes the window. It sits on this always-visible button, not the footer Close
+                     (collapsed until connected). -->
                 <Button Grid.Column="2" Width="30" Height="30" VerticalAlignment="Top" Cursor="Hand"
-                        Click="Close_Click" ToolTip="{services:Loc brainx.close}">
+                        Click="Close_Click" IsCancel="True" ToolTip="{services:Loc brainx.close}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="bd" Background="Transparent" CornerRadius="15">
@@ -138,8 +140,9 @@
                     <Button Content="{services:Loc brainx.notInterested}" Style="{StaticResource SecondaryButton}"
                             Padding="12,7" FontSize="12" Margin="0,0,8,0" Command="{Binding NotInterestedCommand}"
                             Visibility="{Binding ShowPrimary, Converter={StaticResource BoolVis}}"/>
+                    <!-- Deliberately NOT IsDefault: a stray Enter must never open the download page or start a server. -->
                     <Button Content="{Binding PrimaryText}" Style="{StaticResource PrimaryButton}"
-                            Padding="16,7" FontSize="12.5" IsDefault="True" Command="{Binding PrimaryCommand}"
+                            Padding="16,7" FontSize="12.5" Command="{Binding PrimaryCommand}"
                             Visibility="{Binding ShowPrimary, Converter={StaticResource BoolVis}}"/>
                     <Button Content="{services:Loc brainx.close}" Style="{StaticResource PrimaryButton}"
                             Padding="16,7" FontSize="12.5" Click="Close_Click"

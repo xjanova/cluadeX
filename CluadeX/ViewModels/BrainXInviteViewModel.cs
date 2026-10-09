@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -10,7 +11,7 @@ namespace CluadeX.ViewModels;
 /// The BrainX invitation: what BrainX adds, and one button that does the right next thing for this PC —
 /// install (opens the download page, then connects by itself once BrainX appears), connect an installed BrainX,
 /// or nothing when it is already connected. "Read more first" opens the product page; "Not interested" stops the
-/// window from opening by itself again.
+/// window from opening by itself again AND stops CluadeX from registering an installed BrainX by itself at launch.
 /// </summary>
 public class BrainXInviteViewModel : ViewModelBase
 {
@@ -20,6 +21,8 @@ public class BrainXInviteViewModel : ViewModelBase
     private readonly McpServerManager _mcp;
     private readonly SettingsService _settings;
     private readonly LocalizationService _loc;
+    private readonly Dispatcher _dispatcher;
+    private readonly PropertyChangedEventHandler _brainChanged;
     private DispatcherTimer? _installWatch;
     private DateTime _installWatchUntil;
 
@@ -28,13 +31,29 @@ public class BrainXInviteViewModel : ViewModelBase
         _mcp = mcp;
         _settings = settings;
         _loc = loc;
+        _dispatcher = Dispatcher.CurrentDispatcher;
         PrimaryCommand = new AsyncRelayCommand(PrimaryAsync, () => !IsBusy && State != McpServerManager.BrainInstall.Connected);
         ReadFirstCommand = new RelayCommand(() => Open(ProductUrl));
         NotInterestedCommand = new RelayCommand(() =>
         {
-            _settings.UpdateSettings(s => s.BrainXInviteDismissed = true);
+            // "Not interested" means BrainX too, not just this window: an installed BrainX is no longer
+            // registered and started by itself at launch (only an explicit Connect here undoes that).
+            _settings.UpdateSettings(s =>
+            {
+                s.BrainXInviteDismissed = true;
+                s.BrainXAutoConnectDeclined = true;
+            });
             RequestClose?.Invoke();
         });
+
+        // The brain moves on its own (starting → ready, a crash → reconnecting): keep the subtitle and the button
+        // honest while the window is open. Raised from any thread, so hop to the window's dispatcher.
+        _brainChanged = (_, e) =>
+        {
+            if (e.PropertyName != nameof(McpServerManager.BrainState)) return;
+            _dispatcher.BeginInvoke(new Action(Refresh));
+        };
+        _mcp.PropertyChanged += _brainChanged;
         Refresh();
     }
 
@@ -59,6 +78,7 @@ public class BrainXInviteViewModel : ViewModelBase
                 OnPropertyChanged(nameof(PrimaryText));
                 OnPropertyChanged(nameof(ShowPrimary));
                 OnPropertyChanged(nameof(IsConnected));
+                CommandManager.InvalidateRequerySuggested();
             }
         }
     }
@@ -68,6 +88,9 @@ public class BrainXInviteViewModel : ViewModelBase
     public string Subtitle => State switch
     {
         McpServerManager.BrainInstall.Connected => T("brainx.subConnected"),
+        // Starting / reconnecting is not "set up but not running" — and Connect now waits for it instead of
+        // restarting it.
+        McpServerManager.BrainInstall.Starting => T("brainx.subStarting"),
         McpServerManager.BrainInstall.Configured => T("brainx.subConfigured"),
         McpServerManager.BrainInstall.InstalledNotConfigured => T("brainx.subInstalled"),
         _ => T("brainx.subNotInstalled"),
@@ -89,6 +112,9 @@ public class BrainXInviteViewModel : ViewModelBase
 
     private async Task PrimaryAsync()
     {
+        // The user asked for BrainX here, explicitly: the only thing that lifts an earlier "Not interested" or a
+        // removal on the MCP page.
+        _mcp.SetBrainAutoConnectDeclined(false);
         Refresh();
         if (State == McpServerManager.BrainInstall.NotInstalled)
         {
@@ -111,11 +137,13 @@ public class BrainXInviteViewModel : ViewModelBase
             if (ok && _mcp.IsBrainConnected)
                 Say(T("brainx.connected", _mcp.BrainToolCount), error: false);
             else
-                Say(T("brainx.connectFailed", _mcp.BrainLastError ?? _mcp.BrainStatusText), error: true);
+                Say(T("brainx.connectFailed", ReasonText(_mcp.LastBrainConnectProblem)), error: true);
         }
         catch (Exception ex)
         {
-            Say(T("brainx.connectFailed", ex.Message), error: true);
+            // Unexpected: the details go to the debug log, the window says a sentence.
+            _mcp.LogDiagnostic("BrainX window: connect threw", ex);
+            Say(T("brainx.connectFailed", T("brainx.reasonStart")), error: true);
         }
         finally
         {
@@ -123,6 +151,15 @@ public class BrainXInviteViewModel : ViewModelBase
             CommandManager.InvalidateRequerySuggested();
         }
     }
+
+    private string ReasonText(McpServerManager.BrainConnectProblem problem) => problem switch
+    {
+        McpServerManager.BrainConnectProblem.ConfigUnreadable => T("brainx.reasonConfig"),
+        // Read fine, could not be written (locked / read-only / disk full): a different fix than a broken file.
+        McpServerManager.BrainConnectProblem.ConfigNotSaved => T("brainx.reasonSave"),
+        McpServerManager.BrainConnectProblem.NotInstalled => T("brainx.reasonMissing"),
+        _ => T("brainx.reasonStart"),
+    };
 
     /// <summary>After "Install": look for BrainX every few seconds (for up to 15 minutes) and connect the moment
     /// its exe appears, so the user never has to come back and press anything.</summary>
@@ -148,17 +185,22 @@ public class BrainXInviteViewModel : ViewModelBase
         _installWatch = null;
     }
 
-    /// <summary>The window closed: stop watching, keep "don't show again".</summary>
+    /// <summary>The window closed: stop watching, stop listening, keep "don't show again".</summary>
     public void Detach()
     {
         StopWatch();
+        _mcp.PropertyChanged -= _brainChanged;
         if (DontShowAgain) _settings.UpdateSettings(s => s.BrainXInviteDismissed = true);
     }
 
     private void Open(string url)
     {
         try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-        catch (Exception ex) { Say(ex.Message, error: true); }
+        catch (Exception ex)
+        {
+            _mcp.LogDiagnostic($"BrainX window: could not open {url}", ex);
+            Say(T("brainx.openFailed", url), error: true);
+        }
     }
 
     private void Say(string text, bool error)

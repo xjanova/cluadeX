@@ -340,9 +340,9 @@ public class SettingsService
                 var stack = new System.Diagnostics.StackTrace(skipFrames: 1, fNeedFileInfo: false);
                 var caller = stack.GetFrames()?.FirstOrDefault(f => f.GetMethod()?.Name != "UpdateSettings")?.GetMethod();
                 var callerName = caller != null ? $"{caller.DeclaringType?.Name}.{caller.Name}" : "?";
-                var logFile = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".cluadex", "mcp-host.log");
+                // The data home (~/.cluadex installed; <exe>\Data portable) — a portable copy and the test harnesses
+                // must not write into the user's real ~/.cluadex.
+                var logFile = System.IO.Path.Combine(_dataRoot, "mcp-host.log");
                 System.IO.File.AppendAllText(logFile,
                     $"{DateTime.Now:O} ActiveProvider FLIP {before} -> {after}  caller={callerName}\n");
             }

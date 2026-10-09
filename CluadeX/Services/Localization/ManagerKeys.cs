@@ -239,6 +239,16 @@ internal static class ManagerKeys
         ["settingsm.errGeneric"] = new() { ["en"] = "something went wrong — details are in the Debug Log.", ["th"] = "เกิดข้อผิดพลาด — ดูรายละเอียดที่หน้า Debug Log" },
         ["settingsm.ollamaNoModels"] = new() { ["en"] = "Ollama is running but has no models — run: ollama pull qwen2.5-coder", ["th"] = "Ollama ทำงานอยู่แต่ยังไม่มีโมเดล — รันคำสั่ง: ollama pull qwen2.5-coder" },
         ["settingsm.ollamaNotDetected"] = new() { ["en"] = "Ollama not detected — install it from ollama.com and run 'ollama serve'.", ["th"] = "ไม่พบ Ollama — ติดตั้งจาก ollama.com แล้วรัน 'ollama serve'" },
+        // Ollama provider: Test Connection / status line (OllamaProvider). Details of a failure go to the Debug Log.
+        ["ollama.ready"] = new() { ["en"] = "Ollama ready ({0})", ["th"] = "Ollama พร้อมใช้งาน ({0})" },
+        ["ollama.connected"] = new() { ["en"] = "Ollama connected at {0} — {1} model(s) available", ["th"] = "เชื่อมต่อ Ollama ที่ {0} แล้ว — มีโมเดล {1} ตัว" },
+        ["ollama.noModels"] = new() { ["en"] = "Ollama connected at {0}, but it has no models yet — run: ollama pull <model>", ["th"] = "เชื่อมต่อ Ollama ที่ {0} แล้ว แต่ยังไม่มีโมเดล — รันคำสั่ง: ollama pull <ชื่อโมเดล>" },
+        ["ollama.unreachable"] = new() { ["en"] = "Can't reach Ollama at {0}. Is it running? Start it with 'ollama serve'.", ["th"] = "ติดต่อ Ollama ที่ {0} ไม่ได้ — Ollama ทำงานอยู่หรือไม่? เริ่มด้วยคำสั่ง 'ollama serve'" },
+        ["ollama.httpError"] = new() { ["en"] = "Ollama at {0} answered with an error (HTTP {1}) — details are in the Debug Log.", ["th"] = "Ollama ที่ {0} ตอบกลับเป็นข้อผิดพลาด (HTTP {1}) — ดูรายละเอียดที่หน้า Debug Log" },
+        ["ollama.timeout"] = new() { ["en"] = "Ollama at {0} took too long to answer.", ["th"] = "Ollama ที่ {0} ตอบกลับช้าเกินไป" },
+        ["ollama.badReply"] = new() { ["en"] = "{0} answered, but not with Ollama's model list — is this address really Ollama?", ["th"] = "{0} ตอบกลับ แต่ไม่ใช่รายการโมเดลของ Ollama — ที่อยู่นี้เป็น Ollama จริงหรือไม่?" },
+        // Update bar: the legacy (zip) installer could not start — CluadeX keeps running this version.
+        ["update.installFailed"] = new() { ["en"] = "Couldn't install the update — CluadeX keeps running this version. Try again, or install it with Setup.exe.", ["th"] = "ติดตั้งอัปเดตไม่สำเร็จ — CluadeX ยังใช้เวอร์ชันนี้ต่อ ลองใหม่อีกครั้ง หรือติดตั้งด้วย Setup.exe" },
 
         // ═══════ FEATURES / LICENSE ═══════
         ["featuresm.activating"] = new() { ["en"] = "Activating…", ["th"] = "กำลังเปิดใช้งาน…" },

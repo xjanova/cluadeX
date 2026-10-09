@@ -69,6 +69,67 @@ internal static class SparkKeys
             ["th"] = "CluadeX ใช้ {0} บน Spark ({1}) แล้ว หน้าต่างบริบท {2} โทเคน",
         },
         ["spark.active"] = new() { ["en"] = "In use: {0} on {1}", ["th"] = "กำลังใช้: {0} บน {1}" },
+        ["spark.contextRestored"] = new()
+        {
+            ["en"] = "CluadeX no longer uses the Spark, so the context window went back to {0} tokens (it was {1} on the Spark) — a model on this PC never loads with the Spark's size.",
+            ["th"] = "CluadeX เลิกใช้ Spark แล้ว จึงคืนหน้าต่างบริบทกลับเป็น {0} โทเคน (ตอนใช้ Spark เป็น {1}) — โมเดลบนพีซีนี้จะไม่ถูกโหลดด้วยขนาดของ Spark",
+        },
+        ["spark.listFailed"] = new()
+        {
+            ["en"] = "Ollama answered at {0}, but its list of installed models didn't come: {1} Press Connect to try again.",
+            ["th"] = "Ollama ที่ {0} ตอบกลับ แต่ไม่ได้ส่งรายการโมเดลที่ติดตั้งไว้มา: {1} กด \"เชื่อมต่อ\" เพื่อลองใหม่",
+        },
+        // ── Why something failed (the exception itself goes to the Debug Log, never to this window) ──
+        ["spark.err.network"] = new()
+        {
+            ["en"] = "The Spark couldn't be reached over the network.",
+            ["th"] = "ติดต่อ Spark ผ่านเครือข่ายไม่ได้",
+        },
+        ["spark.err.timeout"] = new() { ["en"] = "The Spark took too long to answer.", ["th"] = "Spark ตอบกลับช้าเกินไป" },
+        ["spark.err.server"] = new()
+        {
+            ["en"] = "Ollama on the Spark answered with an error.",
+            ["th"] = "Ollama บน Spark ตอบกลับมาเป็นข้อผิดพลาด",
+        },
+        ["spark.err.badResponse"] = new()
+        {
+            ["en"] = "The Spark sent a reply CluadeX couldn't read.",
+            ["th"] = "Spark ส่งข้อมูลที่ CluadeX อ่านไม่ออกกลับมา",
+        },
+        ["spark.err.generic"] = new()
+        {
+            ["en"] = "Something went wrong — the details are in the Debug Log.",
+            ["th"] = "เกิดข้อผิดพลาด — ดูรายละเอียดได้ใน Debug Log",
+        },
+        ["spark.err.busy"] = new()
+        {
+            ["en"] = "another model switch was still in progress. Nothing was changed — try again in a moment.",
+            ["th"] = "ยังมีการสลับโมเดลอื่นค้างอยู่ จึงยังไม่ได้เปลี่ยนอะไร — ลองใหม่อีกครั้งในอีกสักครู่",
+        },
+        ["spark.err.notReady"] = new()
+        {
+            ["en"] = "Ollama on the Spark didn't come up, so CluadeX stays on the model it was using.",
+            ["th"] = "Ollama บน Spark ไม่พร้อมทำงาน CluadeX จึงยังใช้โมเดลเดิมต่อไป",
+        },
+        ["spark.err.modelMissing"] = new()
+        {
+            ["en"] = "{0} is no longer on the Spark — connect again to refresh the list.",
+            ["th"] = "ไม่พบ {0} บน Spark แล้ว — กดเชื่อมต่ออีกครั้งเพื่อโหลดรายการใหม่",
+        },
+        ["spark.err.openLink"] = new()
+        {
+            ["en"] = "Couldn't open the browser. The page is {0}",
+            ["th"] = "เปิดเบราว์เซอร์ไม่ได้ — ที่อยู่ของหน้าคือ {0}",
+        },
+        // ── Closing while a download runs ──
+        ["spark.closeTitle"] = new() { ["en"] = "Download in progress", ["th"] = "กำลังดาวน์โหลดอยู่" },
+        ["spark.closeBody"] = new()
+        {
+            ["en"] = "Still downloading onto the Spark:\n{0}\n\nClosing this window stops the download.",
+            ["th"] = "ยังดาวน์โหลดลง Spark อยู่:\n{0}\n\nถ้าปิดหน้าต่างนี้ การดาวน์โหลดจะหยุดลง",
+        },
+        ["spark.closeStop"] = new() { ["en"] = "Stop download and close", ["th"] = "หยุดดาวน์โหลดแล้วปิด" },
+        ["spark.closeKeep"] = new() { ["en"] = "Keep downloading", ["th"] = "ดาวน์โหลดต่อ" },
         ["spark.speedNote"] = new()
         {
             ["en"] = "Speeds are published single-request measurements on one DGX Spark (NVIDIA developer blog and forum benchmarks). Real speed depends on quantisation, context length and serving stack.",

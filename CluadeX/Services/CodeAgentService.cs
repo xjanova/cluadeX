@@ -1028,7 +1028,7 @@ public class CodeAgentService
             sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
             sb.AppendLine("  You have NO brain tools right now. Do not claim to have searched the brain, and");
             sb.AppendLine("  do not promise to. If asked about the connection, quote the line above verbatim");
-            sb.AppendLine("  and tell the user to check the 🧠 chip in the status bar (MCP Servers, Ctrl+5).");
+            sb.AppendLine("  and tell the user to click the 🧠 chip in the status bar, or open MCP Servers (Ctrl+K → MCP Servers).");
         }
 
         // ─── Context-window awareness (fixes the local-model "hang / no response") ───
@@ -1611,7 +1611,7 @@ public class CodeAgentService
             // and again on 2026-08-04 behind a crashed brainx-mcp: the user asks a
             // question, gets a memoryless answer, and nothing anywhere says why.
             _debugLog?.Warn("Agent", "Brain auto-recall skipped — no brain MCP server is running "
-                + "(check the 🧠 chip in the status bar / MCP Servers, Ctrl+5)");
+                + "(check the 🧠 chip in the status bar, or MCP Servers: Ctrl+K → MCP Servers)");
             return userMessage;
         }
         // Skip the brain round-trip for very short / conversational asks ("hi", "โมเดลอะไร", "thanks").

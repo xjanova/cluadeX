@@ -23,6 +23,17 @@ public class MainViewModel : ViewModelBase
     private Views.DgxSparkWindow? _sparkWindow;
     private Views.BrainXInviteWindow? _brainWindow;
     private DispatcherTimer? _brainInviteTimer;
+    private readonly CodeWorkspaceService? _workspace;
+    private readonly DebugLogService? _log;
+
+    /// <summary>The questions before an update restart were answered and the restart is under way: the app closes
+    /// without a Closing guard that can cancel (Application.Shutdown ignores Cancel), so MainWindow.OnClosing must not
+    /// ask again — it only saves (<see cref="SaveForUpdateRestart"/>).</summary>
+    public bool IsRestartingForUpdate { get; private set; }
+
+    /// <summary>Editor tabs that were dirty when the restart questions were answered — the user chose to discard
+    /// them. A tab edited after the answer is not in here and is saved on the way out.</summary>
+    private HashSet<OpenFileTab>? _updateAnsweredDirtyTabs;
 
     private ViewModelBase? _currentView;
     private string _selectedNavItem = "Chat";
@@ -60,9 +71,12 @@ public class MainViewModel : ViewModelBase
     }
 
     public bool HasLiveGpuStats => _liveGpuStats != null;
-    /// <summary>The status-bar GPU readout, only while a local model (LLamaSharp / llama-server) is answering.</summary>
-    public bool ShowGpuStats => _liveGpuStats != null
-        && _providerManager?.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer;
+    /// <summary>The status-bar GPU readout, only while the model answering runs on this PC's GPU.</summary>
+    public bool ShowGpuStats => _liveGpuStats != null && ModelRunsOnThisPc;
+
+    /// <summary>LLamaSharp, llama-server, or an Ollama on this PC (loopback address, not the remembered DGX Spark).
+    /// One rule for the GPU readout and the nvidia-smi poll — a local Ollama loads onto this GPU too.</summary>
+    private bool ModelRunsOnThisPc => _settingsService?.Settings is { } s && DgxSparkService.ModelRunsOnThisPc(s);
     public string GpuTempDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.TemperatureC}°C";
     public string GpuUsageDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.GpuUtilization}%";
     public string GpuVramDisplay => _liveGpuStats is null ? "" : $"{_liveGpuStats.VramUsedGB:F1} / {_liveGpuStats.VramTotalGB:F1} GB";
@@ -309,7 +323,8 @@ public class MainViewModel : ViewModelBase
     public ICommand CheckUpdateCommand { get; }
     public ICommand OpenLicenseCommand { get; }
     public ICommand OpenDgxSparkCommand { get; }
-    /// <summary>The status-bar brain chip: the MCP page when BrainX is connected, the BrainX window otherwise.</summary>
+    /// <summary>The status-bar brain chip: the MCP page while a configured brain is up or coming up (Ready, Starting,
+    /// Reconnecting), the BrainX window when there is none to manage (not installed / not configured / stopped / failed).</summary>
     public ICommand OpenBrainCommand { get; }
 
     /// <summary>The title-bar DGX Spark chip glows solid while CluadeX is running on a Spark.</summary>
@@ -349,12 +364,16 @@ public class MainViewModel : ViewModelBase
         AutoUpdateService autoUpdate,
         ActivationService? activation = null,
         XmanLicenseService? license = null,
-        DgxSparkService? spark = null)
+        DgxSparkService? spark = null,
+        CodeWorkspaceService? workspace = null,
+        DebugLogService? log = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
         _license = license;
         _spark = spark;
+        _workspace = workspace;
+        _log = log;
         ChatVM = chatVM;
         ModelManagerVM = modelManagerVM;
         SettingsVM = settingsVM;
@@ -431,7 +450,11 @@ public class MainViewModel : ViewModelBase
         OpenDgxSparkCommand = new RelayCommand(OpenDgxSpark);
         OpenBrainCommand = new RelayCommand(() =>
         {
-            if (McpServers?.IsBrainConnected == true) NavigateTo("McpServers");
+            // A configured brain that is up or on its way up (connecting, reconnecting) is managed on the MCP page;
+            // the BrainX window is for getting one: not installed, not configured, stopped or failed.
+            if (McpServers is { BrainServerName: not null } mcp
+                && mcp.BrainState is McpServerState.Starting or McpServerState.Reconnecting or McpServerState.Ready)
+                NavigateTo("McpServers");
             else OpenBrainXInvite();
         });
 
@@ -475,9 +498,15 @@ public class MainViewModel : ViewModelBase
         // Refresh all nav labels when language changes
         _loc.LanguageChanged += RefreshNavLabels;
 
-        // Refresh buddy visibility when settings change
+        // Settings change: buddy visibility, and whether the model answering is on this PC / on the Spark — an
+        // Ollama address edited in Settings moves it without any provider switch.
         _settingsService.SettingsChanged += () =>
-            App.Current?.Dispatcher.Invoke(() => OnPropertyChanged(nameof(IsBuddyEnabled)));
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                OnPropertyChanged(nameof(IsBuddyEnabled));
+                OnPropertyChanged(nameof(ShowGpuStats));
+                OnPropertyChanged(nameof(IsSparkActive));
+            });
 
         // Forward buddy changes to UI
         _buddyService.BuddyChanged += () =>
@@ -507,8 +536,8 @@ public class MainViewModel : ViewModelBase
         _gpuLiveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _gpuLiveTimer.Tick += (_, _) =>
         {
-            // No local model answering → nothing on screen shows the GPU; don't spawn nvidia-smi every 2 s for it.
-            if (_providerManager.ActiveProviderType is not (AiProviderType.Local or AiProviderType.LlamaServer)) return;
+            // No model on this PC answering → nothing on screen shows the GPU; don't spawn nvidia-smi every 2 s for it.
+            if (!ModelRunsOnThisPc) return;
             // Keep the UI responsive: nvidia-smi can take ~200ms on first call.
             Task.Run(() =>
             {
@@ -625,13 +654,21 @@ public class MainViewModel : ViewModelBase
         win.Activate();
     }
 
-    /// <summary>Open the BrainX invitation (one at a time).</summary>
-    public void OpenBrainXInvite()
+    /// <summary>Open the BrainX invitation (one at a time) — the user asked for it (the brain chip), so it takes focus.</summary>
+    public void OpenBrainXInvite() => OpenBrainXInvite(activate: true);
+
+    /// <param name="activate">False for the scheduled first-launch invitation: it appears without taking the
+    /// keyboard, so text the user is typing in the chat box keeps going there.</param>
+    private void OpenBrainXInvite(bool activate)
     {
+        // Opened by any path → the scheduled invitation is spent: it opens by itself at most once.
+        _brainInviteSpent = true;
+        StopBrainInviteTimer();
+
         if (McpServers is not { } mcp) return;
         if (_brainWindow != null)
         {
-            _brainWindow.Activate();
+            if (activate) _brainWindow.Activate();
             return;
         }
 
@@ -641,38 +678,54 @@ public class MainViewModel : ViewModelBase
         else win.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
         win.Closed += (_, _) => { if (_brainWindow == win) _brainWindow = null; };
         _brainWindow = win;
+        win.ShowActivated = activate;
         win.Show();
-        win.Activate();
+        if (activate) win.Activate();
+    }
+
+    /// <summary>The automatic invitation already opened (or the user opened it first).</summary>
+    private bool _brainInviteSpent;
+
+    private void StopBrainInviteTimer()
+    {
+        _brainInviteTimer?.Stop();
+        _brainInviteTimer = null;
     }
 
     /// <summary>
     /// First launch without BrainX: invite once the app has settled — never on top of another dialog (the license
     /// window opens by itself when the free trial is issued). Gives up quietly after ~5 minutes of other dialogs.
+    /// Opens without taking focus (see <see cref="OpenBrainXInvite(bool)"/>), and at most once.
     /// </summary>
     public void ScheduleBrainXInvite()
     {
-        if (_brainInviteTimer != null) return;
+        if (_brainInviteTimer != null || _brainInviteSpent) return;
         int tries = 0;
-        _brainInviteTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
-        _brainInviteTimer.Tick += (_, _) =>
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+        _brainInviteTimer = timer;
+        timer.Tick += (_, _) =>
         {
+            if (!ReferenceEquals(_brainInviteTimer, timer)) { timer.Stop(); return; }   // stopped by an open meanwhile
             tries++;
             bool otherDialog = _licenseWindow != null || _sparkWindow != null
                 || (App.Current?.Windows.OfType<System.Windows.Window>().Any(w => w != App.Current.MainWindow && w.IsVisible) ?? false);
             if (otherDialog && tries < 20) return;
-            _brainInviteTimer?.Stop();
-            _brainInviteTimer = null;
-            if (otherDialog || _settingsService.Settings.BrainXInviteDismissed
+            StopBrainInviteTimer();
+            if (otherDialog || _brainInviteSpent || _settingsService.Settings.BrainXInviteDismissed
                 || McpServers?.GetBrainInstallState() != Services.Mcp.McpServerManager.BrainInstall.NotInstalled) return;
-            OpenBrainXInvite();
+            OpenBrainXInvite(activate: false);
         };
-        _brainInviteTimer.Start();
+        timer.Start();
     }
+
+    /// <summary>Ask before a close that would stop DGX Spark downloads in progress. True when nothing is downloading
+    /// or the user agreed to stop them.</summary>
+    public bool ConfirmCloseSparkWindow() => _sparkWindow?.ConfirmClose() ?? true;
 
     /// <summary>Open the DGX Spark window (one at a time).</summary>
     public void OpenDgxSpark()
     {
-        if (_spark == null) return;
+        if (_spark == null || IsRestartingForUpdate) return;   // not a new window while the app is going down for an update
         if (_sparkWindow != null)
         {
             _sparkWindow.Activate();
@@ -814,9 +867,76 @@ public class MainViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// The update restarts the app without a window Closing event (Velopack: Environment.Exit; the legacy path:
+    /// Application.Shutdown, which ignores Cancel), so MainWindow.OnClosing's guard never runs. Same questions here,
+    /// first: unsaved editor tabs (Save all / Discard / Cancel) and DGX Spark downloads in progress; then the chat
+    /// is saved. False = the user cancelled — nothing is installed.
+    /// </summary>
+    private bool ConfirmRestartForUpdate()
+    {
+        if (!CodeEditorVM.ConfirmCloseAll()) return false;
+        if (!ConfirmCloseSparkWindow()) return false;
+        try { ChatVM.SaveNow(); }
+        catch (Exception ex) { CommandErrorSink.Report("InstallUpdate.SaveChat", ex); }
+        return true;
+    }
+
+    /// <summary>The questions are answered and the restart starts now: from here MainWindow.OnClosing and the DGX
+    /// Spark window close without asking (the app goes down through Application.Shutdown, which ignores Cancel, or
+    /// Environment.Exit). Tabs dirty at this moment were answered "Discard"; any other dirty tab on the way out was
+    /// edited after the answer and is saved.</summary>
+    private void BeginRestartForUpdate()
+    {
+        _updateAnsweredDirtyTabs = CodeEditorVM.Tabs.Where(t => t.IsDirty).ToHashSet();
+        IsRestartingForUpdate = true;
+        _sparkWindow?.SetClosingForRestart(true);
+    }
+
+    /// <summary>The update did not restart the app (download failed, apply/install failed, a question was cancelled):
+    /// the answers were for a close that didn't happen — the next close asks again.</summary>
+    private void EndRestartForUpdate()
+    {
+        IsRestartingForUpdate = false;
+        _updateAnsweredDirtyTabs = null;
+        _sparkWindow?.ResetCloseConfirmation();
+    }
+
+    /// <summary>
+    /// The app is closing for an update restart (MainWindow.OnClosing while <see cref="IsRestartingForUpdate"/>, and
+    /// right before a Velopack apply, which exits without any Closing event). Nothing is asked: save the chat, and
+    /// save the editor tabs edited after the questions were answered — a tab the user chose to discard stays discarded.
+    /// A file that changed on disk meanwhile is not overwritten.
+    /// </summary>
+    public void SaveForUpdateRestart()
+    {
+        try { ChatVM.SaveNow(); }
+        catch (Exception ex) { CommandErrorSink.Report("UpdateRestart.SaveChat", ex); }
+        if (_workspace == null) return;
+        var answered = _updateAnsweredDirtyTabs ?? [];
+        foreach (var tab in CodeEditorVM.Tabs.Where(t => t.IsDirty && !answered.Contains(t)).ToList())
+        {
+            try
+            {
+                var r = _workspace.SaveTabChecked(tab, overwriteExternalChanges: false);
+                if (r.Outcome != SaveOutcome.Saved)
+                    _log?.Warn("Update", $"restart: {tab.FullPath} was edited after the update questions but not saved ({r.Outcome}) {r.Error}");
+            }
+            catch (Exception ex) { _log?.Warn("Update", $"restart: saving {tab.FullPath} failed", ex); }
+        }
+    }
+
     private async Task InstallUpdate()
     {
         if (IsUpdating) return;
+        if (!_autoUpdate.HasStagedUpdate && _pendingUpdate == null) return;   // nothing to install — nothing to ask
+
+        if (!ConfirmRestartForUpdate())
+        {
+            EndRestartForUpdate();
+            IsUpdating = false;
+            return;
+        }
 
         // Velopack first: when a package is already staged this is an atomic swap
         // plus a restart, not a download. The call does not return.
@@ -825,9 +945,12 @@ public class MainViewModel : ViewModelBase
             IsUpdating = true;
             UpdateMessage = string.Format(L("update.applying"), _autoUpdate.StagedVersion);
             UpdateProgress = 100;
+            BeginRestartForUpdate();
             await Task.Delay(600);
+            SaveForUpdateRestart();   // Velopack exits without a Closing event — a tab edited in these 600 ms is saved here
             if (!_autoUpdate.VelopackApplyAndRestart())
             {
+                EndRestartForUpdate();
                 UpdateMessage = L("update.applyFailed");
                 IsUpdating = false;
             }
@@ -836,24 +959,50 @@ public class MainViewModel : ViewModelBase
 
         if (_pendingUpdate == null) return;
 
+        // Tabs still dirty now were answered "Discard". The download below takes a while — a tab edited during it
+        // gets asked about again before the restart.
+        var answeredDirty = CodeEditorVM.Tabs.Where(t => t.IsDirty).ToHashSet();
+        string messageBefore = UpdateMessage;
+
         IsUpdating = true;
         UpdateMessage = L("update.downloading");
         UpdateProgress = 0;
 
         string? zipPath = await _autoUpdate.DownloadUpdateAsync(_pendingUpdate);
-        if (zipPath != null)
+        if (zipPath == null)
         {
-            UpdateMessage = L("update.installing");
-            UpdateProgress = 100;
-
-            // Small delay to show the message
-            await Task.Delay(1000);
-
-            _autoUpdate.InstallAndRestart(zipPath);
-        }
-        else
-        {
+            EndRestartForUpdate();
             UpdateMessage = L("update.downloadFailed");
+            IsUpdating = false;
+            return;
+        }
+
+        // A download started on the Spark during the update's download isn't covered by the first answer — asked here.
+        bool editedMeanwhile = CodeEditorVM.Tabs.Any(t => t.IsDirty && !answeredDirty.Contains(t));
+        if ((editedMeanwhile && !CodeEditorVM.ConfirmCloseAll()) || !ConfirmCloseSparkWindow())
+        {
+            EndRestartForUpdate();
+            UpdateMessage = messageBefore;
+            UpdateProgress = 0;
+            IsUpdating = false;
+            return;
+        }
+        try { ChatVM.SaveNow(); }
+        catch (Exception ex) { CommandErrorSink.Report("InstallUpdate.SaveChat", ex); }
+
+        BeginRestartForUpdate();
+        UpdateMessage = L("update.installing");
+        UpdateProgress = 100;
+
+        // Small delay to show the message
+        await Task.Delay(1000);
+
+        // Extracts, starts the installer script and shuts the app down (MainWindow.OnClosing only saves now).
+        if (!_autoUpdate.InstallAndRestart(zipPath))
+        {
+            EndRestartForUpdate();
+            UpdateMessage = L("update.installFailed");
+            UpdateProgress = 0;
             IsUpdating = false;
         }
     }

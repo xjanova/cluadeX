@@ -14,6 +14,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     private readonly LocalizationService _loc;
     private readonly DebugLogService? _log;
     private readonly Action<string, McpServerState> _stateHandler;
+    private readonly Action _configHandler;
 
     /// <summary>
     /// Per-server log text, owned here rather than by the list item. Items used to be rebuilt on every state
@@ -96,7 +97,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         SaveEditCommand = new RelayCommand(SaveEdit, () => HasSel() && IsEditing);
         CancelEditCommand = new RelayCommand(CancelEdit, () => IsEditing);
         ShowAddFormCommand = new RelayCommand(() => IsAddingServer = !IsAddingServer);
-        RefreshCommand = new RelayCommand(Refresh);
+        RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         StartAllCommand = new AsyncRelayCommand(StartAllServers);
 
         _mcpManager.OnServerLog += OnServerLog;
@@ -114,6 +115,12 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         _stateHandler = (name, _) =>
             Application.Current?.Dispatcher.BeginInvoke(new Action(() => OnServerStateChanged(name)));
         _mcpManager.OnServerStateChanged += _stateHandler;
+        // This page is built BEFORE the startup load (MainViewModel takes it at construction), so what its
+        // constructor sees is the empty pre-load state: a file that then fails to load has to reach the status
+        // line through this, or the notice "mcp_servers.json could not be read" never shows. Same when the
+        // BrainX window's Connect reads the file again and it works.
+        _configHandler = () => OnUi(OnConfigStatusChanged);
+        _mcpManager.ConfigStatusChanged += _configHandler;
         _loc.LanguageChanged += () =>
         {
             OnPropertyChanged(nameof(PageTitle));
@@ -125,16 +132,84 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         StatusText = Summary();
     }
 
-    // ─── Sync (in place) ───
-
-    private string Summary() => _loc.T("mcpm.summary", Servers.Count, _mcpManager.GetRunningServers().Count);
-
-    /// <summary>Explicit Refresh: re-sync and show the summary line.</summary>
-    private void Refresh()
+    /// <summary>Run on the UI thread: inline when already there (keeps the order of status lines a page action
+    /// sets), BeginInvoke from any other thread (never a blocking Invoke — see the state subscription above).
+    /// With no WPF application at all (a headless test host) there is no UI thread to wait for: inline.</summary>
+    private static void OnUi(Action action)
     {
+        var d = Application.Current?.Dispatcher;
+        if (d == null || d.CheckAccess()) action();
+        else d.BeginInvoke(action);
+    }
+
+    private void OnConfigStatusChanged()
+    {
+        if (_disposed) return;
         SyncServers();
         RefreshSelectedTools();
         StatusText = Summary();
+    }
+
+    // ─── Sync (in place) ───
+
+    /// <summary>The page's status line at rest: a config-file problem first (it is why the list may be empty
+    /// or short, and why edits aren't saved), then servers a re-read brought back that are not started yet,
+    /// otherwise the server count.</summary>
+    private string Summary()
+    {
+        if (_mcpManager.ConfigLoadFailed) return _loc.T("mcp.config.unreadable");
+        var unreadable = _mcpManager.UnreadableServers;
+        if (unreadable.Count > 0) return _loc.T("mcp.config.someUnreadable", string.Join(", ", unreadable));
+        var waiting = _mcpManager.ServersAwaitingStartAfterReload;
+        if (waiting.Count > 0) return _loc.T("mcp.config.reloadedNotStarted", string.Join(", ", waiting));
+        return _loc.T("mcpm.summary", Servers.Count, _mcpManager.GetRunningServers().Count);
+    }
+
+    /// <summary>A save that returned false: "can't be read" and "can't be written" are different fixes.</summary>
+    private string SaveFailedText()
+        => _mcpManager.LastConfigWriteProblem == McpServerManager.ConfigWriteProblem.Unreadable
+            ? _loc.T("mcp.config.unreadable")
+            : _loc.T("mcp.config.saveFailed");
+
+    /// <summary>
+    /// mcp_servers.json could not be read: say so instead of changing anything. Every edit on this page is
+    /// checked against this first, so nothing is changed in memory that could not be saved.
+    /// </summary>
+    private bool RefuseWhileConfigUnreadable()
+    {
+        if (!_mcpManager.ConfigLoadFailed) return false;
+        StatusText = _loc.T("mcp.config.unreadable");
+        return true;
+    }
+
+    /// <summary>
+    /// Explicit Refresh. When the file — or an entry in it — could not be read before, read it again (the user
+    /// may have fixed it), and when that works do what startup would have done: start the enabled servers it
+    /// never got to and register an installed BrainX that was skipped. Then re-sync and show the summary.
+    /// The command's body; public so the contract harness can await it.
+    /// </summary>
+    public async Task RefreshAsync()
+    {
+        bool reloaded = false;
+        if (_mcpManager.ConfigLoadFailed || _mcpManager.UnreadableServers.Count > 0
+            || _mcpManager.ServersAwaitingStartAfterReload.Count > 0)
+        {
+            StatusText = _loc.T("mcp.config.rereading");
+            try { reloaded = await _mcpManager.RecoverConfigAsync(); }
+            catch (Exception ex)
+            {
+                _log?.Error("MCP", "Refresh: reading mcp_servers.json again threw", ex);
+            }
+        }
+        if (_disposed) return;
+        SyncServers();
+        RefreshSelectedTools();
+        string summary = Summary();
+        StatusText = reloaded && !_mcpManager.ConfigLoadFailed && _mcpManager.UnreadableServers.Count == 0
+                     && _mcpManager.ServersAwaitingStartAfterReload.Count == 0
+            ? _loc.T("mcp.config.reloaded", Servers.Count, _mcpManager.GetRunningServers().Count)
+            : summary;
+        CommandManager.InvalidateRequerySuggested();
     }
 
     /// <summary>
@@ -300,9 +375,11 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         string name = NewServerName.Trim();
         string command = NewServerCommand.Trim();
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(command)) return;
+        if (RefuseWhileConfigUnreadable()) return;
 
         // Adding under an existing name used to silently replace that server's command, args and env.
-        if (_mcpManager.Configs.ContainsKey(name))
+        // An entry in the file that couldn't be read counts too — saving over it would destroy it.
+        if (_mcpManager.IsServerNameTaken(name))
         {
             StatusText = _loc.T("mcpm.nameTaken", name);
             return;
@@ -318,7 +395,8 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         };
 
         _mcpManager.SetConfig(name, config);
-        _mcpManager.SaveConfig();
+        // Only this server: the other entries on disk stay exactly as they are now, outside edits included.
+        bool saved = _mcpManager.SaveConfig(name);
 
         NewServerName = "";
         NewServerCommand = "";
@@ -327,7 +405,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
 
         SyncServers();
         SelectedServer = Servers.FirstOrDefault(s => s.Name == name);
-        StatusText = _loc.T("mcpm.added", name);
+        StatusText = saved ? _loc.T("mcpm.added", name) : SaveFailedText();
     }
 
     private async Task RemoveServer()
@@ -335,6 +413,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         var item = SelectedServer;
         if (item == null) return;
         string name = item.Name;
+        if (RefuseWhileConfigUnreadable()) return;
 
         // The server's env block usually holds API keys the user pasted once — removal loses them for good.
         var answer = MessageBox.Show(_loc.T("mcpm.removeConfirm", name), "CluadeX",
@@ -347,11 +426,14 @@ public class McpServersViewModel : ViewModelBase, IDisposable
                 await _mcpManager.StopServerAsync(name);
 
             _mcpManager.RemoveConfig(name);
-            _mcpManager.SaveConfig();
+            bool saved = _mcpManager.SaveConfig(name);   // writes this removal and nothing else
+            // A brain the user removed by hand stays removed: without this the startup check found BrainX
+            // installed-but-unlisted on the next launch and put it straight back.
+            if (McpServerManager.LooksLikeBrain(name)) _mcpManager.SetBrainAutoConnectDeclined(true);
             _logBuffers.Remove(name);
             IsEditing = false;
             SyncServers();
-            StatusText = _loc.T("mcpm.removed", name);
+            StatusText = saved ? _loc.T("mcpm.removed", name) : SaveFailedText();
         }
         catch (Exception ex)
         {
@@ -370,13 +452,15 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     {
         var item = SelectedServer;
         if (item == null) return;
+        if (RefuseWhileConfigUnreadable()) return;
         if (!_mcpManager.Configs.TryGetValue(item.Name, out var config)) return;
 
         config.Enabled = !config.Enabled;
-        _mcpManager.SaveConfig();
+        bool saved = _mcpManager.SaveConfig(item.Name);
         item.Enabled = config.Enabled;
         ApplyState(item);
-        StatusText = _loc.T(config.Enabled ? "mcpm.enabledMsg" : "mcpm.disabledMsg", item.Name);
+        StatusText = !saved ? SaveFailedText()
+            : _loc.T(config.Enabled ? "mcpm.enabledMsg" : "mcpm.disabledMsg", item.Name);
     }
 
     // ─── Edit ───
@@ -392,6 +476,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
     {
         var item = SelectedServer;
         if (item == null) return;
+        if (RefuseWhileConfigUnreadable()) return;
         var config = item.ToConfig();
         if (string.IsNullOrWhiteSpace(config.Command))
         {
@@ -399,12 +484,13 @@ public class McpServersViewModel : ViewModelBase, IDisposable
             return;
         }
         _mcpManager.SetConfig(item.Name, config);
-        _mcpManager.SaveConfig();
+        bool saved = _mcpManager.SaveConfig(item.Name);
         item.LoadFrom(config);
         IsEditing = false;
-        StatusText = _mcpManager.IsServerRunning(item.Name)
-            ? _loc.T("mcpm.savedRestart", item.Name)
-            : _loc.T("mcpm.saved", item.Name);
+        StatusText = !saved ? SaveFailedText()
+            : _mcpManager.IsServerRunning(item.Name)
+                ? _loc.T("mcpm.savedRestart", item.Name)
+                : _loc.T("mcpm.saved", item.Name);
     }
 
     private void CancelEdit()
@@ -455,5 +541,6 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         _mcpManager.OnServerLog -= OnServerLog;
         _mcpManager.OnToolsChanged -= OnToolsChanged;
         _mcpManager.OnServerStateChanged -= _stateHandler;
+        _mcpManager.ConfigStatusChanged -= _configHandler;
     }
 }

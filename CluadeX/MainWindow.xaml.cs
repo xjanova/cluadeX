@@ -73,15 +73,30 @@ public partial class MainWindow : Window
         Title = kind == CluadeX.Services.AutoUpdateService.BuildKind.Installed
             ? $"CluadeX {chip} — AI Coding Assistant"
             : $"CluadeX {chip}";
-
-        // Keyboard shortcut: Ctrl+N = New Chat
-        InputBindings.Add(new KeyBinding(viewModel.ChatVM.NewSessionCommand, Key.N, ModifierKeys.Control));
+        // Keyboard shortcuts (Ctrl+N = new chat and show it, …) live in MainWindow.xaml's InputBindings only — a
+        // second binding added here took precedence and pointed Ctrl+N at a different command.
     }
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // An update restart is closing the app (Application.Shutdown — Cancel would be ignored). Its questions were
+        // answered before it started: nothing is asked again; the chat and any tab edited since are saved.
+        if (_viewModel.IsRestartingForUpdate)
+        {
+            _viewModel.SaveForUpdateRestart();
+            return;
+        }
+
         // Unsaved editor tabs: Save all / Discard / Cancel. Cancel (or a failed save) keeps the app open.
         if (!_viewModel.CodeEditorVM.ConfirmCloseAll())
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        // A model still downloading onto the DGX Spark stops when its window closes with this one — ask first.
+        // Asked after the editor (saving there is harmless if this answer keeps the app open).
+        if (!_viewModel.ConfirmCloseSparkWindow())
         {
             e.Cancel = true;
             return;

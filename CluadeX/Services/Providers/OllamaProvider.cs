@@ -23,7 +23,12 @@ public class OllamaProvider : ApiProviderBase
     public long LastTotalDurationNs { get; private set; }
     public long LastEvalDurationNs { get; private set; }
 
-    public OllamaProvider(SettingsService settingsService) : base(settingsService) { }
+    private readonly DebugLogService? _log;
+
+    public OllamaProvider(SettingsService settingsService, DebugLogService? log = null) : base(settingsService)
+    {
+        _log = log;
+    }
 
     private string GetBaseUrl()
     {
@@ -31,16 +36,82 @@ public class OllamaProvider : ApiProviderBase
         return config.BaseUrl?.TrimEnd('/') ?? DefaultBaseUrl;
     }
 
+    private static string L(string key, params object[] args) =>
+        args.Length == 0 ? LocalizedResources.Instance[key] : string.Format(LocalizedResources.Instance[key], args);
+
+    /// <summary>How long the model list (/api/tags — answered at once by a running Ollama) may take. The shared
+    /// HttpClient waits 5 minutes, which is for generation, not for "is anything there".</summary>
+    private static readonly TimeSpan TagsTimeout = TimeSpan.FromSeconds(10);
+
+    private enum TagsFailure { None, Unreachable, HttpError, Timeout, BadReply }
+
+    /// <summary>One GET /api/tags. <c>Models</c> is null when the list didn't come, and <c>Failure</c> says why;
+    /// a 2xx with an empty list is a success. Only the caller's own cancel escapes.</summary>
+    private async Task<(List<string>? Models, TagsFailure Failure, int Status)> FetchTagsAsync(string baseUrl, CancellationToken ct)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(TagsTimeout);
+        try
+        {
+            using var response = await _httpClient.GetAsync($"{baseUrl}/api/tags", limit.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                _log?.Warn("Ollama", $"{baseUrl}/api/tags answered HTTP {(int)response.StatusCode}");
+                return (null, TagsFailure.HttpError, (int)response.StatusCode);
+            }
+
+            var json = await response.Content.ReadAsStringAsync(limit.Token);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
+            {
+                _log?.Warn("Ollama", $"{baseUrl}/api/tags did not answer with a model list");
+                return (null, TagsFailure.BadReply, (int)response.StatusCode);
+            }
+
+            var names = new List<string>();
+            foreach (var model in models.EnumerateArray())
+                if (model.ValueKind == JsonValueKind.Object && model.TryGetProperty("name", out var name)
+                    && name.ValueKind == JsonValueKind.String && name.GetString() is { Length: > 0 } modelName)
+                    names.Add(modelName);
+            return (names, TagsFailure.None, (int)response.StatusCode);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException ex)
+        {
+            _log?.Warn("Ollama", $"{baseUrl}/api/tags: no answer within {TagsTimeout.TotalSeconds:0} s", ex);
+            return (null, TagsFailure.Timeout, 0);
+        }
+        catch (JsonException ex)
+        {
+            _log?.Warn("Ollama", $"{baseUrl}/api/tags: the reply isn't JSON", ex);
+            return (null, TagsFailure.BadReply, 0);
+        }
+        catch (Exception ex)
+        {
+            _log?.Warn("Ollama", $"{baseUrl}/api/tags failed", ex);
+            return (null, TagsFailure.Unreachable, 0);
+        }
+    }
+
+    private static string Describe(TagsFailure failure, string baseUrl, int status) => failure switch
+    {
+        TagsFailure.HttpError => L("ollama.httpError", baseUrl, status),
+        TagsFailure.Timeout => L("ollama.timeout", baseUrl),
+        TagsFailure.BadReply => L("ollama.badReply", baseUrl),
+        _ => L("ollama.unreachable", baseUrl),
+    };
+
     public override async Task InitializeAsync(CancellationToken ct = default)
     {
         SetLoading(true);
         try
         {
+            // Ready only when Ollama actually answered with its model list (see TestConnectionAsync) — a server that
+            // is down or answering errors leaves the provider not ready, so a switch onto it can be rolled back.
             var (success, msg) = await TestConnectionAsync(ct);
             IsReady = success;
-            SetStatus(success
-                ? $"Ollama ready ({GetConfig().EffectiveModelId ?? "llama3"})"
-                : msg);
+            SetStatus(success ? L("ollama.ready", GetConfig().EffectiveModelId ?? "llama3") : msg);
         }
         finally
         {
@@ -48,42 +119,15 @@ public class OllamaProvider : ApiProviderBase
         }
     }
 
+    /// <summary>The models Ollama has — or, when it can't be asked, the last list it gave (the failure is raised as a
+    /// localized error; the details are in the Debug Log).</summary>
     public async Task<List<string>> GetAvailableModelsAsync(CancellationToken ct = default)
     {
         string baseUrl = GetBaseUrl();
-
-        try
-        {
-            using var response = await _httpClient.GetAsync($"{baseUrl}/api/tags", ct);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            var newModels = new List<string>();
-            if (doc.RootElement.TryGetProperty("models", out var models))
-            {
-                foreach (var model in models.EnumerateArray())
-                {
-                    if (model.TryGetProperty("name", out var name))
-                    {
-                        var modelName = name.GetString();
-                        if (!string.IsNullOrEmpty(modelName))
-                            newModels.Add(modelName);
-                    }
-                }
-            }
-
-            // Thread-safe swap
-            _availableModels = newModels;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (HttpRequestException ex)
-        {
-            RaiseError($"Cannot reach Ollama at {baseUrl}: {ex.Message}");
-        }
-        catch { /* Ollama might not be running */ }
-
+        var (models, failure, status) = await FetchTagsAsync(baseUrl, ct);
+        if (models != null) _availableModels = models;   // thread-safe swap
+        else if (failure is TagsFailure.Unreachable or TagsFailure.HttpError or TagsFailure.Timeout)
+            RaiseError(Describe(failure, baseUrl, status));
         return _availableModels.ToList();
     }
 
@@ -406,26 +450,22 @@ public class OllamaProvider : ApiProviderBase
         return result;
     }
 
+    /// <summary>
+    /// Ask Ollama for its model list (/api/tags) directly. Success only when it answers 2xx with the list — an empty
+    /// list is still a success (Ollama runs, nothing pulled yet). A request that fails, times out, answers an error
+    /// status or isn't the list is a failure: this used to go through <see cref="GetAvailableModelsAsync"/>, which
+    /// swallows the failure and returns the cached list, so a dead server reported "connected" and the provider was
+    /// never not-ready.
+    /// </summary>
     public override async Task<(bool Success, string Message)> TestConnectionAsync(CancellationToken ct = default)
     {
         string baseUrl = GetBaseUrl();
-
-        try
-        {
-            var models = await GetAvailableModelsAsync(ct);
-            if (models.Count == 0)
-                return (true, $"Ollama connected at {baseUrl} but no models found. Run 'ollama pull <model>' first.");
-            return (true, $"Ollama connected — {models.Count} model(s) available");
-        }
-        catch (HttpRequestException)
-        {
-            return (false, $"Cannot reach Ollama at {baseUrl}. Is Ollama running? Start it with 'ollama serve'.");
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            return (false, $"Connection failed: {ex.Message}");
-        }
+        var (models, failure, status) = await FetchTagsAsync(baseUrl, ct);
+        if (models == null) return (false, Describe(failure, baseUrl, status));
+        _availableModels = models;
+        return models.Count == 0
+            ? (true, L("ollama.noModels", baseUrl))
+            : (true, L("ollama.connected", baseUrl, models.Count));
     }
 
     private static string TruncateError(string error) =>

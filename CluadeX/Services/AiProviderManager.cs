@@ -52,7 +52,7 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.OpenAI] = new OpenAiProvider(settingsService, costTracker);
         _providers[AiProviderType.Anthropic] = new AnthropicProvider(settingsService, costTracker);
         _providers[AiProviderType.Gemini] = new GeminiProvider(settingsService, costTracker);
-        _providers[AiProviderType.Ollama] = new OllamaProvider(settingsService);
+        _providers[AiProviderType.Ollama] = new OllamaProvider(settingsService, debugLog);
         // The installed Claude Code CLI as a model — needs the working directory so
         // the CLI runs in (and reads) the user's actual project.
         _providers[AiProviderType.ClaudeDev] = new ClaudeDevProvider(settingsService, fileSystemService);
