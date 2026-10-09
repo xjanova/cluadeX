@@ -30,7 +30,24 @@ public partial class App : Application
         _singleInstanceMutex = new System.Threading.Mutex(true, @"Local\CluadeX_SingleInstance", out bool isFirstInstance);
         if (!isFirstInstance)
         {
-            MessageBox.Show("CluadeX is already running — check your taskbar.\n(เปิดอยู่แล้ว — ดูที่ taskbar)",
+            // The installed app and a dev build share one data folder, so only one may run — but say which
+            // one is running, or "already running" sends the user hunting for the wrong window.
+            string other = "";
+            try
+            {
+                int me = Environment.ProcessId;
+                var running = System.Diagnostics.Process.GetProcessesByName("CluadeX").FirstOrDefault(p => p.Id != me);
+                string? path = running?.MainModule?.FileName;
+                if (path != null)
+                {
+                    bool installed = path.Contains(@"\AppData\Local\CluadeX\current\", StringComparison.OrdinalIgnoreCase);
+                    other = (installed ? "\n\nRunning: installed CluadeX / ตัวที่ติดตั้ง" : "\n\nRunning: DEV build / ตัว dev")
+                            + $"\n{path}";
+                }
+            }
+            catch { /* best effort */ }
+            MessageBox.Show("CluadeX is already running — close it first; two copies can't share the same chats and settings."
+                + "\n(CluadeX เปิดอยู่แล้ว — ปิดตัวนั้นก่อน เพราะสองตัวใช้แชทและการตั้งค่าชุดเดียวกัน)" + other,
                 "CluadeX", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;

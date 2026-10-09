@@ -207,10 +207,20 @@ public class SettingsViewModel : ViewModelBase
                 try { _settingsService.UpdateSettings(s => s.Language = lang); }
                 finally { _saving = false; }
                 OnPropertyChanged(nameof(ApiKeyLinkText));
+                OnPropertyChanged(nameof(LicenseStatus));
             }
         }
     }
     public List<string> UiLanguageOptions { get; } = ["English", "ไทย"];
+
+    /// <summary>Cloud providers (Anthropic / OpenAI / Gemini) need an activated license; the key itself is
+    /// entered on the Features page (it handles moving a license from another device).</summary>
+    public bool IsLicenseActivated => _activationService.IsActivated;
+    public string LicenseStatus => _activationService.IsActivated
+        ? string.Format(T("settings.licenseActive"), _activationService.TierDisplayName)
+        : T("settings.licenseInactive");
+    /// <summary>Show the "enter license key" shortcut on the provider card: a cloud provider without a license.</summary>
+    public bool ShowLicenseShortcut => NeedsApiKey && !_activationService.IsActivated;
 
     public bool IsPortable => _settingsService.IsPortable;
     public string DataRootDisplay => _settingsService.DataRoot;
@@ -266,6 +276,7 @@ public class SettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(CanRefreshModels));
                 OnPropertyChanged(nameof(IsLocalSelected));
                 OnPropertyChanged(nameof(CanTestConnection));
+                OnPropertyChanged(nameof(ShowLicenseShortcut));
                 OnPropertyChanged(nameof(ApiKeyLink));
                 OnPropertyChanged(nameof(ApiKeyLinkText));
             }
@@ -392,6 +403,12 @@ public class SettingsViewModel : ViewModelBase
             if (_saving) return;
             App.Current?.Dispatcher.BeginInvoke(() => { if (_dirty.Count == 0) LoadPageValues(_settingsService.Settings); });
         };
+        _activationService.ActivationChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            OnPropertyChanged(nameof(IsLicenseActivated));
+            OnPropertyChanged(nameof(LicenseStatus));
+            OnPropertyChanged(nameof(ShowLicenseShortcut));
+        });
         _providerManager.OnProviderChanged += _ =>
             App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(ActiveProviderName)));
 

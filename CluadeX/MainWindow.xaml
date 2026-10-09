@@ -834,6 +834,7 @@
                                                  Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
                                 <Button Grid.Column="2" Command="{Binding InstallUpdateCommand}"
+                                        Visibility="{Binding CanInstallUpdate, Converter={StaticResource BoolVis}}"
                                         Padding="14,6" Margin="8,0" FontSize="11" Cursor="Hand"
                                         Background="{StaticResource NeonRewindGradient}" BorderThickness="0"
                                         Foreground="White">

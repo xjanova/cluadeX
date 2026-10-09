@@ -179,6 +179,9 @@ public class MainViewModel : ViewModelBase
     public double UpdateProgress { get => _updateProgress; set => SetProperty(ref _updateProgress, value); }
     public string UpdateProgressText { get => _updateProgressText; set => SetProperty(ref _updateProgressText, value); }
     public bool IsUpdating { get => _isUpdating; set => SetProperty(ref _isUpdating, value); }
+    private bool _canInstallUpdate;
+    /// <summary>The banner's Install button: only when a release was actually found (or staged).</summary>
+    public bool CanInstallUpdate { get => _canInstallUpdate; set => SetProperty(ref _canInstallUpdate, value); }
     public string AppVersion => $"v{AutoUpdateService.CurrentVersion}";
 
     public ChatViewModel ChatVM { get; }
@@ -377,7 +380,7 @@ public class MainViewModel : ViewModelBase
         PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
         DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
-        CheckUpdateCommand = new AsyncRelayCommand(CheckForUpdate);
+        CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
 
         // Wire up auto-update events
         _autoUpdate.OnDownloadProgress += (percent, status) =>
@@ -391,7 +394,7 @@ public class MainViewModel : ViewModelBase
         _ = Task.Run(async () =>
         {
             await Task.Delay(5000);
-            await CheckForUpdate();
+            await CheckForUpdate(manual: false);
         });
 
         _providerManager.OnStatusChanged += status =>
@@ -513,8 +516,19 @@ public class MainViewModel : ViewModelBase
 
     // ─── Auto-Update ───
 
-    private async Task CheckForUpdate()
+    /// <param name="manual">Clicked by the user (bell / Settings). A manual check always answers — "you're up
+    /// to date" included — so the button never looks dead; the silent startup check only speaks up when
+    /// there is something to install.</param>
+    private async Task CheckForUpdate(bool manual)
     {
+        string L(string key) => _loc.T(key);
+        if (manual)
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                UpdateMessage = L("update.checking");
+                CanInstallUpdate = false;
+                ShowUpdateBar = true;
+            });
         try
         {
             // Whatever we are running now is the verdict on the last apply attempt.
@@ -530,6 +544,7 @@ public class MainViewModel : ViewModelBase
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     UpdateMessage = "⚠ " + paused;
+                    CanInstallUpdate = false;
                     ShowUpdateBar = true;
                     IsUpdating = false;
                 });
@@ -542,6 +557,7 @@ public class MainViewModel : ViewModelBase
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     UpdateMessage = $"🔔 Update v{staged} downloaded — click Install to restart and apply.";
+                    CanInstallUpdate = true;
                     ShowUpdateBar = true;
                     IsUpdating = false;
                 });
@@ -559,12 +575,33 @@ public class MainViewModel : ViewModelBase
                     UpdateMessage = _autoUpdate.CanSelfUpdate
                         ? $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}"
                         : $"🔔 v{info.NewVersion} is out (running v{info.CurrentVersion}) — this is a portable build, install via Setup.exe once to enable self-update.";
+                    CanInstallUpdate = true;
                     ShowUpdateBar = true;
                     IsUpdating = false;
                 });
             }
+            else if (manual && paused == null)
+            {
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = string.Format(L("update.upToDate"), AutoUpdateService.CurrentVersion)
+                        + (_autoUpdate.CanSelfUpdate ? "" : " " + L("update.devBuildNote"));
+                    CanInstallUpdate = false;
+                    ShowUpdateBar = true;
+                });
+            }
         }
-        catch { /* silently fail */ }
+        catch
+        {
+            // The startup probe stays quiet; a check the user asked for must say it failed.
+            if (manual)
+                App.Current?.Dispatcher.Invoke(() =>
+                {
+                    UpdateMessage = L("update.checkFailed");
+                    CanInstallUpdate = false;
+                    ShowUpdateBar = true;
+                });
+        }
     }
 
     private async Task InstallUpdate()

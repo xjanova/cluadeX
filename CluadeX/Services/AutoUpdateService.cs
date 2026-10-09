@@ -65,8 +65,48 @@ public class AutoUpdateService
         UpdateAttemptLog.Load(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex"));
 
-    private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(
-        new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false));
+    /// <summary>Set to a folder (or http URL) holding a Velopack release feed — the Releases/ output of
+    /// <c>vpk pack</c> — to test a self-update end to end before anything is published to GitHub.</summary>
+    public const string FeedOverrideVariable = "CLUADEX_UPDATE_FEED";
+
+    private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(CreateSource());
+
+    private Velopack.Sources.IUpdateSource CreateSource()
+    {
+        string? feed = Environment.GetEnvironmentVariable(FeedOverrideVariable)?.Trim();
+        if (!string.IsNullOrEmpty(feed))
+        {
+            _log?.Warn("Update", $"update feed overridden by {FeedOverrideVariable}: {feed}");
+            return feed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? new Velopack.Sources.SimpleWebSource(feed)
+                : new Velopack.Sources.SimpleFileSource(new DirectoryInfo(feed));
+        }
+        return new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false);
+    }
+
+    /// <summary>How this copy was started — shown on the title bar so the installed app and a dev build
+    /// sitting side by side are never mistaken for each other.</summary>
+    public enum BuildKind { Installed, Portable, Dev }
+
+    /// <summary>Installed = Velopack layout (…\current\CluadeX.exe with sq.version, Update.exe one level
+    /// up); Portable = a portable marker next to the exe; anything else is a developer build.</summary>
+    public static BuildKind CurrentBuildKind
+    {
+        get
+        {
+            try
+            {
+                string exeDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+                string? parent = Path.GetDirectoryName(exeDir);
+                if (File.Exists(Path.Combine(exeDir, "sq.version")) && parent != null && File.Exists(Path.Combine(parent, "Update.exe")))
+                    return BuildKind.Installed;
+                if (File.Exists(Path.Combine(exeDir, "portable")) || File.Exists(Path.Combine(exeDir, "portable.txt")))
+                    return BuildKind.Portable;
+            }
+            catch { /* fall through */ }
+            return BuildKind.Dev;
+        }
+    }
 
     /// <summary>True when this build can actually self-update (installed via Setup.exe).</summary>
     public bool CanSelfUpdate

@@ -57,8 +57,22 @@ public partial class MainWindow : Window
         string chip = $"v{version}";
         if (commit.Length > 0 && commit != "local") chip += $" · {commit}";
         if (buildTime.Length > 0) chip += $" · {buildTime}";
+
+        // A dev build and the installed app look identical otherwise — and both can sit on the desktop.
+        var kind = CluadeX.Services.AutoUpdateService.CurrentBuildKind;
+        if (kind != CluadeX.Services.AutoUpdateService.BuildKind.Installed)
+        {
+            string tag = kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev ? "DEV" : "PORTABLE";
+            chip = $"{tag} · {chip}";
+            VersionChip.Foreground = kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev
+                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x6E, 0x6E))
+                : VersionChip.Foreground;
+            VersionChip.FontWeight = FontWeights.Bold;
+        }
         VersionChip.Text = chip;
-        Title = $"CluadeX {chip} — AI Coding Assistant";
+        Title = kind == CluadeX.Services.AutoUpdateService.BuildKind.Installed
+            ? $"CluadeX {chip} — AI Coding Assistant"
+            : $"CluadeX {chip}";
 
         // Keyboard shortcut: Ctrl+N = New Chat
         InputBindings.Add(new KeyBinding(viewModel.ChatVM.NewSessionCommand, Key.N, ModifierKeys.Control));
