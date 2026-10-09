@@ -12,6 +12,15 @@ public class LocalizationService
     public string CurrentLanguage => _currentLanguage;
     public event Action? LanguageChanged;
 
+    // Keys added per area live in their own files (Services/Localization/*.cs) so work on separate pages
+    // never edits the same giant dictionary. A key defined twice keeps the first definition.
+    static LocalizationService()
+    {
+        foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys })
+            foreach (var (key, values) in extra)
+                Translations.TryAdd(key, values);
+    }
+
     // ─── Translation Dictionaries ────────────────────────────────
 
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
