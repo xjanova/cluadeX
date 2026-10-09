@@ -479,6 +479,19 @@ internal static class Program
         Check("cap", "brain recall tools survive the cut", capped.Any(t => t.Name.EndsWith("__brain_search")) && capped.Any(t => t.Name.EndsWith("__brain_get_note")), "");
         Check("cap", "original order kept", capped.Select(t => many.IndexOf(t)).SequenceEqual(capped.Select(t => many.IndexOf(t)).OrderBy(i => i)), "");
 
+        Section("offline · MCP tool risk (what may run without asking)");
+        foreach (var (tool, want) in new (string, AgentToolService.McpRisk)[]
+        {
+            ("brain_search", AgentToolService.McpRisk.Read), ("brain_get_note", AgentToolService.McpRisk.Read),
+            ("brain_create_note", AgentToolService.McpRisk.MemoryWrite), ("brain_remember", AgentToolService.McpRisk.MemoryWrite),
+            ("ssh_run", AgentToolService.McpRisk.Risky), ("agent_send", AgentToolService.McpRisk.Risky),
+            ("task_handoff", AgentToolService.McpRisk.Risky), ("brain_apply_audit_fix", AgentToolService.McpRisk.Risky),
+            ("unity__execute_code", AgentToolService.McpRisk.Risky), ("roblox__execute_luau", AgentToolService.McpRisk.Risky),
+            ("unity__find_gameobjects", AgentToolService.McpRisk.Read), ("roblox__script_read", AgentToolService.McpRisk.Read),
+            ("some_unknown_tool", AgentToolService.McpRisk.Risky),
+        })
+            Check("mcp-risk", $"{tool} → {want}", AgentToolService.ClassifyMcpTool(tool) == want, $"got {AgentToolService.ClassifyMcpTool(tool)}");
+
         await MockProviders.Run(Check, Section);
         await MockLicense.Run(Check, Section);
 

@@ -101,6 +101,26 @@ public class PermissionService
     /// Supports Claude Code-style patterns: "run_command", "Bash(npm:*)", "read_file(/src/**)".
     /// </summary>
     public PermAction CheckPermission(string resource, string scope, string? toolName)
+        => FindRule(resource, scope, toolName) ?? PermAction.Ask;
+
+    /// <summary>A rule written for one of these exact tool names (no wildcard tool rule counts). Lets the
+    /// user allow or deny one specific risky tool on purpose while a blanket "*" rule never does.</summary>
+    public PermAction? FindNamedToolRule(params string[] toolNames)
+    {
+        List<PermissionRule> rules;
+        lock (_gate) rules = Rules.ToList();
+        foreach (var rule in rules)
+        {
+            if (string.IsNullOrEmpty(rule.ToolName) || rule.ToolName.Contains('*') || rule.ToolName.Contains('(')) continue;
+            if (toolNames.Any(n => string.Equals(n, rule.ToolName, StringComparison.OrdinalIgnoreCase)))
+                return rule.Action;
+        }
+        return null;
+    }
+
+    /// <summary>The action of the first rule that matches, or null when no rule does — so a caller can
+    /// apply its own default (e.g. reading inside the open project) without overriding a user rule.</summary>
+    public PermAction? FindRule(string resource, string scope, string? toolName)
     {
         // Snapshot under the lock so a concurrent AddRule/RemoveRule (UI thread) can't throw
         // "collection was modified" while the agent thread is iterating.
@@ -133,7 +153,7 @@ public class PermissionService
                 return rule.Action;
         }
 
-        return PermAction.Ask;
+        return null;
     }
 
     /// <summary>
