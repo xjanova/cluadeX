@@ -261,6 +261,10 @@ public class AppSettings
     // Language / Localization
     public string Language { get; set; } = "en"; // "en" or "th"
 
+    /// <summary>The theme the app starts in and the picker shows as in use: "Classic", "Midnight" or "NeonCyber"
+    /// (Services.ThemeIds). Anything else starts Midnight and is rewritten — see ThemeService.ApplySaved.</summary>
+    public string Theme { get; set; } = "Midnight";
+
     // Activation Key — unlocks advanced features
     public string? ActivationKey { get; set; }
     /// <summary>Server license_type of <see cref="ActivationKey"/> (demo, yearly, lifetime, …).</summary>

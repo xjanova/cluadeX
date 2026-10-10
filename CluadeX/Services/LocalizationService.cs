@@ -18,7 +18,8 @@ public class LocalizationService
     {
         foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys,
                                       Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
-                                      Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys })
+                                      Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys,
+                                      Localization.ThemeKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

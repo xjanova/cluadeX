@@ -11,8 +11,8 @@
         MinHeight="600" MinWidth="900"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
-        Background="{StaticResource NeonBg0Brush}"
-        FontFamily="{StaticResource NeonUiFont}">
+        Background="{DynamicResource Bg.Window}"
+        FontFamily="{DynamicResource Font.Ui.Display}">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="42"
@@ -109,55 +109,28 @@
     <Border x:Name="RootBorder">
         <Grid x:Name="RootGrid">
             <!-- Nebula background — same physics as TimeMachine but app-wide -->
-            <Rectangle IsHitTestVisible="False">
-                <Rectangle.Fill>
-                    <RadialGradientBrush Center="0.5,0" RadiusX="0.8" RadiusY="0.55">
-                        <GradientStop Color="#22A672FF" Offset="0"/>
-                        <GradientStop Color="#06071A" Offset="1"/>
-                    </RadialGradientBrush>
-                </Rectangle.Fill>
-            </Rectangle>
+            <Rectangle IsHitTestVisible="False" Fill="{DynamicResource Backdrop.Nebula}"/>
 
             <!-- 4 ambient depth orbs (subtle parallax) -->
             <Grid IsHitTestVisible="False" ClipToBounds="True" Panel.ZIndex="0">
                 <Ellipse Width="220" Height="220" Margin="-40,80,0,0"
-                         HorizontalAlignment="Left" VerticalAlignment="Top" Opacity="0.16">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#A672FF" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Left" VerticalAlignment="Top" Opacity="0.16"
+                         Fill="{DynamicResource Backdrop.Orb.1}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
                 <Ellipse Width="180" Height="180" Margin="0,80,80,0"
-                         HorizontalAlignment="Right" VerticalAlignment="Top" Opacity="0.14">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#4CDFFF" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Right" VerticalAlignment="Top" Opacity="0.14"
+                         Fill="{DynamicResource Backdrop.Orb.2}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
                 <Ellipse Width="240" Height="240" Margin="0,0,180,40"
-                         HorizontalAlignment="Right" VerticalAlignment="Bottom" Opacity="0.13">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#FF5EC4" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Right" VerticalAlignment="Bottom" Opacity="0.13"
+                         Fill="{DynamicResource Backdrop.Orb.3}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
                 <Ellipse Width="160" Height="160" Margin="180,0,0,40"
-                         HorizontalAlignment="Left" VerticalAlignment="Bottom" Opacity="0.12">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#5CFFB0" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Left" VerticalAlignment="Bottom" Opacity="0.12"
+                         Fill="{DynamicResource Backdrop.Orb.4}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
             </Grid>
@@ -172,13 +145,8 @@
                 <!-- ════════════════════════════════════════════════════════ -->
                 <!--                       TITLE BAR (42)                     -->
                 <!-- ════════════════════════════════════════════════════════ -->
-                <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#EB141838" Offset="0"/>
-                            <GradientStop Color="#D90A0C22" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
+                <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource TitleBar.Border}"
+                        Background="{DynamicResource TitleBar.Background}">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>  <!-- (unused: the cosmetic mac traffic lights were removed) -->
@@ -199,33 +167,33 @@
 
                         <!-- Project + branch -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                            <TextBlock Text="CluadeX" FontFamily="{StaticResource NeonMonoFont}"
+                            <TextBlock Text="CluadeX" FontFamily="{DynamicResource Font.Mono.Display}"
                                        FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                                       Foreground="{DynamicResource TitleBar.Foreground}" VerticalAlignment="Center"/>
                             <!-- Version chip: vX.Y.Z · commit · build time — set in code-behind from the
                                  assembly InformationalVersion, so which build is running is never a guess. -->
                             <Border Margin="8,0,0,0" Padding="6,2" CornerRadius="4" VerticalAlignment="Center"
-                                    Background="#3311152E" BorderThickness="1"
-                                    BorderBrush="{StaticResource NeonLineBrush}">
+                                    Background="{DynamicResource TitleBar.Chip.Background}" BorderThickness="1"
+                                    BorderBrush="{DynamicResource Border.Subtle}">
                                 <TextBlock x:Name="VersionChip" Text="v?"
-                                           FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                           Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                           Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center"
                                            ToolTip="{services:Loc nav.versionTip}"/>
                             </Border>
                             <TextBlock Text="›" Margin="8,0" FontSize="11"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                         Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}}">
                                 <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                           FontSize="11" Foreground="{StaticResource NeonCyanBrush}"
+                                           FontSize="11" Foreground="{DynamicResource Accent.1}"
                                            VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{StaticResource NeonMonoFont}"
-                                           FontSize="11" Foreground="{StaticResource NeonCyanBrush}"
+                                <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                           FontSize="11" Foreground="{DynamicResource Accent.1}"
                                            VerticalAlignment="Center" MaxWidth="140" TextTrimming="CharacterEllipsis"
                                            ToolTip="{Binding ChatVM.WorkingDirectory}"/>
                             </StackPanel>
-                            <TextBlock Text="{services:Loc nav.noProject}" FontFamily="{StaticResource NeonMonoFont}"
-                                       FontSize="11" Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"
+                            <TextBlock Text="{services:Loc nav.noProject}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                       FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"
                                        FontStyle="Italic"
                                        Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                         </StackPanel>
@@ -249,9 +217,9 @@
                                     <TextBlock Text="{services:Loc nav.searchPlaceholder}" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"/>
                                 </DockPanel>
-                                <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="3" Padding="6,1">
-                                    <TextBlock Text="Ctrl K" FontFamily="{StaticResource NeonMonoFont}"
-                                               FontSize="9" Foreground="{StaticResource NeonInk2Brush}"/>
+                                <Border Grid.Column="1" Background="{DynamicResource TitleBar.Search.Kbd.Background}" CornerRadius="3" Padding="6,1">
+                                    <TextBlock Text="Ctrl K" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" Foreground="{DynamicResource Text.Muted}"/>
                                 </Border>
                             </Grid>
                         </Button>
@@ -267,25 +235,21 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" CornerRadius="13" Padding="10,0" BorderThickness="1"
-                                            Background="#1476D16B" BorderBrush="#9976D16B">
+                                            Background="{DynamicResource Spark.Chip.Background}" BorderBrush="{DynamicResource Spark.Chip.Border}">
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="#5576D16B"
+                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
                                                      VerticalAlignment="Center"/>
                                             <TextBlock x:Name="txt" Text="{services:Loc spark.chip}" FontSize="11.5" FontWeight="SemiBold"
-                                                       Foreground="#9BE26B" VerticalAlignment="Center"/>
+                                                       Foreground="{DynamicResource Spark.Chip.Foreground}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#3376D16B"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource Spark.Chip.Hover.Background}"/>
                                         </Trigger>
                                         <DataTrigger Binding="{Binding IsSparkActive}" Value="True">
-                                            <Setter TargetName="dot" Property="Fill" Value="#9BE26B"/>
-                                            <Setter TargetName="bd" Property="Effect">
-                                                <Setter.Value>
-                                                    <DropShadowEffect Color="#76D16B" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
-                                                </Setter.Value>
-                                            </Setter>
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                            <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.Spark.Active}"/>
                                         </DataTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -297,25 +261,16 @@
                                 ToolTip="{Binding LicenseChipTip}">
                             <Button.Style>
                                 <Style TargetType="Button">
-                                    <Setter Property="Foreground" Value="White"/>
-                                    <Setter Property="BorderBrush" Value="#99FFFFFF"/>
-                                    <Setter Property="Background">
-                                        <Setter.Value>
-                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                <GradientStop Color="#FF5CA8" Offset="0"/>
-                                                <GradientStop Color="#A672FF" Offset="1"/>
-                                            </LinearGradientBrush>
-                                        </Setter.Value>
-                                    </Setter>
+                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Border}"/>
+                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="Button">
                                                 <Border x:Name="bd" Background="{TemplateBinding Background}"
                                                         BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                                                        CornerRadius="13" Padding="12,0">
-                                                    <Border.Effect>
-                                                        <DropShadowEffect Color="#FF5CA8" BlurRadius="14" ShadowDepth="0" Opacity="0.75"/>
-                                                    </Border.Effect>
+                                                        CornerRadius="13" Padding="12,0"
+                                                        Effect="{DynamicResource Glow.License.Chip}">
                                                     <ContentPresenter VerticalAlignment="Center"/>
                                                 </Border>
                                                 <ControlTemplate.Triggers>
@@ -323,11 +278,7 @@
                                                         <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
                                                     </Trigger>
                                                     <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
-                                                        <Setter TargetName="bd" Property="Effect">
-                                                            <Setter.Value>
-                                                                <DropShadowEffect Color="#FFD166" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
-                                                            </Setter.Value>
-                                                        </Setter>
+                                                        <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.License.Trial}"/>
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
                                                         <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
@@ -338,20 +289,13 @@
                                     </Setter>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
-                                            <Setter Property="Foreground" Value="#1E1E2E"/>
-                                            <Setter Property="Background">
-                                                <Setter.Value>
-                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                        <GradientStop Color="#FFD166" Offset="0"/>
-                                                        <GradientStop Color="#FFA94D" Offset="1"/>
-                                                    </LinearGradientBrush>
-                                                </Setter.Value>
-                                            </Setter>
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Trial.Foreground}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Trial.Background}"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
-                                            <Setter Property="BorderBrush" Value="#665CFFB0"/>
-                                            <Setter Property="Background" Value="#1F5CFFB0"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Active.Foreground}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Active.Border}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Active.Background}"/>
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
@@ -360,7 +304,7 @@
                                 <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                            VerticalAlignment="Center" Margin="0,0,6,0"/>
                                 <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
-                                           FontFamily="{StaticResource MainFont}" VerticalAlignment="Center"/>
+                                           FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                         </StackPanel>
@@ -375,12 +319,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
                                         <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{StaticResource NeonCyanBrush}"
+                                                   FontSize="13" Foreground="{DynamicResource Accent.1}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -397,12 +341,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
                                         <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{StaticResource NeonMintBrush}"
+                                                   FontSize="13" Foreground="{DynamicResource Status.Success}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -419,12 +363,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="6">
                                         <TextBlock Text="&#xEA8F;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{StaticResource NeonInk2Brush}"
+                                                   FontSize="13" Foreground="{DynamicResource Text.Muted}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -434,22 +378,15 @@
                         <!-- Buddy chip -->
                         <Border Grid.Column="9" Margin="10,6,12,6" Padding="4,0,12,0"
                                 CornerRadius="14"
-                                Background="#7028326E"
-                                BorderBrush="#665CFFB0" BorderThickness="1"
+                                Background="{DynamicResource Buddy.Chip.Background}"
+                                BorderBrush="{DynamicResource Buddy.Chip.Border}" BorderThickness="1"
                                 Cursor="Hand" MouseLeftButtonDown="Buddy_Pet"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
+                                Effect="{DynamicResource Glow.Buddy.Chip}"
                                 Visibility="{Binding IsBuddyEnabled, Converter={StaticResource BoolVis}}">
-                            <Border.Effect>
-                                <DropShadowEffect Color="#5CFFB0" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
-                            </Border.Effect>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border Width="22" Height="22" CornerRadius="11" Margin="0,0,8,0">
-                                    <Border.Background>
-                                        <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                            <GradientStop Color="#5CFFB0" Offset="0"/>
-                                            <GradientStop Color="#1F8C5C" Offset="1"/>
-                                        </RadialGradientBrush>
-                                    </Border.Background>
+                                <Border Width="22" Height="22" CornerRadius="11" Margin="0,0,8,0"
+                                        Background="{DynamicResource Buddy.Avatar}">
                                     <TextBlock Text="{Binding BuddyService.CurrentBuddy.DisplayEmoji, FallbackValue=🦎}"
                                                FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
@@ -457,12 +394,12 @@
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="{Binding BuddyService.CurrentBuddy.Soul.Name, FallbackValue=Buddy}"
                                                    FontSize="11" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource NeonInk0Brush}"/>
+                                                   Foreground="{DynamicResource Text.Primary}"/>
                                         <TextBlock Text="{Binding BuddyService.CurrentBuddy.ShinyBadge, FallbackValue=''}"
                                                    FontSize="10" Margin="2,0,0,0"/>
                                     </StackPanel>
-                                    <TextBlock FontFamily="{StaticResource NeonMonoFont}"
-                                               FontSize="9" Foreground="{StaticResource NeonMintBrush}">
+                                    <TextBlock FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" Foreground="{DynamicResource Status.Success}">
                                         <Run Text="{Binding BuddyService.CurrentBuddy.Bones.Rarity, Mode=OneWay, FallbackValue=COMMON}"/>
                                     </TextBlock>
                                 </StackPanel>
@@ -493,13 +430,8 @@
                     </Grid.ColumnDefinitions>
 
                     <!-- ░░░ ACTIVITY BAR (60px) ░░░ -->
-                    <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{StaticResource NeonLineBrush}">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                <GradientStop Color="#D90C0E26" Offset="0"/>
-                                <GradientStop Color="#D906071A" Offset="1"/>
-                            </LinearGradientBrush>
-                        </Border.Background>
+                    <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource ActivityBar.Border}"
+                            Background="{DynamicResource ActivityBar.Background}">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>  <!-- Logo + divider -->
@@ -511,13 +443,8 @@
                             <StackPanel Grid.Row="0" Margin="0,12,0,8" HorizontalAlignment="Center">
                                 <Grid Width="36" Height="36">
                                     <!-- Halo with conic-gradient feel via radial -->
-                                    <Ellipse Width="48" Height="48" Margin="-6" Opacity="0.55">
-                                        <Ellipse.Fill>
-                                            <RadialGradientBrush>
-                                                <GradientStop Color="#A672FF" Offset="0"/>
-                                                <GradientStop Color="Transparent" Offset="0.7"/>
-                                            </RadialGradientBrush>
-                                        </Ellipse.Fill>
+                                    <Ellipse Width="48" Height="48" Margin="-6" Opacity="0.55"
+                                             Fill="{DynamicResource ActivityBar.Logo.Halo}">
                                         <Ellipse.Effect><BlurEffect Radius="8"/></Ellipse.Effect>
                                         <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
                                         <Ellipse.RenderTransform><RotateTransform x:Name="LogoHalo"/></Ellipse.RenderTransform>
@@ -534,12 +461,12 @@
                                         </Ellipse.Triggers>
                                     </Ellipse>
                                     <Border Width="36" Height="36" CornerRadius="18"
-                                            Background="{StaticResource NeonBg2Brush}">
+                                            Background="{DynamicResource ActivityBar.Logo.Background}">
                                         <Image Source="Assets/logo.png" Width="32" Height="32"
                                                RenderOptions.BitmapScalingMode="HighQuality"/>
                                     </Border>
                                 </Grid>
-                                <Border Width="28" Height="1" Margin="0,10,0,0" Background="{StaticResource NeonLineHiBrush}"/>
+                                <Border Width="28" Height="1" Margin="0,10,0,0" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
                             </StackPanel>
 
                             <!-- Activity icons -->
@@ -604,7 +531,7 @@
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.hexTip}" AutomationProperties.Name="Hex Editor"/>
 
-                                <Border Width="28" Height="1" Margin="16,8" Background="{StaticResource NeonLineBrush}"/>
+                                <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
 
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE74C;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Plugins, Mode=OneWay}"
@@ -645,8 +572,8 @@
                     </Border>
 
                     <!-- ░░░ CONTEXTUAL PANEL (240px when Chat is selected) ░░░ -->
-                    <Border Grid.Column="1" BorderThickness="0,0,1,0" BorderBrush="{StaticResource NeonLineBrush}"
-                            Background="#A60A0C22">
+                    <Border Grid.Column="1" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Sidebar.Border}"
+                            Background="{DynamicResource Sidebar.Background}">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Setter Property="Width" Value="0"/>
@@ -673,16 +600,16 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                         <TextBlock Text="{services:Loc sidebar.chatHistory}" FontSize="10" FontWeight="Bold"
-                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   Foreground="{DynamicResource Text.Faint}"
                                                    VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <ToggleButton Grid.Column="1" Width="22" Height="22"
                                                   IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
                                                   Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                  Foreground="{StaticResource NeonInk3Brush}"
+                                                  Foreground="{DynamicResource Text.Faint}"
                                                   ToolTip="{services:Loc nav.allProjectsTip}">
                                         <ToggleButton.Template>
                                             <ControlTemplate TargetType="ToggleButton">
@@ -693,10 +620,10 @@
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Foreground" Value="{StaticResource NeonMagentaBrush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
                                                     </Trigger>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bg" Property="Background" Value="#1AFFFFFF"/>
+                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -707,8 +634,8 @@
 
                             <!-- Search box -->
                             <Border Grid.Row="1" Margin="14,2,14,10" Padding="8,0"
-                                    Background="#7011152E"
-                                    BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
+                                    Background="{DynamicResource Surface.Input}"
+                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
                                     CornerRadius="6">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -717,12 +644,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                               Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                               Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Grid.Column="1"
                                              Text="{Binding ChatVM.HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"
                                              Background="Transparent" BorderThickness="0"
-                                             Foreground="{StaticResource NeonInk0Brush}"
-                                             CaretBrush="{StaticResource NeonCyanBrush}"
+                                             Foreground="{DynamicResource Text.Primary}"
+                                             CaretBrush="{DynamicResource Accent.1}"
                                              FontSize="11" Padding="0,7" VerticalContentAlignment="Center"/>
                                     <Button Grid.Column="2" Width="20" Height="20"
                                             Background="Transparent" BorderThickness="0" Cursor="Hand"
@@ -730,7 +657,7 @@
                                             Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
                                             ToolTip="{services:Loc sidebar.clearSearch}">
                                         <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   Foreground="{DynamicResource Text.Faint}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Button>
                                 </Grid>
@@ -756,7 +683,7 @@
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding Id}"
                                                         Background="Transparent" BorderThickness="0"
-                                                        Foreground="{StaticResource NeonInk1Brush}"
+                                                        Foreground="{DynamicResource Text.Secondary}"
                                                         HorizontalContentAlignment="Stretch" Cursor="Hand"
                                                         Margin="0,1" Padding="10,7">
                                                     <Button.Template>
@@ -768,8 +695,8 @@
                                                             </Border>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="bd" Property="Background" Value="#15FFFFFF"/>
-                                                                    <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonLineHiBrush}"/>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
+                                                                    <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
                                                                 </Trigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
@@ -781,19 +708,19 @@
                                                         </Grid.ColumnDefinitions>
                                                         <StackPanel>
                                                             <TextBlock Text="{Binding Title}" FontSize="12"
-                                                                       Foreground="{StaticResource NeonInk1Brush}"
+                                                                       Foreground="{DynamicResource Text.Secondary}"
                                                                        TextTrimming="CharacterEllipsis" MaxWidth="170"/>
                                                             <TextBlock Text="{Binding UpdatedAt, StringFormat='{}{0:MMM dd · HH:mm}'}"
                                                                        FontSize="9" Margin="0,2,0,0"
-                                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                                       Foreground="{StaticResource NeonInk3Brush}"/>
+                                                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                                                       Foreground="{DynamicResource Text.Faint}"/>
                                                         </StackPanel>
                                                         <Button Grid.Column="1" Width="20" Height="20"
                                                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                                                 Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                 CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
                                                             <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                                       Foreground="{DynamicResource Text.Faint}"
                                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Button>
                                                     </Grid>
@@ -806,7 +733,7 @@
                                     <TextBlock Text="{services:Loc sidebar.noConversations}"
                                                FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
                                                HorizontalAlignment="Center" Margin="20,30"
-                                               Foreground="{StaticResource NeonInk3Brush}">
+                                               Foreground="{DynamicResource Text.Faint}">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
                                                 <Setter Property="Visibility" Value="Collapsed"/>
@@ -849,7 +776,7 @@
                                                             </Border>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="bd" Property="Background" Value="#15FFFFFF"/>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
                                                                 </Trigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
@@ -861,16 +788,16 @@
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
                                                             <TextBlock Text="{Binding SessionTitle}" FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{StaticResource NeonVioletBrush}"
+                                                                       Foreground="{DynamicResource Accent.2}"
                                                                        TextTrimming="CharacterEllipsis" MaxWidth="160"/>
-                                                            <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="8" Padding="6,1">
+                                                            <Border Grid.Column="1" Background="{DynamicResource Surface.Badge}" CornerRadius="8" Padding="6,1">
                                                                 <TextBlock Text="{Binding MatchCount, StringFormat='{}{0} hits'}"
-                                                                           FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                                                           Foreground="{StaticResource NeonInk2Brush}"/>
+                                                                           FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
+                                                                           Foreground="{DynamicResource Text.Muted}"/>
                                                             </Border>
                                                         </Grid>
                                                         <TextBlock Text="{Binding Snippet}" FontSize="10" Margin="0,3,0,0"
-                                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                                   Foreground="{DynamicResource Text.Faint}"
                                                                    TextTrimming="CharacterEllipsis" MaxHeight="32" TextWrapping="Wrap"/>
                                                     </StackPanel>
                                                 </Button>
@@ -891,14 +818,9 @@
 
                         <!-- Update banner -->
                         <Border Grid.Row="0" Padding="14,8" BorderThickness="0,0,0,1"
-                                BorderBrush="{StaticResource NeonLineBrush}"
+                                BorderBrush="{DynamicResource Border.Subtle}"
+                                Background="{DynamicResource Banner.Background}"
                                 Visibility="{Binding ShowUpdateBar, Converter={StaticResource BoolVis}}">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#1A6366F1" Offset="0"/>
-                                    <GradientStop Color="#1A06B6D4" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -907,19 +829,19 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets" FontSize="16"
-                                           Foreground="{StaticResource NeonCyanBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                           Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding UpdateMessage}" FontSize="12"
-                                               Foreground="{StaticResource NeonInk0Brush}"/>
+                                               Foreground="{DynamicResource Text.Primary}"/>
                                     <ProgressBar Value="{Binding UpdateProgress}" Maximum="100" Height="4" Margin="0,4,0,0"
-                                                 Foreground="{StaticResource NeonCyanBrush}"
+                                                 Foreground="{DynamicResource Accent.1}"
                                                  Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
                                 <Button Grid.Column="2" Command="{Binding InstallUpdateCommand}"
                                         Visibility="{Binding CanInstallUpdate, Converter={StaticResource BoolVis}}"
                                         Padding="14,6" Margin="8,0" FontSize="11" Cursor="Hand"
-                                        Background="{StaticResource NeonRewindGradient}" BorderThickness="0"
-                                        Foreground="White">
+                                        Background="{DynamicResource Banner.Button.Background}" BorderThickness="0"
+                                        Foreground="{DynamicResource Text.OnAccent}">
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
                                             <Border Background="{TemplateBinding Background}" CornerRadius="6"
@@ -934,7 +856,7 @@
                                         Background="Transparent" BorderThickness="0" Cursor="Hand"
                                         ToolTip="{services:Loc nav.dismissTip}">
                                     <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="{StaticResource NeonInk3Brush}"
+                                               Foreground="{DynamicResource Text.Faint}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Button>
                             </Grid>
@@ -948,13 +870,8 @@
                 <!-- ════════════════════════════════════════════════════════ -->
                 <!--                     STATUS BAR (34)                      -->
                 <!-- ════════════════════════════════════════════════════════ -->
-                <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{StaticResource NeonLineBrush}">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#EB0C0E26" Offset="0"/>
-                            <GradientStop Color="#F206071A" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
+                <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StatusBar.Border}"
+                        Background="{DynamicResource StatusBar.Background}">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>  <!-- Connected -->
@@ -968,36 +885,33 @@
 
                         <!-- Connected pip -->
                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                            <Ellipse Width="8" Height="8" Margin="0,0,6,0">
+                            <Ellipse Width="8" Height="8" Margin="0,0,6,0" Effect="{DynamicResource Glow.StatusBar.Pip}">
                                 <Ellipse.Style>
                                     <Style TargetType="Ellipse">
-                                        <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
+                                        <Setter Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsModelLoaded}" Value="True">
-                                                <Setter Property="Fill" Value="{StaticResource NeonMintBrush}"/>
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Success}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
-                                                <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Warning}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </Ellipse.Style>
-                                <Ellipse.Effect>
-                                    <DropShadowEffect Color="#5CFFB0" BlurRadius="10" ShadowDepth="0" Opacity="0.8"/>
-                                </Ellipse.Effect>
                             </Ellipse>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10" VerticalAlignment="Center">
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10" VerticalAlignment="Center">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="{StaticResource NeonRedBrush}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
                                         <Setter Property="Text" Value="OFFLINE"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsModelLoaded}" Value="True">
-                                                <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
                                                 <Setter Property="Text" Value="CONNECTED"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
-                                                <Setter Property="Foreground" Value="{StaticResource NeonAmberBrush}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
                                                 <Setter Property="Text" Value="LOADING…"/>
                                             </DataTrigger>
                                         </Style.Triggers>
@@ -1013,56 +927,53 @@
                             <StackPanel.ToolTip>
                                 <StackPanel Margin="4">
                                     <TextBlock Text="{services:Loc nav.gpuMonitor}" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                               Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="{services:Loc nav.utilization}"/><Run Text="{Binding LiveGpuStats.GpuUtilization, Mode=OneWay}"/><Run Text="%"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="{services:Loc nav.temperature}"/><Run Text="{Binding LiveGpuStats.TemperatureC, Mode=OneWay}"/><Run Text="°C"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="VRAM: "/><Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
                                     </TextBlock>
                                 </StackPanel>
                             </StackPanel.ToolTip>
                             <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center">
+                                       Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center">
                                 <Run Text="{Binding GpuUsageDisplay, Mode=OneWay}"/>
                             </TextBlock>
                             <!-- Rolling sparkline of last ~48s of GPU utilization -->
                             <Canvas Width="100" Height="18" Margin="8,0,0,0" ClipToBounds="True"
-                                    Background="#221E2056">
+                                    Background="{DynamicResource Chart.Background}">
                                 <Polyline Points="{Binding GpuSparklinePoints}"
-                                          Stroke="{StaticResource NeonVioletBrush}"
+                                          Stroke="{DynamicResource Chart.Line}"
+                                          Effect="{DynamicResource Glow.Chart.Line}"
                                           StrokeThickness="1.4"
                                           StrokeLineJoin="Round"
                                           StrokeStartLineCap="Round"
-                                          StrokeEndLineCap="Round">
-                                    <Polyline.Effect>
-                                        <DropShadowEffect Color="#A672FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
-                                    </Polyline.Effect>
-                                </Polyline>
+                                          StrokeEndLineCap="Round"/>
                             </Canvas>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"
                                        Margin="8,0,0,0">
                                 <Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
                             </TextBlock>
                             <Border Margin="6,0,0,0" Padding="5,1" CornerRadius="3"
                                     Background="{Binding GpuTempBrush}">
                                 <TextBlock Text="{Binding GpuTempDisplay}" FontSize="9" FontWeight="Bold"
-                                           Foreground="#1E1E2E"/>
+                                           Foreground="{DynamicResource Text.Inverse}"/>
                             </Border>
                         </StackPanel>
 
                         <!-- Model name -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
                             <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center"
                                        MaxWidth="160" TextTrimming="CharacterEllipsis"
                                        Text="{Binding ChatVM.LoadedModelName, FallbackValue='no model'}"/>
                         </StackPanel>
@@ -1070,15 +981,15 @@
                         <!-- Tokens/sec + Cost -->
                         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock Text="{Binding ChatVM.LastTurnStats, FallbackValue='—'}"
-                                       FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center"/>
-                            <TextBlock Text=" · " FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                                       FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"/>
+                            <TextBlock Text=" · " FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                             <TextBlock Text="{Binding ChatVM.CostText, FallbackValue='$0.00'}"
-                                       FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center"/>
+                                       FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center"/>
                         </StackPanel>
 
                         <!-- Two MCP chips, opposite directions:
@@ -1088,7 +999,7 @@
 
                         <!-- BrainX link chip — click: the MCP page when connected, the BrainX window (install / connect) otherwise -->
                         <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6" Cursor="Hand"
-                                Background="#1AA672FF" BorderBrush="#55A672FF" BorderThickness="1"
+                                Background="{DynamicResource StatusBar.Brain.Background}" BorderBrush="{DynamicResource StatusBar.Brain.Border}" BorderThickness="1"
                                 Visibility="{Binding McpServers, Converter={StaticResource NullToCollapsed}}">
                             <Border.InputBindings>
                                 <MouseBinding MouseAction="LeftClick" Command="{Binding OpenBrainCommand}"/>
@@ -1096,16 +1007,16 @@
                             <Border.ToolTip>
                                 <StackPanel Margin="4" MaxWidth="420">
                                     <TextBlock Text="BrainX" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                               Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="Server: "/><Run Text="{Binding McpServers.BrainServerName, Mode=OneWay, FallbackValue='(not configured)'}"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="State: "/><Run Text="{Binding McpServers.BrainState, Mode=OneWay}"/>
                                         <Run Text=" · Tools: "/><Run Text="{Binding McpServers.BrainToolCount, Mode=OneWay}"/>
                                     </TextBlock>
                                     <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"
-                                               Foreground="{StaticResource NeonRedBrush}"
+                                               Foreground="{DynamicResource Status.Danger}"
                                                Text="{Binding McpServers.BrainLastError, Mode=OneWay}"
                                                Visibility="{Binding McpServers.BrainLastError, Converter={StaticResource NullToCollapsed}}"/>
                                 </StackPanel>
@@ -1116,29 +1027,29 @@
                                         <Style TargetType="Ellipse">
                                             <!-- Default red: anything that is not provably Ready is a
                                                  brain the agent cannot call. -->
-                                            <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
+                                            <Setter Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                             <Style.Triggers>
                                                 <!-- Amber while starting OR while the supervisor is between two
                                                      respawn attempts (an attempt just failed, the next is due): the
                                                      same IsBrainStarting the BrainX window asks, so the chip no
                                                      longer goes red in the gap while the window says "starting". -->
                                                 <DataTrigger Binding="{Binding McpServers.IsBrainStarting}" Value="True">
-                                                    <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
+                                                    <Setter Property="Fill" Value="{DynamicResource Status.Warning}"/>
                                                 </DataTrigger>
                                                 <!-- Last, so it wins: bound to the BOOL, not the enum, because a
                                                      bool trigger is the pattern already proven in this file. If the
                                                      enum triggers above ever failed to match, the dot degrades to
                                                      red — still honest, never a false green. -->
                                                 <DataTrigger Binding="{Binding McpServers.IsBrainConnected}" Value="True">
-                                                    <Setter Property="Fill" Value="#A672FF"/>
+                                                    <Setter Property="Fill" Value="{DynamicResource StatusBar.Brain.Connected}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Ellipse.Style>
                                 </Ellipse>
                                 <TextBlock Text="🧠" FontSize="10" Margin="0,0,4,0"/>
-                                <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk1Brush}"
+                                <TextBlock FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Secondary}"
                                            Text="{Binding McpServers.BrainStatusText, Mode=OneWay, FallbackValue='brain · —'}"/>
                             </StackPanel>
                         </Border>
@@ -1148,7 +1059,7 @@
 
                         <!-- LED context bar (5 segments) -->
                         <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
                                        Foreground="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource CtxBrush}}">
                                 <Run Text="CTX "/>
                                 <Run Text="{Binding ChatVM.ContextUsagePercent, Mode=OneWay, StringFormat={}{0:F0}}"/>
@@ -1158,15 +1069,11 @@
                             <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
+                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=0}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonMintBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#5CFFB0" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
+                                                <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Success}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -1175,15 +1082,11 @@
                             <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
+                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=25}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonCyanBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#4CDFFF" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
+                                                <Setter Property="Background" Value="{DynamicResource Accent.1}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Accent}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -1192,15 +1095,11 @@
                             <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
+                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=50}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonAmberBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#FFD166" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
+                                                <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Warning}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -1209,15 +1108,11 @@
                             <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
+                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=75}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonPinkBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#FF8AA6" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
+                                                <Setter Property="Background" Value="{DynamicResource Accent.4}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Caution}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -1226,15 +1121,11 @@
                             <Border Width="22" Height="8" CornerRadius="2">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
+                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=90}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonRedBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#FF6E6E" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
+                                                <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Danger}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -1247,28 +1138,17 @@
             </Grid>
 
             <!-- ════════ MODEL LOADING OVERLAY ════════ -->
-            <Border Panel.ZIndex="999"
+            <Border Panel.ZIndex="999" Background="{DynamicResource Bg.Overlay}"
                     Visibility="{Binding IsModelLoading, Converter={StaticResource BoolVis}}">
-                <Border.Background>
-                    <SolidColorBrush Color="#06071A" Opacity="0.85"/>
-                </Border.Background>
                 <Border HorizontalAlignment="Center" VerticalAlignment="Center"
-                        Background="{StaticResource NeonPanelFill}"
-                        BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                        CornerRadius="16" Padding="40,36" MinWidth="380">
-                    <Border.Effect>
-                        <DropShadowEffect Color="#A672FF" BlurRadius="40" ShadowDepth="0" Opacity="0.5"/>
-                    </Border.Effect>
+                        Background="{DynamicResource Surface.Panel}"
+                        BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                        CornerRadius="16" Padding="40,36" MinWidth="380"
+                        Effect="{DynamicResource Glow.Loading.Card}">
                     <StackPanel HorizontalAlignment="Center">
                         <Border Width="64" Height="64" CornerRadius="32" Margin="0,0,0,20"
-                                HorizontalAlignment="Center">
-                            <Border.Background>
-                                <RadialGradientBrush>
-                                    <GradientStop Color="#A672FF" Offset="0"/>
-                                    <GradientStop Color="#4CDFFF" Offset="1"/>
-                                </RadialGradientBrush>
-                            </Border.Background>
-                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="White"
+                                HorizontalAlignment="Center" Background="{DynamicResource Loading.Orb}">
+                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource Text.OnAccent}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
                                        RenderTransformOrigin="0.5,0.5">
                                 <TextBlock.RenderTransform><RotateTransform x:Name="SpinTransform" Angle="0"/></TextBlock.RenderTransform>
@@ -1293,17 +1173,17 @@
                                 </TextBlock.Style>
                             </TextBlock>
                         </Border>
-                        <TextBlock Text="{services:Loc nav.loadingModel}" Foreground="{StaticResource NeonInk0Brush}"
+                        <TextBlock Text="{services:Loc nav.loadingModel}" Foreground="{DynamicResource Text.Primary}"
                                    FontSize="20" FontWeight="Bold"
                                    HorizontalAlignment="Center" Margin="0,0,0,8"/>
-                        <TextBlock Text="{Binding ModelStatus}" Foreground="{StaticResource NeonInk1Brush}"
+                        <TextBlock Text="{Binding ModelStatus}" Foreground="{DynamicResource Text.Secondary}"
                                    FontSize="13" HorizontalAlignment="Center" TextAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="320" Margin="0,0,0,16"/>
                         <ProgressBar IsIndeterminate="True" Height="4" Width="260"
-                                     Foreground="{StaticResource NeonVioletBrush}"
+                                     Foreground="{DynamicResource Accent.2}"
                                      HorizontalAlignment="Center"/>
                         <TextBlock Text="{services:Loc nav.loadingHint}"
-                                   Foreground="{StaticResource NeonInk2Brush}" FontSize="11"
+                                   Foreground="{DynamicResource Text.Muted}" FontSize="11"
                                    HorizontalAlignment="Center" Margin="0,14,0,0"/>
                     </StackPanel>
                 </Border>
@@ -1312,7 +1192,7 @@
             <!-- ═══ COMMAND PALETTE (Ctrl+K) ═══
                  Overlays everything. Pages + skills + project files, subsequence-matched. -->
             <Grid Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="900"
-                  Background="#B4000000"
+                  Background="{DynamicResource Bg.Scrim}"
                   Visibility="{Binding Palette.IsOpen, Converter={StaticResource BoolVis}}">
                 <!-- click the backdrop to dismiss -->
                 <Button Command="{Binding ClosePaletteCommand}" Background="Transparent"
@@ -1323,11 +1203,9 @@
                 </Button>
 
                 <Border Width="640" MaxHeight="460" VerticalAlignment="Top" Margin="0,90,0,0"
-                        Background="#F00A0C22" CornerRadius="12" BorderThickness="1"
-                        BorderBrush="{StaticResource NeonLineHiBrush}">
-                    <Border.Effect>
-                        <DropShadowEffect Color="Black" BlurRadius="34" ShadowDepth="0" Opacity="0.6"/>
-                    </Border.Effect>
+                        Background="{DynamicResource Palette.Background}" CornerRadius="12" BorderThickness="1"
+                        BorderBrush="{DynamicResource Border.Default}"
+                        Effect="{DynamicResource Shadow.Palette}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -1342,18 +1220,18 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                       Foreground="{StaticResource NeonCyanBrush}"
+                                       Foreground="{DynamicResource Accent.1}"
                                        VerticalAlignment="Center" Margin="2,0,10,0"/>
                             <TextBox x:Name="PaletteBox" Grid.Column="1"
                                      Text="{Binding Palette.Query, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0"
-                                     Foreground="{StaticResource NeonInk0Brush}"
-                                     CaretBrush="{StaticResource NeonCyanBrush}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     CaretBrush="{DynamicResource Accent.1}"
                                      FontSize="16" VerticalContentAlignment="Center"
                                      PreviewKeyDown="PaletteBox_PreviewKeyDown"/>
                         </Grid>
                         <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom"
-                                Background="{StaticResource NeonLineBrush}"/>
+                                Background="{DynamicResource Border.Subtle}"/>
 
                         <!-- Results -->
                         <ListBox Grid.Row="1" x:Name="PaletteList"
@@ -1366,7 +1244,7 @@
                                 <Style TargetType="ListBoxItem">
                                     <Setter Property="Padding" Value="10,7"/>
                                     <Setter Property="Background" Value="Transparent"/>
-                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="ListBoxItem">
@@ -1377,10 +1255,10 @@
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsSelected" Value="True">
-                                                        <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
                                                     </Trigger>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -1398,19 +1276,19 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets"
                                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"
-                                                   Foreground="{StaticResource NeonInk2Brush}"/>
+                                                   Foreground="{DynamicResource Text.Muted}"/>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontSize="13"
-                                                       Foreground="{StaticResource NeonInk0Brush}"
+                                                       Foreground="{DynamicResource Text.Primary}"
                                                        TextTrimming="CharacterEllipsis"/>
                                             <TextBlock Text="{Binding Subtitle}" FontSize="10"
-                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                       Foreground="{DynamicResource Text.Faint}"
                                                        TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
                                         <Border Grid.Column="2" CornerRadius="3" Padding="6,1"
-                                                Background="#22FFFFFF" VerticalAlignment="Center">
+                                                Background="{DynamicResource Surface.Badge}" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Kind}" FontSize="9"
-                                                       FontFamily="{StaticResource NeonMonoFont}">
+                                                       FontFamily="{DynamicResource Font.Mono.Display}">
                                                 <TextBlock.Foreground>
                                                     <SolidColorBrush Color="{Binding KindColor, Converter={StaticResource HexToColor}, FallbackValue=#8388BD}"/>
                                                 </TextBlock.Foreground>
@@ -1423,14 +1301,14 @@
 
                         <!-- Footer -->
                         <Border Grid.Row="2" BorderThickness="0,1,0,0"
-                                BorderBrush="{StaticResource NeonLineBrush}" Padding="16,7">
+                                BorderBrush="{DynamicResource Border.Subtle}" Padding="16,7">
                             <Grid>
                                 <TextBlock Text="{Binding Palette.ResultSummary}" FontSize="10"
-                                           FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk3Brush}"/>
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Faint}"/>
                                 <TextBlock HorizontalAlignment="Right" FontSize="10"
-                                           FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk3Brush}"
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Faint}"
                                            Text="{services:Loc nav.paletteHint}"/>
                             </Grid>
                         </Border>

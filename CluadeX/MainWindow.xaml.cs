@@ -64,9 +64,9 @@ public partial class MainWindow : Window
         {
             string tag = kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev ? "DEV" : "PORTABLE";
             chip = $"{tag} · {chip}";
-            VersionChip.Foreground = kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev
-                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFF, 0x6E, 0x6E))
-                : VersionChip.Foreground;
+            // A dev build's chip is the theme's danger colour — a resource reference, so a theme switch recolours it.
+            if (kind == CluadeX.Services.AutoUpdateService.BuildKind.Dev)
+                VersionChip.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "Status.Danger");
             VersionChip.FontWeight = FontWeights.Bold;
         }
         VersionChip.Text = chip;

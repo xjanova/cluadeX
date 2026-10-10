@@ -15,6 +15,7 @@ public class SettingsViewModel : ViewModelBase
     private readonly MemoryService _memoryService;
     private readonly ActivationService _activationService;
     private readonly DebugLogService? _log;
+    private readonly ThemeService? _themes;
     private readonly System.Windows.Threading.DispatcherTimer _autoSaveDebounce;
 
     private string T(string key) => _localizationService.T(key);
@@ -369,7 +370,8 @@ public class SettingsViewModel : ViewModelBase
         LocalizationService localizationService,
         MemoryService memoryService,
         ActivationService activationService,
-        DebugLogService? log = null)
+        DebugLogService? log = null,
+        ThemeService? themes = null)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
@@ -378,6 +380,7 @@ public class SettingsViewModel : ViewModelBase
         _memoryService = memoryService;
         _activationService = activationService;
         _log = log;
+        _themes = themes;
 
         BrowseModelDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.modelStorageDir"), ModelDirectory); if (p != null) ModelDirectory = p; });
         BrowseTempDirCommand = new RelayCommand(() => { var p = BrowseFolder(T("settings.tempDir"), TempDirectory); if (p != null) TempDirectory = p; });
@@ -390,6 +393,7 @@ public class SettingsViewModel : ViewModelBase
         RefreshModelsCommand = new AsyncRelayCommand(RefreshModels);
         RefreshMemoriesCommand = new RelayCommand(RefreshMemories);
         DeleteMemoryCommand = new RelayCommand(DeleteSelectedMemory);
+        SelectThemeCommand = new RelayCommand<string>(SelectTheme);
 
         // Debounced auto-save, 1 s after the user's last edit — and only for user edits.
         _autoSaveDebounce = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -425,6 +429,17 @@ public class SettingsViewModel : ViewModelBase
             App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(ActiveProviderName)));
         _localizationService.LanguageChanged += () => OnPropertyChanged(nameof(SecretsNotice));
 
+        // Theme picker: one card per shipped theme; the card in use follows the theme service (a switch made
+        // anywhere — here, a future palette command — marks the right card).
+        if (_themes != null)
+        {
+            foreach (var info in _themes.Themes) ThemeOptions.Add(new ThemeOption(info));
+            RefreshThemeTexts();
+            MarkCurrentTheme();
+            _themes.ThemeChanged += _ => MarkCurrentTheme();
+            _localizationService.LanguageChanged += RefreshThemeTexts;
+        }
+
         LoadPageValues(_settingsService.Settings);
         _uiLanguage = _settingsService.Settings.Language == "th" ? "ไทย" : "English";
         _loading = true;
@@ -432,6 +447,39 @@ public class SettingsViewModel : ViewModelBase
         finally { _loading = false; }
         DetectGpuInfo();
         RefreshMemories();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    //  Appearance — theme picker (Settings › General)
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>The theme cards, in ThemeService.Themes order (empty when no ThemeService was injected).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ThemeOption> ThemeOptions { get; } = new();
+
+    /// <summary>Apply the clicked card's theme — live, remembered. An unknown id or the theme in use does nothing.</summary>
+    public ICommand SelectThemeCommand { get; }
+
+    private void SelectTheme(string? id)
+    {
+        if (_themes == null || ThemeService.Normalize(id) is not { } known) return;
+        if (known == _themes.CurrentThemeId) { MarkCurrentTheme(); return; }
+        // Apply raises ThemeChanged, which marks the card; a theme that failed to load leaves the old card marked.
+        if (!_themes.Apply(known)) MarkCurrentTheme();
+    }
+
+    private void MarkCurrentTheme()
+    {
+        string current = _themes?.CurrentThemeId ?? ThemeIds.Default;
+        foreach (var o in ThemeOptions) o.IsSelected = o.Id == current;
+    }
+
+    private void RefreshThemeTexts()
+    {
+        foreach (var o in ThemeOptions)
+        {
+            o.Name = T(o.NameKey);
+            o.Description = T(o.DescKey);
+        }
     }
 
     /// <summary>Show <paramref name="src"/>'s values on the page without marking anything as edited.

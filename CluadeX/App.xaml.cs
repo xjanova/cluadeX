@@ -88,6 +88,11 @@ public partial class App : Application
                 $"{source} failed: {ex.Message}", ex);
         };
 
+        // The saved theme goes on screen before the first window exists, so nothing is drawn twice. A theme that
+        // fails to load (or a damaged setting) leaves the default Midnight in place — never a startup failure.
+        try { _serviceProvider.GetRequiredService<ThemeService>().ApplySaved(); }
+        catch (Exception ex) { WriteCrashLog("theme", ex); }
+
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
 
@@ -743,6 +748,8 @@ public partial class App : Application
         services.AddSingleton<WebFetchService>();
         services.AddSingleton<BuddyService>();
         services.AddSingleton<LocalizationService>();
+        // ThemeService — swaps Resources/Themes/<id>.xaml in Application.Resources at runtime (Settings › General).
+        services.AddSingleton<ThemeService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
         // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
