@@ -40,7 +40,10 @@ public interface IAiProvider : IDisposable
 
     /// <summary>Chat with native tool support. Only called when SupportsNativeToolUse is true.
     /// <paramref name="onTextDelta"/> (optional) is invoked with each streamed text chunk as it arrives,
-    /// so the agent loop can render the model's reply live instead of waiting for the whole turn.</summary>
+    /// so the agent loop can render the model's reply live instead of waiting for the whole turn.
+    /// Streaming providers also invoke it with an EMPTY string for every other stream event (tool-input JSON,
+    /// thinking, pings) — a keep-alive the loop's idle timeout needs: while the model writes a large edit into a
+    /// tool call no text arrives for minutes, and a text-only reset cut those healthy turns off at 120 s.</summary>
     /// <param name="toolChoice">Constrain tool selection: null/"auto" = model's choice (default), "required" =
     /// must call some tool, "none" = no tools, or an exact tool name = must call that tool. Used by the planner
     /// and forced-retry to make a weak local model emit a constrained tool call instead of free prose.</param>

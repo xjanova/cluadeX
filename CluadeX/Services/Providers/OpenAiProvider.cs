@@ -488,7 +488,9 @@ public class OpenAiProvider : ApiProviderBase, IModelLister
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            onTextDelta?.Invoke(string.Empty);   // keep-alive for the loop's idle timeout (see IAiProvider)
+            if (!line.StartsWith("data: ")) continue;
             var data = line["data: ".Length..];
             if (data == "[DONE]") break;
 

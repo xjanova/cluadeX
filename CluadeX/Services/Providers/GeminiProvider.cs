@@ -607,7 +607,9 @@ public class GeminiProvider : ApiProviderBase, IModelLister
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            onTextDelta?.Invoke(string.Empty);   // keep-alive for the loop's idle timeout (see IAiProvider)
+            if (!line.StartsWith("data: ")) continue;
             JsonDocument doc;
             try { doc = JsonDocument.Parse(line["data: ".Length..]); } catch (JsonException) { continue; }
             using (doc)

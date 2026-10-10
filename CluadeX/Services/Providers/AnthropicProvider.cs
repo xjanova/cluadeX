@@ -696,6 +696,7 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
             if (string.IsNullOrWhiteSpace(line)) continue;
+            onTextDelta?.Invoke(string.Empty);   // keep-alive: any event proves the stream is alive (see IAiProvider)
             if (line.StartsWith("event: ")) continue;
             if (!line.StartsWith("data: ")) continue;
             var data = line["data: ".Length..];

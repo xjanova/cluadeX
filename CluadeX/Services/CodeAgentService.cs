@@ -2720,8 +2720,11 @@ public class CodeAgentService
                         outboundMessages, systemPrompt, toolSchemas,
                         onTextDelta: token =>
                         {
+                            // Every stream event resets the idle window — including the empty keep-alives the
+                            // providers send while the model writes tool-call JSON or thinks (no text for minutes
+                            // during a large edit). Only real text goes to the UI.
                             if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); // reset idle window
-                            OnAgenticStreamingToken?.Invoke(token, nativeStreamStep);
+                            if (!string.IsNullOrEmpty(token)) OnAgenticStreamingToken?.Invoke(token, nativeStreamStep);
                         },
                         ct: callCts.Token,
                         toolChoice: iterToolChoice);

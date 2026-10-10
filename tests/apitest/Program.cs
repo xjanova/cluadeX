@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -523,6 +523,7 @@ internal static class Program
             plain.Content.Select(b => b.Type).SequenceEqual(new[] { "text", "tool_use" }), string.Join(",", plain.Content.Select(b => b.Type)));
 
         await ImageWire.Run(Check, Section);
+        await StreamKeepAlive.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>
