@@ -7,6 +7,7 @@
              xmlns:views="clr-namespace:CluadeX.Views"
              xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
              xmlns:editor="clr-namespace:CluadeX.Views.Editor"
+             xmlns:preview="clr-namespace:CluadeX.Views.Preview"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
@@ -1425,6 +1426,16 @@
                 <RowDefinition Height="*"/>      <!-- Code area + minimap (or the diff editor) -->
                 <RowDefinition Height="Auto"/>   <!-- Terminal drawer -->
             </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>    <!-- Editor -->
+                <ColumnDefinition Width="Auto"/> <!-- PREVIEW split (built-in browser) -->
+            </Grid.ColumnDefinitions>
+
+            <!-- ══════════ PREVIEW split — the built-in browser the agent drives (Dev Preview) ══════════
+                 Its own column over all rows, so no WPF overlay (diff editor, banner) ever sits on top of the
+                 page's native window. The page itself belongs to BrowserService and survives page switches. -->
+            <preview:PreviewDock Grid.Column="1" Grid.Row="0" Grid.RowSpan="4"
+                                 Visibility="{Binding IsChecked, ElementName=PreviewToggle, Converter={StaticResource BoolVis}}"/>
 
             <!-- Tab strip -->
             <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}"
@@ -1433,7 +1444,37 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
+                    <!-- PREVIEW split toggle -->
+                    <!-- IsChecked lives in the app-wide PreviewViewModel: this view is rebuilt on every visit. -->
+                    <ToggleButton x:Name="PreviewToggle" Grid.Column="2" Margin="0,3,8,3" Padding="8,3" Cursor="Hand"
+                                  IsChecked="{Binding IsDockOpen, Source={x:Static vm:PreviewViewModel.Current}, Mode=TwoWay}"
+                                  ToolTip="{services:Loc preview.toggleTip}">
+                        <ToggleButton.Template>
+                            <ControlTemplate TargetType="ToggleButton">
+                                <Border x:Name="bd" Background="Transparent" BorderThickness="1" CornerRadius="4"
+                                        BorderBrush="{StaticResource NeonLineBrush}" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                    </Trigger>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#3328C8FF"/>
+                                        <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </ToggleButton.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{StaticResource NeonCyanBrush}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc preview.title}" FontSize="11" Foreground="{StaticResource NeonCyanBrush}"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
                     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <ItemsControl ItemsSource="{Binding Tabs}" ItemTemplate="{StaticResource EditorTabTemplate}">
                             <ItemsControl.ItemsPanel>

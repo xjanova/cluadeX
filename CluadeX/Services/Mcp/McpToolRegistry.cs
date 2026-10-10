@@ -125,24 +125,27 @@ public class McpToolRegistry
                 {
                     sb.AppendLine($"    {tool.QualifiedName} — {description}");
 
-                    // Generate parameter hints from inputSchema
+                    // Parameter hints from the SANITIZED schema — the same types the native schema and the argument
+                    // typing use ($ref / anyOf / ["string","null"] resolved; limits folded into the description). A raw
+                    // "type" array used to throw here and take the whole [ACTION:] catalogue down.
                     if (tool.InputSchema.HasValue)
                     {
-                        var schema = tool.InputSchema.Value;
-                        if (schema.TryGetProperty("properties", out var props))
+                        var schema = McpSchemaSanitizer.SanitizeCached(tool.ServerName, tool.Name, tool.InputSchema);
+                        if (schema.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
                         {
                             sb.AppendLine($"        [ACTION: {tool.QualifiedName}]");
                             var required = new HashSet<string>();
-                            if (schema.TryGetProperty("required", out var reqArr))
+                            if (schema.TryGetProperty("required", out var reqArr) && reqArr.ValueKind == JsonValueKind.Array)
                             {
                                 foreach (var r in reqArr.EnumerateArray())
-                                    required.Add(r.GetString() ?? "");
+                                    if (r.ValueKind == JsonValueKind.String) required.Add(r.GetString() ?? "");
                             }
 
                             foreach (var prop in props.EnumerateObject())
                             {
-                                string type = prop.Value.TryGetProperty("type", out var t) ? t.GetString() ?? "string" : "string";
-                                string desc = prop.Value.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+                                string type = McpSchemaSanitizer.TypeOf(prop.Value) ?? "string";
+                                string desc = prop.Value.TryGetProperty("description", out var d)
+                                    && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
                                 string reqMark = required.Contains(prop.Name) ? " (required)" : "";
                                 sb.AppendLine($"        {prop.Name}: <{type}>{reqMark} — {desc}");
                             }

@@ -137,6 +137,15 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>Whether the tool output contains diff content.</summary>
     public bool IsDiffContent { get; set; }
 
+    // ─── Tool image (screenshot) thumbnail ───
+    /// <summary>The JPEG a tool saved (ToolResult.Images[i].FilePath), shown as a thumbnail on the tool row; click
+    /// opens the full image. A PATH only — image bytes never live on a message, and it is not written to codex.db
+    /// (the screenshots folder is pruned, so a reloaded chat shows the row's text without the picture).</summary>
+    public string? ThumbnailPath { get; set; }
+
+    /// <summary>How many images the tool returned (the row shows the first).</summary>
+    public int ImageCount { get; set; }
+
     // ─── Inline Diff (file edit/write) ───
     /// <summary>Colorized diff lines for a file-mutating tool action. Null/empty = no diff to show.</summary>
     public List<EditDiffLine>? DiffLines { get; set; }

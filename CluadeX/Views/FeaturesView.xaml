@@ -323,6 +323,21 @@
                                                Foreground="{StaticResource Overlay0Brush}"
                                                FontFamily="{StaticResource MainFont}"
                                                TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                    <!-- Dev Preview: the engine found, or the command that installs it (selectable) -->
+                                    <TextBox Text="{Binding Detail, Mode=OneWay}" IsReadOnly="True" FontSize="10"
+                                             Background="Transparent" BorderThickness="0" Padding="0"
+                                             Foreground="{StaticResource TealBrush}" FontFamily="Consolas"
+                                             TextWrapping="Wrap" Margin="0,3,0,0"
+                                             Visibility="{Binding Detail, Converter={StaticResource BoolVis}}"/>
+                                    <!-- Dev Preview: sites outside this PC — ask / allow / block -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,5,0,0" ToolTip="{Binding ChoiceTip}"
+                                                Visibility="{Binding HasChoices, Converter={StaticResource BoolVis}}">
+                                        <TextBlock Text="{Binding ChoiceLabel}" FontSize="10" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource Overlay0Brush}" FontFamily="{StaticResource MainFont}"/>
+                                        <ComboBox ItemsSource="{Binding Choices}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding SelectedChoice, Mode=TwoWay}" FontSize="10"
+                                                  MinWidth="90" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <CheckBox Style="{StaticResource ToggleSwitch}"

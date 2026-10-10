@@ -47,6 +47,8 @@ internal static class Program
     static SettingsService Settings;
     static LocalizationService LocSvc;
     static AiProviderManager Providers;
+    static ServiceProvider Sp;
+    static Dictionary<string, DateTime?> ProfileBefore;
     static readonly List<string> ConfirmTitles = new();
     static bool ConfirmAnswer = true;
 
@@ -108,6 +110,7 @@ internal static class Program
     }
 
     static string L(string key) => LocalizedResources.Instance[key];
+    static string LocF(string key, params object[] args) => string.Format(L(key), args);
 
     static IEnumerable<T> Find<T>(DependencyObject root) where T : DependencyObject
     {
@@ -177,10 +180,14 @@ internal static class Program
     {
         Log("# Chat page harness\n");
 
+        // ~/.cluadex must not change — this harness used to run the app's whole startup (see Z1 at the end).
+        ProfileBefore = ProfileSnapshot();
+
         var services = new ServiceCollection();
         typeof(CluadeX.App).GetMethod("ConfigureServices", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, [services]);
         var sp = services.BuildServiceProvider();
+        Sp = sp;
 
         Settings = sp.GetRequiredService<SettingsService>();
         Check("setup: portable data root (never the user's ~/.cluadex)",
@@ -243,6 +250,13 @@ internal static class Program
         await TestCodeBlockStop();            // L12
         await TestNewChatNavigation();        // MINOR: title-bar New chat
         TestPureHelpers();                    // L3 classifier, L8 dedupe, U9 redaction, U2 palette
+        await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
+        await TestAcceptEdits();              // T5: Accept edits switch
+        await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
+        await TestThumbnail();                // T5: tool-row image thumbnail
+
+        var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
+        Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
 
         Log($"\n## Result: {Pass} pass / {Fail} FAIL");
         foreach (var f in Failures) Log("  - " + f);
@@ -845,6 +859,436 @@ internal static class Program
         Check("U2 typing 'new chat' finds New chat first", palette.Results.FirstOrDefault()?.Title == L("palette.cmd.newChat"));
         Check("U2 palette result count is localized", palette.ResultSummary.Length > 0 && !palette.ResultSummary.Contains("result{"));
     }
+
+    // ═══════════════════════════════════════════ T5: pipe runs ═══════════════════════════════════════════
+
+    static string PipeRoot => Path.Combine(AppContext.BaseDirectory, "pipe-projects");
+    static string ProjA => Path.Combine(PipeRoot, "user-project");
+    static string ProjB => Path.Combine(PipeRoot, "caller-project");
+
+    static bool SamePath(string a, string b) =>
+        string.Equals((a ?? "").TrimEnd('\\', '/'), (b ?? "").TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+    static Dictionary<string, DateTime?> ProfileSnapshot()
+    {
+        string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
+        var d = new Dictionary<string, DateTime?>();
+        foreach (var name in new[] { "install.json", "mcp-host.log", "mcp-host-token", "mcp_servers.json", "settings.json" })
+        {
+            string p = Path.Combine(dir, name);
+            d[name] = File.Exists(p) ? File.GetLastWriteTimeUtc(p) : null;
+        }
+        return d;
+    }
+
+    /// <summary>App.HandleMcpToolAsync — the pipe's real dispatcher — on this harness's container.</summary>
+    static async Task<McpToolResult> Dispatch(string tool, string argsJson, CancellationToken ct = default)
+    {
+        var app = (CluadeX.App)Application.Current;
+        typeof(CluadeX.App).GetField("_serviceProvider", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(app, Sp);
+        var handler = typeof(CluadeX.App).GetMethod("HandleMcpToolAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        using var doc = System.Text.Json.JsonDocument.Parse(argsJson);
+        var invocation = new CluadeX.Services.Mcp.McpToolInvocation(tool, doc.RootElement.Clone());
+        return await (Task<McpToolResult>)handler.Invoke(app, [invocation, ct])!;
+    }
+
+    static async Task TestPipeRuns()
+    {
+        Log("\n## T5 — pipe runs (cluadex.write_code): watched live, failures are isError, the app ends on its own project");
+        if (Directory.Exists(PipeRoot)) Directory.Delete(PipeRoot, true);
+        Directory.CreateDirectory(ProjA);
+        Directory.CreateDirectory(ProjB);
+        File.WriteAllText(Path.Combine(ProjB, "readme.txt"), "hello");
+        var fs = Sp.GetRequiredService<FileSystemService>();
+        Vm.ShowAllProjectSessions = false;
+        Vm.SetWorkingDirectory(ProjA);
+        await FreshChat();
+
+        int toChat = 0, toEditor = 0;
+        Action onChat = () => toChat++, onEditor = () => toEditor++;
+        Vm.NavigateToChatRequested += onChat;
+        Vm.NavigateToEditorRequested += onEditor;
+        try
+        {
+            // P1 — the reply streams into the run's chat while the run is going.
+            var gate = new SemaphoreSlim(0);
+            Fake.Script.Clear();
+            Fake.Script.Enqueue(FakeStep.Gated(["Hello", " from", " the", " pipe"], gate, [" — the task is complete."]));
+            var run = Task.Run(() => Vm.RunMcpTaskAsync("t5-live", "Say hello.", null, null, ProjB, CancellationToken.None, maxSteps: 5));
+            bool streaming = await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.Assistant && m.IsStreaming && m.Content.StartsWith("Hello")), 20000);
+            await Render();
+            var bubble = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Assistant);
+            Check("P1 a pipe run streams its reply into the visible chat while it runs", streaming && bubble != null && Container(bubble)?.Visibility == Visibility.Visible,
+                string.Join(" | ", Vm.Messages.Select(m => $"{m.Role}:{(m.Content.Length > 40 ? m.Content[..40] : m.Content)}")));
+            Check("P1 the Chat page is brought forward for the run", toChat == 1, $"{toChat} navigations");
+            Check("P1 during the run the app is on the caller's project", SamePath(Vm.WorkingDirectory, ProjB) && SamePath(fs.WorkingDirectory, ProjB), Vm.WorkingDirectory);
+            Check("P1 the run's chat is tagged with that project and stays in the project-filtered sidebar",
+                Vm.CurrentSession != null && SamePath(Vm.CurrentSession.ProjectPath, ProjB) && Vm.VisibleSessions.Contains(Vm.CurrentSession), Vm.CurrentSession?.ProjectPath);
+            gate.Release();
+            var outcome = await run;
+            await Render();
+            Check("P1 a finished run returns its final text with isError=false", !outcome.IsError && outcome.Text.Contains("task is complete"), outcome.Text);
+            Check("P1 the streamed bubble becomes the final reply in place (no duplicate answer)",
+                Vm.Messages.Count(m => m.Role == MessageRole.Assistant && m.Content.Contains("task is complete")) == 1 && bubble is { IsStreaming: false },
+                string.Join(" | ", Vm.Messages.Where(m => m.Role == MessageRole.Assistant).Select(m => m.Content)));
+            Check("P2 afterwards the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA) && SamePath(fs.WorkingDirectory, ProjA), $"{Vm.WorkingDirectory} / {fs.WorkingDirectory}");
+            Check("P2 neither switch dragged the user to the editor", toEditor == 0, $"{toEditor} editor navigations");
+            var stored = Persist.LoadSession(Vm.CurrentSession!.Id);
+            Check("P2 the run's chat is saved with its project tag", stored != null && SamePath(stored.ProjectPath, ProjB) && stored.Messages.Any(m => m.Content.Contains("task is complete")), stored?.ProjectPath);
+            // UX (review): the task's chat stayed open after the switch back, tagged with the task's folder — a message typed
+            // there then worked in the user's project with nothing saying so.
+            var back = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.System && m.Content.Contains(ProjA) && m.Content.Contains(ProjB));
+            Check("P2 the task's chat says which project is open now (the user's) and where the task worked", back != null && back.Content.Contains(LocF("chat.pipe.backToProject", ProjA, ProjB)),
+                back?.Content ?? string.Join(" | ", Vm.Messages.Where(m => m.Role == MessageRole.System).Select(m => m.Content)));
+            // UX (review): maxSteps was ignored silently until T1's per-run limit is in the build.
+            bool limitInBuild = typeof(CodeAgentService).GetMethods().Any(m => m.Name == "ExecuteAgenticAsync" && m.GetParameters().Any(p => p.Name == "maxIterations"));
+            Check("P2 maxSteps: applied when this build's agent loop takes a per-run limit, otherwise the caller is TOLD it was not applied",
+                limitInBuild ? !outcome.Text.Contains("was not applied") : outcome.Text.Contains("maxSteps=5 was not applied"), $"limitInBuild={limitInBuild}: {outcome.Text}");
+
+            // P3 — Stop in CluadeX → the pipe result is isError (through App's real dispatcher).
+            Fake.Script.Clear();
+            Fake.Script.Enqueue(FakeStep.Hang());
+            var call = Dispatch("cluadex.write_code", "{\"taskId\":\"t5-stop\",\"spec\":\"wait for me\",\"workingDirectory\":" + System.Text.Json.JsonSerializer.Serialize(ProjB) + "}");
+            bool running = await WaitUntil(() => Vm.IsGenerating, 10000);
+            Vm.StopGenerationCommand.Execute(null);
+            var stopped = await Task.WhenAny(call, Task.Delay(20000)) == call ? await call : null;
+            Check("P3 Stop during a pipe run returns isError=true to the caller", running && stopped is { IsError: true } && stopped.GetTextOutput().Contains("Stopped"), stopped?.GetTextOutput() ?? "no result");
+            Check("P3 …and the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA) && !Vm.IsGenerating);
+            var bad = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"maxSteps\":0}");
+            var missing = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"workingDirectory\":\"Z:\\\\no\\\\such\\\\folder\"}");
+            Check("P3 a bad maxSteps or a folder that does not exist is refused as isError (it ran in the open project before)",
+                bad.IsError && bad.GetTextOutput().Contains("maxSteps") && missing.IsError && missing.GetTextOutput().Contains("does not exist") && SamePath(Vm.WorkingDirectory, ProjA),
+                bad.GetTextOutput() + " / " + missing.GetTextOutput());
+
+            // P4 — the caller going away (the pipe closes) stops the run.
+            Fake.Script.Clear();
+            Fake.Script.Enqueue(FakeStep.Hang());
+            using (var gone = new CancellationTokenSource())
+            {
+                var t = Task.Run(() => Vm.RunMcpTaskAsync("t5-gone", "wait", null, null, ProjB, gone.Token));
+                await WaitUntil(() => Vm.IsGenerating, 10000);
+                gone.Cancel();
+                var o = await Task.WhenAny(t, Task.Delay(20000)) == t ? await t : null;
+                await Render();
+                Check("P4 the caller disconnecting mid-run stops it: isError, and the chat says why",
+                    o is { IsError: true } && Vm.Messages.Any(m => m.Content.Contains(L("chat.pipe.callerGone"))) && !Vm.IsGenerating && SamePath(Vm.WorkingDirectory, ProjA), o?.Text ?? "no outcome");
+            }
+
+            // P5 — Stop while a permission prompt is open: the prompt is retired, the run returns isError.
+            Fake.Script.Clear();
+            Fake.Script.Enqueue(FakeStep.Reply("I will run it.\n[ACTION: run_command]\ncommand: echo hi\n[/ACTION]"));
+            var t5 = Task.Run(() => Vm.RunMcpTaskAsync("t5-prompt", "run echo hi", null, null, ProjB, CancellationToken.None));
+            bool prompted = await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered), 20000);
+            var prompt = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.PermissionRequest);
+            Vm.StopGenerationCommand.Execute(null);
+            var o5 = await Task.WhenAny(t5, Task.Delay(20000)) == t5 ? await t5 : null;
+            await Render();
+            Check("P5 Stop during a permission prompt retires the prompt and the run returns isError",
+                prompted && prompt?.PermissionOutcome == PermissionOutcome.Cancelled && o5 is { IsError: true } && !Vm.IsGenerating,
+                $"prompted={prompted} outcome={prompt?.PermissionOutcome} result={o5?.Text}");
+
+            await TestPipeAcceptEdits();
+            await TestPipeNoSummary();
+        }
+        finally
+        {
+            Vm.NavigateToChatRequested -= onChat;
+            Vm.NavigateToEditorRequested -= onEditor;
+            Fake.Script.Clear();
+        }
+    }
+
+    /// <summary>One gated pipe run: returns what Accept edits was for its folder WHILE it ran, the chat's lines, the outcome.</summary>
+    static async Task<(bool AcceptOn, List<string> Lines, McpTaskOutcome Outcome)> GatedPipeRun(string taskId, string folder, bool? acceptEdits)
+    {
+        var perms = Sp.GetRequiredService<PermissionService>();
+        var gate = new SemaphoreSlim(0);
+        Fake.Script.Clear();
+        Fake.Script.Enqueue(FakeStep.Gated(["Working"], gate, [" — done."]));
+        var run = Task.Run(() => Vm.RunMcpTaskAsync(taskId, "Edit something.", null, null, folder, CancellationToken.None, acceptEdits: acceptEdits));
+        bool started = await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Role == MessageRole.Assistant && m.IsStreaming), 20000);
+        bool on = started && perms.AcceptsEditsIn(folder) && Vm.AcceptEdits;
+        var lines = Vm.Messages.Where(m => m.Role == MessageRole.System).Select(m => m.Content).ToList();
+        gate.Release();
+        var outcome = await Task.WhenAny(run, Task.Delay(20000)) == run ? await run : new McpTaskOutcome("(timed out)", true);
+        await Render();
+        return (on, lines, outcome);
+    }
+
+    static async Task TestPipeAcceptEdits()
+    {
+        Log("\n## T5 — a pipe caller's acceptEdits:true is the user's decision (confirmed once per folder, never for a drive/user/system folder)");
+        var perms = Sp.GetRequiredService<PermissionService>();
+        Vm.SetWorkingDirectory(ProjA);
+        await FreshChat();
+
+        // Declined: the run goes on with every edit asking, the chat and the caller are told.
+        ConfirmTitles.Clear();
+        ConfirmAnswer = false;
+        var (on1, lines1, o1) = await GatedPipeRun("t5-accept-no", ProjB, true);
+        Check("P6 acceptEdits:true asks the user in CluadeX first (it used to switch the prompts off for any folder, unasked)",
+            ConfirmTitles.Count(t => t == L("chat.acceptEdits.pipeConfirmTitle")) == 1, string.Join(" | ", ConfirmTitles));
+        Check("P6 declined → off during the run, the chat says so, the caller's result says so",
+            !on1 && lines1.Any(l => l.Contains(LocF("chat.acceptEdits.pipeDeclined", ProjB))) && o1.Text.Contains("declined"), $"on={on1} result={o1.Text}");
+
+        // Approved: on for exactly that folder during the run, the chat says who turned it on; asked once per folder.
+        ConfirmTitles.Clear();
+        ConfirmAnswer = true;
+        var (on2, lines2, o2) = await GatedPipeRun("t5-accept-yes", ProjB, true);
+        var (on3, _, _) = await GatedPipeRun("t5-accept-again", ProjB, true);
+        Check("P6 approved → on during the run, and the task's chat says the caller turned it on",
+            on2 && lines2.Any(l => l.Contains(LocF("chat.acceptEdits.pipeOn", ProjB))) && !o2.IsError, $"on={on2} lines={string.Join(" | ", lines2)}");
+        Check("P6 the approval holds for that folder for this session: a second run asks nothing", on3 && ConfirmTitles.Count == 1, $"on={on3} confirms={ConfirmTitles.Count}");
+        Check("P6 afterwards the app is back on the user's project with the user's own state (off)", SamePath(Vm.WorkingDirectory, ProjA) && !Vm.AcceptEdits && !perms.AcceptsEditsIn(ProjB));
+
+        // Negative control: no acceptEdits → no question, off.
+        ConfirmTitles.Clear();
+        var (on4, lines4, _) = await GatedPipeRun("t5-accept-none", ProjB, null);
+        Check("P6 negative control: without acceptEdits nothing is asked and it stays off", !on4 && ConfirmTitles.Count == 0 && !lines4.Any(l => l.Contains(L("chat.acceptEdits.pipeConfirmTitle"))));
+
+        // A folder it must never cover: refused without a question — CluadeX's own data folder here (a drive root would
+        // make this harness open C:\ as a project).
+        string unsafeDir = Settings.DataRoot;
+        var (on5, lines5, o5) = await GatedPipeRun("t5-accept-unsafe", unsafeDir, true);
+        Check("P6 a drive / user / system / data folder is refused without asking: off, a ⚠ line, and the caller is told",
+            !on5 && ConfirmTitles.Count == 0 && lines5.Any(l => l.Contains(LocF("chat.acceptEdits.unsafeFolder", unsafeDir))) && o5.Text.Contains("refused"),
+            $"on={on5} confirms={ConfirmTitles.Count} result={o5.Text}");
+        Check("P6 …and the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA));
+
+        // MINOR (re-review): when the user had Accept edits on for that folder themselves, the folder was remembered as
+        // approved for pipe callers for the rest of the session — after the user turned it off, the next acceptEdits:true
+        // switched it back on unasked, and the chat said "(you allowed it)" though nobody was asked.
+        string projC = Path.Combine(PipeRoot, "own-accept-project");
+        Directory.CreateDirectory(projC);
+        Vm.SetWorkingDirectory(projC);
+        bool userOn = perms.SetAcceptEdits(projC);   // the user's own switch, for the folder they have open
+        ConfirmTitles.Clear();
+        ConfirmAnswer = false;
+        var (on6, lines6, _) = await GatedPipeRun("t5-accept-users-own", projC, true);
+        Check("P6 the user has Accept edits on there themselves: on for the task, no question, and the chat says it is the user's own setting (not 'you allowed it')",
+            userOn && on6 && ConfirmTitles.Count == 0 && lines6.Any(l => l.Contains(LocF("chat.acceptEdits.pipeUserOn", projC)))
+            && !lines6.Any(l => l.Contains(LocF("chat.acceptEdits.pipeOn", projC))), $"userOn={userOn} on={on6} confirms={ConfirmTitles.Count} lines={string.Join(" | ", lines6)}");
+        perms.SetAcceptEdits(null);                  // the user turns it off
+        ConfirmTitles.Clear();
+        var (on7, lines7, o7) = await GatedPipeRun("t5-accept-after-off", projC, true);
+        Check("P6 …which grants the caller nothing lasting: after the user turns it off, the next acceptEdits:true asks again (declined → off)",
+            !on7 && ConfirmTitles.Count(t => t == L("chat.acceptEdits.pipeConfirmTitle")) == 1 && lines7.Any(l => l.Contains(LocF("chat.acceptEdits.pipeDeclined", projC))) && o7.Text.Contains("declined"),
+            $"on={on7} confirms={ConfirmTitles.Count} result={o7.Text}");
+        perms.SetAcceptEdits(null);
+        Vm.SetWorkingDirectory(ProjA);
+        ConfirmAnswer = true;
+    }
+
+    /// <summary>The live view's end-of-run safety net, driven directly (a scripted provider can't end a run with tool
+    /// calls and no text): tools ran → "no summary", not an error; nothing at all → the red "no reply".</summary>
+    static async Task TestPipeNoSummary()
+    {
+        Log("\n## T5 — a pipe run that ran tools but wrote no summary is not shown as an error (same as a typed turn)");
+        await FreshChat();
+        var liveType = typeof(ChatViewModel).GetNestedType("LiveRunView", BindingFlags.NonPublic)!;
+        object NewLive() => Activator.CreateInstance(liveType, BindingFlags.Public | BindingFlags.Instance, null, [Vm, Vm.CurrentSession], null)!;
+        var finish = liveType.GetMethod("Finish")!;
+        finish.Invoke(NewLive(), [null, 3]);
+        var withTools = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Assistant);
+        finish.Invoke(NewLive(), [null, 0]);
+        var nothing = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Assistant);
+        await Render();
+        Check("P7 tools ran, no text → the 'no summary' note, not an error", withTools != null && withTools.Content.Contains(LocF("chat.agent.noSummary", 3)) && !withTools.HasError, withTools?.Content);
+        Check("P7 negative control: nothing at all → the red 'no reply'", nothing != null && !ReferenceEquals(nothing, withTools) && nothing.HasError && nothing.Content.Contains(L("chat.agent.noReply")), nothing?.Content);
+    }
+
+    // ═══════════════════════════════════════════ T5: Accept edits ═══════════════════════════════════════════
+
+    /// <summary>Run one tool through the shipping gate; a prompt that appears is answered Deny and counted.</summary>
+    static async Task<(ToolResult Result, bool Prompted)> Gate(ToolCall call)
+    {
+        var tools = Sp.GetRequiredService<AgentToolService>();
+        int before = Vm.Messages.Count(m => m.Role == MessageRole.PermissionRequest);
+        var task = tools.ExecuteToolAsync(call);
+        bool prompted = false;
+        while (!task.IsCompleted)
+        {
+            var open = Vm.Messages.FirstOrDefault(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered);
+            if (open != null) { prompted = true; open.ResolvePermission(PermissionOutcome.Denied); }
+            await Task.Delay(30);
+        }
+        return (await task, prompted || Vm.Messages.Count(m => m.Role == MessageRole.PermissionRequest) > before);
+    }
+
+    static async Task TestAcceptEdits()
+    {
+        Log("\n## T5 — Accept edits: file edits inside the project run without a prompt; nothing else does");
+        Vm.SetWorkingDirectory(ProjA);
+        await FreshChat();
+        File.WriteAllText(Path.Combine(ProjA, "app.txt"), "one\ntwo\n");
+        await Render();
+        var toggle = (CheckBox)View.FindName("AcceptEditsToggle");
+        Check("A1 with a project open the switch shows in the status bar, off by default", toggle is { IsVisible: true } && toggle.IsChecked == false && !Vm.AcceptEdits);
+        Check("A1 its tooltip states the scope", toggle?.ToolTip is string tip && tip.Contains("inside the open project") && tip.Contains("still ask"), toggle?.ToolTip?.ToString());
+
+        ConfirmTitles.Clear();
+        ConfirmAnswer = false;
+        Vm.AcceptEdits = true;
+        await Render();
+        Check("A1 switching it on asks first; declining keeps it off", ConfirmTitles.Contains(L("chat.acceptEdits.confirmTitle")) && !Vm.AcceptEdits && toggle?.IsChecked == false);
+        ConfirmAnswer = true;
+        Vm.AcceptEdits = true;
+        await Render();
+        Check("A1 confirmed: on, and the switch shows it", Vm.AcceptEdits && toggle?.IsChecked == true);
+
+        var (edit, editAsked) = await Gate(new ToolCall { Type = ToolType.EditFile, ToolName = "edit_file", Arguments = new() { ["path"] = "app.txt", ["find"] = "one", ["replace"] = "ONE" } });
+        Check("A2 edit_file inside the project runs without a prompt", !editAsked && edit.Success && File.ReadAllText(Path.Combine(ProjA, "app.txt")).Contains("ONE"), edit.Error);
+        var (_, cmdAsked) = await Gate(new ToolCall { Type = ToolType.RunCommand, ToolName = "run_command", Arguments = new() { ["command"] = "echo hi" } });
+        Check("A2 run_command still asks", cmdAsked);
+        string outside = Path.Combine(PipeRoot, "outside.txt");
+        var (_, outAsked) = await Gate(new ToolCall { Type = ToolType.WriteFile, ToolName = "write_file", Arguments = new() { ["path"] = outside, ["content"] = "x" } });
+        Check("A2 a write to a path outside the project still asks", outAsked && !File.Exists(outside));
+
+        Vm.SetWorkingDirectory(ProjB);
+        await Render();
+        Check("A3 switching projects turns Accept edits off", !Vm.AcceptEdits && toggle?.IsChecked == false);
+        var (_, bAsked) = await Gate(new ToolCall { Type = ToolType.WriteFile, ToolName = "write_file", Arguments = new() { ["path"] = "new.txt", ["content"] = "x" } });
+        Check("A3 …so an edit in the new project asks again", bAsked);
+        Vm.SetWorkingDirectory(ProjA);
+        Check("A3 back in the first project it stays off (it is per session, never re-enabled behind the user's back)", !Vm.AcceptEdits);
+
+        // LOGIC (review): never for a drive root, the user folder, a system folder or CluadeX's own data — not even
+        // when the user ticks it (CluadeX's data folder stands in for C:\ here, which this harness must not open).
+        Vm.SetWorkingDirectory(Settings.DataRoot);
+        await Render();
+        ConfirmTitles.Clear();
+        ConfirmAnswer = true;
+        Vm.AcceptEdits = true;
+        await Render();
+        Check("A4 on CluadeX's data folder the switch refuses without asking, says why, and stays off",
+            !Vm.AcceptEdits && ConfirmTitles.Count == 0 && toggle?.IsChecked == false
+            && Vm.Messages.Any(m => m.Role == MessageRole.System && m.Content.Contains(LocF("chat.acceptEdits.unsafeFolder", Settings.DataRoot))),
+            $"on={Vm.AcceptEdits} confirms={ConfirmTitles.Count}");
+        Vm.SetWorkingDirectory(ProjA);
+        await Render();
+    }
+
+    // ═══════════════════════════════════════════ T5: Autonomous build gate ═══════════════════════════════════════════
+
+    /// <summary>
+    /// CRITICAL (re-review): with Accept edits and the Autonomous switch on, the loop ran its build/test command over
+    /// edits nobody saw. Through the real chat: the agent turn is a brain-status question the app answers itself (no
+    /// model), then the loop's verify command — which runs the script the unseen edit wrote — must ask in the chat.
+    /// </summary>
+    static async Task TestAutonomousBuildGate()
+    {
+        Log("\n## T5 — the Autonomous loop asks before its build/test after unseen (Accept edits) edits; No → not run, said in the chat");
+        var perms = Sp.GetRequiredService<PermissionService>();
+        var tools = Sp.GetRequiredService<AgentToolService>();
+        string proj = Path.Combine(PipeRoot, "autonomous-project");
+        Directory.CreateDirectory(proj);
+        string marker = Path.Combine(proj, "auto-ran.txt");
+        const string verify = @"scripts\helper.cmd";
+        var s = Settings.Settings;
+        var keep = (s.AutoVerifyCommand, s.AutoFixMaxIterations, s.AutoReviewEnabled);
+        Settings.UpdateSettings(x => { x.AutoVerifyCommand = verify; x.AutoFixMaxIterations = 1; x.AutoReviewEnabled = false; });
+        try
+        {
+            Vm.SetWorkingDirectory(proj);
+            await Render();
+            async Task<(bool Asked, bool Idle, List<string> Lines)> Turn(bool allow)
+            {
+                perms.SetAcceptEdits(proj);
+                var w = await tools.ExecuteToolAsync(new ToolCall { Type = ToolType.WriteFile, ToolName = "write_file",
+                    Arguments = new() { ["path"] = "scripts/helper.cmd", ["content"] = $"@echo ran>> auto-ran.txt\r\n@rem {Guid.NewGuid():N}\r\n" } });
+                if (!w.Success) Log("   (write_file failed: " + w.Error + ")");
+                await FreshChat();
+                Vm.AutonomousMode = true;
+                await Send("is the brain connected?");
+                ChatMessage prompt = null;
+                bool asked = await WaitUntil(() => (prompt = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.PermissionRequest
+                    && m.PermissionOutcome == PermissionOutcome.Pending)) != null, 20000);
+                bool namesIt = prompt != null && prompt.Content.Contains(verify) && prompt.Content.Contains(L("perm.autoVerify.autonomous"));
+                prompt?.ResolvePermission(allow ? PermissionOutcome.Allowed : PermissionOutcome.Denied);
+                bool idle = await WaitIdle(30000);
+                Vm.AutonomousMode = false;
+                return (asked && namesIt, idle, Vm.Messages.Where(m => m.Role == MessageRole.System).Select(m => m.Content).ToList());
+            }
+            if (File.Exists(marker)) File.Delete(marker);
+            string declined = LocF("chat.auto.verifyDeclined", verify);
+            var (asked1, idle1, lines1) = await Turn(allow: false);
+            Check("T5 Autonomous: after an unseen edit the build/test asks in the chat (naming the command and why); Deny → not run, and a line that stays in the chat says so",
+                asked1 && idle1 && !File.Exists(marker) && lines1.Any(l => l == "✋ " + declined),
+                $"asked={asked1} idle={idle1} ran={File.Exists(marker)} lines={string.Join(" | ", lines1)}");
+            var (asked2, idle2, lines2) = await Turn(allow: true);
+            Check("T5 Autonomous control: Allow → the command runs, and no 'not run' line",
+                asked2 && idle2 && File.Exists(marker) && !lines2.Any(l => l.Contains(declined)),
+                $"asked={asked2} idle={idle2} ran={File.Exists(marker)} lines={string.Join(" | ", lines2)}");
+        }
+        finally
+        {
+            Vm.AutonomousMode = false;
+            perms.SetAcceptEdits(null);
+            Settings.UpdateSettings(x => (x.AutoVerifyCommand, x.AutoFixMaxIterations, x.AutoReviewEnabled) = keep);
+            Vm.SetWorkingDirectory(ProjA);
+            await Render();
+        }
+    }
+
+    // ═══════════════════════════════════════════ T5: tool-row thumbnail ═══════════════════════════════════════════
+
+    static byte[] MakeJpeg()
+    {
+        int w = 64, h = 48, stride = w * 4;
+        var px = new byte[stride * h];
+        for (int i = 0; i < px.Length; i += 4) { px[i] = 40; px[i + 1] = 40; px[i + 2] = 220; px[i + 3] = 255; }
+        var src = System.Windows.Media.Imaging.BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgr32, null, px, stride);
+        var enc = new System.Windows.Media.Imaging.JpegBitmapEncoder();
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(src));
+        using var ms = new MemoryStream();
+        enc.Save(ms);
+        return ms.ToArray();
+    }
+
+    static async Task TestThumbnail()
+    {
+        Log("\n## T5 — a tool image shows as a thumbnail on its row (the saved file's path — never the bytes)");
+        await FreshChat();
+        string dir = Path.Combine(Settings.DataRoot, "screens", "chattest");
+        Directory.CreateDirectory(dir);
+        string jpg = Path.Combine(dir, "001.jpg");
+        byte[] bytes = MakeJpeg();
+        File.WriteAllBytes(jpg, bytes);
+        string b64 = Convert.ToBase64String(bytes);
+
+        var agent = Field<CodeAgentService>(Vm, "_agentService");
+        var handler = (Action<ToolResult>)typeof(CodeAgentService).GetField("OnToolExecuted", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(agent);
+        handler?.Invoke(new ToolResult
+        {
+            Type = ToolType.McpTool, ToolName = "mcp__stub__take_screenshot", Success = true,
+            Output = $"[image 1: 64x48 attached, saved at {jpg}]", Summary = "MCP (stub/take_screenshot): OK",
+            Images = [new ToolImage("image/jpeg", b64, 64, 48, jpg)],
+        });
+        handler?.Invoke(new ToolResult
+        {
+            Type = ToolType.McpTool, ToolName = "mcp__stub__take_screenshot", Success = true, Output = "[image 1 attached]", Summary = "no file",
+            Images = [new ToolImage("image/jpeg", b64, 64, 48, Path.Combine(dir, "gone.jpg"))],
+        });
+        await Render();
+        var rows = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).ToList();
+        var row = rows.FirstOrDefault(m => m.ThumbnailPath != null);
+        Check("T1 the tool row carries the saved file's path", row != null && row.ThumbnailPath == jpg && row.ImageCount == 1, string.Join(" | ", rows.Select(r => r.ThumbnailPath ?? "-")));
+        Check("T1 an image whose file is gone gets no thumbnail (no broken picture)", rows.Count == 2 && rows[1].ThumbnailPath == null);
+        Check("T1 with Steps off the image row stays on screen (like a diff: something to verify), the plain row collapses",
+            !Vm.ShowAgentInternals && row != null && Container(row)?.Visibility == Visibility.Visible && Container(rows[1])?.Visibility == Visibility.Collapsed);
+        var img = row == null || Container(row) == null ? null : Find<Image>(Container(row)).FirstOrDefault(i => i.IsVisible && i.Source != null);
+        Check("T1 the thumbnail is rendered on the row", img?.Source is System.Windows.Media.Imaging.BitmapSource bs && bs.PixelHeight > 0);
+        var open = row == null || Container(row) == null ? null : Find<Button>(Container(row)).FirstOrDefault(b => Equals(b.Tag, jpg));
+        Check("T1 the thumbnail is a button carrying the file to open full size; only an existing local image is ever opened",
+            open is { IsVisible: true } && ChatViewModel.IsOpenableImage(jpg) && !ChatViewModel.IsOpenableImage("https://example.com/a.jpg")
+            && !ChatViewModel.IsOpenableImage(@"\\server\share\a.jpg") && !ChatViewModel.IsOpenableImage(Path.Combine(dir, "a.exe")));
+        bool onMessage = typeof(ChatMessage).GetProperties().Where(p => p.PropertyType == typeof(string))
+            .Any(p => (p.GetValue(row) as string)?.Contains(b64[..60]) == true);
+        Vm.SaveNow();
+        var stored = Persist.LoadSession(Vm.CurrentSession!.Id);
+        bool inDb = stored?.Messages.Any(m => (m.Content + m.ToolOutput + m.ToolSummary).Contains(b64[..60])) == true;
+        Check("T1 the image bytes are on neither the chat message nor in codex.db", row != null && !onMessage && !inDb && stored != null);
+    }
 }
 
 // ═══════════════════════════════════════════ fake provider ═══════════════════════════════════════════
@@ -854,9 +1298,13 @@ internal sealed class FakeStep
     public string[] Tokens;
     public Exception Error;
     public bool HangUntilCancelled;
+    /// <summary>Gated: <see cref="Tokens"/> stream, then the step waits for <see cref="Gate"/>, then <see cref="After"/>.</summary>
+    public SemaphoreSlim Gate;
+    public string[] After = [];
     public static FakeStep Reply(params string[] tokens) => new() { Tokens = tokens };
     public static FakeStep Throw(Exception ex) => new() { Error = ex };
     public static FakeStep Hang() => new() { HangUntilCancelled = true };
+    public static FakeStep Gated(string[] before, SemaphoreSlim gate, string[] after) => new() { Tokens = before, Gate = gate, After = after };
 }
 
 internal sealed record FakeCall(List<(MessageRole Role, string Content)> History, string Input);
@@ -889,6 +1337,15 @@ internal sealed class FakeProvider : IAiProvider
         {
             await Task.Delay(10, ct);
             yield return t;
+        }
+        if (step.Gate != null)
+        {
+            await step.Gate.WaitAsync(ct);
+            foreach (var t in step.After)
+            {
+                await Task.Delay(10, ct);
+                yield return t;
+            }
         }
     }
 

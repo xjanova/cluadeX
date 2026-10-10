@@ -3389,7 +3389,8 @@ public class CodeAgentService
             // A weak model edits, claims done, and never runs the build. If this turn changed files (and the
             // model didn't already verify), run the detected build and feed failures back so it's FORCED to
             // confront real compiler errors instead of declaring false victory. Bounded so a slow build can't
-            // dominate the task; system-initiated so it doesn't prompt for permission.
+            // dominate the task; system-initiated so it doesn't prompt for permission — except after an edit that
+            // "Accept edits" let through unseen: then the build asks first (AgentToolService.RunVerifyBuildAsync).
             if (_settingsService.Settings.AutoVerifyAfterEditEnabled
                 && autoVerifyCount < MaxAutoVerifies
                 && !ct.IsCancellationRequested
@@ -3402,9 +3403,15 @@ public class CodeAgentService
                 try
                 {
                     var verify = await _agentToolService.RunVerifyBuildAsync(ct);
-                    OnToolExecuted?.Invoke(verify);
+                    if (verify != null) OnToolExecuted?.Invoke(verify);
                     string note;
-                    if (verify.Success)
+                    if (verify == null)
+                    {
+                        // Edits made without a prompt (Accept edits): the build asked first, and was not approved.
+                        note = "[auto-verify] Skipped: the user did not approve running the build after these edits. "
+                             + "The build was NOT checked — do not claim it passes.";
+                    }
+                    else if (verify.Success)
                     {
                         note = "[auto-verify] ✓ Build passed after your edit.";
                     }

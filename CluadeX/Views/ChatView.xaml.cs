@@ -237,6 +237,20 @@ public partial class ChatView : UserControl
             msg.ResolvePermission(PermissionOutcome.Denied);
     }
 
+    // ─── Tool-row thumbnail → the full image ───
+
+    /// <summary>Opens the image a tool saved, in the system's image viewer. Only an existing local .jpg/.png/.webp/.gif
+    /// is handed to the shell (<see cref="ChatViewModel.IsOpenableImage"/>) — never a URL, a share or another file type.</summary>
+    private void ToolThumbnail_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string path } || !ChatViewModel.IsOpenableImage(path)) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
+        }
+        catch { /* no viewer registered for images — nothing else to do */ }
+    }
+
     // ─── Suggested prompts ───
 
     private void SuggestedPrompt_Click(object sender, RoutedEventArgs e)
@@ -248,4 +262,33 @@ public partial class ChatView : UserControl
                 vm.SendMessageCommand.Execute(null);
         }
     }
+}
+
+/// <summary>
+/// A tool-row thumbnail from an image file path: decoded small (≈240 px tall), read fully into memory and the file
+/// closed at once — so a thumbnail never holds a lock on a screenshot the store later prunes — and nothing (no
+/// image) when the file is gone or unreadable.
+/// </summary>
+public sealed class ThumbnailSourceConverter : System.Windows.Data.IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+    {
+        if (value is not string path || !ChatViewModel.IsOpenableImage(path)) return null;
+        try
+        {
+            var bmp = new System.Windows.Media.Imaging.BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bmp.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
+            bmp.DecodePixelHeight = 240;
+            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch { return null; }
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
 }

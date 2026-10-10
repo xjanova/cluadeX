@@ -643,6 +643,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         return s == McpServerState.Failed && _reconnecting.ContainsKey(name) ? McpServerState.Reconnecting : s;
     }
 
+    /// <summary>The last error a server's start or run reported (the text the MCP page shows), or null.</summary>
+    public string? GetServerLastError(string name) => _lastErrors.TryGetValue(name, out var e) ? e : null;
+
     /// <summary>Where a server is restarted from, for a localized message: the MCP Servers page via the Ctrl+K
     /// palette (its entry is "MCP Servers" in every language), plus the 🧠 chip only for the brain — the chip
     /// is about BrainX, so offering it for any other server sent people to the wrong place.</summary>
@@ -707,6 +710,32 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     {
         LoadConfig();
         await StartAllEnabledAsync(ct);
+    }
+
+    // ─── The app's startup MCP work, for tasks that arrive over the pipe meanwhile ───
+    private Task? _startup;
+
+    /// <summary>What a pipe task's caller is told when the MCP servers were still starting after the wait.</summary>
+    public const string StartupNotReadyNote =
+        "CluadeX's MCP servers (BrainX and others) were still starting when this task began, so their tools may have been missing for it.";
+
+    /// <summary>The app's startup MCP work (load + start + BrainX registration) — App.OnStartup hands it over BEFORE
+    /// the pipe host accepts tasks, which no longer waits for it (one silent server held the pipe for 120 s).</summary>
+    public void TrackStartup(Task startup) => Volatile.Write(ref _startup, startup);
+
+    /// <summary>
+    /// Wait — at most <paramref name="max"/> — for the startup work <see cref="TrackStartup"/> was given. True when it
+    /// is done (or there was none: a harness, or a later task), false when it is still running after the wait.
+    /// </summary>
+    public async Task<bool> WaitForStartupAsync(TimeSpan max, CancellationToken ct = default)
+    {
+        var startup = Volatile.Read(ref _startup);
+        if (startup == null || startup.IsCompleted) return true;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var finished = await Task.WhenAny(startup, Task.Delay(max, stop.Token)).ConfigureAwait(false);
+        stop.Cancel();
+        ct.ThrowIfCancellationRequested();
+        return finished == startup;
     }
 
     /// <summary>Where mcp_servers.json is copied before this app first changes it in a session.</summary>
@@ -1151,14 +1180,26 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         obj[name] = value;
     }
 
-    /// <summary>Start all enabled MCP servers.</summary>
+    /// <summary>How many servers <see cref="StartAllEnabledAsync"/> starts at the same time.</summary>
+    public const int MaxParallelStarts = 4;
+
+    /// <summary>
+    /// Start all enabled MCP servers — up to <see cref="MaxParallelStarts"/> at a time. One after another, a single
+    /// server that never answers (an npx package still downloading, mcp-remote waiting for a login) held every server
+    /// behind it — BrainX included — for its whole initialize timeout.
+    /// </summary>
     public async Task StartAllEnabledAsync(CancellationToken ct = default)
     {
-        foreach (var (name, config) in _configs)
+        var names = _configs.Where(kv => kv.Value.Enabled).Select(kv => kv.Key).ToList();
+        using var slots = new SemaphoreSlim(MaxParallelStarts, MaxParallelStarts);
+        await Task.WhenAll(names.Select(async name =>
         {
-            if (!config.Enabled) continue;
-            await StartServerAsync(name, ct);
-        }
+            await slots.WaitAsync(ct);
+            try { await StartServerAsync(name, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { Log(name, $"start failed: {ex.GetType().Name}: {ex.Message}"); }
+            finally { slots.Release(); }
+        }));
         if (_reloadPendingStart)
         {
             _reloadPendingStart = false;
@@ -1216,6 +1257,50 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         }
     }
 
+    // ─── Startup timeout ──────────────────────────────────────────────
+    /// <summary>How long initialize may take when the entry says nothing and nothing has to be downloaded.</summary>
+    public const int DefaultStartupTimeoutSeconds = 15;
+    /// <summary>A package runner's (npx/uvx/bunx …) first start in this session: it may download the package —
+    /// and Playwright's browsers — before it can answer initialize, which routinely takes longer than 15 s.</summary>
+    public const int PackageRunnerFirstStartTimeoutSeconds = 120;
+    /// <summary>Upper bound for a hand-written startupTimeoutSeconds.</summary>
+    public const int MaxStartupTimeoutSeconds = 600;
+
+    /// <summary>Launches that have answered initialize before — on disk, so it survives a restart.</summary>
+    private McpStartHistory? _startHistory;
+    private McpStartHistory StartHistory => _startHistory ??= new McpStartHistory(_settingsService.DataRoot);
+
+    /// <summary>
+    /// The initialize timeout for this start of <paramref name="name"/>: the entry's startupTimeoutSeconds when it
+    /// sets one; otherwise 120 s for an npx/uvx-style package runner whose launch (name + command + arguments) has
+    /// never answered initialize on this machine — its package may still have to be downloaded — else 15 s.
+    /// </summary>
+    public int StartupTimeoutFor(string name, McpServerConfig config)
+    {
+        if (config.StartupTimeoutSeconds is int s && s > 0) return Math.Min(s, MaxStartupTimeoutSeconds);
+        if (IsPackageRunner(config) && !StartHistory.HasBeenReady(name, config)) return PackageRunnerFirstStartTimeoutSeconds;
+        return DefaultStartupTimeoutSeconds;
+    }
+
+    /// <summary>npx / uvx / bunx / pnpx, "pnpm dlx" / "yarn dlx", also behind "cmd /c".</summary>
+    public static bool IsPackageRunner(McpServerConfig config)
+    {
+        static string Stem(string? s)
+        {
+            try { return Path.GetFileNameWithoutExtension((s ?? "").Trim().Trim('"')).ToLowerInvariant(); }
+            catch { return ""; }
+        }
+        var words = new List<string> { Stem(config.Command) };
+        if (config.Args != null) words.AddRange(config.Args.Take(4).Select(a => (a ?? "").Trim()));
+        if (words[0] is "cmd" && words.Count > 2 && words[1].Equals("/c", StringComparison.OrdinalIgnoreCase))
+            words.RemoveRange(0, 2);
+        if (words.Count == 0) return false;
+        string head = Stem(words[0]);
+        if (head is "npx" or "uvx" or "bunx" or "pnpx") return true;
+        return head is "pnpm" or "yarn" or "bun" && words.Count > 1 && words[1].Equals("dlx", StringComparison.OrdinalIgnoreCase)
+            || head is "uv" && words.Count > 1 && words[1].Equals("tool", StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task<bool> StartServerCoreAsync(string name, McpServerConfig config, CancellationToken ct)
     {
         // Stop existing transport if running. Supervision comes off FIRST so the
@@ -1229,6 +1314,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         }
 
         SetState(name, McpServerState.Starting);
+        int startupSeconds = StartupTimeoutFor(name, config);
 
         try
         {
@@ -1248,7 +1334,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             _transports[name] = transport;
             Log(name, "Process started. Sending initialize handshake...");
 
-            // Initialize handshake (use 15s timeout instead of 30s default)
+            // Initialize handshake — 15 s by default, longer for a package runner's first start or when the entry
+            // sets startupTimeoutSeconds (StartupTimeoutFor).
             var initParams = new McpInitializeParams
             {
                 ClientInfo = new McpClientInfo
@@ -1258,7 +1345,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                 },
             };
 
-            var initResponse = await transport.SendRequestAsync("initialize", initParams, timeoutMs: 15000, ct: ct);
+            if (startupSeconds != DefaultStartupTimeoutSeconds)
+                Log(name, $"Waiting up to {startupSeconds}s for initialize (first start of a package runner, or the entry's startupTimeoutSeconds).");
+            var initResponse = await transport.SendRequestAsync("initialize", initParams, timeoutMs: startupSeconds * 1000, ct: ct);
 
             if (!initResponse.IsSuccess)
             {
@@ -1284,6 +1373,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             // blocks, and a half-started transport must not trigger a respawn race.
             _supervised[name] = 1;
             _readySinceUtc[name] = DateTime.UtcNow;
+            // This launch works on this machine (a package runner's package is downloaded now): the next app start
+            // waits the normal 15 s, not 120.
+            StartHistory.Record(name, config);
             _reconnectAttempts.TryRemove(name, out _);
             SetState(name, McpServerState.Ready);
             Log(name, $"Ready ({toolCount} tools)");
@@ -1299,9 +1391,10 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                 timedOut.Dispose();
                 _transports.TryRemove(name, out _);
             }
+            // Shown on the MCP page and in the status chip's tooltip — localized, with the real limit and the fix.
             string detail = !string.IsNullOrEmpty(stderrHint)
-                ? $"Handshake timed out. Server stderr:\n{stderrHint}"
-                : "Handshake timed out — server did not respond to initialize request within 15s.";
+                ? string.Format(L("mcp.handshake.timedOutStderr"), startupSeconds, stderrHint)
+                : string.Format(L("mcp.handshake.timedOut"), startupSeconds);
             Log(name, detail);
             SetState(name, McpServerState.Failed, detail);
             return false;
@@ -1465,19 +1558,21 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         // "[\"a\",\"b\"]" where it expected a real array, and rejected the call — which made every
         // MCP tool with a non-scalar parameter unusable from the agent.
         // The tool's own schema decides first: a property declared "string" stays a string, so a search
-        // for "2026" or "true" is not sent as a number / bool that the server rejects.
-        JsonElement? props = null;
-        var tool = _toolRegistry.ResolveTool(toolName);
-        if (tool?.ServerName == serverName && tool.InputSchema is { ValueKind: JsonValueKind.Object } schema
-            && schema.TryGetProperty("properties", out var p) && p.ValueKind == JsonValueKind.Object)
-            props = p;
+        // for "2026" or "true" is not sent as a number / bool that the server rejects. "Declared" means what the
+        // model was TOLD — the sanitized schema, where ["string","null"], anyOf[string,null] (pydantic's Optional[str])
+        // and a $ref to a string are all "string". Reading only a raw "type" key sent those as 2026 / true.
+        // By server + name: a bare leaf that two servers share used to resolve to neither, and the schema check below
+        // was skipped (a "2026" search went out as a number).
+        var tool = _toolRegistry.FindTool($"mcp__{serverName}__{toolName}") ?? _toolRegistry.ResolveTool(toolName);
+        IReadOnlyDictionary<string, string> declared = tool?.ServerName == serverName && tool.InputSchema.HasValue
+            ? McpSchemaSanitizer.DeclaredTypes(McpSchemaSanitizer.SanitizeCached(tool.ServerName, tool.Name, tool.InputSchema))
+            : new Dictionary<string, string>();
 
         var argsDict = new Dictionary<string, object>();
         foreach (var (key, value) in arguments)
         {
             string v = value ?? "";
-            if (props is { } pp && pp.TryGetProperty(key, out var decl)
-                && decl.TryGetProperty("type", out var dt) && dt.ValueKind == JsonValueKind.String && dt.GetString() == "string")
+            if (declared.TryGetValue(key, out var declaredType) && declaredType == "string")
             {
                 argsDict[key] = v;
                 continue;

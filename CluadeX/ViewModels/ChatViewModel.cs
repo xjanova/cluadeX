@@ -33,6 +33,7 @@ public class ChatViewModel : ViewModelBase
     private readonly CostTrackingService _costTracker;
     private readonly SessionMemoryService? _sessionMemoryService;
     private readonly DebugLogService? _debugLog;
+    private readonly PermissionService? _permissionService;
     private CancellationTokenSource? _cts;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _autoSaveTimer;
@@ -106,6 +107,63 @@ public class ChatViewModel : ViewModelBase
             if (SetProperty(ref _autoExecute, value))
                 _settingsService.UpdateSettings(s => s.AutoExecuteCode = value);
         }
+    }
+
+    /// <summary>
+    /// "Accept edits" for this session: write_file / edit_file / multi_edit / create_directory INSIDE the open
+    /// project run without a prompt. Never commands, MCP tools, browsing, background processes, paths outside the
+    /// project, nor files that run code later (.git, .cluadex, .husky, .vscode, .claude, CI workflows, build files —
+    /// PermissionService.IsCodeRunningConfig); and the automatic build check after such an edit asks first. Off by
+    /// default (Settings ▸ AcceptEditsDefault), confirmed when switched on, never for a drive root, the user folder or
+    /// a system folder, and it ends on a project switch and on restart — it is bound to the folder it was switched on for.
+    /// </summary>
+    public bool AcceptEdits
+    {
+        get => _permissionService?.AcceptsEditsIn(_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null) == true;
+        set
+        {
+            if (_permissionService == null) return;
+            if (value == AcceptEdits) return;
+            if (value)
+            {
+                string folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                bool unsafeFolder = folder.Length > 0 && PermissionService.IsUnsafeAcceptEditsRoot(folder, _settingsService.DataRoot);
+                if (unsafeFolder) PostAcceptEditsRefusal(folder);
+                if (folder.Length == 0 || unsafeFolder
+                    || !Confirm(Loc("chat.acceptEdits.confirm"), Loc("chat.acceptEdits.confirmTitle"))
+                    || !_permissionService.SetAcceptEdits(folder))
+                {
+                    // Declined, no project, or a folder it must not cover: the CheckBox already shows a tick — re-raise so it clears.
+                    App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
+                    return;
+                }
+            }
+            else
+            {
+                _permissionService.SetAcceptEdits(null);
+            }
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>"Accept edits can't be used on X: it is a drive, your user folder or a system folder."</summary>
+    private void PostAcceptEditsRefusal(string folder)
+    {
+        Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "⚠ " + LocF("chat.acceptEdits.unsafeFolder", folder) });
+        StatusText = LocF("chat.acceptEdits.unsafeFolder", folder);
+        ScrollToBottom?.Invoke();
+    }
+
+    /// <summary>Folders a pipe caller's "acceptEdits": true was approved for by the user in this app session.</summary>
+    private readonly HashSet<string> _pipeAcceptEditsApproved = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A project switch ends Accept edits; it starts on again only when the user made that the default.</summary>
+    private void ResetAcceptEditsForProject(string? projectRoot)
+    {
+        if (_permissionService == null) return;
+        bool on = _settingsService.Settings.AcceptEditsDefault && !string.IsNullOrWhiteSpace(projectRoot);
+        _permissionService.SetAcceptEdits(on ? projectRoot : null);
+        OnPropertyChanged(nameof(AcceptEdits));
     }
 
     /// <summary>Yes/No confirmation for destructive or risky actions (title, text). A seam so the chat harness
@@ -508,9 +566,17 @@ public class ChatViewModel : ViewModelBase
         SessionMemoryService? sessionMemoryService = null,
         Services.Providers.LocalGgufProvider? localGgufProvider = null,
         AutonomousCodingService? autonomousService = null,
-        DebugLogService? debugLog = null)
+        DebugLogService? debugLog = null,
+        PermissionService? permissionService = null)
     {
         _debugLog = debugLog;
+        _permissionService = permissionService;
+        if (_permissionService != null)
+        {
+            _permissionService.AcceptEditsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
+            // The switch shows the truth for the folder that is open now, whoever changed it.
+            fileSystemService.OnWorkingDirectoryChanged += () => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
+        }
         _providerManager = providerManager;
         _agentService = agentService;
         _codeExecutionService = codeExecutionService;
@@ -1303,8 +1369,16 @@ public class ChatViewModel : ViewModelBase
             SetWorkingDirectory(folder);
     }
 
-    public void SetWorkingDirectory(string path)
+    public void SetWorkingDirectory(string path) => ApplyWorkingDirectory(path, announce: true, showEditor: true);
+
+    /// <summary>
+    /// Switch the open project. <paramref name="announce"/> posts the "📁 Opened project" line in the open chat;
+    /// <paramref name="showEditor"/> brings the workbench forward. A pipe run switches with announce only (the run
+    /// shows in the chat, not the editor) and switches BACK with neither. An empty path closes the project.
+    /// </summary>
+    private void ApplyWorkingDirectory(string path, bool announce, bool showEditor)
     {
+        path ??= "";
         _fileSystemService.WorkingDirectory = path;
         WorkingDirectory = path;
         OnPropertyChanged(nameof(ProjectName));
@@ -1317,6 +1391,17 @@ public class ChatViewModel : ViewModelBase
         // previous project's skills stayed advertised).
         _skillService.ReloadSkills();
 
+        // "Accept edits" was given for the previous folder: it ends here.
+        ResetAcceptEditsForProject(path.Length > 0 ? path : null);
+
+        if (path.Length == 0)
+        {
+            AgenticMode = false;
+            GitBranch = "";
+            StatusText = Loc("chat.status.ready");
+            return;
+        }
+
         // Auto-enable agentic mode when a project is open
         AgenticMode = true;
 
@@ -1325,16 +1410,18 @@ public class ChatViewModel : ViewModelBase
         // Detect git info
         _ = DetectGitInfoAsync();
 
-        // Add system message
-        Messages.Add(new ChatMessage
+        if (announce)
         {
-            Role = MessageRole.System,
-            Content = "\U0001F4C1 " + LocF("chat.folder.opened", path),
-        });
-        ScrollToBottom?.Invoke();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = "\U0001F4C1 " + LocF("chat.folder.opened", path),
+            });
+            ScrollToBottom?.Invoke();
+        }
 
         // Land the user in the workbench: opening a project in an IDE should show the project.
-        NavigateToEditorRequested?.Invoke();
+        if (showEditor) NavigateToEditorRequested?.Invoke();
     }
 
     private async Task DetectGitInfoAsync()
@@ -1479,16 +1566,9 @@ public class ChatViewModel : ViewModelBase
     {
         if (!await EnsureIdleAsync()) return;
 
-        _fileSystemService.WorkingDirectory = string.Empty;
-        WorkingDirectory = string.Empty;
-        AgenticMode = false;
-        OnPropertyChanged(nameof(ProjectName));
-        // Mirror SetWorkingDirectory: the closed project's branch badge, its skills and the system prompt that
-        // described it all stayed behind before.
-        GitBranch = "";
-        _agentService.InvalidateSystemPromptCache();
-        _skillService.ReloadSkills();
-        StatusText = Loc("chat.status.ready");
+        // Mirror SetWorkingDirectory: the closed project's branch badge, its skills, the system prompt that
+        // described it and its "Accept edits" all go with it.
+        ApplyWorkingDirectory(string.Empty, announce: false, showEditor: false);
     }
 
     /// <summary>New chat from the chat's own buttons: stops a running reply first. Stays on the current page —
@@ -1565,29 +1645,44 @@ public class ChatViewModel : ViewModelBase
     // ════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Run a coding task that arrived over the named-pipe MCP host. Spawns
-    /// a NEW visible chat session tagged with the caller's task id, posts
-    /// the spec as the user message, runs the agentic loop, and posts the
-    /// agent's reply. The transcript persists in codex.db like any normal
-    /// session — user can scroll back to it anytime.
+    /// Run a coding task that arrived over the named-pipe MCP host, VISIBLY: a new chat for the task (the Chat page
+    /// is brought forward), the spec as its user message, then the same agent loop, tools, hooks and permission
+    /// prompts as a typed turn — with the reply, thinking and the harness's notices streaming in live (they were
+    /// wired only for typed turns, so a pipe run showed its tool rows and then the whole answer at once).
     ///
-    /// All UI-touching work happens on the dispatcher thread. Network/agent
-    /// work is awaited so the caller (the named-pipe handler) can serialise
-    /// the final response back to ObsidianX.
+    /// <paramref name="workingDirectory"/>: the run switches the app to that project and BACK afterwards (it used to
+    /// leave the app on the caller's folder), and the chat is tagged with it so the project-filtered sidebar keeps
+    /// showing it. A folder that does not exist is refused rather than silently running in whatever is open.
+    /// <paramref name="maxSteps"/>: a step limit for this run. <paramref name="acceptEdits"/>: explicit opt-in to
+    /// "Accept edits" for this run (default: the user's AcceptEditsDefault); the user's own setting comes back after.
+    ///
+    /// The outcome is an error when the run failed, ended without finishing (step limit, error stop), was stopped in
+    /// CluadeX, or its caller went away — those all came back as success before. UI work happens on the dispatcher;
+    /// the agent loop runs on the thread pool.
     /// </summary>
-    public async Task<string> RunMcpTaskAsync(
+    public async Task<McpTaskOutcome> RunMcpTaskAsync(
         string taskId,
         string spec,
         IReadOnlyList<string>? lessons,
         IReadOnlyList<string>? contextFiles,
         string? workingDirectory,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? maxSteps = null,
+        bool? acceptEdits = null)
     {
         if (string.IsNullOrWhiteSpace(spec))
-            return "(empty spec — nothing to do)";
+            return new McpTaskOutcome("(empty spec — nothing to do)", IsError: true);
+
+        string? runDir = null;
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            try { runDir = Path.GetFullPath(workingDirectory); } catch { runDir = null; }
+            if (runDir == null || !Directory.Exists(runDir))
+                return new McpTaskOutcome($"workingDirectory does not exist: {workingDirectory}", IsError: true);
+        }
 
         // Compose the prompt. Inject "lessons learned" verbatim so the
-        // agent sees them as system-level guidance from the orchestrator.
+        // agent sees them as guidance from the orchestrator.
         var sb = new StringBuilder();
         sb.AppendLine(spec);
         if (lessons is { Count: > 0 })
@@ -1606,42 +1701,111 @@ public class ChatViewModel : ViewModelBase
                 sb.AppendLine($"- `{f}`");
         }
         string prompt = sb.ToString();
+        var dispatcher = Application.Current.Dispatcher;
+
+        // "acceptEdits": true comes from a PROGRAM — a BrainX peer or an orchestrator's intern, i.e. possibly an AI that
+        // read untrusted text — so it is the user's decision, not the caller's: never for a drive root, the user folder
+        // or a system folder, and confirmed here in CluadeX once per folder per app session. (It used to switch the
+        // prompts off for any folder that exists, with nothing in the chat saying who did it.)
+        var notes = new List<string>();      // told to the caller with the result
+        string? acceptLine = null;           // a system line in the task's chat
+        string? acceptTarget = null;         // the folder the caller's acceptEdits was approved for
+        if (acceptEdits == true && _permissionService != null)
+        {
+            string target = runDir ?? await dispatcher.InvokeAsync(CurrentProjectFolder);
+            if (target.Length == 0)
+                notes.Add("acceptEdits was ignored: no project folder is open, so every edit asks.");
+            else if (PermissionService.IsUnsafeAcceptEditsRoot(target, _settingsService.DataRoot))
+            {
+                acceptLine = "⚠ " + LocF("chat.acceptEdits.unsafeFolder", target);
+                notes.Add($"acceptEdits was refused: {target} is a drive root, the user folder, a system folder or CluadeX's own data — every edit asks.");
+            }
+            else
+            {
+                string key = target.TrimEnd('\\', '/');
+                // Already approved for this folder in this session: no second question. The user has Accept edits on
+                // there themselves: on for THIS task only — remembering the folder would let a later pipe task switch
+                // it on unasked after the user turned it off. Otherwise the user is asked, in CluadeX.
+                int decision = await dispatcher.InvokeAsync(() =>
+                    _pipeAcceptEditsApproved.Contains(key) ? 1
+                    : _permissionService.AcceptsEditsIn(target) ? 2
+                    : Confirm(LocF("chat.acceptEdits.pipeConfirm", taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
+                        && _pipeAcceptEditsApproved.Add(key) ? 1 : 0);
+                if (decision != 0)
+                {
+                    acceptTarget = target;
+                    acceptLine = "✏️ " + LocF(decision == 2 ? "chat.acceptEdits.pipeUserOn" : "chat.acceptEdits.pipeOn", target);
+                }
+                else
+                {
+                    acceptLine = "✋ " + LocF("chat.acceptEdits.pipeDeclined", target);
+                    notes.Add("acceptEdits was declined by the user in CluadeX — every edit asks.");
+                }
+            }
+        }
+        // A step limit this build can't apply is said, not swallowed.
+        if (maxSteps is int askedSteps && FindStepLimitedAgentLoop() == null)
+            notes.Add($"maxSteps={Math.Clamp(askedSteps, 1, 200)} was not applied: this CluadeX build has no per-run step limit, "
+                + $"so the 'Max agent steps' setting ({_settingsService.Settings.MaxAgentIterations}) applied.");
+        string WithNotes(string text) => notes.Count == 0 ? text : $"{text}\n\n({string.Join(" ", notes)})";
 
         // Claim the chat. If the user's own reply is still running, WAIT for it: this used to switch to a new
         // session underneath it, and that reply's tool rows and answer then landed in the MCP task's chat.
-        // Check-and-claim happens in ONE dispatcher call, so the user can't start a turn in between.
-        var dispatcher = Application.Current.Dispatcher;
+        // Check-and-claim happens in ONE dispatcher call, so the user (or a second pipe call) can't start a turn in between.
         TaskCompletionSource? turn = null;
         ChatSession? taskSession = null;
         CancellationTokenSource? linked = null;
         List<ChatMessage> historySnapshot = new();
+        string previousDir = "";       // the project to come back to ("" = none was open)
+        string? switchedTo = null;     // the folder this run opened (null = it ran in the open project)
+        string? previousAccept = null; // the user's own Accept-edits state, restored afterwards
         while (true)
         {
             Task? busy = await dispatcher.InvokeAsync<Task?>(() =>
             {
                 if (IsGenerating) return _turnDone?.Task ?? Task.Delay(250);
 
-                // 1. A fresh visible session so the user's current chat isn't disturbed. Tagged with the
-                //    caller's id so the sidebar filter and history are easy to find later.
+                previousDir = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                previousAccept = _permissionService?.AcceptEditsProject;
+
+                // 1. A fresh visible session so the user's current chat isn't disturbed (NewSession saves it).
                 NewSession();
+                // 2. The caller's project, announced in the task's chat — not the editor (the run is watched here).
+                if (runDir != null && !PathEquals(runDir, previousDir))
+                {
+                    ApplyWorkingDirectory(runDir, announce: true, showEditor: false);
+                    switchedTo = runDir;
+                }
+                string project = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
                 if (CurrentSession != null)
                 {
                     CurrentSession.Title = $"[ObsidianX] {taskId}";
-                    CurrentSession.ProjectPath = $"obsidianx-task::{taskId}";
+                    // Tagged with the run's real project: an "obsidianx-task::" tag hid it from the sidebar's
+                    // project filter, so the run the user was meant to watch was nowhere in the list.
+                    CurrentSession.ProjectPath = project;
+                    RebuildVisibleSessions();
                 }
-                // If the caller pinned a working directory, switch to it so all
-                // file ops in this session are scoped correctly.
-                if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
-                    SetWorkingDirectory(workingDirectory!);
+                // "Accept edits" for this run: the caller's request as approved above (for exactly that folder), else
+                // the user's own default. SetAcceptEdits refuses a drive / user / system folder by itself.
+                if (_permissionService != null)
+                {
+                    bool want = project.Length > 0 && (acceptEdits == true
+                        ? acceptTarget != null && PathEquals(project, acceptTarget)
+                        : acceptEdits ?? _settingsService.Settings.AcceptEditsDefault);
+                    if (!_permissionService.SetAcceptEdits(want ? project : null) && acceptLine == null)
+                        acceptLine = "⚠ " + LocF("chat.acceptEdits.unsafeFolder", project);
+                    OnPropertyChanged(nameof(AcceptEdits));
+                }
 
-                // 2. The spec as a user message, visible exactly like a human-typed prompt.
+                // 3. The spec as a user message, visible exactly like a human-typed prompt — then, when the caller
+                //    asked for Accept edits, who turned it on (or why it stayed off).
                 var userMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
                 Messages.Add(userMsg);
+                if (acceptLine != null) Messages.Add(new ChatMessage { Role = MessageRole.System, Content = acceptLine });
                 _isDirty = true;
                 ScrollToBottom?.Invoke();
 
-                // 3. Own the chat for the run. Stop works on it (the button showed during MCP runs but
-                //    cancelled nothing — there was no _cts), and IsGenerating blocks a concurrent user turn.
+                // 4. Own the chat for the run. Stop works on it, and IsGenerating blocks a concurrent turn.
                 IsGenerating = true;
                 CanSend = false;
                 turn = BeginTurn();
@@ -1649,6 +1813,10 @@ public class ChatViewModel : ViewModelBase
                 linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 _cts = linked;
                 historySnapshot = BuildModelHistory(Messages, before: userMsg, includeTools: true);
+                StatusText = Loc("chat.status.working");
+
+                // 5. Bring the Chat page forward: the run is there to be watched.
+                NavigateToChatRequested?.Invoke();
                 return null;
             });
             if (busy == null) break;
@@ -1656,52 +1824,112 @@ public class ChatViewModel : ViewModelBase
             ct.ThrowIfCancellationRequested();
         }
 
-        // 4. Run the agentic loop. Use the same CodeAgentService instance
-        //    the interactive chat uses — same provider, same tool budget,
-        //    same hooks/permissions/skills.
+        // 6. Run the agentic loop — the same CodeAgentService the interactive chat uses — and show it live.
+        var live = new LiveRunView(this, taskSession);
+        live.Attach(_agentService);
         try
         {
-            AgentLoopResult agentResult;
+            AgentLoopResult? agentResult = null;
+            Exception? failure = null;
             try
             {
-                agentResult = await _agentService.ExecuteAgenticAsync(historySnapshot, prompt, ct: linked!.Token);
+                agentResult = await Task.Run(() => RunAgentLoopAsync(historySnapshot, prompt, maxSteps, linked!.Token), CancellationToken.None);
             }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            catch (OperationCanceledException) { /* decided below from the tokens */ }
+            catch (Exception ex) { failure = ex; }
+
+            if (linked!.IsCancellationRequested || (agentResult == null && failure == null))
             {
-                // Stopped from the chat's Stop button (the caller's token is still live).
-                await dispatcher.InvokeAsync(() => PostTurnMessage(taskSession,
-                    new ChatMessage { Role = MessageRole.System, Content = $"*{Loc("chat.interruptedNote")}*", IsInterrupted = true }));
-                return "Stopped by the user in CluadeX before the task finished.";
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _debugLog?.Error("Chat", $"MCP task {taskId}: agent loop failed", ex);
-                string shown = $"❌ {Loc("chat.err.agentLoop")}";
-                await dispatcher.InvokeAsync(() => PostTurnMessage(taskSession,
-                    new ChatMessage { Role = MessageRole.Assistant, Content = shown, HasError = true }));
-                return $"Agent loop failed: {SanitizeErrorMessage(ex.Message)}";   // to the MCP caller, not the screen
+                bool callerGone = ct.IsCancellationRequested;
+                await dispatcher.InvokeAsync(() =>
+                {
+                    live.Close();
+                    PostTurnMessage(taskSession, new ChatMessage
+                    {
+                        Role = MessageRole.System,
+                        Content = $"*{Loc(callerGone ? "chat.pipe.callerGone" : "chat.interruptedNote")}*",
+                        IsInterrupted = true,
+                    });
+                    _isDirty = true;
+                    SaveNow();
+                    StatusText = Loc("chat.status.cancelled");
+                });
+                return new McpTaskOutcome(WithNotes(callerGone
+                    ? "Cancelled: the caller disconnected or cancelled the request before the task finished."
+                    : "Stopped by the user in CluadeX before the task finished."), IsError: true);
             }
 
-            // 5. Post the agent's final response to the chat so the user sees
-            //    what was returned to ObsidianX, then persist + return.
-            string finalText = agentResult.FinalResponse ?? "(agent loop returned no text)";
+            if (failure != null)
+            {
+                _debugLog?.Error("Chat", $"MCP task {taskId}: agent loop failed", failure);
+                await dispatcher.InvokeAsync(() =>
+                {
+                    live.Close();
+                    PostTurnMessage(taskSession, new ChatMessage { Role = MessageRole.Assistant, Content = $"❌ {Loc("chat.err.agentLoop")}", HasError = true });
+                    _isDirty = true;
+                    SaveNow();
+                    StatusText = Loc("chat.status.error");
+                });
+                // The caller gets the kind of failure only: the message can hold paths, keys or a stack — those stay
+                // in the Debug Log (as App.HandleMcpToolAsync does for a tool that throws).
+                return new McpTaskOutcome(WithNotes(
+                    $"Agent loop failed ({failure.GetType().Name}) — details are in CluadeX's Debug Log."), IsError: true);
+            }
+
+            // 7. The agent's final reply: the streamed bubble is finalized in place (no duplicate), persisted, returned.
+            string? finalText = string.IsNullOrWhiteSpace(agentResult!.FinalResponse)
+                ? null
+                : StripThinkingSpans(_agentToolService.StripToolCalls(agentResult.FinalResponse));
+            if (string.IsNullOrWhiteSpace(finalText)) finalText = null;
+            bool unfinished = !agentResult.Success;
+            int toolsRun = agentResult.Steps?.Sum(s => s.ToolResults?.Count ?? 0) ?? 0;
             await dispatcher.InvokeAsync(() =>
             {
-                PostTurnMessage(taskSession, new ChatMessage { Role = MessageRole.Assistant, Content = finalText });
+                live.Finish(finalText, toolsRun);
                 _isDirty = true;
                 SaveNow();
+                StatusText = unfinished ? Loc("chat.status.agentDone") : Loc("chat.status.ready");
             });
-            return finalText;
+            string text = finalText ?? (toolsRun > 0
+                ? $"(The agent ran {toolsRun} tool call(s) and ended without a written summary.)"
+                : "(agent loop returned no text)");
+            return unfinished
+                ? new McpTaskOutcome(WithNotes($"{text}\n\n(The run did not finish: {agentResult.StopReason}.)"), IsError: true)
+                : new McpTaskOutcome(WithNotes(text), IsError: false);
         }
         finally
         {
-            // Marshal the reset to the UI thread; SetProperty raises
-            // PropertyChanged which any binding consumers expect on the
-            // dispatcher.
-            // Only release what this run claimed: cancelled while still WAITING for the user's own turn, it owns
-            // nothing — resetting IsGenerating/_cts then would knock over the user's running reply.
+            live.Detach(_agentService);
+            // Marshal the reset to the UI thread; SetProperty raises PropertyChanged, which bindings expect there.
             void Release()
             {
+                live.Close();
+                // Back to the project the user had open — unless they opened another one meanwhile.
+                if (switchedTo != null && PathEquals(CurrentProjectFolder(), switchedTo))
+                {
+                    ApplyWorkingDirectory(previousDir, announce: false, showEditor: false);
+                    // The task's chat may still be on screen, tagged with the task's folder: say which project is open
+                    // NOW, or a message typed here would quietly work in the user's project while the chat talks
+                    // about the task's.
+                    if (taskSession != null && ReferenceEquals(CurrentSession, taskSession))
+                    {
+                        Messages.Add(new ChatMessage
+                        {
+                            Role = MessageRole.System,
+                            Content = "📁 " + (previousDir.Length > 0
+                                ? LocF("chat.pipe.backToProject", previousDir, switchedTo)
+                                : LocF("chat.pipe.backToNoProject", switchedTo)),
+                        });
+                        _isDirty = true;
+                        ScrollToBottom?.Invoke();
+                    }
+                }
+                // The user's own Accept-edits state comes back with their project (never onto another folder).
+                if (_permissionService != null && PathEquals(CurrentProjectFolder(), previousDir))
+                {
+                    _permissionService.SetAcceptEdits(previousAccept);
+                    OnPropertyChanged(nameof(AcceptEdits));
+                }
                 IsGenerating = false;
                 CanSend = true;
                 if (ReferenceEquals(_cts, linked)) _cts = null;
@@ -1710,13 +1938,244 @@ public class ChatViewModel : ViewModelBase
             }
             try
             {
-                if (turn != null)
-                {
-                    if (dispatcher.CheckAccess()) Release();
-                    else await dispatcher.InvokeAsync(Release);
-                }
+                if (dispatcher.CheckAccess()) Release();
+                else await dispatcher.InvokeAsync(Release);
             }
             catch { /* app closing — nothing to do */ }
+        }
+    }
+
+    private string CurrentProjectFolder() => _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+
+    // ── A per-run step limit ──
+    // CodeAgentService gains ExecuteAgenticAsync(history, userMessage, progress, ct, int? maxIterations) in the vision
+    // work (team T1, merged before this one). Until it is in the build, the overload is looked up by its EXACT shape —
+    // (List<ChatMessage>, string, …, CancellationToken, int? maxIterations), every other parameter optional — so this
+    // compiles before and after; when the build has none, the caller is told maxSteps was not applied (never silent).
+    // TODO(merge after T1): replace with _agentService.ExecuteAgenticAsync(history, prompt, ct: ct, maxIterations: limit).
+    private static System.Reflection.MethodInfo? _stepLimitedLoop;
+    private static bool _stepLimitedLoopProbed;
+
+    /// <summary>The agent loop overload that takes a per-run step limit, or null when this build has none.</summary>
+    internal static System.Reflection.MethodInfo? FindStepLimitedAgentLoop()
+    {
+        if (_stepLimitedLoopProbed) return _stepLimitedLoop;
+        try
+        {
+            _stepLimitedLoop = typeof(CodeAgentService).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .FirstOrDefault(m => m.Name == nameof(CodeAgentService.ExecuteAgenticAsync)
+                                     && m.ReturnType == typeof(Task<AgentLoopResult>) && IsStepLimitedShape(m.GetParameters()));
+        }
+        catch { _stepLimitedLoop = null; }
+        _stepLimitedLoopProbed = true;
+        return _stepLimitedLoop;
+    }
+
+    private static bool IsStepLimitParameter(System.Reflection.ParameterInfo p) =>
+        p.ParameterType == typeof(int?) && p.Name == "maxIterations";
+
+    /// <summary>(List&lt;ChatMessage&gt; history, string message, …) with exactly one CancellationToken and one
+    /// "int? maxIterations", and nothing else that has to be supplied.</summary>
+    private static bool IsStepLimitedShape(System.Reflection.ParameterInfo[] ps) =>
+        ps.Length >= 4
+        && ps[0].ParameterType == typeof(List<ChatMessage>) && ps[1].ParameterType == typeof(string)
+        && ps.Count(p => p.ParameterType == typeof(CancellationToken)) == 1
+        && ps.Count(IsStepLimitParameter) == 1
+        && ps.Skip(2).All(p => p.ParameterType == typeof(CancellationToken) || IsStepLimitParameter(p) || p.HasDefaultValue);
+
+    /// <summary>The agent loop for a pipe run, with the caller's step limit when this build supports one (when it
+    /// does not, RunMcpTaskAsync has already put that in the caller's result).</summary>
+    private Task<AgentLoopResult> RunAgentLoopAsync(List<ChatMessage> history, string prompt, int? maxSteps, CancellationToken ct)
+    {
+        if (maxSteps is int steps)
+        {
+            int limit = Math.Clamp(steps, 1, 200);
+            if (FindStepLimitedAgentLoop() is { } method)
+            {
+                var ps = method.GetParameters();
+                var args = new object?[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var p = ps[i];
+                    args[i] = i == 0 ? history
+                        : i == 1 ? prompt
+                        : p.ParameterType == typeof(CancellationToken) ? ct
+                        : IsStepLimitParameter(p) ? (int?)limit
+                        : p.DefaultValue;
+                }
+                return (Task<AgentLoopResult>)method.Invoke(_agentService, args)!;
+            }
+            _debugLog?.Warn("Chat", $"pipe run asked for maxSteps={limit}, but this build's agent loop has no per-run limit — the Max agent steps setting applies (the caller is told)");
+        }
+        return _agentService.ExecuteAgenticAsync(history, prompt, ct: ct);
+    }
+
+    /// <summary>
+    /// Shows a pipe run in its chat as it happens: the reply streams into a bubble per step, thinking goes into that
+    /// bubble's Thinking block, the harness's notices (auto-verify, compaction, recovered calls) appear inline — the
+    /// same rules as a typed turn. Agent events arrive on the pool; the chat is touched on the dispatcher only.
+    /// </summary>
+    private sealed class LiveRunView
+    {
+        private readonly ChatViewModel _vm;
+        private readonly ChatSession? _target;
+        private readonly object _lock = new();
+        private readonly StringBuilder _text = new();   // the current step's streamed text (agent thread, under _lock)
+        private int _step = int.MinValue;
+        private int _tokens;
+        // UI thread only:
+        private ChatMessage? _bubble;
+        private int _bubbleStep = int.MinValue;
+        private string _pendingThinking = "";
+
+        public LiveRunView(ChatViewModel vm, ChatSession? target) { _vm = vm; _target = target; }
+
+        public void Attach(CodeAgentService agent)
+        {
+            agent.OnAgenticStreamingToken += OnToken;
+            agent.OnThinkingUpdate += OnThinking;
+            agent.OnAgentStatus += OnStatus;
+        }
+
+        public void Detach(CodeAgentService agent)
+        {
+            agent.OnAgenticStreamingToken -= OnToken;
+            agent.OnThinkingUpdate -= OnThinking;
+            agent.OnAgentStatus -= OnStatus;
+        }
+
+        private static void Ui(Action action, bool wait = false)
+        {
+            var d = App.Current?.Dispatcher;
+            if (d == null) return;
+            if (wait && !d.CheckAccess()) d.Invoke(action);
+            else if (d.CheckAccess()) action();
+            else d.BeginInvoke(action);
+        }
+
+        private bool OnScreen => _target == null || ReferenceEquals(_target, _vm.CurrentSession);
+
+        private void OnToken(string token, int step)
+        {
+            if (TryUnwrapThinking(token, out var thought))
+            {
+                if (thought.Length > 0) Ui(() => AddThinking(thought, step, replace: false));
+                return;
+            }
+            string snapshot;
+            bool newStep;
+            int count;
+            lock (_lock)
+            {
+                newStep = step != _step;
+                if (newStep) { _text.Clear(); _step = step; }
+                _text.Append(token);
+                snapshot = _text.ToString();
+                count = ++_tokens;
+            }
+            _vm._streamingTokenCount++;
+            if (newStep) Ui(() => OpenBubble(snapshot, step), wait: true);
+            else if (count % 3 == 0) Ui(() => { if (_bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
+        }
+
+        private void OpenBubble(string text, int step)
+        {
+            if (_vm._activeAgentStatusMsg != null && OnScreen)
+            {
+                _vm._activeAgentStatusMsg.IsStreaming = false;
+                _vm.Messages.Remove(_vm._activeAgentStatusMsg);
+                _vm._activeAgentStatusMsg = null;
+            }
+            if (_bubble != null) _bubble.IsStreaming = false;
+            _bubble = new ChatMessage { Role = MessageRole.Assistant, Content = text, IsStreaming = true, ThinkingContent = _pendingThinking };
+            _bubbleStep = step;
+            _pendingThinking = "";
+            _vm.PostTurnMessage(_target, _bubble);
+            _vm.ScrollToBottom?.Invoke();
+        }
+
+        /// <summary>CodeAgentService raises OnThinkingUpdate with real thinking AND with the step's visible text,
+        /// which has already streamed into the bubble — that one is skipped.</summary>
+        private void OnThinking(string text, int step)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            string streamed;
+            lock (_lock) streamed = _text.ToString();
+            if (LooksAlreadyStreamed(text, streamed)) { Ui(() => { if (_bubble != null) _bubble.IsStreaming = false; }); return; }
+            Ui(() => AddThinking(text, step, replace: true));
+        }
+
+        private void AddThinking(string text, int step, bool replace)
+        {
+            if (!_vm.ShowThinking) return;
+            if (_bubble != null && _bubbleStep == step)
+                _bubble.ThinkingContent = replace ? JoinThinking(_bubble.ThinkingContent, text) : _bubble.ThinkingContent + text;
+            else
+                _pendingThinking = replace ? JoinThinking(_pendingThinking, text) : _pendingThinking + text;
+        }
+
+        private void OnStatus(string status)
+        {
+            bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
+                || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
+                || status.Contains("compacting") || status.Contains("บีบอัด")
+                || status.Contains("truncated") || status.Contains("ถูกตัด");
+            if (notable) _vm.OnToolStarting("agent", status);
+        }
+
+        /// <summary>UI thread: the run ended with <paramref name="finalText"/> (null = none). The last streamed bubble
+        /// is finalized in place; with no bubble, the reply is added once; with neither, an honest note — the same
+        /// safety net as a typed turn: tools ran but no summary is not an error (noSummary), nothing at all is.</summary>
+        public void Finish(string? finalText, int toolsRun)
+        {
+            string streamed;
+            lock (_lock) streamed = _text.ToString();
+            ChatMessage final;
+            if (_bubble != null)
+            {
+                if (finalText != null)
+                {
+                    _bubble.Content = finalText;
+                    _bubble.CodeBlocks = _vm._codeExecutionService.ExtractCodeBlocks(finalText);
+                }
+                else if (_bubbleStep == _step && streamed.Length > 0 && _bubble.Content != streamed)
+                {
+                    _bubble.Content = streamed;
+                }
+                _bubble.IsStreaming = false;
+                final = _bubble;
+            }
+            else
+            {
+                bool nothing = finalText == null && toolsRun == 0;
+                final = new ChatMessage
+                {
+                    Role = MessageRole.Assistant,
+                    Content = finalText
+                        ?? (toolsRun > 0 ? $"*{LocF("chat.agent.noSummary", toolsRun)}*" : $"*{Loc("chat.agent.noReply")}*"),
+                    HasError = nothing,
+                    CodeBlocks = finalText != null ? _vm._codeExecutionService.ExtractCodeBlocks(finalText) : new(),
+                };
+                _vm.PostTurnMessage(_target, final);
+            }
+            if (_pendingThinking.Length > 0)
+            {
+                final.ThinkingContent = JoinThinking(final.ThinkingContent, _pendingThinking);
+                _pendingThinking = "";
+            }
+            Close();
+            _vm.ScrollToBottom?.Invoke();
+        }
+
+        /// <summary>UI thread: stop every streaming cursor this run left open.</summary>
+        public void Close()
+        {
+            if (_bubble != null) _bubble.IsStreaming = false;
+            if (_vm._activeAgentStatusMsg != null && OnScreen)
+            {
+                _vm._activeAgentStatusMsg.IsStreaming = false;
+                _vm._activeAgentStatusMsg = null;
+            }
         }
     }
 
@@ -2296,6 +2755,10 @@ public class ChatViewModel : ViewModelBase
             Content = string.IsNullOrWhiteSpace(result.FinalResponse) ? result.Summary : result.FinalResponse,
         };
         PostTurnMessage(target, final);
+        // The build/test was not run (unseen edits, not approved): said in a line that stays with the chat — the phase
+        // banner is transient, and the model's reply above may read as if the work were verified.
+        if (result.VerifyDeclined && !final.Content.Contains(result.LastVerifyOutput))
+            PostTurnMessage(target, new ChatMessage { Role = MessageRole.System, Content = "✋ " + result.LastVerifyOutput });
         _isDirty = true;
         ScrollToBottom?.Invoke();
         SaveNow();
@@ -2739,9 +3202,14 @@ public class ChatViewModel : ViewModelBase
 
             string displayName = FormatToolDisplayName(toolResult.ToolName, toolResult.Arguments);
 
+            // A screenshot (or any image a tool returned) shows on its own row as a thumbnail — by its saved file
+            // path only; the image bytes never reach the chat or codex.db. Such a row is never merged into a group.
+            string? thumbnail = ToolThumbnailPath(toolResult);
+
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);
-            var lastMsg = onScreen ? Messages.LastOrDefault() : null;
+            var lastMsg = onScreen && thumbnail == null ? Messages.LastOrDefault() : null;
+            if (lastMsg?.ThumbnailPath != null) lastMsg = null;   // nor is anything merged into one
 
             if (lastMsg is { Role: MessageRole.ToolAction, IsCollapsedGroup: true }
                 && GetToolCategory(lastMsg.CollapsedToolNames.LastOrDefault() ?? "") == category
@@ -2795,10 +3263,38 @@ public class ChatViewModel : ViewModelBase
                 CollapsedToolNames = new List<string> { toolResult.ToolName },
                 DiffLines = toolResult.Diff?.Lines,
                 DiffStat = toolResult.Diff?.Stat,
+                ThumbnailPath = thumbnail,
+                ImageCount = toolResult.Images?.Count ?? 0,
             };
             PostTurnMessage(target, msg);
             ScrollToBottom?.Invoke();
         });
+    }
+
+    /// <summary>The first image a tool saved to disk, if any (a JPEG/PNG that exists) — what its row shows.</summary>
+    internal static string? ToolThumbnailPath(ToolResult result)
+    {
+        if (result.Images is not { Count: > 0 } images) return null;
+        foreach (var image in images)
+        {
+            string? path = image?.FilePath;
+            if (IsOpenableImage(path)) return path;
+        }
+        return null;
+    }
+
+    /// <summary>A local image file that exists — the only thing a thumbnail click hands to the shell.</summary>
+    public static bool IsOpenableImage(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            if (!Path.IsPathRooted(path) || path.StartsWith(@"\\", StringComparison.Ordinal)) return false;
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp" or ".gif")) return false;
+            return File.Exists(path);
+        }
+        catch { return false; }
     }
 
     // ─── Tool Display Name Formatting ───
@@ -3465,3 +3961,7 @@ public class ChatViewModel : ViewModelBase
         return message;
     }
 }
+
+/// <summary>What a pipe run hands back to its caller: the final reply text, and whether the run failed, was
+/// stopped, did not finish, or lost its caller (then the MCP result carries isError=true).</summary>
+public sealed record McpTaskOutcome(string Text, bool IsError);

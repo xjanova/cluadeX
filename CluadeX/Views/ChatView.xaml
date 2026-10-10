@@ -5,10 +5,12 @@
              xmlns:models="clr-namespace:CluadeX.Models"
              xmlns:helpers="clr-namespace:CluadeX.Helpers"
              xmlns:services="clr-namespace:CluadeX.Services"
-             xmlns:vm="clr-namespace:CluadeX.ViewModels">
+             xmlns:vm="clr-namespace:CluadeX.ViewModels"
+             xmlns:views="clr-namespace:CluadeX.Views">
 
     <UserControl.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
+        <views:ThumbnailSourceConverter x:Key="ThumbSource"/>
         <conv:RoleToBrushConverter x:Key="RoleBrush"/>
         <conv:RoleToBackgroundConverter x:Key="RoleBg"/>
         <conv:RoleToLabelConverter x:Key="RoleLabel"/>
@@ -295,9 +297,10 @@
                                      zero height — a hidden bubble inside a live ListBoxItem still leaves
                                      its margin behind and the chat reads as full of blank gaps.
 
-                                     Three deliberate exemptions, checked as extra Conditions below: a
-                                     FAILED tool, a tool carrying a file DIFF, and permission requests.
-                                     Those are decisions the user has to make or verify; hiding them would
+                                     Four deliberate exemptions, checked as extra Conditions below: a
+                                     FAILED tool, a tool carrying a file DIFF, a tool that returned an IMAGE
+                                     (what the agent looked at), and permission requests.
+                                     Those are things the user has to decide or verify; hiding them would
                                      be the UI concealing its own state, which is the bug this whole
                                      session has been about. -->
                                 <MultiDataTrigger>
@@ -306,6 +309,7 @@
                                         <Condition Binding="{Binding DataContext.ShowAgentInternals, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="False"/>
                                         <Condition Binding="{Binding HasError}" Value="False"/>
                                         <Condition Binding="{Binding HasDiff}" Value="False"/>
+                                        <Condition Binding="{Binding ThumbnailPath, Converter={StaticResource BoolVis}}" Value="Collapsed"/>
                                     </MultiDataTrigger.Conditions>
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </MultiDataTrigger>
@@ -873,6 +877,28 @@
 
                                         <!-- Row 4: inline diff (file edits) + collapsible tool output -->
                                         <StackPanel Grid.Row="4" Margin="0,6,0,0">
+
+                                        <!-- Image the tool returned (a screenshot): a small thumbnail of the saved
+                                             file; click opens it full size. Only a path is bound — never the bytes. -->
+                                        <Button HorizontalAlignment="Left" Margin="0,0,0,6"
+                                                Padding="0" Cursor="Hand" Background="Transparent" BorderThickness="0"
+                                                Tag="{Binding ThumbnailPath}" Click="ToolThumbnail_Click"
+                                                ToolTip="{services:Loc chat.thumbnail.tip}"
+                                                Visibility="{Binding ThumbnailPath, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource Surface2Brush}"
+                                                            Background="{StaticResource CrustBrush}" Padding="2">
+                                                        <ContentPresenter/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                            <Grid>
+                                                <Image Source="{Binding ThumbnailPath, Converter={StaticResource ThumbSource}}"
+                                                       MaxHeight="120" MaxWidth="240" Stretch="Uniform"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                            </Grid>
+                                        </Button>
 
                                         <!-- Colorized before/after diff — shown for every file edit/write -->
                                         <Border Background="{StaticResource Surface0Brush}"
@@ -1565,6 +1591,14 @@
                               Foreground="{StaticResource Subtext0Brush}"
                               FontSize="9" VerticalAlignment="Center"
                               ToolTip="{services:Loc chat.autoRunWarnTip}"/>
+                    <!-- Accept edits: file edits inside the open project run without a prompt. Session-only, off by
+                         default, confirmed when switched on; shown only while a project is open (it is per project). -->
+                    <CheckBox x:Name="AcceptEditsToggle"
+                              Content="{services:Loc chat.acceptEdits.label}" IsChecked="{Binding AcceptEdits}"
+                              Foreground="{StaticResource Subtext0Brush}"
+                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
+                              ToolTip="{services:Loc chat.acceptEdits.tip}"
+                              Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}"/>
                     <!-- Lives on the BOTTOM bar, not the project bar: the project bar is
                          hidden whenever no folder is open, and a plain chat with only the
                          brain connected is exactly where the step spam is worst. -->

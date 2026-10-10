@@ -216,6 +216,30 @@ public class AgentToolService : IDisposable
         lock (_onceLock) _onceApprovals.Add(onceKey);
     }
 
+    // ── "Accept edits" and the automatic build check ──
+    // Every file edit "Accept edits" let through without a prompt bumps _acceptedEditSeq. The automatic build check
+    // after an edit runs the project's build — and a build runs whatever the project's scripts/targets say — so while
+    // there are such edits the user has not approved a build over, the check asks first (RunVerifyBuildAsync).
+    private long _acceptedEditSeq;
+    private long _verifyApprovedThrough;
+    private long _verifyDeclinedAt;
+    private long _declineCount;          // every "No" to an automatic build bumps it (AutoBuildDeclineMark)
+    private long _lastDeclineMark;       // _declineCount at the latest "No"
+    private readonly object _verifyLock = new();
+
+    /// <summary>File edits made without a prompt (Accept edits) that no approved build has run over yet.</summary>
+    public bool HasUnreviewedAcceptedEdits
+    {
+        get { lock (_verifyLock) return Interlocked.Read(ref _acceptedEditSeq) > _verifyApprovedThrough; }
+    }
+
+    /// <summary>A mark for <see cref="ApproveAutomaticBuildAsync"/>'s <c>declinesAfter</c>: a "No" given before this
+    /// moment is not held against a run that starts now (the autonomous loop takes it when the user starts a run).</summary>
+    public long AutoBuildDeclineMark
+    {
+        get { lock (_verifyLock) return _declineCount; }
+    }
+
     private IAgentToolModule? ModuleFor(ToolType type)
     {
         foreach (var m in _toolModules)
@@ -356,25 +380,58 @@ public class AgentToolService : IDisposable
 
     // ── MCP tool policies ──
 
-    /// <summary>Server + real leaf of an MCP call: from the call when the parser set them, else from the registry
-    /// (the native loop passes only the qualified name).</summary>
-    private McpToolKey? McpKeyFor(ToolCall call)
-    {
-        if (!string.IsNullOrEmpty(call.McpServerName) && !string.IsNullOrEmpty(call.McpToolName))
-            return new McpToolKey(call.McpServerName, call.McpToolName);
-        var tool = _mcpManager.ToolRegistry.ResolveTool(call.ToolName);
-        return tool != null ? McpToolKey.From(tool) : null;
-    }
-
     /// <summary>The first policy that owns <paramref name="key"/>, or null.</summary>
-    private IMcpToolPolicy? McpPolicyFor(McpToolKey key)
+    private IMcpToolPolicy? McpPolicyFor(McpToolKey key) => McpToolClassifier.OwnerOf(key, _mcpPolicies);
+
+    /// <summary>
+    /// The permission gate for one MCP call. Null = go ahead, otherwise the failed result.
+    ///
+    /// The tool is judged by its REAL server and leaf (<see cref="McpToolClassifier"/>): the native loop passes only
+    /// "mcp__brainx-brain__brain_search", and classifying that whole string made every MCP call — brain_search
+    /// included — ask. The resolved server and leaf are written back onto the call, so the executor, the hooks and
+    /// the tool row all see the same identity.
+    ///
+    /// Order: a policy that owns the tool (hidden → refused; its verdict on the arguments), else a user rule naming
+    /// the tool or its whole server ("mcp__playwright__*"), else the default: reads and memory writes run, anything
+    /// Risky asks with its arguments shown. PermissionSystem=off does not lift that last prompt: an MCP tool can
+    /// reach the network, other machines and other agents, and a blanket switch is not consent to that — only a
+    /// rule that names the tool or its server is.
+    /// </summary>
+    private async Task<ToolResult?> CheckMcpPermissionAsync(ToolCall call)
     {
-        foreach (var p in _mcpPolicies)
+        var key = McpToolClassifier.Resolve(call, _mcpManager.ToolRegistry, out bool known);
+        if (key is { } k && known)
         {
-            try { if (p.Owns(key)) return p; }
-            catch (Exception ex) { Debug.WriteLine($"[mcp policy {p.Id}] Owns threw: {ex.Message}"); }
+            call.McpServerName ??= k.ServerName;
+            call.McpToolName ??= k.Leaf;
         }
-        return null;
+        string leaf = key?.Leaf ?? call.ToolName;
+
+        McpCallClassification? classified = key is { } kk ? McpToolClassifier.Classify(kk, call.Arguments, _mcpPolicies) : null;
+        if (classified is { Hidden: true })
+            return Fail(call, string.Format(L("mcp.policy.hidden"), call.ToolName));
+
+        var named = _permissionService.FindMcpToolRule(key?.ServerName, leaf, call.ToolName);
+        if (named == PermAction.Deny)
+            return Fail(call, $"Permission denied for {call.ToolName}");
+
+        // A policy judged this call (a screenshot is free, a click asks once per site, page script always asks).
+        if (classified?.Decision is { } decision)
+            return await CheckMcpDecisionAsync(call, leaf, decision, named);
+
+        // No server known at all (neither the parser, the registry nor the name says): nothing vouches for it — ask.
+        var risk = classified?.Risk ?? McpRisk.Risky;
+        // An "Ask" rule naming the tool asks even for a read (it used to be ignored: any rule meant "no prompt").
+        bool ask = named == PermAction.Ask || (named != PermAction.Allow && risk == McpRisk.Risky);
+        if (!ask) return null;
+
+        bool allowed = OnPermissionRequired != null
+            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+            {
+                ToolName = call.ToolName,
+                Detail = McpToolClassifier.DescribeCall(call, leaf),
+            });
+        return allowed ? null : Fail(call, $"User denied permission for {call.ToolName}");
     }
 
     private static bool McpPolicyHides(IMcpToolPolicy policy, McpToolKey key)
@@ -398,15 +455,20 @@ public class AgentToolService : IDisposable
 
     /// <summary>
     /// The permission gate for an MCP call a policy classified. Null = go ahead, otherwise the failed result.
+    /// Free: runs — unless the user wrote an Ask rule naming the tool (or its server): then it asks, every time
+    /// (reading the text of a logged-in page is "free" to a policy, but the user may want to see each one).
     /// Ask: a rule naming the tool decides, then the user's URL rules for <see cref="McpCallDecision.Url"/>, then
-    /// an earlier "Allow" for the same once-key in this chat, then the user. AlwaysAsk: the user, every time.
+    /// an earlier "Allow" for the same once-key in this chat, then the user. An Ask rule skips those shortcuts.
+    /// AlwaysAsk: the user, every time.
     /// </summary>
     private async Task<ToolResult?> CheckMcpDecisionAsync(ToolCall call, string leaf, McpCallDecision decision, PermAction? named)
     {
+        bool askRule = named == PermAction.Ask;
         switch (decision.Risk)
         {
             case McpCallRisk.Free:
-                return null;
+                if (!askRule) return null;
+                break;
             case McpCallRisk.Deny:
                 return Fail(call, string.IsNullOrWhiteSpace(decision.Detail) ? $"Permission denied for {call.ToolName}" : decision.Detail);
             case McpCallRisk.Ask:
@@ -415,13 +477,13 @@ public class AgentToolService : IDisposable
                 {
                     var urlRule = _permissionService.FindUrlRule(decision.Url, "browse", call.ToolName, legacyResource: call.ToolName);
                     if (urlRule == PermAction.Deny) return Fail(call, $"Permission denied for browse: {decision.Url}");
-                    if (urlRule == PermAction.Allow) return null;
+                    if (urlRule == PermAction.Allow && !askRule) return null;
                 }
-                if (IsOnceApproved(decision.OnceKey)) return null;
+                if (!askRule && IsOnceApproved(decision.OnceKey)) return null;
                 break;
         }
 
-        string detail = DescribeMcpCall(call, leaf);
+        string detail = McpToolClassifier.DescribeCall(call, leaf);
         if (!string.IsNullOrWhiteSpace(decision.Detail)) detail += "\n" + decision.Detail;
         bool allowed = OnPermissionRequired != null
             && await OnPermissionRequired.Invoke(new PermissionRequestInfo { ToolName = call.ToolName, Detail = detail });
@@ -651,48 +713,11 @@ public class AgentToolService : IDisposable
             // A BrainX note or another agent's message can try to steer the model, and a blanket "*" Allow
             // rule used to let it run ssh_run / agent_send / unity__execute_code without the user seeing a
             // thing. Reading is free, writing to the memory is free, anything else asks — with the
-            // arguments shown — unless a rule names this exact tool.
+            // arguments shown — unless a rule names this tool (or its whole server).
             if (call.Type == ToolType.McpTool)
             {
-                string leaf = call.McpToolName ?? call.ToolName;
-
-                // A policy that owns this tool (e.g. Claude in Chrome, direct or bridged through BrainX) can hide
-                // it and judges each CALL by its arguments — a screenshot is free, a click asks once per site.
-                IMcpToolPolicy? policy = null;
-                McpToolKey policyKey = default;
-                if (_mcpPolicies.Length > 0 && McpKeyFor(call) is { } key)
-                {
-                    policyKey = key;
-                    policy = McpPolicyFor(key);
-                }
-                if (policy != null && McpPolicyHides(policy, policyKey))
-                    return Fail(call, string.Format(L("mcp.policy.hidden"), call.ToolName));
-                McpCallDecision? decision = null;
-                if (policy != null)
-                {
-                    try { decision = policy.Classify(policyKey, call.Arguments); }
-                    catch (Exception ex) { Debug.WriteLine($"[mcp policy {policy.Id}] Classify threw: {ex.Message}"); }
-                }
-
-                var named = _permissionService.FindNamedToolRule(call.ToolName, leaf);
-                if (named == PermAction.Deny)
-                    return Fail(call, $"Permission denied for {call.ToolName}");
-                if (decision != null)
-                {
-                    var refused = await CheckMcpDecisionAsync(call, leaf, decision, named);
-                    if (refused != null) return refused;
-                }
-                else if (named == null && ClassifyMcpTool(leaf) == McpRisk.Risky)
-                {
-                    bool allowed = OnPermissionRequired != null
-                        && await OnPermissionRequired.Invoke(new PermissionRequestInfo
-                        {
-                            ToolName = call.ToolName,
-                            Detail = DescribeMcpCall(call, leaf),
-                        });
-                    if (!allowed)
-                        return Fail(call, $"User denied permission for {call.ToolName}");
-                }
+                var refused = await CheckMcpPermissionAsync(call);
+                if (refused != null) return refused;
             }
             // ── Module tools (bg_*, browser_*): the module describes the call, the user's rules decide ──
             // Checked even with the permission system off, because a module may mark a call AlwaysAsk.
@@ -721,9 +746,11 @@ public class AgentToolService : IDisposable
                 }
                 else
                 {
-                    var (perm, scope, resource) = EvaluatePermission(call);
+                    var (perm, scope, resource) = EvaluatePermission(call, out bool byAcceptEdits);
                     if (perm == PermAction.Deny)
                         return Fail(call, $"Permission denied for {scope}: {resource}");
+                    // Nobody looked at this edit: the build it may feed must not run unseen either.
+                    if (byAcceptEdits) Interlocked.Increment(ref _acceptedEditSeq);
                     if (perm == PermAction.Ask)
                     {
                         bool allowed = OnPermissionRequired != null
@@ -1086,27 +1113,12 @@ public class AgentToolService : IDisposable
                 string? offeredDescription = McpOfferedDescription(mcpTool);
                 if (offeredDescription == null) continue;
 
-                // Convert MCP tool's JSON Schema to native format
-                var paramsList = new List<(string name, string type, string desc, bool required)>();
-                if (mcpTool.InputSchema.HasValue)
-                {
-                    try
-                    {
-                        var schema = mcpTool.InputSchema.Value;
-                        var props = schema.GetProperty("properties");
-                        var reqList = schema.TryGetProperty("required", out var reqEl)
-                            ? reqEl.EnumerateArray().Select(e => e.GetString() ?? "").ToHashSet()
-                            : new HashSet<string>();
-
-                        foreach (var prop in props.EnumerateObject())
-                        {
-                            string pType = prop.Value.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "string" : "string";
-                            string pDesc = prop.Value.TryGetProperty("description", out var descEl) ? descEl.GetString() ?? "" : "";
-                            paramsList.Add((prop.Name, pType, pDesc, reqList.Contains(prop.Name)));
-                        }
-                    }
-                    catch { /* skip malformed schemas */ }
-                }
+                // The server's own schema, sanitized into the one form Anthropic, OpenAI and Gemini all accept —
+                // items, enums and nested objects intact. (Rebuilding it as {name: {type, description}} lost all of
+                // those, and a "type" given as an array threw and dropped every parameter after it.)
+                // Memoized per (server, tool, schema): this runs several times a turn, and a schema whose $refs
+                // multiply is cut to a budget once, not re-expanded every time.
+                var inputSchema = McpSchemaSanitizer.SanitizeCached(mcpTool.ServerName, mcpTool.Name, mcpTool.InputSchema);
                 // The Anthropic API rejects a tool name that isn't ^[a-zA-Z0-9_-]{1,128}$ — and it
                 // rejects the WHOLE request, so one server named with a space or a dot used to
                 // 400 every agentic turn. Skip such tools instead of poisoning the catalogue.
@@ -1118,7 +1130,7 @@ public class AgentToolService : IDisposable
                         + "Rename the server key in mcp_servers.json.");
                     continue;
                 }
-                schemas.Add(new() { Name = mcpName, Description = _mcpPolicies.Length == 0 ? mcpTool.Description ?? mcpTool.Name : offeredDescription, InputSchema = MakeSchema(paramsList.ToArray()) });
+                schemas.Add(new() { Name = mcpName, Description = _mcpPolicies.Length == 0 ? mcpTool.Description ?? mcpTool.Name : offeredDescription, InputSchema = inputSchema });
             }
         }
 
@@ -1779,45 +1791,9 @@ public class AgentToolService : IDisposable
 
     public enum McpRisk { Read, MemoryWrite, Risky }
 
-    /// <summary>BrainX tools that only look things up.</summary>
-    private static readonly HashSet<string> McpReadOnlyTools = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "brain_search", "brain_semantic_search", "brain_recall", "brain_get_note", "brain_list", "brain_walk",
-        "brain_bundle", "brain_bundles_list", "brain_stats", "brain_expertise", "brain_get_backlinks",
-        "brain_suggest_links", "brain_suggest_topics", "brain_find_contradictions", "brain_scope_list",
-        "brain_audit", "bridge_status", "agent_peers", "agent_inbox", "agent_activity", "cowork_read",
-        "cowork_who", "task_queue", "fetch_review_queue", "media_status", "ssh_profiles_list",
-    };
-
-    /// <summary>BrainX tools that add to the user's own memory — saving a lesson must not need a click.</summary>
-    private static readonly HashSet<string> McpMemoryWriteTools = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "brain_create_note", "brain_append_note", "brain_remember", "brain_mark_verified", "brain_synthesize",
-    };
-
-    /// <summary>How much an MCP tool can do. Unknown tools are Risky: they ask.</summary>
-    public static McpRisk ClassifyMcpTool(string name)
-    {
-        if (McpReadOnlyTools.Contains(name)) return McpRisk.Read;
-        if (McpMemoryWriteTools.Contains(name)) return McpRisk.MemoryWrite;
-        // Editor bridges (unity__, unreal__, roblox__): looking at the editor is free, changing it asks.
-        int sep = name.LastIndexOf("__", StringComparison.Ordinal);
-        if (sep >= 0 && Regex.IsMatch(name[(sep + 2)..],
-                "^(get|find|read|list|search|inspect|describe|validate|script_read|script_grep|script_search)",
-                RegexOptions.IgnoreCase))
-            return McpRisk.Read;
-        return McpRisk.Risky;
-    }
-
-    /// <summary>What the permission prompt shows for an MCP call: the server, the tool and its arguments.</summary>
-    private static string DescribeMcpCall(ToolCall call, string leaf)
-    {
-        string args = call.Arguments.Count == 0 ? "(no arguments)"
-            : System.Text.Json.JsonSerializer.Serialize(call.Arguments,
-                new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
-        if (args.Length > 600) args = args[..600] + "…";
-        return $"run {call.McpServerName ?? "MCP"} · {leaf} {args}";
-    }
+    /// <summary>How much an MCP tool can do, by its leaf name (a qualified name is reduced to its leaf). Unknown
+    /// tools are Risky: they ask. The rule itself lives in <see cref="McpToolClassifier.ClassifyLeaf"/>.</summary>
+    public static McpRisk ClassifyMcpTool(string name) => McpToolClassifier.ClassifyLeaf(name);
 
     /// <summary>
     /// What the permission gate decides for <paramref name="call"/> before anyone is asked: the user's first
@@ -1826,7 +1802,14 @@ public class AgentToolService : IDisposable
     /// Public so the contract harness can prove the gate without running the tool.
     /// </summary>
     public (PermAction Action, string Scope, string Resource) EvaluatePermission(ToolCall call)
+        => EvaluatePermission(call, out _);
+
+    /// <summary><see cref="EvaluatePermission(ToolCall)"/>, also saying whether the Allow came from "Accept edits"
+    /// (no rule of the user's, a file edit inside the project) — such an edit makes the next automatic build check
+    /// ask first (<see cref="RunVerifyBuildAsync"/>).</summary>
+    private (PermAction Action, string Scope, string Resource) EvaluatePermission(ToolCall call, out bool byAcceptEdits)
     {
+        byAcceptEdits = false;
         // Module tools describe their own scope and resource ("browse" + URL, "execute" + command, free reads).
         if (ModuleFor(call.Type) is { } module)
         {
@@ -1864,11 +1847,26 @@ public class AgentToolService : IDisposable
         string resource = PermissionResource(call);
         // No rule of the user's matches → the defaults: reading inside the open project is free
         // (a fresh install asked before every single read_file — 30 prompts for one review),
-        // everything else asks.
-        var perm = _permissionService.FindRule(resource, scope, call.ToolName)
-            ?? (scope == "read" && IsInsideProject(resource) ? PermAction.Allow : PermAction.Ask);
+        // a file edit inside the project is free while "Accept edits" is on, everything else asks.
+        // A rule always wins — a Deny (or Ask) rule for some folder still applies with Accept edits on.
+        var rule = _permissionService.FindRule(resource, scope, call.ToolName);
+        PermAction perm;
+        if (rule is { } r) perm = r;
+        else if (scope == "read" && IsInsideProject(resource)) perm = PermAction.Allow;
+        else if (IsAcceptedEdit(call, resource)) { perm = PermAction.Allow; byAcceptEdits = true; }
+        else perm = PermAction.Ask;
         return (perm, scope, resource);
     }
+
+    /// <summary>
+    /// "Accept edits" covers exactly the four file-writing tools, on a path inside the open project that the
+    /// session switched it on for — never execute, MCP, browse, background processes, a path outside the project,
+    /// a junction out of it, or .git / .cluadex (hooks there run code). See <see cref="PermissionService.AcceptEditsCovers"/>.
+    /// </summary>
+    private bool IsAcceptedEdit(ToolCall call, string resource) =>
+        call.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory
+        && _fileSystem.HasWorkingDirectory
+        && _permissionService.AcceptEditsCovers(_fileSystem.WorkingDirectory, resource);
 
     /// <summary>
     /// What a non-URL call's rule is matched against: the argument its executor ACTUALLY acts on, else the
@@ -2636,16 +2634,81 @@ public class AgentToolService : IDisposable
         };
     }
 
-    /// <summary>Run the project's detected/configured build for an automatic verify-after-edit. System-initiated,
-    /// so it deliberately bypasses the model permission gate + PreToolUse hooks (same precedent as the autonomous
-    /// loop's verify step) — the dangerous-command blocklist inside the runner still applies. Honors
-    /// AutoVerifyCommand when the user set one.</summary>
-    public Task<ToolResult> RunVerifyBuildAsync(CancellationToken ct)
+    /// <summary>
+    /// Run the project's detected/configured build for an automatic verify-after-edit. System-initiated: when every
+    /// edit since the last approved build was seen by the user (a prompt or a rule of theirs), it runs without the
+    /// model permission gate + PreToolUse hooks (same precedent as the autonomous loop's verify step) — the
+    /// dangerous-command blocklist inside the runner still applies. Honors AutoVerifyCommand when the user set one.
+    ///
+    /// After an edit that "Accept edits" let through WITHOUT a prompt, the build goes through the gate like a command
+    /// (scope execute, resource = the build command): a user's Allow rule for it runs it, a Deny skips it, otherwise
+    /// the user is asked — a build runs whatever the project's targets, scripts or Makefile say, and nobody looked at
+    /// those edits. Declined: null (not run), and not asked again until another such edit.
+    /// </summary>
+    /// <returns>The build's result, or null when it was not run because the user did not approve it.</returns>
+    public async Task<ToolResult?> RunVerifyBuildAsync(CancellationToken ct)
     {
         var call = new ToolCall { Type = ToolType.RunBuild, ToolName = "run_build" };
         string custom = _settingsService.Settings.AutoVerifyCommand;
         if (!string.IsNullOrWhiteSpace(custom)) call.Arguments["command"] = custom;
-        return ExecuteRunBuildAsync(call, ct);
+
+        if (HasUnreviewedAcceptedEdits)
+        {
+            string command = !string.IsNullOrWhiteSpace(custom) ? custom.Trim()
+                : _fileSystem.DetectProjectCommand(test: false)?.Command ?? "run_build";
+            if (!await ApproveAutomaticBuildAsync(command, "perm.autoVerify.acceptedEdits", ct: ct)) return null;
+        }
+        return await ExecuteRunBuildAsync(call, ct);
+    }
+
+    /// <summary>
+    /// The one approval every AUTOMATIC build/test run goes through — the verify-after-edit above and the Autonomous
+    /// loop's build/test command (<see cref="AutonomousCodingService"/>). True straight away while every file edit
+    /// since the last approved build was seen by the user (a prompt or a rule of theirs), or with the permission
+    /// system off. Otherwise <paramref name="command"/> is judged like a command (scope execute, tool run_build): the
+    /// user's Allow rule approves it, a Deny refuses it, else the user is asked — a build runs whatever the project's
+    /// targets, scripts, Makefile or test files say, and nobody looked at those edits.
+    /// A "No" is not asked again for the same edits (no nagging every step) — unless it was given before
+    /// <paramref name="declinesAfter"/> (<see cref="AutoBuildDeclineMark"/>): a run the user starts later asks anew.
+    /// </summary>
+    /// <param name="reasonKey">Localization key of the line that tells the user why they are asked.</param>
+    public async Task<bool> ApproveAutomaticBuildAsync(string command, string reasonKey = "perm.autoVerify.acceptedEdits",
+        long declinesAfter = 0, CancellationToken ct = default)
+    {
+        long seq = Interlocked.Read(ref _acceptedEditSeq);
+        if (!_settingsService.Settings.Features.PermissionSystem) return true;
+        lock (_verifyLock)
+        {
+            if (seq <= _verifyApprovedThrough) return true;
+            // Declined for these very edits already (and, for a run, during that run) — don't ask again.
+            if (seq <= _verifyDeclinedAt && _lastDeclineMark > declinesAfter) return false;
+        }
+        ct.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(command)) command = "run_build";
+        var rule = _permissionService.FindRule(command, "execute", "run_build");
+        bool approved;
+        if (rule == PermAction.Deny) approved = false;
+        else if (rule == PermAction.Allow) approved = true;
+        else
+        {
+            approved = OnPermissionRequired != null
+                && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+                {
+                    ToolName = "run_build",
+                    Detail = $"execute: {command}\n{L(reasonKey)}",
+                });
+        }
+        lock (_verifyLock)
+        {
+            if (approved) _verifyApprovedThrough = Math.Max(_verifyApprovedThrough, seq);
+            else
+            {
+                _verifyDeclinedAt = Math.Max(_verifyDeclinedAt, seq);
+                _lastDeclineMark = ++_declineCount;
+            }
+        }
+        return approved;
     }
 
     private ToolResult ExecuteListFiles(ToolCall call)

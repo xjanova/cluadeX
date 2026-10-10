@@ -25,21 +25,26 @@ public class AutonomousCodingService
     private readonly CodeAgentService _agent;
     private readonly FileSystemService _fileSystem;
     private readonly SettingsService _settings;
+    private readonly AgentToolService _tools;
 
     /// <summary>Status/progress for the UI (iteration banners, verify pass/fail, summary).</summary>
     public event Action<string>? OnPhase;
 
-    public AutonomousCodingService(CodeAgentService agent, FileSystemService fileSystem, SettingsService settings)
+    public AutonomousCodingService(CodeAgentService agent, FileSystemService fileSystem, SettingsService settings, AgentToolService tools)
     {
         _agent = agent;
         _fileSystem = fileSystem;
         _settings = settings;
+        _tools = tools;
     }
 
     public async Task<AutonomousResult> RunAsync(List<ChatMessage> history, string goal, CancellationToken ct = default)
     {
         var s = _settings.Settings;
         var result = new AutonomousResult();
+        // A "No" to an automatic build given before this run started is not held against it (starting a run is a new
+        // decision of the user's): the run asks again. One given during it is — the run stops instead of asking twice.
+        long declineMark = _tools.AutoBuildDeclineMark;
 
         int maxFix = Math.Clamp(s.AutoFixMaxIterations, 1, 25);
         int maxReview = Math.Clamp(s.AutoReviewMaxRounds, 1, 25);
@@ -80,8 +85,18 @@ public class AutonomousCodingService
             }
 
             Report($"▶ Iteration {i} — running `{verifyCmd}`…");
-            var (ok, output) = await RunCommandAsync(verifyCmd, ct);
-            result.LastVerifyOutput = output;
+            var run = await RunVerifyAsync(verifyCmd, declineMark, ct);
+            result.LastVerifyOutput = run.Output;
+            if (run.Declined)
+            {
+                // Files were edited unseen (Accept edits) and the user did not approve running the build over them:
+                // the run stops here — not "fixed", not "passed", and never re-asked every iteration. (The summary
+                // below says so.)
+                result.VerifyDeclined = true;
+                break;
+            }
+            bool ok = run.Ok;
+            string output = run.Output;
             if (ok)
             {
                 result.GoalMet = true;
@@ -119,8 +134,17 @@ public class AutonomousCodingService
                     // A review fix must not silently break the build — re-run verify and repair if needed.
                     if (!string.IsNullOrEmpty(verifyCmd))
                     {
-                        var (ok2, out2) = await RunCommandAsync(verifyCmd, ct);
-                        result.LastVerifyOutput = out2;
+                        var run2 = await RunVerifyAsync(verifyCmd, declineMark, ct);
+                        result.LastVerifyOutput = run2.Output;
+                        if (run2.Declined)
+                        {
+                            // The review's edits went in unseen and the build over them was not approved: stop.
+                            result.VerifyDeclined = true;
+                            result.ReviewClean = false;
+                            break;
+                        }
+                        bool ok2 = run2.Ok;
+                        string out2 = run2.Output;
                         if (!ok2)
                         {
                             Report("✗ A review fix broke the build — repairing.");
@@ -205,12 +229,38 @@ public class AutonomousCodingService
             : null;
     }
 
-    /// <summary>Run a shell command in the working dir, capturing stdout+stderr; 10-minute hard cap.</summary>
+    /// <summary>One verify run: <see cref="Declined"/> = not run, because the user did not approve it.</summary>
+    private readonly record struct VerifyRun(bool Ok, string Output, bool Declined);
+
+    /// <summary>Run a shell command in the working dir, capturing stdout+stderr; 10-minute hard cap. Goes through the
+    /// blocklist and the automatic-build approval (<see cref="RunVerifyAsync"/>) like every verify run.</summary>
     private async Task<(bool ok, string output)> RunCommandAsync(string command, CancellationToken ct)
     {
-        // Checked again here, not only where the run starts: nothing reaches the shell past the blocklist.
-        if (VerifyCommandBlockReason(command) is { } blocked) return (false, blocked);
+        var run = await RunVerifyAsync(command, declineMark: 0, ct);
+        return (run.Ok, run.Output);
+    }
 
+    /// <summary>
+    /// The only way a verify command reaches the shell. 1) The dangerous-command blocklist. 2) The automatic-build
+    /// approval shared with the verify-after-edit (<see cref="AgentToolService.ApproveAutomaticBuildAsync"/>): after
+    /// file edits "Accept edits" let through without a prompt, the build/test command — which runs whatever the
+    /// project's scripts, targets or test files now say — needs the user's Yes (or an Allow rule for run_build).
+    /// It used to run them unasked, even right after the user said No to the same build.
+    /// </summary>
+    private async Task<VerifyRun> RunVerifyAsync(string command, long declineMark, CancellationToken ct)
+    {
+        // Checked again here, not only where the run starts: nothing reaches the shell past the blocklist.
+        if (VerifyCommandBlockReason(command) is { } blocked) return new VerifyRun(false, blocked, false);
+
+        if (!await _tools.ApproveAutomaticBuildAsync(command, "perm.autoVerify.autonomous", declineMark, ct))
+            return new VerifyRun(false, string.Format(LocalizedResources.Instance["chat.auto.verifyDeclined"], command), true);
+
+        var (ok, output) = await RunProcessAsync(command, ct);
+        return new VerifyRun(ok, output, false);
+    }
+
+    private async Task<(bool ok, string output)> RunProcessAsync(string command, CancellationToken ct)
+    {
         Process? proc = null;
         try
         {
@@ -263,6 +313,8 @@ public class AutonomousCodingService
         sb.AppendLine(r.GoalMet
             ? $"✅ **Goal met** after {r.FixIterations} iteration(s)."
             : $"⚠ **Goal NOT met** after {r.FixIterations}/{maxFix} iterations — manual attention needed.");
+        if (r.VerifyDeclined)
+            sb.AppendLine("✋ " + r.LastVerifyOutput);
         if (r.ReviewRounds > 0)
             sb.AppendLine(r.ReviewClean
                 ? $"✅ Code review clean after {r.ReviewRounds} round(s)."
@@ -278,6 +330,9 @@ public class AutonomousResult
 {
     public bool GoalMet { get; set; }
     public bool ReviewClean { get; set; }
+    /// <summary>The run stopped because the user did not approve running the build/test command over file edits
+    /// that Accept edits let through unseen (LastVerifyOutput says so, localized).</summary>
+    public bool VerifyDeclined { get; set; }
     public int FixIterations { get; set; }
     public int ReviewRounds { get; set; }
     public string VerifyCommand { get; set; } = "";

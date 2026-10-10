@@ -26,6 +26,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // A test harness that creates App only for its XAML resources (chattest) gets exactly that. WPF calls
+        // OnStartup as soon as the harness's dispatcher runs, and this method then built a SECOND DI container
+        // (the harness's Thai UI checks read the wrong LocalizationService), showed MainWindow, auto-connected the
+        // installed BrainX against the user's vault, opened the real pipe, called the license server and rewrote
+        // ~/.cluadex/install.json to point at the harness exe. Only the entry assembly is checked here, so the app
+        // still starts as "dotnet CluadeX.dll"; install.json additionally requires CluadeX.exe (WriteInstallMarker).
+        if (!McpHostService.IsCluadeXApp()) return;
+
         // ─── Single instance ───
         // Two CluadeX processes fight over the SAME settings.json/session DB, and the second
         // instance's llama-server startup sweep kills the first instance's (still-owned) server —
@@ -121,47 +129,56 @@ public partial class App : Application
                 }
             });
 
-            try
+            // MCP servers on their own task too: a server that never answers initialize (an npx package still
+            // downloading, mcp-remote waiting for a login) can hold InitializeAsync for its whole startup timeout, and
+            // the pipe host, install.json and the bundled hooks below must not wait for that. A pipe task that arrives
+            // meanwhile waits for it briefly (WaitForMcpStartupAsync) and its caller is told when it was not ready.
+            var mcpStartup = Task.Run(async () =>
             {
-                // Initialize MCP servers
-                var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
-
-                // Surface the manager on MainViewModel BEFORE starting anything, so the
-                // status chip shows "connecting…" and then whatever really happens —
-                // including a start that fails outright. Binding it afterwards would
-                // hide exactly the case the chip exists for.
-                Dispatcher.Invoke(() =>
+                try
                 {
-                    var mainVm = _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>();
-                    mainVm.McpServers = mcpManager;
-                });
+                    // Initialize MCP servers
+                    var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
 
-                await mcpManager.InitializeAsync();
-                dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
+                    // Surface the manager on MainViewModel BEFORE starting anything, so the
+                    // status chip shows "connecting…" and then whatever really happens —
+                    // including a start that fails outright. Binding it afterwards would
+                    // hide exactly the case the chip exists for.
+                    Dispatcher.Invoke(() =>
+                    {
+                        var mainVm = _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>();
+                        mainVm.McpServers = mcpManager;
+                    });
 
-                if (mcpManager.ConfigLoadFailed)
-                    dbg?.Warn("MCP", "mcp_servers.json could not be read — it is left untouched and nothing is written to it this session");
+                    await mcpManager.InitializeAsync();
+                    dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
 
-                // BrainX installed but not in our MCP list (installed after CluadeX, or before it existed):
-                // connect it without asking — that is what installing it meant — unless the user removed it /
-                // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
-                // Not installed: invite, once.
-                var auto = await mcpManager.AutoConnectInstalledBrainAsync();
-                var brainSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
-                if (auto != Services.Mcp.McpServerManager.BrainAutoConnect.NotNeeded)
-                {
-                    dbg?.Info("MCP", $"installed BrainX startup check: {auto} · {mcpManager.BrainStatusText}");
+                    if (mcpManager.ConfigLoadFailed)
+                        dbg?.Warn("MCP", "mcp_servers.json could not be read — it is left untouched and nothing is written to it this session");
+
+                    // BrainX installed but not in our MCP list (installed after CluadeX, or before it existed):
+                    // connect it without asking — that is what installing it meant — unless the user removed it /
+                    // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
+                    // Not installed: invite, once.
+                    var auto = await mcpManager.AutoConnectInstalledBrainAsync();
+                    var brainSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
+                    if (auto != Services.Mcp.McpServerManager.BrainAutoConnect.NotNeeded)
+                    {
+                        dbg?.Info("MCP", $"installed BrainX startup check: {auto} · {mcpManager.BrainStatusText}");
+                    }
+                    else if (mcpManager.GetBrainInstallState() == Services.Mcp.McpServerManager.BrainInstall.NotInstalled
+                             && !brainSettings.BrainXInviteDismissed && !brainSettings.BrainXAutoConnectDeclined)
+                    {
+                        _ = Dispatcher.BeginInvoke(() => _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>().ScheduleBrainXInvite());
+                    }
                 }
-                else if (mcpManager.GetBrainInstallState() == Services.Mcp.McpServerManager.BrainInstall.NotInstalled
-                         && !brainSettings.BrainXInviteDismissed && !brainSettings.BrainXAutoConnectDeclined)
+                catch (Exception ex)
                 {
-                    _ = Dispatcher.BeginInvoke(() => _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>().ScheduleBrainXInvite());
+                    dbg?.Warn("MCP", "McpServerManager init failed", ex);
                 }
-            }
-            catch (Exception ex)
-            {
-                dbg?.Warn("MCP", "McpServerManager init failed", ex);
-            }
+            });
+            try { _serviceProvider.GetRequiredService<McpServerManager>().TrackStartup(mcpStartup); }
+            catch (Exception ex) { dbg?.Warn("MCP", "could not track the MCP startup", ex); }
 
             try
             {
@@ -175,9 +192,9 @@ public partial class App : Application
                 await host.StartAsync();
                 dbg?.Info("MCP", $"McpHostService listening on pipe '{host.PipeName}'");
 
-                // Self-register a discovery marker (~/.cluadex/install.json) so an external orchestrator
+                // Self-register a discovery marker (<data root>\install.json) so an external orchestrator
                 // (e.g. BrainX's CluadeXLauncher) can find THIS install's exe + pipe without guessing paths.
-                WriteInstallMarker(host.PipeName);
+                WriteInstallMarker(host);
 
                 // Surface the host on MainViewModel so the sidebar status chip
                 // can data-bind to its observable properties. Do this on the UI
@@ -250,40 +267,34 @@ public partial class App : Application
     // ════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Write ~/.cluadex/install.json describing THIS running install (exe path, version, pipe name, token
-    /// file) so a launcher/orchestrator can discover and start CluadeX, and connect to its named pipe,
-    /// without hard-coding paths. Best-effort — never blocks startup.
+    /// Write install.json (exe path, version, pipe name, token file) into the app's data root — ~/.cluadex for an
+    /// installed app, &lt;exe&gt;\Data for a portable copy — so a launcher/orchestrator can discover and start CluadeX
+    /// and connect to its named pipe without hard-coding paths. Only CluadeX.exe itself writes it (a harness never
+    /// does), and every start of the installed app rewrites it, which repairs a marker a harness left behind.
+    /// Best-effort — never blocks startup.
     /// </summary>
-    private static void WriteInstallMarker(string pipeName)
+    private static void WriteInstallMarker(McpHostService host)
     {
-        try
-        {
-            string dir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
-            System.IO.Directory.CreateDirectory(dir);
-
-            string exe = Environment.ProcessPath ?? "";
-            var marker = new
-            {
-                exePath = exe,
-                installDir = string.IsNullOrEmpty(exe) ? "" : System.IO.Path.GetDirectoryName(exe),
-                version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "",
-                pipeName,
-                tokenFile = System.IO.Path.Combine(dir, "mcp-host-token"),
-                updatedAt = DateTime.UtcNow.ToString("o"),
-            };
-            System.IO.File.WriteAllText(
-                System.IO.Path.Combine(dir, "install.json"),
-                System.Text.Json.JsonSerializer.Serialize(marker, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { /* discovery marker is best-effort */ }
+        if (!McpHostService.WriteInstallMarker(host.DataDirectory, host.PipeName, host.TokenFilePath))
+            System.Diagnostics.Debug.WriteLine("install.json not written (not the CluadeX app, or the data folder refused the write)");
     }
+
+    /// <summary>How long an agent task from the pipe waits for the startup MCP servers (BrainX) before it runs anyway.</summary>
+    private static readonly TimeSpan McpStartupWait = TimeSpan.FromSeconds(15);
 
     private async Task<McpToolResult> HandleMcpToolAsync(McpToolInvocation invocation, CancellationToken ct)
     {
         try
         {
-            return invocation.ToolName switch
+            // The pipe accepts tasks before the MCP servers finished starting: an agent task waits for them briefly,
+            // and when they are still not ready its caller is told (its run may have had no brain / MCP tools).
+            string? startupNote = null;
+            if (invocation.ToolName is "cluadex.write_code" or "cluadex.run_skill" or "cluadex.review"
+                && _serviceProvider?.GetService<McpServerManager>() is { } mcpManager
+                && !await mcpManager.WaitForStartupAsync(McpStartupWait, ct))
+                startupNote = McpServerManager.StartupNotReadyNote;
+
+            var result = invocation.ToolName switch
             {
                 "cluadex.write_code"        => await HandleWriteCodeAsync(invocation.Arguments, ct),
                 "cluadex.run_skill"         => await HandleRunSkillAsync(invocation.Arguments, ct),
@@ -292,6 +303,9 @@ public partial class App : Application
                 "cluadex.set_model"         => await HandleSetModelAsync(invocation.Arguments, ct),
                 _ => ErrorResult($"Unknown tool '{invocation.ToolName}'"),
             };
+            if (startupNote != null)
+                result.Content.Add(new McpContentItem { Type = "text", Text = $"({startupNote})" });
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -299,7 +313,9 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            return ErrorResult($"Tool '{invocation.ToolName}' threw: {ex.Message}");
+            // The caller gets the kind of failure; the details (paths, stack) go to the debug log only.
+            TryLogToDebugService(CluadeX.Models.LogLevel.Error, "MCP", $"pipe tool '{invocation.ToolName}' threw", ex);
+            return ErrorResult($"Tool '{invocation.ToolName}' failed ({ex.GetType().Name}) — details are in CluadeX's Debug Log.");
         }
     }
 
@@ -316,9 +332,47 @@ public partial class App : Application
 
         if (string.IsNullOrWhiteSpace(spec))
             return ErrorResult("'spec' is required");
+        if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
+            return ErrorResult(stepsError!);
+        bool? acceptEdits = ReadBool(args, "acceptEdits");
 
-        string finalText = await chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, ct);
-        return TextResult(finalText);
+        var outcome = await chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, ct, maxSteps, acceptEdits);
+        return ToMcpResult(outcome);
+    }
+
+    /// <summary>A run that failed, hit its step limit, was stopped in CluadeX or lost its caller is an error result —
+    /// it used to come back as isError=false, indistinguishable from success.</summary>
+    private static McpToolResult ToMcpResult(ViewModels.McpTaskOutcome outcome)
+        => outcome.IsError ? ErrorResult(outcome.Text) : TextResult(outcome.Text);
+
+    /// <summary>Optional "maxSteps": an integer 1-200 (a numeric string is accepted). Absent = the setting.</summary>
+    private static bool TryReadMaxSteps(System.Text.Json.JsonElement args, out int? maxSteps, out string? error)
+    {
+        maxSteps = null;
+        error = null;
+        if (args.ValueKind != System.Text.Json.JsonValueKind.Object || !args.TryGetProperty("maxSteps", out var v)
+            || v.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return true;
+        int n;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt32(out n)) { }
+        else if (v.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(v.GetString(), out n)) { }
+        else { error = "'maxSteps' must be an integer from 1 to 200"; return false; }
+        if (n < 1 || n > 200) { error = "'maxSteps' must be an integer from 1 to 200"; return false; }
+        maxSteps = n;
+        return true;
+    }
+
+    /// <summary>true/false (or "true"/"false"); anything else = not given.</summary>
+    private static bool? ReadBool(System.Text.Json.JsonElement args, string name)
+    {
+        if (args.ValueKind != System.Text.Json.JsonValueKind.Object || !args.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.True => true,
+            System.Text.Json.JsonValueKind.False => false,
+            System.Text.Json.JsonValueKind.String when bool.TryParse(v.GetString(), out bool b) => b,
+            _ => null,
+        };
     }
 
     private async Task<McpToolResult> HandleRunSkillAsync(System.Text.Json.JsonElement args, CancellationToken ct)
@@ -356,20 +410,23 @@ public partial class App : Application
         // UNRESTRICTED — /brainx-tester, whose entire point is that it cannot
         // write files, happily called write_file (observed 2026-07-31). The
         // in-app path sets this from SendMessage; the pipe path had no equivalent.
+        if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
+            return ErrorResult(stepsError!);
         var toolService = _serviceProvider.GetRequiredService<Services.AgentToolService>();
         if (skill.AllowedTools is { Count: > 0 })
             toolService.ActiveSkillAllowedTools = skill.AllowedTools;
 
         try
         {
-            string finalText = await chatVm.RunMcpTaskAsync(
+            var outcome = await chatVm.RunMcpTaskAsync(
                 taskId: $"{taskId}-skill-{skillName}",
                 spec: sb.ToString(),
                 lessons: null,
                 contextFiles: null,
                 workingDirectory: cwd,
-                ct: ct);
-            return TextResult(finalText);
+                ct: ct,
+                maxSteps: maxSteps);
+            return ToMcpResult(outcome);
         }
         finally
         {
@@ -531,9 +588,8 @@ public partial class App : Application
         // before/after state to mcp-host.log so we can verify the path
         // taken if something looks off (e.g. settings still showing the
         // previous provider after a successful-looking response).
-        var logFile = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "mcp-host.log");
+        // The host's own log, in the data root (a portable copy keeps it next to the exe).
+        var logFile = System.IO.Path.Combine(settingsService.DataRoot, "mcp-host.log");
         var beforeProvider = providerManager.ActiveProviderType;
         var beforeReady = providerManager.ActiveProvider.IsReady;
         try { System.IO.File.AppendAllText(logFile,
@@ -614,14 +670,14 @@ public partial class App : Application
             "  - Suggested patch: minimal diff to address the comments (or 'none')\n\n" +
             "## Diff\n```diff\n" + diff + "\n```";
 
-        string finalText = await chatVm.RunMcpTaskAsync(
+        var outcome = await chatVm.RunMcpTaskAsync(
             taskId: $"{taskId}-review",
             spec: spec,
             lessons: null,
             contextFiles: null,
             workingDirectory: null,
             ct: ct);
-        return TextResult(finalText);
+        return ToMcpResult(outcome);
     }
 
     // ─── Tool result helpers ─────────────────────────────────────────────

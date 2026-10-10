@@ -50,6 +50,43 @@ public class FeatureItem : ViewModelBase
 
     private string _statusLabel = "";
     public string StatusLabel { get => _statusLabel; set => SetProperty(ref _statusLabel, value); }
+
+    /// <summary>An extra line under the description (Dev Preview: the browser engine found, or how to install it).</summary>
+    private string _detail = "";
+    public string Detail { get => _detail; set => SetProperty(ref _detail, value); }
+
+    /// <summary>An optional setting shown under the description (Dev Preview: what to do with sites outside this
+    /// PC — ask / allow / block). Empty = none.</summary>
+    public ObservableCollection<FeatureChoice> Choices { get; } = new();
+    public bool HasChoices => Choices.Count > 0;
+
+    private string _choiceLabel = "";
+    public string ChoiceLabel { get => _choiceLabel; set => SetProperty(ref _choiceLabel, value); }
+
+    private string _choiceTip = "";
+    public string ChoiceTip { get => _choiceTip; set => SetProperty(ref _choiceTip, value); }
+
+    private string? _selectedChoice;
+    /// <summary>The chosen <see cref="FeatureChoice.Value"/>; a change is saved through <see cref="ChoiceChanged"/>.</summary>
+    public string? SelectedChoice
+    {
+        get => _selectedChoice;
+        set
+        {
+            if (string.IsNullOrEmpty(value)) return;   // the list being relabelled never clears the setting
+            if (SetProperty(ref _selectedChoice, value)) ChoiceChanged?.Invoke(value);
+        }
+    }
+
+    public Action<string>? ChoiceChanged { get; set; }
+}
+
+/// <summary>One option of a <see cref="FeatureItem"/> setting (the label follows the language).</summary>
+public class FeatureChoice : ViewModelBase
+{
+    public string Value { get; init; } = "";
+    private string _label = "";
+    public string Label { get => _label; set => SetProperty(ref _label, value); }
 }
 
 public class FeaturesViewModel : ViewModelBase
@@ -371,6 +408,18 @@ public class FeaturesViewModel : ViewModelBase
             Key = "feature.smartEditing", Icon = "\u2728",
             Category = "tools", IsToggleable = true, IsEnabled = ft.SmartEditing,
         });
+        // Dev Preview: background dev servers + the built-in browser the agent drives (Detail = engine probe;
+        // the choice = what the built-in browser does with sites outside this PC).
+        var devPreview = new FeatureItem
+        {
+            Key = "feature.devPreview", Icon = "\U0001F441\ufe0f",
+            Category = "tools", IsToggleable = true, IsEnabled = ft.DevPreview,
+        };
+        foreach (var value in new[] { "ask", "allow", "deny" }) devPreview.Choices.Add(new FeatureChoice { Value = value });
+        string mode = (_settingsService.Settings.BrowserAllowExternal ?? "ask").Trim().ToLowerInvariant();
+        devPreview.SelectedChoice = mode is "allow" or "deny" ? mode : "ask";
+        devPreview.ChoiceChanged = SaveBrowserExternalMode;
+        ToolFeatures.Add(devPreview);
 
         // ─── Security ───
         SecurityFeatures.Add(new FeatureItem
@@ -458,6 +507,45 @@ public class FeaturesViewModel : ViewModelBase
                 item.StatusLabel = _loc.T("features.free");
             else
                 item.StatusLabel = item.IsEnabled ? _loc.T("features.enabled") : _loc.T("features.disabled");
+
+            if (item.Key == "feature.devPreview")
+            {
+                item.Detail = DevPreviewEngineLine();
+                item.ChoiceLabel = _loc.T("devPreview.externalLabel");
+                item.ChoiceTip = _loc.T("devPreview.externalTip");
+                foreach (var c in item.Choices) c.Label = _loc.T("devPreview.external." + c.Value);
+            }
+        }
+    }
+
+    /// <summary>Settings ▸ Features ▸ Dev Preview ▸ Sites outside this PC: "ask", "allow" or "deny".</summary>
+    private void SaveBrowserExternalMode(string value)
+    {
+        if (value is not ("ask" or "allow" or "deny")) return;
+        if (string.Equals(_settingsService.Settings.BrowserAllowExternal, value, StringComparison.OrdinalIgnoreCase)) return;
+        _settingsService.Settings.BrowserAllowExternal = value;
+        if (!_settingsService.Save())
+        {
+            _log?.Error("Features", $"Saving the external-sites choice failed: {_settingsService.LastSaveError}");
+            ActivationSuccess = false;
+            ActivationMessage = _loc.T("featuresm.saveFailed");
+        }
+    }
+
+    /// <summary>"Engine: WebView2 154.0… · Edge … · Chrome …" or the command that installs the runtime.</summary>
+    private string DevPreviewEngineLine()
+    {
+        try
+        {
+            var info = Services.Browser.BrowserEngineProbe.Probe();
+            return info.HasWebView2
+                ? string.Format(_loc.T("devPreview.engineFound"), info.Summary)
+                : string.Format(_loc.T("devPreview.engineMissing"), Services.Browser.BrowserEngineProbe.InstallCommand);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Features", "Browser engine probe failed", ex);
+            return string.Format(_loc.T("devPreview.engineMissing"), Services.Browser.BrowserEngineProbe.InstallCommand);
         }
     }
 
@@ -483,6 +571,7 @@ public class FeaturesViewModel : ViewModelBase
             case "feature.buddy": ft.BuddyCompanion = item.IsEnabled; break;
             case "feature.plugins": ft.PluginSystem = item.IsEnabled; break;
             case "feature.taskManager": ft.TaskManager = item.IsEnabled; break;
+            case "feature.devPreview": ft.DevPreview = item.IsEnabled; break;
             case "feature.webFetch": ft.WebFetch = item.IsEnabled; break;
             case "feature.git": ft.GitIntegration = item.IsEnabled; break;
             case "feature.github": ft.GitHubIntegration = item.IsEnabled; break;

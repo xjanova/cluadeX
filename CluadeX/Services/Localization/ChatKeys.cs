@@ -227,5 +227,92 @@ internal static class ChatKeys
         ["palette.noMatches"] = new() { ["en"] = "No matches", ["th"] = "ไม่พบรายการ" },
         ["palette.oneResult"] = new() { ["en"] = "1 result", ["th"] = "1 รายการ" },
         ["palette.results"] = new() { ["en"] = "{0} results", ["th"] = "{0} รายการ" },
+
+        // ─── Accept edits (status-bar switch) ───
+        ["chat.acceptEdits.label"] = new() { ["en"] = "Accept edits", ["th"] = "ยอมรับการแก้ไขไฟล์" },
+        ["chat.acceptEdits.tip"] = new()
+        {
+            ["en"] = "Accept edits: write_file, edit_file, multi_edit and create_directory run without asking — only inside the open project. These still ask: commands, MCP tools, browsing, background processes, anything outside the project, and files that run code later (.git, .husky, .vscode, .claude, CI workflows, project/build files such as *.csproj, package.json, Makefile) — and an automatic build/test after such an edit (the check after an edit, or the Autonomous loop) asks before it runs. Ends when you switch projects or restart CluadeX (unless AcceptEditsDefault is set in settings.json).",
+            ["th"] = "ยอมรับการแก้ไขไฟล์: write_file, edit_file, multi_edit และ create_directory จะทำงานโดยไม่ถาม — เฉพาะภายในโปรเจกต์ที่เปิดอยู่ สิ่งที่ยังถามเหมือนเดิม: การรันคำสั่ง เครื่องมือ MCP การเปิดเว็บ โปรเซสเบื้องหลัง ทุกอย่างนอกโปรเจกต์ และไฟล์ที่จะรันโค้ดภายหลัง (.git, .husky, .vscode, .claude, CI workflow และไฟล์โปรเจกต์/build เช่น *.csproj, package.json, Makefile) — การ build/test อัตโนมัติหลังแก้ไขแบบนี้ (การตรวจหลังแก้ไข หรือโหมดทำงานอัตโนมัติ Autonomous) ก็จะถามก่อนรัน จะปิดเองเมื่อสลับโปรเจกต์หรือเปิด CluadeX ใหม่ (เว้นแต่ตั้ง AcceptEditsDefault ไว้ใน settings.json)",
+        },
+        ["chat.acceptEdits.confirmTitle"] = new() { ["en"] = "Accept edits without asking?", ["th"] = "ยอมรับการแก้ไขไฟล์โดยไม่ถาม?" },
+        ["chat.acceptEdits.confirm"] = new()
+        {
+            ["en"] = "The AI will create and change files inside this project WITHOUT asking you first.\n\nStill asking: commands, MCP tools, browsing, files outside the project, and files that run code later (git hooks, .vscode, CI workflows, project/build files). An automatic build/test after an edit you did not see (the check after an edit, or the Autonomous loop) asks before it runs. This lasts until you switch projects or restart CluadeX (unless AcceptEditsDefault is set in settings.json).\n\nTurn on Accept edits?",
+            ["th"] = "AI จะสร้างและแก้ไขไฟล์ภายในโปรเจกต์นี้โดยไม่ถามคุณก่อน\n\nสิ่งที่ยังถามเหมือนเดิม: การรันคำสั่ง เครื่องมือ MCP การเปิดเว็บ ไฟล์นอกโปรเจกต์ และไฟล์ที่จะรันโค้ดภายหลัง (git hook, .vscode, CI workflow, ไฟล์โปรเจกต์/build) การ build/test อัตโนมัติหลังการแก้ไขที่คุณไม่ได้ดู (การตรวจหลังแก้ไข หรือโหมดทำงานอัตโนมัติ Autonomous) จะถามก่อนรัน โหมดนี้จะอยู่จนกว่าคุณจะสลับโปรเจกต์หรือเปิด CluadeX ใหม่ (เว้นแต่ตั้ง AcceptEditsDefault ไว้ใน settings.json)\n\nเปิดโหมดยอมรับการแก้ไขไฟล์หรือไม่?",
+        },
+        ["chat.acceptEdits.unsafeFolder"] = new()
+        {
+            ["en"] = "Accept edits can't be used on {0}: it is a drive, your user folder, a system folder or CluadeX's own data. Open a project folder instead — every edit here asks.",
+            ["th"] = "ใช้โหมดยอมรับการแก้ไขไฟล์กับ {0} ไม่ได้ เพราะเป็นไดรฟ์ทั้งไดรฟ์ โฟลเดอร์ผู้ใช้ โฟลเดอร์ระบบ หรือข้อมูลของ CluadeX เอง ให้เปิดโฟลเดอร์โปรเจกต์แทน — การแก้ไขทุกครั้งที่นี่จะถามก่อน",
+        },
+        ["chat.acceptEdits.pipeConfirmTitle"] = new() { ["en"] = "A program asks to accept edits", ["th"] = "มีโปรแกรมขอให้ยอมรับการแก้ไขไฟล์" },
+        ["chat.acceptEdits.pipeConfirm"] = new()
+        {
+            ["en"] = "The program that sent task \"{0}\" over CluadeX's pipe asks to let the AI create and change files in\n{1}\nWITHOUT asking you. If you allow it, every task sent over the pipe for this folder may do the same until CluadeX restarts.\n\nCommands, MCP tools, files outside the folder and files that run code later still ask.\n\nAllow it?",
+            ["th"] = "โปรแกรมที่ส่งงาน \"{0}\" มาทาง pipe ของ CluadeX ขอให้ AI สร้างและแก้ไขไฟล์ใน\n{1}\nโดยไม่ถามคุณ ถ้าอนุญาต งานทุกงานที่ส่งมาทาง pipe สำหรับโฟลเดอร์นี้จะทำแบบเดียวกันได้จนกว่าจะเปิด CluadeX ใหม่\n\nการรันคำสั่ง เครื่องมือ MCP ไฟล์นอกโฟลเดอร์ และไฟล์ที่จะรันโค้ดภายหลังยังถามเหมือนเดิม\n\nอนุญาตหรือไม่?",
+        },
+        ["chat.acceptEdits.pipeOn"] = new()
+        {
+            ["en"] = "The program that sent this task turned on Accept edits for {0} (you allowed it): file edits inside it run without asking during this run.",
+            ["th"] = "โปรแกรมที่ส่งงานนี้เปิดโหมดยอมรับการแก้ไขไฟล์สำหรับ {0} (คุณอนุญาตแล้ว): การแก้ไขไฟล์ในโฟลเดอร์นี้จะไม่ถามระหว่างงานนี้",
+        },
+        ["chat.acceptEdits.pipeDeclined"] = new()
+        {
+            ["en"] = "The program that sent this task asked to accept edits without prompts for {0}; you declined, so every edit asks.",
+            ["th"] = "โปรแกรมที่ส่งงานนี้ขอให้ยอมรับการแก้ไขไฟล์ใน {0} โดยไม่ถาม แต่คุณไม่อนุญาต การแก้ไขทุกครั้งจึงยังถามก่อน",
+        },
+        ["perm.autoVerify.acceptedEdits"] = new()
+        {
+            ["en"] = "Automatic build check after file edits that Accept edits let through without asking you. A build runs whatever the project's build files and scripts say — allow it only if you trust those edits.",
+            ["th"] = "การตรวจ build อัตโนมัติหลังการแก้ไขไฟล์ที่โหมดยอมรับการแก้ไขไฟล์ปล่อยผ่านโดยไม่ได้ถามคุณ การ build จะรันทุกอย่างที่ไฟล์ build และสคริปต์ของโปรเจกต์กำหนด — อนุญาตเฉพาะเมื่อไว้ใจการแก้ไขเหล่านั้น",
+        },
+        ["perm.autoVerify.autonomous"] = new()
+        {
+            ["en"] = "The Autonomous loop's build / test command, after file edits that Accept edits let through without asking you. It runs whatever the project's build files, scripts and test files now say — allow it only if you trust those edits.",
+            ["th"] = "คำสั่ง build / test ของโหมดทำงานอัตโนมัติ (Autonomous) หลังการแก้ไขไฟล์ที่โหมดยอมรับการแก้ไขไฟล์ปล่อยผ่านโดยไม่ได้ถามคุณ คำสั่งนี้จะรันทุกอย่างที่ไฟล์ build สคริปต์ และไฟล์ทดสอบของโปรเจกต์กำหนดไว้ตอนนี้ — อนุญาตเฉพาะเมื่อไว้ใจการแก้ไขเหล่านั้น",
+        },
+        ["chat.auto.verifyDeclined"] = new()
+        {
+            ["en"] = "The build / test command was not run: `{0}`. Files were edited without asking you (Accept edits) and running the build over them was not approved, so the autonomous run stopped here. Review the edits, then start the run again (it will ask again).",
+            ["th"] = "ไม่ได้รันคำสั่ง build / test: `{0}` เพราะมีไฟล์ที่ถูกแก้ไขโดยไม่ได้ถามคุณ (โหมดยอมรับการแก้ไขไฟล์) และการรัน build หลังการแก้ไขนั้นไม่ได้รับอนุญาต การทำงานอัตโนมัติจึงหยุดตรงนี้ ตรวจดูการแก้ไขก่อน แล้วเริ่มใหม่อีกครั้ง (ระบบจะถามอีกครั้ง)",
+        },
+        ["chat.acceptEdits.pipeUserOn"] = new()
+        {
+            ["en"] = "Accept edits is on for {0} because you turned it on there yourself: file edits inside it run without asking during this run. The program that sent this task gets no lasting permission from this.",
+            ["th"] = "โหมดยอมรับการแก้ไขไฟล์เปิดอยู่สำหรับ {0} เพราะคุณเปิดโหมดนี้ไว้เองที่โฟลเดอร์นี้ การแก้ไขไฟล์ในโฟลเดอร์นี้จะไม่ถามระหว่างงานนี้ โปรแกรมที่ส่งงานนี้ไม่ได้รับสิทธิ์ถาวรจากการนี้",
+        },
+
+        // ─── Pipe-driven runs (cluadex.write_code / run_skill / review) ───
+        ["chat.pipe.callerGone"] = new()
+        {
+            ["en"] = "Stopped — the program that sent this task disconnected or cancelled it.",
+            ["th"] = "หยุดแล้ว — โปรแกรมที่ส่งงานนี้มาตัดการเชื่อมต่อหรือยกเลิกงาน",
+        },
+        ["chat.pipe.backToProject"] = new()
+        {
+            ["en"] = "CluadeX is back on your project {0}. This task worked in {1} — a message you send here now works in {0}; to continue the task, open {1} first.",
+            ["th"] = "CluadeX กลับมาที่โปรเจกต์ของคุณ {0} แล้ว งานนี้ทำใน {1} — ข้อความที่ส่งในแชทนี้ตอนนี้จะทำงานใน {0} ถ้าจะทำงานนี้ต่อ ให้เปิด {1} ก่อน",
+        },
+        ["chat.pipe.backToNoProject"] = new()
+        {
+            ["en"] = "The task's folder {0} is closed again (no project was open before). To continue the task, open {0} first.",
+            ["th"] = "ปิดโฟลเดอร์ของงาน {0} แล้ว (ก่อนหน้านี้ไม่ได้เปิดโปรเจกต์ไว้) ถ้าจะทำงานนี้ต่อ ให้เปิด {0} ก่อน",
+        },
+
+        // ─── Tool-row image thumbnail ───
+        ["chat.thumbnail.tip"] = new() { ["en"] = "Image the tool returned — click to open it full size", ["th"] = "ภาพที่เครื่องมือส่งกลับมา — คลิกเพื่อเปิดภาพเต็ม" },
+
+        // ─── MCP server start (shown on the MCP Servers page and the status chip) ───
+        ["mcp.handshake.timedOut"] = new()
+        {
+            ["en"] = "The server did not answer the initialize handshake within {0} s. A first start that downloads a package (npx, uvx) can need longer: set \"startupTimeoutSeconds\" for this server in mcp_servers.json, or install the package globally, then press Restart.",
+            ["th"] = "เซิร์ฟเวอร์ไม่ตอบการเริ่มต้นเชื่อมต่อ (initialize) ภายใน {0} วินาที การเริ่มครั้งแรกที่ต้องดาวน์โหลดแพ็กเกจ (npx, uvx) อาจใช้เวลานานกว่านั้น: ตั้งค่า \"startupTimeoutSeconds\" ให้เซิร์ฟเวอร์นี้ใน mcp_servers.json หรือติดตั้งแพ็กเกจแบบ global แล้วกดปุ่ม \"เริ่มใหม่\"",
+        },
+        ["mcp.handshake.timedOutStderr"] = new()
+        {
+            ["en"] = "The server did not answer the initialize handshake within {0} s. Its last error output:\n{1}",
+            ["th"] = "เซิร์ฟเวอร์ไม่ตอบการเริ่มต้นเชื่อมต่อ (initialize) ภายใน {0} วินาที ข้อความผิดพลาดล่าสุดของเซิร์ฟเวอร์:\n{1}",
+        },
     };
 }
