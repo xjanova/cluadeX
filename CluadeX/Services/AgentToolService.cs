@@ -3200,7 +3200,12 @@ public class AgentToolService : IDisposable
             ToolName = call.ToolName,
             Success = gitResult.Success,
             Output = gitResult.Success ? gitResult.Output : gitResult.FullOutput,
-            Error = gitResult.Success ? "" : gitResult.Error,
+            // git often says why on stdout ("nothing to commit, working tree clean") and nothing on stderr: an
+            // empty Error reached the model as an empty failure, which the Anthropic API refuses outright.
+            Error = gitResult.Success ? ""
+                : !string.IsNullOrWhiteSpace(gitResult.Error) ? gitResult.Error
+                : !string.IsNullOrWhiteSpace(gitResult.Output) ? gitResult.Output
+                : $"{summary} failed (git printed nothing)",
             Summary = gitResult.Success ? summary : $"Failed: {summary}",
         };
     }

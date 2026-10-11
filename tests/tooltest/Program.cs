@@ -546,6 +546,30 @@ internal static partial class Program
         await Case("P1", async () => { var r = await T("powershell", ("command", "Get-ChildItem App -Filter *.cs -Name")); Check("P1", "Get-ChildItem", r.Success && Seen(r).Contains("Program.cs"), Seen(r)); });
         await Case("P2", async () => { var r = await T("powershell", ("command", "Write-Output 'สวัสดี'")); Check("P2", "Thai output intact", r.Success && Seen(r).Contains("สวัสดี"), Seen(r)); });
 
+        Console.WriteLine("\n── git_commit ──");
+        await Case("GC1", async () =>
+        {
+            // A fresh repo with nothing staged: git explains on stdout and prints nothing on stderr. That empty
+            // failure reached the model as an empty error tool_result, which the Anthropic API refuses — the whole
+            // turn failed with HTTP 400 (2026-10-11).
+            string empty = Path.Combine(Path.GetTempPath(), "cluadex-tooltest-commit-" + Guid.NewGuid().ToString("N")[..6]);
+            Directory.CreateDirectory(empty);
+            var psi = new ProcessStartInfo("git", "init -q") { WorkingDirectory = empty, UseShellExecute = false, CreateNoWindow = true };
+            using (var p = Process.Start(psi)!) p.WaitForExit(20000);
+            Fs.WorkingDirectory = empty;
+            try
+            {
+                var r = await T("git_commit", ("message", "nothing new"));
+                Check("GC1", "git_commit with nothing to commit fails WITH git's reason, never an empty error",
+                    !r.Success && !string.IsNullOrWhiteSpace(r.Error) && r.Error.Contains("nothing", StringComparison.OrdinalIgnoreCase), r.Error ?? "(null)");
+            }
+            finally
+            {
+                Fs.WorkingDirectory = Root;
+                try { Directory.Delete(empty, true); } catch { }
+            }
+        });
+
         Console.WriteLine("\n── run_build ──");
         await Case("B1", async () => { var r = await T("run_build"); Check("B1", $"builds the project ({LastMs} ms)", r.Success, Seen(r)); });
         await Case("B2", async () =>

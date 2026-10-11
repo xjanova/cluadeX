@@ -651,7 +651,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         {
             ["type"] = "tool_result",
             ["tool_use_id"] = block.ToolUseId ?? "",
-            ["content"] = block.Content ?? "",
+            ["content"] = ToolResultText(block),
             ["is_error"] = block.IsError ?? false,
         },
         // Echoed exactly as received — an altered or unsigned thinking block fails the request.
@@ -674,6 +674,16 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
 
     /// <summary>The blocks of one message as this request sends them: other providers' raw state never, and this
     /// provider's server-tool blocks only while tool search is in the request (without it the API can't read them).</summary>
+    /// <summary>
+    /// A tool_result's text. The Messages API refuses an EMPTY error result ("content cannot be empty if `is_error`
+    /// is true") — and refuses the whole request, so a git_commit that failed without printing anything failed the
+    /// turn, and every later turn of that chat too (the history carries the result). An empty error says so instead.
+    /// </summary>
+    public static string ToolResultText(ContentBlock block) =>
+        block.IsError == true && string.IsNullOrWhiteSpace(block.Content)
+            ? "(the tool failed without an error message)"
+            : block.Content ?? "";
+
     private static List<object> WireContent(NativeMessage m, bool search) =>
         m.Content.Where(b => b.Type != "provider_item" || (search && b.Provider == "anthropic"))
             .Select(SerializeBlock).ToList();

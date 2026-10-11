@@ -3471,6 +3471,10 @@ public partial class CodeAgentService
                     // Per-tool and aggregate budget enforcement — on TEXT only. Images never enter resultContent,
                     // so these cuts can't split a base64 string; they ride on the block's Images below.
                     resultContent = (toolResult.Success ? toolResult.Output : toolResult.Error) ?? string.Empty;
+                    // A failure with no error text: its output, else a line saying so — never an empty failure.
+                    if (!toolResult.Success && string.IsNullOrWhiteSpace(resultContent))
+                        resultContent = !string.IsNullOrWhiteSpace(toolResult.Output) ? toolResult.Output
+                            : $"Tool '{toolCall.Name}' failed without an error message.";
                     string uncutContent = resultContent;
                     isError = !toolResult.Success;
                     bool cutText = false;

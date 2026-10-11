@@ -72,6 +72,14 @@ internal static class ToolSearchWire
     {
         section("offline · tool search (MCP tools loaded on demand)");
 
+        // A failed tool with no text: the Messages API refuses an empty error tool_result — and with it the whole
+        // request, so every later turn of a chat whose history carries one failed too (2026-10-11, git_commit).
+        check("wire", "an empty FAILED tool_result gets a line of text; an empty OK one stays empty (cache prefixes); text is kept",
+            AnthropicProvider.ToolResultText(new ContentBlock { Type = "tool_result", IsError = true, Content = "" }).Length > 0
+            && AnthropicProvider.ToolResultText(new ContentBlock { Type = "tool_result", IsError = true, Content = null }).Length > 0
+            && AnthropicProvider.ToolResultText(new ContentBlock { Type = "tool_result", IsError = false, Content = "" }) == ""
+            && AnthropicProvider.ToolResultText(new ContentBlock { Type = "tool_result", IsError = true, Content = "boom" }) == "boom", "");
+
         // 1. Rules
         var cat = Catalogue();
         check("toolsearch", "models: Sonnet 5.5 / Opus 5.5 / Haiku 4.5 / Opus 4.5 / Fable search; Opus 4.1 and Sonnet 4 do not",
