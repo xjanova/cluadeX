@@ -558,6 +558,10 @@
                                  covered the last items and took their clicks. -->
                             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                                           Focusable="False" PanningMode="VerticalOnly">
+                            <!-- Only the places you work in (owner 2026-10-11: "อันไหนใช้ไม่ได้จริงบ้างหรือไม่จำเป็นต้องมี ให้เอาออกเลย").
+                                 Skills, Subagents, Instincts, Hooks, Plugins, Permissions, Features, Security Shield,
+                                 Hex Editor and Debug Log live under Settings › General › More tools, Ctrl+K and their
+                                 Ctrl+number keys; the agent still opens Hex Editor itself. -->
                             <StackPanel Margin="0,8,0,8">
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8BD;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
@@ -569,40 +573,6 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Code"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.codeTip}" AutomationProperties.Name="Code Editor"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE99A;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=SubAgents, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="SubAgents"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.subagentsTip}" AutomationProperties.Name="Subagents"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE945;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Skills, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Skills"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.skillsTip}" AutomationProperties.Name="Skills"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE82D;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Instincts, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Instincts"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.instinctsTip}"
-                                             AutomationProperties.Name="Instincts"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xEBE8;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=DebugLog, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="DebugLog"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.debugLogTip}"
-                                             AutomationProperties.Name="Debug Log"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE72E;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=SecurityShield, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="SecurityShield"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.shieldTip}"
-                                             AutomationProperties.Name="SecurityShield"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE9F5;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=HookLibrary, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="HookLibrary"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.hooksTip}"
-                                             AutomationProperties.Name="Hook Library"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8F1;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Models"
@@ -613,19 +583,9 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="TimeMachine"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.timeMachineTip}" AutomationProperties.Name="Time Machine"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE943;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=HexEditor, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="HexEditor"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.hexTip}" AutomationProperties.Name="Hex Editor"/>
 
                                 <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
 
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE74C;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Plugins, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Plugins"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.pluginsTip}" AutomationProperties.Name="Plugins"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xECAA;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=McpServers, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
@@ -636,16 +596,6 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.tasksTip}" AutomationProperties.Name="Tasks"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE72E;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Permissions, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Permissions"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.permissionsTip}" AutomationProperties.Name="Permissions"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE734;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Features, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Features"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.featuresTip}" AutomationProperties.Name="Features"/>
                             </StackPanel>
                             </ScrollViewer>
 

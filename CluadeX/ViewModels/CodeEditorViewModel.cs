@@ -1225,7 +1225,9 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
         // Expand — populate if children are not yet loaded
         if (node.Children.Count == 0)
         {
-            await Task.Run(() => _workspace.PopulateChildren(node));
+            // Read off the UI thread, fill the bound collection on it.
+            var children = await Task.Run(() => _workspace.ReadChildren(node.FullPath));
+            _workspace.SetChildren(node, children);
             // re-tag git
             _ = _workspace.EnrichGitStatusAsync(new[] { node });
         }

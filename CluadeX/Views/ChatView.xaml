@@ -1503,13 +1503,23 @@
                                      SelectionBrush="{DynamicResource Accent.1}"
                                      FontFamily="{DynamicResource Font.Ui}" FontSize="14"
                                      MinHeight="44" MaxHeight="200"
-                                     VerticalScrollBarVisibility="Auto"
-                                     IsEnabled="{Binding IsGenerating, Converter={StaticResource InvertBool}}"/>
-                            <TextBlock Text="{services:Loc chat.placeholder}"
-                                       FontFamily="{DynamicResource Font.Ui}" FontSize="14"
+                                     VerticalScrollBarVisibility="Auto"/>
+                            <!-- While a reply runs the box stays open: Enter sends to it (it reads it at its next step) -->
+                            <TextBlock FontFamily="{DynamicResource Font.Ui}" FontSize="14"
                                        Foreground="{DynamicResource Text.Muted}"
                                        VerticalAlignment="Top" Margin="2,0,0,0" IsHitTestVisible="False"
-                                       Visibility="{Binding UserInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}"/>
+                                       Visibility="{Binding UserInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{services:Loc chat.placeholder}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsGenerating}" Value="True">
+                                                <Setter Property="Text" Value="{services:Loc chat.steer.placeholder}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </Grid>
 
                         <Grid Grid.Row="1" Margin="0,8,0,0">
@@ -1652,8 +1662,7 @@
                                 <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
                                         Command="{Binding SendMessageCommand}"
                                         FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
-                                        ToolTip="{services:Loc chat.send}"
-                                        Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                        ToolTip="{services:Loc chat.send}"/>
                                 <Button Content="&#xE71A;" Style="{StaticResource DangerButton}"
                                         Command="{Binding StopGenerationCommand}"
                                         FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"

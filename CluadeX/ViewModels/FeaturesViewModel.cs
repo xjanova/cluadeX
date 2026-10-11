@@ -149,7 +149,7 @@ public class FeaturesViewModel : ViewModelBase
     public static readonly HashSet<string> GatedFeatures = new(StringComparer.Ordinal)
     {
         "feature.openai", "feature.anthropic", "feature.gemini", "feature.multiProvider",
-        "feature.github", "feature.webFetch", "feature.taskManager", "feature.devPreview",
+        "feature.github", "feature.webFetch", "feature.devPreview",
     };
 
     private bool IsUnlockedForDisplay(string key) => !GatedFeatures.Contains(key) || _activation.IsFeatureUnlocked(key);
@@ -459,11 +459,6 @@ public class FeaturesViewModel : ViewModelBase
             Key = "feature.plugins", Icon = "\U0001F9E9",
             Category = "fun", IsToggleable = true, IsEnabled = ft.PluginSystem,
         });
-        FunFeatures.Add(new FeatureItem
-        {
-            Key = "feature.taskManager", Icon = "\U0001F4CB",
-            Category = "fun", IsToggleable = true, IsEnabled = ft.TaskManager,
-        });
     }
 
     private void RefreshLabels()
@@ -570,7 +565,6 @@ public class FeaturesViewModel : ViewModelBase
         {
             case "feature.buddy": ft.BuddyCompanion = item.IsEnabled; break;
             case "feature.plugins": ft.PluginSystem = item.IsEnabled; break;
-            case "feature.taskManager": ft.TaskManager = item.IsEnabled; break;
             case "feature.devPreview": ft.DevPreview = item.IsEnabled; break;
             case "feature.webFetch": ft.WebFetch = item.IsEnabled; break;
             case "feature.git": ft.GitIntegration = item.IsEnabled; break;

@@ -1136,6 +1136,7 @@ public partial class ChatViewModel : ViewModelBase
             for (int i = 0; i < Sessions.Count; i++)
                 if (Sessions[i].Id == sessionId) { Sessions[i] = running.Session; break; }
             StatusText = Loc("chat.status.working");
+            FollowChatProject(running.Session);
             UpdateContextInfo();
             ScrollToBottom?.Invoke();
             return;
@@ -1191,9 +1192,26 @@ public partial class ChatViewModel : ViewModelBase
         StatusText = session.Messages.Count > 0
             ? LocF("chat.status.loaded", session.Title, session.Messages.Count)
             : LocF("chat.status.loadedEmpty", session.Title);
+        FollowChatProject(session);
 
         UpdateContextInfo();
         ScrollToBottom?.Invoke();
+    }
+
+    /// <summary>
+    /// Opening a chat opens its project. A chat belongs to the folder it was started in (ChatSession.ProjectPath).
+    /// After a restart — or coming from another project's chat — the app had no folder or the wrong one open, so a
+    /// "carry on" in an old chat ran with no file or shell tools at all: the agent answered that it could not work
+    /// and handed the job off (owner 2026-10-11: "ฉันสั่งงานต่อในแชทเก่า ทำไม มันไม่รู้เรื่อง"). A folder that no
+    /// longer exists is left alone.
+    /// </summary>
+    private void FollowChatProject(ChatSession? session)
+    {
+        string? path = session?.ProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        if (HasProject && PathEquals(WorkingDirectory, path)) return;
+        ApplyWorkingDirectory(path, announce: false, showEditor: false);
+        StatusText = LocF("chat.status.projectFollowed", Path.GetFileName(path.TrimEnd('\\', '/')));
     }
 
     private async Task DeleteSessionAsync(string? sessionId)
@@ -2405,7 +2423,10 @@ public partial class ChatViewModel : ViewModelBase
     private async Task SendMessage()
     {
         string input = UserInput?.Trim() ?? "";
-        if (string.IsNullOrEmpty(input) || IsGenerating) return;
+        if (string.IsNullOrEmpty(input)) return;
+        // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
+        // to do nothing at all (the box was even disabled) until the run ended.
+        if (IsGenerating) { SendIntoRunningReply(input); return; }
 
         // ─── Built-in slash commands ───
         // Handled BEFORE the provider check: they act on the chat itself and need no model. Behind the check,
@@ -2430,6 +2451,9 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         if (!await EnsureProviderReadyAsync()) return;
+
+        // The chat on screen since startup was never opened through LoadSessionAsync: its folder comes back here.
+        FollowChatProject(CurrentSession);
 
         // ─── Slash Command / Skill Interception ───
         string skillPromptOverride = "";
@@ -2484,6 +2508,43 @@ public partial class ChatViewModel : ViewModelBase
         Messages.Add(userMsg);
         UserInput = string.Empty;
         await RunTurnAsync(userMsg, input, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride));
+    }
+
+    /// <summary>
+    /// Typed while the chat's reply is running: shown at once as the user's bubble and handed to the run, which reads
+    /// it at its next step (AgentRunScope.AddUserNote). A slash command needs the chat idle — it stays in the box.
+    /// </summary>
+    private void SendIntoRunningReply(string text)
+    {
+        var run = RunOf(CurrentSession);
+        if (run?.Scope == null) return;
+        if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
+        run.Messages.Add(bubble);
+        run.Scope.AddUserNote(text, bubble);
+        UserInput = string.Empty;
+        StatusText = Loc("chat.steer.queued");
+        _pet?.NoteMessage(text);
+    }
+
+    /// <summary>A run ended with something typed that its agent never read (it finished first, or the provider answers
+    /// in one call): moved after the answer and sent as the next turn — or, after Stop, put back in the box. Nothing
+    /// typed is lost either way.</summary>
+    private void SendLeftoverNotes(ChatRun run, List<(string Text, object? Tag)> notes)
+    {
+        string text = string.Join("\n\n", notes.Select(n => n.Text));
+        foreach (var n in notes) if (n.Tag is ChatMessage b) run.Messages.Remove(b);
+        if (!ReferenceEquals(run.Session, CurrentSession) || run.Cts?.IsCancellationRequested == true)
+        {
+            if (ReferenceEquals(run.Session, CurrentSession))
+                UserInput = string.IsNullOrWhiteSpace(UserInput) ? text : UserInput + "\n" + text;
+            else
+                _debugLog?.Warn("Chat", "a message typed during a run that is no longer on screen was not sent");
+            return;
+        }
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
+        Messages.Add(bubble);
+        Detached(() => RunTurnAsync(bubble, text, null, false));
     }
 
     /// <summary>True when the active provider can answer. Waits for (or retries) its initialise — after a

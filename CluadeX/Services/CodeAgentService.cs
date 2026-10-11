@@ -2211,6 +2211,16 @@ public partial class CodeAgentService
                     continue; // re-generate
                 }
 
+                if (AgentRunScope.Current?.TakeUserNotes() is { } lateNote && iteration < MaxAgentIterations - 1)
+                {
+                    result.Steps.Add(step);
+                    OnThinkingUpdate?.Invoke(response, iteration + 1);
+                    workingHistory.Add(new ChatMessage { Role = MessageRole.Assistant, Content = response });
+                    workingHistory.Add(new ChatMessage { Role = MessageRole.User, Content = lateNote });
+                    currentMessage = lateNote;
+                    continue;
+                }
+
                 result.Steps.Add(step);
                 result.FinalResponse = response;
                 result.Success = true;
@@ -2248,6 +2258,7 @@ public partial class CodeAgentService
             });
 
             string toolFeedback = FormatToolResultsWithBudget(toolResults);
+            if (AgentRunScope.Current?.TakeUserNotes() is { } typedMidRun) toolFeedback += "\n\n" + typedMidRun;
             // This loop never sends pixels (the note above says so): keep only the files' paths and sizes.
             StripImagePixels(toolResults);
             workingHistory.Add(new ChatMessage
@@ -3326,6 +3337,28 @@ public partial class CodeAgentService
                     continue; // re-generate
                 }
 
+                // The user sent something while this answer was being written: not the end of the turn — the model
+                // reads it and carries on.
+                if (AgentRunScope.Current?.TakeUserNotes() is { } lateNote && iteration < MaxAgentIterations - 1)
+                {
+                    if (!string.IsNullOrWhiteSpace(textContent)) OnThinkingUpdate?.Invoke(textContent, iteration + 1);
+                    result.Steps.Add(step);
+                    var answeredSoFar = new Services.Providers.NativeMessage { Role = "assistant" };
+                    answeredSoFar.Content.Add(new Services.Providers.ContentBlock
+                    {
+                        Type = "text", Text = string.IsNullOrWhiteSpace(textContent) ? "(working)" : textContent,
+                    });
+                    nativeMessages.Add(answeredSoFar);
+                    nativeMessages.Add(new Services.Providers.NativeMessage
+                    {
+                        Role = "user",
+                        Content = { new Services.Providers.ContentBlock { Type = "text", Text = lateNote } },
+                    });
+                    nativeMessages = EnsureAlternatingRoles(nativeMessages);
+                    _debugLog?.Info("Agent", $"step {iteration + 1}: the user sent a message mid-run — carrying on instead of ending the turn");
+                    continue;
+                }
+
                 result.Steps.Add(step);
                 result.FinalResponse = textContent;
                 result.Success = true;
@@ -3745,6 +3778,12 @@ public partial class CodeAgentService
 
             // Add messages to conversation
             nativeMessages.Add(assistantMsg);
+            // What the user typed while these tools ran rides along with their results.
+            if (AgentRunScope.Current?.TakeUserNotes() is { } typedMidRun)
+            {
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = typedMidRun });
+                _debugLog?.Info("Agent", $"step {iteration + 1}: a message the user sent mid-run goes with the tool results");
+            }
             nativeMessages.Add(userResultMsg);
         }
 

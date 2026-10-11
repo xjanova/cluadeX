@@ -173,9 +173,11 @@ public partial class ChatViewModel
     private void EndTurn(TaskCompletionSource done)
     {
         var run = _runs.FirstOrDefault(r => ReferenceEquals(r.Done, done));
+        List<(string Text, object? Tag)>? leftover = null;
         if (run != null)
         {
             PostRunCostSummary(run);
+            leftover = run.Scope?.DrainUserNotes();
             _runs.Remove(run);
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
@@ -183,6 +185,7 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
+        if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
     }
 

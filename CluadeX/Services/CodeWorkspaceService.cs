@@ -60,15 +60,26 @@ public class CodeWorkspaceService
         return result;
     }
 
-    /// <summary>Synchronously populate a folder's children (cheap because we cap + filter).</summary>
+    /// <summary>Synchronously populate a folder's children (cheap because we cap + filter). UI thread only once the
+    /// folder is on screen — see <see cref="ReadChildren"/> for the part that can run anywhere.</summary>
     public void PopulateChildren(FileTreeNode folder)
     {
         if (!folder.IsDirectory) return;
-        folder.Children.Clear();
+        SetChildren(folder, ReadChildren(folder.FullPath));
+    }
 
+    /// <summary>
+    /// A folder's entries as new nodes — disk only, safe on any thread. Expanding a folder reads here off the UI
+    /// thread and hands the list to <see cref="SetChildren"/> on it: filling the bound Children collection from a
+    /// worker thread threw (a CollectionView only takes changes on its own thread), so a click on a folder in the
+    /// explorer silently did nothing.
+    /// </summary>
+    public List<FileTreeNode> ReadChildren(string folderPath)
+    {
+        var list = new List<FileTreeNode>();
         try
         {
-            var dirs = Directory.EnumerateDirectories(folder.FullPath)
+            var dirs = Directory.EnumerateDirectories(folderPath)
                 .Where(d =>
                 {
                     var name = Path.GetFileName(d);
@@ -78,35 +89,27 @@ public class CodeWorkspaceService
                 })
                 .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
                 .Take(MaxEntriesPerFolder);
-
             foreach (var d in dirs)
-            {
-                folder.Children.Add(new FileTreeNode
-                {
-                    FullPath = d,
-                    Name = Path.GetFileName(d) ?? d,
-                    IsDirectory = true,
-                });
-            }
+                list.Add(new FileTreeNode { FullPath = d, Name = Path.GetFileName(d) ?? d, IsDirectory = true });
 
-            var files = Directory.EnumerateFiles(folder.FullPath)
+            var files = Directory.EnumerateFiles(folderPath)
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                 .Take(MaxEntriesPerFolder);
-
             foreach (var f in files)
-            {
-                folder.Children.Add(new FileTreeNode
-                {
-                    FullPath = f,
-                    Name = Path.GetFileName(f),
-                    IsDirectory = false,
-                });
-            }
+                list.Add(new FileTreeNode { FullPath = f, Name = Path.GetFileName(f), IsDirectory = false });
         }
         catch
         {
             // Permission denied / IO error — just leave it empty
         }
+        return list;
+    }
+
+    /// <summary>Replace a folder's children (on the thread that owns the tree once it is on screen).</summary>
+    public void SetChildren(FileTreeNode folder, IEnumerable<FileTreeNode> children)
+    {
+        folder.Children.Clear();
+        foreach (var c in children) folder.Children.Add(c);
     }
 
     /// <summary>Largest file the diff view compares — a side-by-side diff of anything bigger is unreadable anyway.</summary>

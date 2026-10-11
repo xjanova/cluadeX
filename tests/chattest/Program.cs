@@ -244,6 +244,8 @@ internal static class Program
         await TestRetryLogic();               // L3 + L7
         await TestHoverRetry();               // L10
         await TestBackgroundRuns();           // R (was L2: switching mid-turn stopped the turn)
+        await TestTypeWhileWorking();         // W: typing while a reply runs reaches it
+        await TestChatOpensItsProject();      // F: an old chat brings its project back
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6
@@ -664,6 +666,107 @@ internal static class Program
         Vm.LoadSessionCommand.Execute(sessionId);
         await WaitUntil(() => Vm.CurrentSession?.Id == sessionId);
         await Render();
+    }
+
+    /// <summary>
+    /// W — typing while a reply runs. The box was disabled for the whole run and Enter did nothing; now the message
+    /// shows at once and reaches the run: an agent loop reads it at its next step (AgentRunScope.TakeUserNotes, unit
+    /// checked here), and a reply that ends first (plain chat, claude-dev) gets it as the very next turn.
+    /// </summary>
+    static async Task TestTypeWhileWorking()
+    {
+        Log("\n## W — typing while a reply runs: shown at once, read by the run or sent right after it");
+
+        var scope = new AgentRunScope("w-unit", null);
+        Check("W1 the run's note queue starts empty", !scope.HasUserNotes && scope.TakeUserNotes() == null);
+        scope.AddUserNote("  also add tests  ");
+        scope.AddUserNote("and use English names");
+        string note = scope.TakeUserNotes();
+        Check("W1 the agent gets everything typed since it last looked, as one block that says what it is",
+            note != null && note.StartsWith("[The user sent this while you were working") && note.Contains("also add tests\n\nand use English names")
+            && !scope.HasUserNotes, note ?? "null");
+
+        await FreshChat();
+        var gate = new SemaphoreSlim(0);
+        Fake.ScriptFor["[W2]"] = new Queue<FakeStep>([FakeStep.Gated(["W2 working"], gate, [" — W2 done."])]);
+        Fake.ScriptFor["[W2-more]"] = new Queue<FakeStep>([FakeStep.Reply("Added", " the tests.")]);
+        await Send("[W2] write the parser");
+        await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Content.StartsWith("W2 working")));
+        var box = (TextBox)View.FindName("InputBox");
+        Check("W2 the input box stays usable while the reply runs", box is { IsEnabled: true });
+
+        Vm.UserInput = "[W2-more] also add tests";
+        Vm.SendMessageCommand.Execute(null);
+        await Task.Delay(100); await Render();
+        Check("W2 Enter while it works shows the message at once, clears the box and stops nothing",
+            Vm.Messages.Any(m => m.Role == MessageRole.User && m.Content == "[W2-more] also add tests") && Vm.UserInput == "" && Vm.IsGenerating,
+            $"input='{Vm.UserInput}' generating={Vm.IsGenerating}");
+
+        Vm.UserInput = "/compact";
+        Vm.SendMessageCommand.Execute(null);
+        Check("W2 a slash command waits for the reply to finish (it stays in the box)", Vm.UserInput == "/compact" && Vm.IsGenerating, Vm.StatusText);
+        Vm.UserInput = "";
+
+        gate.Release();
+        bool sent = await WaitUntil(() => Fake.Calls.Any(c => c.Input.Contains("[W2-more] also add tests")), 15000);
+        await WaitUntil(() => !Vm.IsGenerating && Vm.Messages.Any(m => m.Content.Contains("Added the tests.")), 15000);
+        var order = Vm.Messages.Where(m => m.Role is MessageRole.User or MessageRole.Assistant).Select(m => m.Content).ToList();
+        int answer = order.FindIndex(c => c.Contains("W2 done")), more = order.FindIndex(c => c == "[W2-more] also add tests"),
+            reply = order.FindIndex(c => c.Contains("Added the tests."));
+        Check("W3 a reply that ended before reading it: the message moves after its answer and goes as the next turn",
+            sent && answer >= 0 && more > answer && reply > more && order.Count(c => c == "[W2-more] also add tests") == 1,
+            string.Join(" | ", order));
+    }
+
+    /// <summary>
+    /// F — an old chat brings its project back. After a restart the app had no folder open, so carrying on in an old
+    /// chat ran with no file or shell tools and the agent said it could not work.
+    /// </summary>
+    static async Task TestChatOpensItsProject()
+    {
+        Log("\n## F — opening an old chat opens its project; sending in it does too");
+        Directory.CreateDirectory(ProjA);
+        Directory.CreateDirectory(ProjB);
+        var old = new ChatSession { Title = "old chat in A", ProjectPath = ProjA };
+        old.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "fix the parser" });
+        old.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "done" });
+        Persist.SaveSession(old);
+        Vm.Sessions.Insert(0, new ChatSession { Id = old.Id, Title = old.Title, ProjectPath = ProjA });
+
+        Vm.SetWorkingDirectory("");
+        await FreshChat();
+        await Open(old.Id);
+        Check("F1 opening a chat started in a project, with no folder open, opens that project",
+            Vm.HasProject && string.Equals(Vm.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+
+        Vm.SetWorkingDirectory(ProjB);
+        await FreshChat();
+        await Open(old.Id);
+        Check("F2 …and with another project open, switches to the chat's own",
+            string.Equals(Vm.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+
+        var plain = ChatInDb("chat with no project", "hi", "hello");
+        Vm.SetWorkingDirectory(ProjB);
+        await Open(plain.Id);
+        Check("F3 a chat that had no project leaves the open folder alone", string.Equals(Vm.WorkingDirectory, ProjB, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+
+        var gone = new ChatSession { Title = "chat whose folder was deleted", ProjectPath = Path.Combine(PipeRoot, "deleted-folder") };
+        gone.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "x" });
+        Persist.SaveSession(gone);
+        Vm.Sessions.Insert(0, new ChatSession { Id = gone.Id, Title = gone.Title });
+        await Open(gone.Id);
+        Check("F4 a chat whose folder no longer exists opens without touching the open folder",
+            string.Equals(Vm.WorkingDirectory, ProjB, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+
+        // The chat on screen at startup never went through the chat list: sending in it brings its folder back.
+        await Open(old.Id);
+        Vm.SetWorkingDirectory("");
+        Fake.ScriptFor["[F5]"] = new Queue<FakeStep>([FakeStep.Reply("ok")]);
+        await Send("[F5] carry on");
+        Check("F5 sending in a chat whose project is closed opens it again before the reply",
+            Vm.HasProject && string.Equals(Vm.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+        await WaitUntil(() => !Vm.IsGenerating, 10000);
+        Vm.SetWorkingDirectory("");
     }
 
     static async Task TestBackgroundRuns()

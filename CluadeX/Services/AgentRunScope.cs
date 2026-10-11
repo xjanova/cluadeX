@@ -90,4 +90,37 @@ public sealed class AgentRunScope
     /// <summary>What the user allowed beyond the per-run budget by answering "go on" (USD). The run stops to ask once
     /// <see cref="CostUsd"/> reaches the setting plus this — so a budget changed mid-run applies at once.</summary>
     public decimal BudgetGrantedUsd { get; set; }
+
+    // ─── What the user typed while the run was working ───
+
+    private readonly System.Collections.Concurrent.ConcurrentQueue<(string Text, object? Tag)> _userNotes = new();
+
+    /// <summary>
+    /// The user sent this while the run was working. Like Claude Code, it reaches the agent at its next step — with
+    /// the next tool results, or instead of ending the turn — rather than being dropped: the input box used to be
+    /// disabled for the whole run. <paramref name="tag"/> is the chat bubble that shows it.
+    /// </summary>
+    public void AddUserNote(string text, object? tag = null)
+    {
+        if (!string.IsNullOrWhiteSpace(text)) _userNotes.Enqueue((text.Trim(), tag));
+    }
+
+    public bool HasUserNotes => !_userNotes.IsEmpty;
+
+    /// <summary>Everything typed since the agent last looked, as one block for the model; null when nothing waits.</summary>
+    public string? TakeUserNotes()
+    {
+        var notes = DrainUserNotes();
+        if (notes.Count == 0) return null;
+        return "[The user sent this while you were working. Take it into account from here on — it may change or add to the task:]\n"
+               + string.Join("\n\n", notes.Select(n => n.Text));
+    }
+
+    /// <summary>What the agent never got to (the run ended first): the caller sends it as the next turn.</summary>
+    public List<(string Text, object? Tag)> DrainUserNotes()
+    {
+        var notes = new List<(string Text, object? Tag)>();
+        while (_userNotes.TryDequeue(out var n)) notes.Add(n);
+        return notes;
+    }
 }

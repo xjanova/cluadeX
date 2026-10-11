@@ -53,7 +53,7 @@ public class SubAgentsViewModel : ViewModelBase
         get
         {
             if (_selected == null) return "";
-            return $"[ACTION: subagent_invoke]\ntype: {_selected.Name}\nprompt: <your task here>";
+            return $"[ACTION: subagent_invoke]\ntype: {_selected.Name}\nprompt: <your task here>\n[/ACTION]";
         }
     }
 

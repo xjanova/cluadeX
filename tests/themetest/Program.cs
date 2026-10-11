@@ -217,6 +217,26 @@ internal static partial class Program
               string.Join("; ", covered.Take(6)));
     }
 
+    /// <summary>
+    /// A click on a folder in the explorer opens it. Born from every folder doing nothing in the app: its entries were
+    /// added to the tree on screen from a worker thread, which WPF refuses (the exception went to the debug log).
+    /// Needs the real, bound TreeView — a view model alone accepts the cross-thread add.
+    /// </summary>
+    static async Task ExpandFolderCheck(string set)
+    {
+        var vm = MainVm.CodeEditorVM;
+        await WaitUntil(() => vm.Tree.Count > 0 && vm.Tree[0].Children.Any(n => n.IsDirectory), 5000);
+        var folder = vm.Tree.FirstOrDefault()?.Children.FirstOrDefault(n => n.IsDirectory && !n.IsExpanded);
+        if (folder == null) { Check($"{set}/code-editor: the explorer shows a folder to open", false, "the fixture project has none"); return; }
+        await Idle(100);   // the folder's row (and its bound child list) is on screen
+        vm.ToggleNodeCommand.Execute(folder);
+        await WaitUntil(() => folder.IsExpanded, 3000);
+        Check($"{set}/code-editor: clicking a folder in the explorer opens it ({folder.Name})",
+            folder.IsExpanded && folder.Children.Count > 0, $"expanded={folder.IsExpanded} children={folder.Children.Count}");
+        if (folder.IsExpanded) vm.ToggleNodeCommand.Execute(folder);   // closed again: later renders match the golden
+        await Idle(100);
+    }
+
     /// <summary>The point is inside every scroll viewport above the element, and nothing above it is see-through.</summary>
     static bool InViewAndOpaque(DependencyObject el, Point inRoot, UIElement root)
     {
@@ -643,6 +663,7 @@ internal static partial class Program
                 ClickableButtons(set, "code-editor (no folder)");
                 Invoke(MainVm.ChatVM, "ApplyWorkingDirectory", FixtureProject, false, false);
                 await Idle(200);
+                await ExpandFolderCheck(set);
             }
         }
         settingsVm.SelectedCategory = "provider";

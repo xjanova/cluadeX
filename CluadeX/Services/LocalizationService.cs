@@ -445,6 +445,10 @@ public class LocalizationService
 
         // ═══════ CHAT VIEW ═══════
         ["chat.placeholder"] = new() { ["en"] = "Type a message...", ["th"] = "พิมพ์ข้อความ..." },
+        ["chat.steer.placeholder"] = new() { ["en"] = "Working… type to add to or change the task — Enter sends it at the next step", ["th"] = "กำลังทำงาน… พิมพ์เพิ่มหรือเปลี่ยนคำสั่งได้ — Enter แล้วจะส่งให้ AI ในขั้นถัดไป" },
+        ["chat.steer.queued"] = new() { ["en"] = "Sent — the agent reads it at its next step", ["th"] = "ส่งแล้ว — AI จะอ่านในขั้นถัดไป" },
+        ["chat.status.projectFollowed"] = new() { ["en"] = "Opened this chat's project: {0}", ["th"] = "เปิดโปรเจกต์ของแชทนี้แล้ว: {0}" },
+        ["chat.steer.noSlash"] = new() { ["en"] = "Slash commands wait until the reply finishes", ["th"] = "คำสั่ง / ใช้ได้เมื่อ AI ตอบเสร็จแล้ว" },
         ["chat.send"] = new() { ["en"] = "Send", ["th"] = "ส่ง" },
         ["chat.stop"] = new() { ["en"] = "Stop", ["th"] = "หยุด" },
         ["chat.thinking"] = new() { ["en"] = "Thinking...", ["th"] = "กำลังคิด..." },
@@ -787,6 +791,19 @@ public class LocalizationService
         ["nav.newChatTip"] = new() { ["en"] = "New Chat (Ctrl+N)", ["th"] = "แชทใหม่ (Ctrl+N)" },
         ["nav.checkUpdatesTip"] = new() { ["en"] = "Check for updates", ["th"] = "ตรวจหาอัปเดต" },
         ["nav.themeTip"] = new() { ["en"] = "Theme", ["th"] = "เลือกธีม" },
+        ["nav.hookLibrary"] = new() { ["en"] = "Hook Library", ["th"] = "คลังฮุก" },
+        ["nav.skills"] = new() { ["en"] = "Skills", ["th"] = "Skill" },
+        ["nav.subagents"] = new() { ["en"] = "Subagents", ["th"] = "Subagent" },
+        ["nav.instincts"] = new() { ["en"] = "Instincts", ["th"] = "สัญชาตญาณ" },
+        ["nav.securityShield"] = new() { ["en"] = "Security Shield", ["th"] = "สแกนความปลอดภัย" },
+        ["nav.hexEditor"] = new() { ["en"] = "Hex Editor", ["th"] = "Hex Editor" },
+        ["nav.debugLog"] = new() { ["en"] = "Debug Log", ["th"] = "บันทึกดีบัก" },
+        ["settings.card.moreTools"] = new() { ["en"] = "More tools", ["th"] = "เครื่องมือเพิ่มเติม" },
+        ["settings.moreToolsDesc"] = new()
+        {
+            ["en"] = "Pages that are not on the left bar — also on Ctrl+K and their Ctrl+number keys.",
+            ["th"] = "หน้าที่ไม่ได้อยู่บนแถบซ้าย — เปิดจาก Ctrl+K หรือปุ่มลัด Ctrl+ตัวเลขได้เหมือนเดิม",
+        },
         ["nav.chatTip"] = new() { ["en"] = "Chat (Ctrl+1)", ["th"] = "แชท (Ctrl+1)" },
         ["nav.codeTip"] = new() { ["en"] = "Code Editor (Ctrl+5)", ["th"] = "อีดิเตอร์โค้ด (Ctrl+5)" },
         ["nav.subagentsTip"] = new() { ["en"] = "Subagents (Ctrl+6)", ["th"] = "Subagent (Ctrl+6)" },

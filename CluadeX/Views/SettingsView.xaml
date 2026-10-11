@@ -1015,6 +1015,96 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- More tools: the pages that left the activity bar (still on Ctrl+K and their Ctrl+number keys) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.moreTools}" Style="{StaticResource CardTitle}"/>
+                                <TextBlock Text="{services:Loc settings.moreToolsDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
+                                <WrapPanel>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="Features" ToolTip="{services:Loc nav.featuresTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE734;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.features}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="Permissions" ToolTip="{services:Loc nav.permissionsTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.permissions}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="HookLibrary" ToolTip="{services:Loc nav.hooksTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE9F5;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.hookLibrary}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="Plugins" ToolTip="{services:Loc nav.pluginsTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE74C;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.plugins}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="Skills" ToolTip="{services:Loc nav.skillsTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.skills}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="SubAgents" ToolTip="{services:Loc nav.subagentsTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.subagents}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="Instincts" ToolTip="{services:Loc nav.instinctsTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE82D;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.instincts}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="SecurityShield" ToolTip="{services:Loc nav.shieldTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.securityShield}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="HexEditor" ToolTip="{services:Loc nav.hexTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.hexEditor}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
+                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="DebugLog" ToolTip="{services:Loc nav.debugLogTip}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{services:Loc nav.debugLog}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.language}" Style="{StaticResource CardTitle}"/>
