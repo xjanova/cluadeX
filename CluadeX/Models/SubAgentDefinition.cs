@@ -1,3 +1,5 @@
+using CluadeX.Services;
+
 namespace CluadeX.Models;
 
 /// <summary>
@@ -54,15 +56,15 @@ public class SubAgentDefinition
     /// <summary>Hex color for the UI (derived from Color name).</summary>
     public string ColorHex => Color.ToLowerInvariant() switch
     {
-        "cyan"    => "#4CDFFF",
-        "blue"    => "#5A8DFF",
-        "violet"  => "#A672FF",
-        "magenta" => "#FF5EC4",
-        "pink"    => "#FF8AA6",
-        "mint"    => "#5CFFB0",
-        "amber"   => "#FFD166",
-        "red"     => "#FF6E6E",
-        _         => "#A672FF",
+        "cyan"    => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+        "blue"    => ThemeColors.Hex("Status.Info", "#5A8DFF"),
+        "violet"  => ThemeColors.Hex("Accent.2", "#A672FF"),
+        "magenta" => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+        "pink"    => ThemeColors.Hex("Accent.4", "#FF8AA6"),
+        "mint"    => ThemeColors.Hex("Status.Success", "#5CFFB0"),
+        "amber"   => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        "red"     => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+        _         => ThemeColors.Hex("Accent.2", "#A672FF"),
     };
 
     public string TierBadge => Tier switch

@@ -26,7 +26,13 @@ public class AgentToolService : IDisposable
 
     // ─── Skill AllowedTools Filter ───
     /// <summary>When set, only these tools can be called. Set by skill execution context. Null = all allowed.</summary>
-    public List<string>? ActiveSkillAllowedTools { get; set; }
+    /// <summary>The running skill's tool limits — per run when a run is in progress (AgentRunScope).</summary>
+    public List<string>? ActiveSkillAllowedTools
+    {
+        get => AgentRunScope.Current is { } run ? run.ActiveSkillAllowedTools : _activeSkillAllowedTools;
+        set { if (AgentRunScope.Current is { } run) run.ActiveSkillAllowedTools = value; else _activeSkillAllowedTools = value; }
+    }
+    private List<string>? _activeSkillAllowedTools;
 
     /// <summary>
     /// Does the active skill's whitelist permit <paramref name="toolName"/>?
@@ -87,7 +93,9 @@ public class AgentToolService : IDisposable
     }
 
     // ─── TODO List State ───
-    private readonly List<TodoItem> _todoItems = new();
+    private readonly List<TodoItem> _appTodoItems = new();
+    /// <summary>The plan checklist of the run in progress (each run has its own), else the app's.</summary>
+    private List<TodoItem> _todoItems => AgentRunScope.Current?.Todos ?? _appTodoItems;
     public IReadOnlyList<TodoItem> TodoItems => _todoItems;
     public event Action? TodoChanged;
 
@@ -96,7 +104,9 @@ public class AgentToolService : IDisposable
 
     // ─── Agent Sub-task Spawning ───
     /// <summary>Raised when agent requests a sub-task spawn. Returns sub-agent result.</summary>
-    public event Func<string, string, CancellationToken, Task<string>>? OnAgentSpawnRequested;
+    /// <summary>Runs a real sub-agent (CodeAgentService.RunSubAgentAsync) for agent_spawn and subagent_invoke; returns
+    /// its report, or null when the active model cannot run one (the [ACTION:] protocol).</summary>
+    public event Func<SubAgentRequest, CancellationToken, Task<string?>>? OnAgentSpawnRequested;
 
     // Regex to match [ACTION: tool_name]...[/ACTION] blocks.
     // The name class must cover MCP qualified names (mcp__server__tool), which routinely contain
@@ -191,7 +201,7 @@ public class AgentToolService : IDisposable
     /// </summary>
     public string SessionKey
     {
-        get => _sessionKey;
+        get => AgentRunScope.Current is { } run ? Vision.ToolImageStore.SafeSessionName(run.SessionKey) : _sessionKey;
         set
         {
             string key = Vision.ToolImageStore.SafeSessionName(value);
@@ -199,7 +209,7 @@ public class AgentToolService : IDisposable
             {
                 if (key == _sessionKey) return;
                 _sessionKey = key;
-                _onceApprovals.Clear();
+                // Approvals are keyed per chat (SessionKey|onceKey): nothing to forget on a switch.
             }
         }
     }
@@ -207,13 +217,14 @@ public class AgentToolService : IDisposable
     private bool IsOnceApproved(string? onceKey)
     {
         if (string.IsNullOrEmpty(onceKey)) return false;
-        lock (_onceLock) return _onceApprovals.Contains(onceKey);
+        // Per chat: two chats running at once never share an "allow once".
+        lock (_onceLock) return _onceApprovals.Contains(SessionKey + "|" + onceKey);
     }
 
     private void RememberOnceApproval(string? onceKey)
     {
         if (string.IsNullOrEmpty(onceKey)) return;
-        lock (_onceLock) _onceApprovals.Add(onceKey);
+        lock (_onceLock) _onceApprovals.Add(SessionKey + "|" + onceKey);
     }
 
     // ── "Accept edits" and the automatic build check ──
@@ -363,7 +374,11 @@ public class AgentToolService : IDisposable
         string detail = $"{scope}: {resource}";
         if (!string.IsNullOrWhiteSpace(perm.Detail) && perm.Detail != resource) detail += "\n" + perm.Detail;
         bool allowed = OnPermissionRequired != null
-            && await OnPermissionRequired.Invoke(new PermissionRequestInfo { ToolName = call.ToolName, Detail = detail });
+            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+            {
+                ToolName = call.ToolName, Detail = detail,
+                AlwaysAsk = perm.AlwaysAsk || FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask,
+            });
         if (!allowed) return Fail(call, $"User denied permission for {scope}: {resource}");
         if (!perm.AlwaysAsk) RememberOnceApproval(perm.OnceKey);
         return null;
@@ -430,6 +445,7 @@ public class AgentToolService : IDisposable
             {
                 ToolName = call.ToolName,
                 Detail = McpToolClassifier.DescribeCall(call, leaf),
+                AlwaysAsk = named == PermAction.Ask,
             });
         return allowed ? null : Fail(call, $"User denied permission for {call.ToolName}");
     }
@@ -486,7 +502,11 @@ public class AgentToolService : IDisposable
         string detail = McpToolClassifier.DescribeCall(call, leaf);
         if (!string.IsNullOrWhiteSpace(decision.Detail)) detail += "\n" + decision.Detail;
         bool allowed = OnPermissionRequired != null
-            && await OnPermissionRequired.Invoke(new PermissionRequestInfo { ToolName = call.ToolName, Detail = detail });
+            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
+            {
+                ToolName = call.ToolName, Detail = detail,
+                AlwaysAsk = askRule || decision.Risk == McpCallRisk.AlwaysAsk,
+            });
         if (!allowed) return Fail(call, $"User denied permission for {call.ToolName}");
         if (decision.Risk == McpCallRisk.Ask) RememberOnceApproval(decision.OnceKey);
         return null;
@@ -551,7 +571,13 @@ public class AgentToolService : IDisposable
 
     /// <summary>Where run_command's `cd` left the shell, carried between calls like a real terminal
     /// (null = the project root). Always inside the project.</summary>
-    private volatile string? _shellCwd;
+    /// <summary>Where the shell is after a `cd` — per run when a run is in progress.</summary>
+    private string? _shellCwd
+    {
+        get => AgentRunScope.Current is { } run ? run.ShellCwd : _appShellCwd;
+        set { if (AgentRunScope.Current is { } run) run.ShellCwd = value; else _appShellCwd = value; }
+    }
+    private volatile string? _appShellCwd;
 
     /// <summary>Tear down long-lived child processes (python/node REPL sessions) on app shutdown.
     /// AgentToolService is a DI singleton, so the container calls this on exit — without it the REPL
@@ -759,6 +785,7 @@ public class AgentToolService : IDisposable
                                 ToolName = call.ToolName,
                                 Detail = DescribePermissionRequest(call, scope, resource),
                                 Diff = TryComputePreviewDiff(call),
+                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask,
                             });
                         if (!allowed)
                             return Fail(call, $"User denied permission for {scope}: {resource}");
@@ -859,7 +886,7 @@ public class AgentToolService : IDisposable
                 ToolType.HexInfo => await ExecuteHexInfoAsync(call, ct),
 
                 // Subagent system (Sprint 1 #1 — ECC parity)
-                ToolType.SubAgentInvoke => ExecuteSubAgentInvoke(call),
+                ToolType.SubAgentInvoke => await ExecuteSubAgentInvokeAsync(call, ct),
                 ToolType.SubAgentList => ExecuteSubAgentList(call),
 
                 // Tool modules (bg_*, browser_*) — after the gate, the permission check and the PreToolUse hooks above.
@@ -1056,11 +1083,11 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
-        schemas.Add(new() { Name = "agent_spawn", Description = "Spawn a sub-agent for a complex sub-task", InputSchema = MakeSchema(("task", "string", "Task description", true), ("context", "string", "Additional context", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default) or general (may edit files)", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
-        schemas.Add(new() { Name = "subagent_invoke", Description = "Spawn a specialised subagent (code-reviewer, security-reviewer, architect, csharp-reviewer, python-reviewer, code-explorer, silent-failure-hunter, performance-optimizer, doc-updater, tdd-guide) with a scoped tool set and isolated focus. Returns a constructed prompt that you should execute next.", InputSchema = MakeSchema(("type", "string", "Subagent name (e.g. 'code-reviewer')", true), ("prompt", "string", "Task / question for the subagent", true), ("context_files", "string", "Optional comma-separated file paths the subagent should read first", false)) });
+        schemas.Add(new() { Name = "subagent_invoke", Description = "Run a specialist (code-reviewer, security-reviewer, architect, csharp-reviewer, python-reviewer, code-explorer, silent-failure-hunter, performance-optimizer, doc-updater, tdd-guide) as its own sub-agent: its own conversation, its persona and its scoped tool set. It works the task end to end and only its report comes back to you — the files it reads stay out of your context.", InputSchema = MakeSchema(("type", "string", "Subagent name (e.g. 'code-reviewer')", true), ("prompt", "string", "Task / question for the subagent", true), ("context_files", "string", "Optional comma-separated file paths the subagent should read first", false)) });
         schemas.Add(new() { Name = "subagent_list", Description = "List all available subagents with descriptions and tiers (cheap/mid/deep).", InputSchema = MakeSchema() });
 
         // Memory tools
@@ -1130,7 +1157,14 @@ public class AgentToolService : IDisposable
                         + "Rename the server key in mcp_servers.json.");
                     continue;
                 }
-                schemas.Add(new() { Name = mcpName, Description = _mcpPolicies.Length == 0 ? mcpTool.Description ?? mcpTool.Name : offeredDescription, InputSchema = inputSchema });
+                schemas.Add(new()
+                {
+                    Name = mcpName, Description = _mcpPolicies.Length == 0 ? mcpTool.Description ?? mcpTool.Name : offeredDescription, InputSchema = inputSchema,
+                    // Loaded on demand where the provider can search for tools — the brain alone is 128 tools (~59k
+                    // tokens, mostly Unity/Roblox proxies) that used to ride every request. The recall tools the
+                    // brain-first rule needs on every turn stay loaded.
+                    DeferLoading = !PinnedMcpToolLeaves.Contains(mcpTool.Name),
+                });
             }
         }
 
@@ -1164,6 +1198,13 @@ public class AgentToolService : IDisposable
     }
 
     private static bool IsMcpSchemaName(string name) => name.StartsWith("mcp__", StringComparison.Ordinal);
+
+    /// <summary>MCP tools (by their own name, without the mcp__server__ prefix) kept in every tool list: the brain
+    /// recall tools. Local models' budget fit never drops them; tool search never defers them.</summary>
+    public static readonly HashSet<string> PinnedMcpToolLeaves = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "brain_search", "brain_semantic_search", "brain_get_note",
+    };
 
     /// <summary>
     /// Are any tools usable with NO project open? Today that means MCP servers.
@@ -1816,6 +1857,11 @@ public class AgentToolService : IDisposable
             var (moduleAction, moduleScope, moduleResource, _) = EvaluateModulePermission(module, call);
             return (moduleAction, moduleScope, moduleResource);
         }
+
+        // Talking to the user and keeping the agent's own notes change nothing on this PC: never a prompt (asking
+        // "Allow ask_user?" before every question, or before every plan update, was a prompt about a prompt).
+        if (call.Type is ToolType.AskUser or ToolType.TodoWrite or ToolType.PlanMode or ToolType.MemoryList)
+            return (PermAction.Allow, "read", call.ToolName);
 
         string scope = call.Type switch
         {
@@ -3534,49 +3580,49 @@ public class AgentToolService : IDisposable
         if (string.IsNullOrEmpty(task))
             return Fail(call, "Missing 'task' argument");
 
-        // No external host is subscribed in the desktop app (the event exists for embedders),
-        // so agent_spawn used to fail 100% of the time despite being advertised in both tool
-        // protocols. Fall back to the same in-loop mechanism subagent_invoke uses: hand the
-        // main agent a focused sub-task brief it executes before returning to the parent task.
-        if (OnAgentSpawnRequested == null)
+        // A real sub-agent (CodeAgentService.RunSubAgentAsync) when the model can run one. Without a handler, or when
+        // the handler declines (a model on the [ACTION:] protocol), hand the main agent a focused brief to work itself.
+        if (OnAgentSpawnRequested != null)
         {
-            var brief = new StringBuilder();
-            brief.AppendLine("# 🧩 Sub-task");
-            brief.AppendLine("Run this as a self-contained sub-task NOW, then return to the parent task:");
-            brief.AppendLine();
-            brief.AppendLine($"**Task:** {task}");
-            if (!string.IsNullOrWhiteSpace(context))
+            try
             {
-                brief.AppendLine();
-                brief.AppendLine($"**Context:** {context}");
+                string? result = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, call.GetArg("type", "explore")), ct);
+                if (result != null)
+                    return new ToolResult
+                    {
+                        Type = call.Type, ToolName = call.ToolName, Success = true,
+                        Output = result.Length > 8000 ? result[..8000] + "\n... (truncated)" : result,
+                        Summary = $"Sub-agent completed: {task[..Math.Min(50, task.Length)]}",
+                    };
             }
-            brief.AppendLine();
-            brief.AppendLine("Work it end to end with your normal tools, verify the result, then summarise "
-                + "the outcome in 2-3 lines and continue what you were doing before.");
-            brief.AppendLine("(For a specialist persona with a scoped tool set, use subagent_invoke instead — "
-                + "run subagent_list to see the available specialists.)");
-            return new ToolResult
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
             {
-                Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = brief.ToString(),
-                Summary = $"Sub-task queued: {task[..Math.Min(50, task.Length)]}",
-            };
+                return Fail(call, $"Sub-agent failed: {ex.Message}");
+            }
         }
 
-        try
+        var brief = new StringBuilder();
+        brief.AppendLine("# 🧩 Sub-task");
+        brief.AppendLine("Run this as a self-contained sub-task NOW, then return to the parent task:");
+        brief.AppendLine();
+        brief.AppendLine($"**Task:** {task}");
+        if (!string.IsNullOrWhiteSpace(context))
         {
-            string result = await OnAgentSpawnRequested.Invoke(task, context, ct);
-            return new ToolResult
-            {
-                Type = call.Type, ToolName = call.ToolName, Success = true,
-                Output = result.Length > 4000 ? result[..4000] + "\n... (truncated)" : result,
-                Summary = $"Sub-agent completed: {task[..Math.Min(50, task.Length)]}",
-            };
+            brief.AppendLine();
+            brief.AppendLine($"**Context:** {context}");
         }
-        catch (Exception ex)
+        brief.AppendLine();
+        brief.AppendLine("Work it end to end with your normal tools, verify the result, then summarise "
+            + "the outcome in 2-3 lines and continue what you were doing before.");
+        brief.AppendLine("(For a specialist persona with a scoped tool set, use subagent_invoke instead — "
+            + "run subagent_list to see the available specialists.)");
+        return new ToolResult
         {
-            return Fail(call, $"Sub-agent failed: {ex.Message}");
-        }
+            Type = call.Type, ToolName = call.ToolName, Success = true,
+            Output = brief.ToString(),
+            Summary = $"Sub-task queued: {task[..Math.Min(50, task.Length)]}",
+        };
     }
 
     // ════════════════════════════════════════════
@@ -4361,6 +4407,38 @@ public class AgentToolService : IDisposable
     /// restrictions are enforced via the existing ActiveSkillAllowedTools
     /// channel until proper context isolation lands in v2.
     /// </summary>
+    private async Task<ToolResult> ExecuteSubAgentInvokeAsync(ToolCall call, CancellationToken ct)
+    {
+        string type = call.GetArg("type");
+        var specialist = string.IsNullOrWhiteSpace(type) ? null : _subAgentService.GetByName(type);
+        string task = call.GetArg("prompt", "").Trim();
+        // A real sub-agent with the specialist's persona and tools when the model can run one. Otherwise (no handler,
+        // or a model on the [ACTION:] protocol) the persona is handed to the main agent below, as before.
+        if (specialist != null && task.Length > 0 && OnAgentSpawnRequested != null)
+        {
+            string files = call.GetArg("context_files", "").Trim();
+            string context = files.Length > 0 ? "Read these files first: " + files : "";
+            try
+            {
+                string? report = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, specialist.Name,
+                    specialist.SystemPrompt, specialist.AllowedTools.Count > 0 ? specialist.AllowedTools : null), ct);
+                if (report != null)
+                    return new ToolResult
+                    {
+                        Type = call.Type, ToolName = call.ToolName, Success = true,
+                        Output = $"## Report from {specialist.Name}\n\n" + (report.Length > 8000 ? report[..8000] + "\n... (truncated)" : report),
+                        Summary = $"Subagent '{specialist.Name}' finished",
+                    };
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                return Fail(call, $"Subagent '{specialist.Name}' failed: {ex.Message}");
+            }
+        }
+        return ExecuteSubAgentInvoke(call);
+    }
+
     private ToolResult ExecuteSubAgentInvoke(ToolCall call)
     {
         string type = call.GetArg("type");
@@ -4793,6 +4871,15 @@ public class AgentToolService : IDisposable
 
     /// <summary>Raised when agent needs to ask user a question via UI dialog.</summary>
     public event Func<string, List<string>, Task<string>>? OnAskUserQuestion;
+
+    /// <summary>Ask the user from outside a tool call (the spend guard). Null = nobody to ask (headless).</summary>
+    public async Task<string?> AskUserAsync(string question, List<string> options)
+    {
+        var handler = OnAskUserQuestion;
+        if (handler == null) return null;
+        try { return await handler.Invoke(question, options); }
+        catch (OperationCanceledException) { return null; }
+    }
 
     private async Task<ToolResult> ExecuteAskUserAsync(ToolCall call)
     {

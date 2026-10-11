@@ -58,6 +58,16 @@ public static class WorkspaceFiles
     public static bool IsPrunedDirName(string name) =>
         PrunedDirs.Contains(name) || (name.StartsWith('.') && !KeptHiddenDirs.Contains(name));
 
+    /// <summary>
+    /// <c>.claude/worktrees</c>: Claude Code's agent worktrees — each one a full checkout of the project. .claude is
+    /// kept for its skills and agents, but walking into these listed every file once per worktree: a search over a
+    /// repo with ten of them was ten times slower and returned every hit eleven times. (git ls-files already skips
+    /// them: a nested worktree is one entry.)
+    /// </summary>
+    public static bool IsAgentWorktrees(string parentDir, string name) =>
+        name.Equals("worktrees", StringComparison.OrdinalIgnoreCase)
+        && Path.GetFileName(parentDir.TrimEnd('\\', '/')).Equals(".claude", StringComparison.OrdinalIgnoreCase);
+
     // ───────────────────────── git ─────────────────────────
 
     private static Listing? TryGit(string projectRoot, string searchRoot, int maxFiles)
@@ -74,10 +84,22 @@ public static class WorkspaceFiles
             if (!Add(listing, projectRoot, searchRoot, rel, maxFiles)) return listing;
         foreach (var rel in untracked)
         {
-            if (rel.Split('/').SkipLast(1).Any(IsPrunedDirName)) continue;
+            var parts = rel.Split('/');
+            if (parts.SkipLast(1).Any(IsPrunedDirName) || InAgentWorktrees(parts)) continue;
             if (!Add(listing, projectRoot, searchRoot, rel, maxFiles)) return listing;
         }
         return listing;
+    }
+
+    /// <summary>An untracked path under <c>.claude/worktrees/</c> (see <see cref="IsAgentWorktrees"/>): git lists a
+    /// nested worktree as one entry, but anything else an agent left there — a build output folder of DLLs — was read
+    /// by every search.</summary>
+    private static bool InAgentWorktrees(string[] parts)
+    {
+        for (int i = 0; i + 2 < parts.Length; i++)
+            if (parts[i].Equals(".claude", StringComparison.OrdinalIgnoreCase)
+                && parts[i + 1].Equals("worktrees", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private static bool Add(Listing listing, string projectRoot, string searchRoot, string relToSearch, int maxFiles)
@@ -140,7 +162,7 @@ public static class WorkspaceFiles
             for (int i = subdirs.Length - 1; i >= 0; i--)
             {
                 string name = Path.GetFileName(subdirs[i]);
-                if (IsPrunedDirName(name)) continue;
+                if (IsPrunedDirName(name) || IsAgentWorktrees(dir, name)) continue;
                 // A junction looping back to an ancestor would otherwise re-list the tree until the cap.
                 try { if ((File.GetAttributes(subdirs[i]) & FileAttributes.ReparsePoint) != 0) continue; } catch { continue; }
                 stack.Push(subdirs[i]);

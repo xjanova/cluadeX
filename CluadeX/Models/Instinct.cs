@@ -1,3 +1,5 @@
+using CluadeX.Services;
+
 namespace CluadeX.Models;
 
 /// <summary>
@@ -102,10 +104,10 @@ public class Instinct
         {
             return ConfidenceTier switch
             {
-                "STRONG"   => "#5CFFB0",  // mint — ready to promote
-                "EMERGING" => "#4CDFFF",  // cyan — keep watching
-                "WEAK"     => "#FFD166",  // amber — needs more evidence
-                _          => "#8388BD",  // muted — likely noise
+                "STRONG"   => ThemeColors.Hex("Status.Success", "#5CFFB0"),  // mint — ready to promote
+                "EMERGING" => ThemeColors.Hex("Accent.1", "#4CDFFF"),  // cyan — keep watching
+                "WEAK"     => ThemeColors.Hex("Status.Warning", "#FFD166"),  // amber — needs more evidence
+                _          => ThemeColors.Hex("Text.Muted", "#8388BD"),  // muted — likely noise
             };
         }
     }

@@ -7,35 +7,6 @@
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
-        <!-- ── Neon retheme — local override of Catppuccin keys ── -->
-        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
-        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
-        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
-        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
-        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
-        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
-        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
-        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
-        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
-        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
-        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
-        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
-        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>
-        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
-        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
-        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
-        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>
-        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
-        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
-        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
-        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
-
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
         <conv:FileSizeConverter x:Key="FileSize"/>
         <conv:InverseBoolConverter x:Key="InvertBool"/>
@@ -43,7 +14,7 @@
 
         <!-- Tag badge style -->
         <Style x:Key="TagBadge" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Raised}"/>
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="6,2"/>
             <Setter Property="Margin" Value="0,0,4,0"/>
@@ -51,22 +22,14 @@
 
         <!-- Accent tag badge (quantization) -->
         <Style x:Key="QuantBadge" TargetType="Border">
-            <Setter Property="Background">
-                <Setter.Value>
-                    <SolidColorBrush Color="{StaticResource MauveColor}" Opacity="0.15"/>
-                </Setter.Value>
-            </Setter>
+            <Setter Property="Background" Value="{DynamicResource Badge.Quant.Background}"/>
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="7,2"/>
             <Setter Property="Margin" Value="0,0,4,0"/>
         </Style>
 
         <Style x:Key="SizeBadge" TargetType="Border">
-            <Setter Property="Background">
-                <Setter.Value>
-                    <SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.15"/>
-                </Setter.Value>
-            </Setter>
+            <Setter Property="Background" Value="{DynamicResource Badge.Size.Background}"/>
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="7,2"/>
             <Setter Property="Margin" Value="0,0,4,0"/>
@@ -77,11 +40,49 @@
             <Setter Property="Cursor" Value="Hand"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background">
-                        <Setter.Value>
-                            <SolidColorBrush Color="{StaticResource Surface1Color}"/>
-                        </Setter.Value>
-                    </Setter>
+                    <Setter Property="Background" Value="{DynamicResource State.Hover}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- List / grid switch. Its own template: the Windows one painted its hover / pressed / checked box in its own
+             light blue whatever the theme said. Same shape and trigger order as that template, so Midnight (whose
+             Button.Plain.* tokens hold those Windows colours) looks exactly as before. -->
+        <Style x:Key="ViewToggle" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Button.Plain.Border}"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+                            <ContentPresenter Focusable="False" RecognizesAccessKey="True" Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource Button.Plain.Hover.Background}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource Button.Plain.Hover.Border}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource Button.Plain.Pressed.Background}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource Button.Plain.Pressed.Border}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{DynamicResource Button.Plain.Checked.Background}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource Button.Plain.Checked.Border}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource Accent.2}"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -98,10 +99,10 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="{services:Loc models.managerTitle}" FontSize="24" FontWeight="Bold"
-                               Foreground="{StaticResource TextBrush}"
-                               FontFamily="{StaticResource MainFont}"/>
+                               Foreground="{DynamicResource Text.Primary}"
+                               FontFamily="{DynamicResource Font.Ui.Display}"/>
                     <TextBlock Text="{services:Loc models.managerSubtitle}"
-                               Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,2,0,0"/>
+                               Foreground="{DynamicResource Text.Secondary}" FontSize="13" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Content="&#xE838;" Style="{StaticResource IconButton}"
@@ -127,17 +128,17 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <Border Background="{StaticResource Surface1Brush}" CornerRadius="8"
+                    <Border Background="{DynamicResource Surface.Raised}" CornerRadius="8"
                             Width="44" Height="44" Margin="0,0,14,0">
                         <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets" FontSize="20"
-                                   Foreground="{StaticResource TealBrush}"
+                                   Foreground="{DynamicResource Accent.1}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                         <TextBlock Text="{services:Loc models.gpuStatus}" FontWeight="SemiBold" FontSize="14"
-                                   Foreground="{StaticResource TextBrush}"/>
+                                   Foreground="{DynamicResource Text.Primary}"/>
                         <TextBlock Text="{Binding GpuRecommendation}"
-                                   Foreground="{StaticResource Subtext0Brush}"
+                                   Foreground="{DynamicResource Text.Secondary}"
                                    FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0"/>
                     </StackPanel>
                 </Grid>
@@ -154,10 +155,10 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="16"
-                                   Foreground="{StaticResource BlueBrush}" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center"
                                    Margin="0,0,10,0"/>
                         <TextBlock Grid.Column="1" Text="{Binding DownloadStatus}"
-                                   Foreground="{StaticResource TextBrush}" FontSize="13"
+                                   Foreground="{DynamicResource Text.Primary}" FontSize="13"
                                    VerticalAlignment="Center"/>
                         <Button Grid.Column="2" Content="{services:Loc models.cancel}" Style="{StaticResource DangerButton}"
                                 Command="{Binding CancelDownloadCommand}" Padding="12,4" FontSize="12"/>
@@ -168,7 +169,7 @@
             </Border>
 
             <!-- Status Message (non-downloading) -->
-            <TextBlock Text="{Binding DownloadStatus}" Foreground="{StaticResource Subtext0Brush}"
+            <TextBlock Text="{Binding DownloadStatus}" Foreground="{DynamicResource Text.Secondary}"
                        FontSize="12" Margin="0,6,0,0"
                        Visibility="{Binding IsDownloading, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                 <TextBlock.Style>
@@ -187,15 +188,15 @@
                     Visibility="{Binding IsLoadingModel, Converter={StaticResource BoolVis}}">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="16"
-                               Foreground="{StaticResource BlueBrush}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center"
                                Margin="0,0,10,0"/>
-                    <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{StaticResource TextBrush}" FontSize="13"/>
+                    <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{DynamicResource Text.Primary}" FontSize="13"/>
                 </StackPanel>
             </Border>
 
             <!-- Last load / unload / apply-fit result. Above the tabs: it used to live inside "My Models",
                  so pressing Apply fit or Load on the Recommended tab showed no result at all. -->
-            <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{StaticResource Subtext0Brush}"
+            <TextBlock Text="{Binding ModelLoadStatus}" Foreground="{DynamicResource Text.Secondary}"
                        FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
@@ -212,7 +213,7 @@
             </TextBlock>
 
             <!-- ═══════ TAB NAVIGATION ═══════ -->
-            <Border BorderThickness="0,0,0,1" BorderBrush="{StaticResource Surface0Brush}"
+            <Border BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Surface.Sunken}"
                     Margin="0,16,0,0" Padding="0,0,0,0">
                 <StackPanel Orientation="Horizontal">
                     <RadioButton Content="{services:Loc models.tabRecommended}" Style="{StaticResource NavButton}" Tag="&#xE735;"
@@ -239,11 +240,11 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="{services:Loc models.popularForGpu}" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextBrush}" FontSize="15"
+                               Foreground="{DynamicResource Text.Primary}" FontSize="15"
                                VerticalAlignment="Center"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <!-- List/Grid view switch -->
-                        <Border CornerRadius="6" Background="{StaticResource Surface0Brush}"
+                        <Border CornerRadius="6" Background="{DynamicResource Surface.Sunken}"
                                 Padding="2" Margin="0,0,12,0">
                             <StackPanel Orientation="Horizontal">
                                 <ToggleButton IsChecked="{Binding IsListView, Mode=OneWay}"
@@ -251,40 +252,18 @@
                                               ToolTip="{services:Loc models.listView}"
                                               Padding="8,4" MinWidth="32"
                                               Background="Transparent" BorderThickness="0"
-                                              Content="&#xE8FD;" FontFamily="Segoe MDL2 Assets" FontSize="12">
-                                    <ToggleButton.Style>
-                                        <Style TargetType="ToggleButton">
-                                            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
-                                            <Style.Triggers>
-                                                <Trigger Property="IsChecked" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
-                                                    <Setter Property="Foreground" Value="{StaticResource MauveBrush}"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </ToggleButton.Style>
-                                </ToggleButton>
+                                              Content="&#xE8FD;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                              Style="{StaticResource ViewToggle}"/>
                                 <ToggleButton IsChecked="{Binding IsGridView, Mode=OneWay}"
                                               Command="{Binding SwitchToGridViewCommand}"
                                               ToolTip="{services:Loc models.gridView}"
                                               Padding="8,4" MinWidth="32"
                                               Background="Transparent" BorderThickness="0"
-                                              Content="&#xF0E2;" FontFamily="Segoe MDL2 Assets" FontSize="12">
-                                    <ToggleButton.Style>
-                                        <Style TargetType="ToggleButton">
-                                            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
-                                            <Style.Triggers>
-                                                <Trigger Property="IsChecked" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
-                                                    <Setter Property="Foreground" Value="{StaticResource MauveBrush}"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </ToggleButton.Style>
-                                </ToggleButton>
+                                              Content="&#xF0E2;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                              Style="{StaticResource ViewToggle}"/>
                             </StackPanel>
                         </Border>
-                        <TextBlock Text="{services:Loc models.category}" Foreground="{StaticResource Overlay0Brush}"
+                        <TextBlock Text="{services:Loc models.category}" Foreground="{DynamicResource Text.Muted}"
                                    FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding Categories}"
                                   DisplayMemberPath="Label" SelectedValuePath="Key"
@@ -321,29 +300,29 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
                             <Border Margin="0,0,0,6" CornerRadius="10"
-                                    Background="{StaticResource Surface0Brush}"
+                                    Background="{DynamicResource Surface.Sunken}"
                                     Padding="12"
                                     BorderThickness="2"
                                     ToolTip="{Binding FitHint}">
                                 <!-- Left-edge accent colored by fit tier -->
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="BorderBrush" Value="{StaticResource Surface1Brush}"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource Surface.Raised}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Green">
-                                                <Setter Property="BorderBrush" Value="{StaticResource GreenBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Success}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Teal">
-                                                <Setter Property="BorderBrush" Value="{StaticResource TealBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Yellow">
-                                                <Setter Property="BorderBrush" Value="{StaticResource YellowBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Peach">
-                                                <Setter Property="BorderBrush" Value="{StaticResource PeachBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Red">
-                                                <Setter Property="BorderBrush" Value="{StaticResource RedBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -356,16 +335,16 @@
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource TextBrush}" FontSize="14"/>
+                                                       Foreground="{DynamicResource Text.Primary}" FontSize="14"/>
                                             <!-- Category badge -->
                                             <Border Style="{StaticResource TagBadge}" Margin="8,0,0,0"
                                                     VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding Category, Converter={StaticResource CategoryLabel}}" FontSize="10"
-                                                           Foreground="{StaticResource BlueBrush}" FontWeight="SemiBold"/>
+                                                           Foreground="{DynamicResource Accent.1}" FontWeight="SemiBold"/>
                                             </Border>
                                             <!-- Parameter badge -->
                                             <Border Style="{StaticResource SizeBadge}" VerticalAlignment="Center">
-                                                <TextBlock FontSize="10" Foreground="{StaticResource TealBrush}" FontWeight="SemiBold">
+                                                <TextBlock FontSize="10" Foreground="{DynamicResource Accent.1}" FontWeight="SemiBold">
                                                     <Run Text="{Binding ParameterBillions}"/><Run Text="B"/>
                                                 </TextBlock>
                                             </Border>
@@ -374,42 +353,22 @@
                                                     CornerRadius="4" Padding="7,2">
                                                 <Border.Style>
                                                     <Style TargetType="Border">
-                                                        <Setter Property="Background" Value="{StaticResource Surface1Brush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Surface.Raised}"/>
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Green">
-                                                                <Setter Property="Background">
-                                                                    <Setter.Value>
-                                                                        <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.2"/>
-                                                                    </Setter.Value>
-                                                                </Setter>
+                                                                <Setter Property="Background" Value="{DynamicResource Fit.Excellent.Tint}"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Teal">
-                                                                <Setter Property="Background">
-                                                                    <Setter.Value>
-                                                                        <SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.2"/>
-                                                                    </Setter.Value>
-                                                                </Setter>
+                                                                <Setter Property="Background" Value="{DynamicResource Fit.Good.Tint}"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Yellow">
-                                                                <Setter Property="Background">
-                                                                    <Setter.Value>
-                                                                        <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.2"/>
-                                                                    </Setter.Value>
-                                                                </Setter>
+                                                                <Setter Property="Background" Value="{DynamicResource Fit.Partial.Tint}"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Peach">
-                                                                <Setter Property="Background">
-                                                                    <Setter.Value>
-                                                                        <SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.2"/>
-                                                                    </Setter.Value>
-                                                                </Setter>
+                                                                <Setter Property="Background" Value="{DynamicResource Fit.Poor.Tint}"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding FitColorKey}" Value="Red">
-                                                                <Setter Property="Background">
-                                                                    <Setter.Value>
-                                                                        <SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.2"/>
-                                                                    </Setter.Value>
-                                                                </Setter>
+                                                                <Setter Property="Background" Value="{DynamicResource Fit.TooLarge.Tint}"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -417,22 +376,22 @@
                                                 <TextBlock Text="{Binding FitLabel}" FontSize="10" FontWeight="SemiBold">
                                                     <TextBlock.Style>
                                                         <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding FitColorKey}" Value="Green">
-                                                                    <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
                                                                 </DataTrigger>
                                                                 <DataTrigger Binding="{Binding FitColorKey}" Value="Teal">
-                                                                    <Setter Property="Foreground" Value="{StaticResource TealBrush}"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
                                                                 </DataTrigger>
                                                                 <DataTrigger Binding="{Binding FitColorKey}" Value="Yellow">
-                                                                    <Setter Property="Foreground" Value="{StaticResource YellowBrush}"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
                                                                 </DataTrigger>
                                                                 <DataTrigger Binding="{Binding FitColorKey}" Value="Peach">
-                                                                    <Setter Property="Foreground" Value="{StaticResource PeachBrush}"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
                                                                 </DataTrigger>
                                                                 <DataTrigger Binding="{Binding FitColorKey}" Value="Red">
-                                                                    <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
@@ -442,22 +401,20 @@
                                             <!-- Installed badge -->
                                             <Border VerticalAlignment="Center" Margin="4,0,0,0"
                                                     CornerRadius="4" Padding="7,2"
-                                                    Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}">
-                                                <Border.Background>
-                                                    <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
-                                                </Border.Background>
+                                                    Visibility="{Binding IsInstalled, Converter={StaticResource BoolVis}}"
+                                                    Background="{DynamicResource Badge.Installed.Background}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="&#x2713;" FontSize="10" FontWeight="Bold"
-                                                               Foreground="{StaticResource GreenBrush}"
+                                                               Foreground="{DynamicResource Status.Success}"
                                                                VerticalAlignment="Center" Margin="0,0,3,0"/>
                                                     <TextBlock Text="{services:Loc models.installed}" FontSize="10" FontWeight="SemiBold"
-                                                               Foreground="{StaticResource GreenBrush}"/>
+                                                               Foreground="{DynamicResource Status.Success}"/>
                                                 </StackPanel>
                                             </Border>
                                             <!-- One-click apply of the card's recommended -ngl -->
                                             <Button Margin="4,0,0,0" Padding="7,2" Cursor="Hand"
                                                     Background="Transparent" BorderThickness="1"
-                                                    BorderBrush="{StaticResource Surface1Brush}"
+                                                    BorderBrush="{DynamicResource Surface.Raised}"
                                                     ToolTip="{Binding FitHint}"
                                                     Command="{Binding DataContext.ApplyFitCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                     CommandParameter="{Binding}">
@@ -471,23 +428,24 @@
                                                         </Border>
                                                         <ControlTemplate.Triggers>
                                                             <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                                             </Trigger>
                                                         </ControlTemplate.Triggers>
                                                     </ControlTemplate>
                                                 </Button.Template>
                                                 <TextBlock Text="{services:Loc models.applyFit}" FontSize="10" FontWeight="SemiBold"
-                                                           Foreground="{StaticResource TealBrush}"/>
+                                                           Foreground="{DynamicResource Accent.1}"/>
                                             </Button>
                                         </StackPanel>
                                         <TextBlock Text="{Binding Description}"
-                                                   Foreground="{StaticResource Subtext0Brush}"
+                                                   Foreground="{DynamicResource Text.Secondary}"
                                                    FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                         <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                             <!-- Star rating -->
                                             <TextBlock Text="{Binding StarDisplay}" FontSize="11"
+                                                       Foreground="{DynamicResource Rating.Star}"
                                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                            <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
+                                            <TextBlock Foreground="{DynamicResource Text.Muted}" FontSize="11">
                                                 <Run Text="{services:Loc models.vramLabel}"/><Run Text="{Binding RequiredVramMB, StringFormat='{}{0:N0} MB'}"/>
                                                 <Run Text="{services:Loc models.sizeLabel}"/>
                                                 <Run Text="{Binding ApproxSizeBytes, Converter={StaticResource FileSize}}"/>
@@ -526,16 +484,16 @@
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,4">
                     <Button Content="{services:Loc modelsm.prev}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding PrevPageCommand}" Padding="12,4" FontSize="11"/>
-                    <TextBlock Text="{Binding PageInfo}" Foreground="{StaticResource TextBrush}"
+                    <TextBlock Text="{Binding PageInfo}" Foreground="{DynamicResource Text.Primary}"
                                FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
-                               Margin="16,0" FontFamily="{StaticResource MonoFont}"/>
+                               Margin="16,0" FontFamily="{DynamicResource Font.Mono.Display}"/>
                     <Button Content="{services:Loc modelsm.next}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding NextPageCommand}" Padding="12,4" FontSize="11"/>
                 </StackPanel>
 
                 <!-- Empty state for filtered -->
                 <TextBlock Text="{services:Loc models.noMatchVram}"
-                           Foreground="{StaticResource Overlay0Brush}" FontSize="13"
+                           Foreground="{DynamicResource Text.Muted}" FontSize="13"
                            HorizontalAlignment="Center" Margin="0,20" FontStyle="Italic">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
@@ -561,7 +519,7 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="{services:Loc models.downloadedModels}" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextBrush}" FontSize="15"
+                               Foreground="{DynamicResource Text.Primary}" FontSize="15"
                                VerticalAlignment="Center"/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <Button Style="{StaticResource SecondaryButton}"
@@ -592,28 +550,28 @@
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource TextBrush}" FontSize="14"/>
+                                                       Foreground="{DynamicResource Text.Primary}" FontSize="14"/>
                                             <!-- Quant badge -->
                                             <Border Style="{StaticResource QuantBadge}" Margin="8,0,0,0"
                                                     VerticalAlignment="Center"
                                                     Visibility="{Binding QuantizationType, Converter={StaticResource BoolVis}}">
                                                 <TextBlock Text="{Binding QuantizationType}" FontSize="10"
-                                                           Foreground="{StaticResource MauveBrush}" FontWeight="SemiBold"/>
+                                                           Foreground="{DynamicResource Accent.2}" FontWeight="SemiBold"/>
                                             </Border>
                                             <!-- Param size badge -->
                                             <Border Style="{StaticResource SizeBadge}" VerticalAlignment="Center"
                                                     Visibility="{Binding ParameterDisplay, Converter={StaticResource BoolVis}}">
                                                 <TextBlock Text="{Binding ParameterDisplay}" FontSize="10"
-                                                           Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                                                           Foreground="{DynamicResource Accent.1}" FontWeight="SemiBold"/>
                                             </Border>
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <TextBlock Text="{Binding FileSizeDisplay}"
-                                                       Foreground="{StaticResource Overlay0Brush}" FontSize="11"/>
+                                                       Foreground="{DynamicResource Text.Muted}" FontSize="11"/>
                                         </StackPanel>
-                                        <TextBlock Text="{Binding LocalPath}" Foreground="{StaticResource Overlay0Brush}"
+                                        <TextBlock Text="{Binding LocalPath}" Foreground="{DynamicResource Text.Muted}"
                                                    FontSize="10" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"
-                                                   FontFamily="{StaticResource MonoFont}" Opacity="0.7"/>
+                                                   FontFamily="{DynamicResource Font.Mono.Display}" Opacity="0.7"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                         <Button Content="{services:Loc models.load}" Style="{StaticResource PrimaryButton}"
@@ -646,11 +604,11 @@
                     </Border.Style>
                     <StackPanel HorizontalAlignment="Center" Margin="0,16">
                         <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="36"
-                                   Foreground="{StaticResource Overlay0Brush}"
+                                   Foreground="{DynamicResource Text.Muted}"
                                    HorizontalAlignment="Center" Margin="0,0,0,10"/>
-                        <TextBlock Text="{services:Loc models.noModelsFound}" Foreground="{StaticResource Subtext0Brush}"
+                        <TextBlock Text="{services:Loc models.noModelsFound}" Foreground="{DynamicResource Text.Secondary}"
                                    FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                        <TextBlock Text="{services:Loc modelsm.noModelsHint}" Foreground="{StaticResource Overlay0Brush}" FontSize="12"
+                        <TextBlock Text="{services:Loc modelsm.noModelsHint}" Foreground="{DynamicResource Text.Muted}" FontSize="12"
                                    HorizontalAlignment="Center" Margin="0,4,0,12" TextAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="520"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -682,8 +640,8 @@
             <StackPanel Visibility="{Binding IsChecked, ElementName=SearchTab, Converter={StaticResource BoolVis}}"
                         Margin="0,16,0,0">
                 <TextBlock Text="{services:Loc models.searchHfTitle}" FontWeight="SemiBold"
-                           Foreground="{StaticResource TextBrush}" FontSize="15" Margin="0,0,0,4"/>
-                <TextBlock Text="{services:Loc modelsm.searchHint}" Foreground="{StaticResource Overlay0Brush}"
+                           Foreground="{DynamicResource Text.Primary}" FontSize="15" Margin="0,0,0,4"/>
+                <TextBlock Text="{services:Loc modelsm.searchHint}" Foreground="{DynamicResource Text.Muted}"
                            FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"/>
 
                 <!-- Search Bar -->
@@ -713,16 +671,16 @@
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8"
                             Visibility="{Binding IsSearching, Converter={StaticResource BoolVis}}">
                     <TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                               Foreground="{StaticResource BlueBrush}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center"
                                Margin="0,0,8,0"/>
-                    <TextBlock Text="{services:Loc models.searching}" Foreground="{StaticResource BlueBrush}"
+                    <TextBlock Text="{services:Loc models.searching}" Foreground="{DynamicResource Accent.1}"
                                FontSize="13" VerticalAlignment="Center"/>
                     <Button Content="{services:Loc models.cancel}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding CancelSearchCommand}" Padding="10,3" FontSize="11" Margin="12,0,0,0"/>
                 </StackPanel>
 
                 <!-- Search Result Info -->
-                <TextBlock Text="{Binding SearchResultInfo}" Foreground="{StaticResource Subtext0Brush}"
+                <TextBlock Text="{Binding SearchResultInfo}" Foreground="{DynamicResource Text.Secondary}"
                            FontSize="12" Margin="0,0,0,8"
                            Visibility="{Binding SearchResultInfo, Converter={StaticResource BoolVis}}"/>
 
@@ -739,29 +697,27 @@
 
                                     <StackPanel>
                                         <!-- Repo name -->
-                                        <TextBlock Foreground="{StaticResource TextBrush}" FontSize="13">
-                                            <Run Text="{Binding Author}" Foreground="{StaticResource Overlay0Brush}"/><Run Text="/" Foreground="{StaticResource Overlay0Brush}"/><Run Text="{Binding Name, Mode=OneWay}" FontWeight="SemiBold"/>
+                                        <TextBlock Foreground="{DynamicResource Text.Primary}" FontSize="13">
+                                            <Run Text="{Binding Author}" Foreground="{DynamicResource Text.Muted}"/><Run Text="/" Foreground="{DynamicResource Text.Muted}"/><Run Text="{Binding Name, Mode=OneWay}" FontWeight="SemiBold"/>
                                         </TextBlock>
 
                                         <!-- File name with badges -->
                                         <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                             <TextBlock Text="{Binding FileName}"
-                                                       Foreground="{StaticResource BlueBrush}"
-                                                       FontSize="12" FontFamily="{StaticResource MonoFont}"
+                                                       Foreground="{DynamicResource Accent.1}"
+                                                       FontSize="12" FontFamily="{DynamicResource Font.Mono.Display}"
                                                        VerticalAlignment="Center"/>
                                             <!-- Installed badge -->
                                             <Border VerticalAlignment="Center" Margin="8,0,0,0"
                                                     CornerRadius="4" Padding="7,2"
-                                                    Visibility="{Binding IsDownloaded, Converter={StaticResource BoolVis}}">
-                                                <Border.Background>
-                                                    <SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/>
-                                                </Border.Background>
+                                                    Visibility="{Binding IsDownloaded, Converter={StaticResource BoolVis}}"
+                                                    Background="{DynamicResource Badge.Installed.Background}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="&#x2713;" FontSize="10" FontWeight="Bold"
-                                                               Foreground="{StaticResource GreenBrush}"
+                                                               Foreground="{DynamicResource Status.Success}"
                                                                VerticalAlignment="Center" Margin="0,0,3,0"/>
                                                     <TextBlock Text="{services:Loc models.installed}" FontSize="10" FontWeight="SemiBold"
-                                                               Foreground="{StaticResource GreenBrush}"/>
+                                                               Foreground="{DynamicResource Status.Success}"/>
                                                 </StackPanel>
                                             </Border>
                                         </StackPanel>
@@ -772,28 +728,28 @@
                                             <Border Style="{StaticResource SizeBadge}"
                                                     Visibility="{Binding FileSize, Converter={StaticResource BoolVis}}">
                                                 <TextBlock Text="{Binding FileSizeDisplay}" FontSize="10"
-                                                           Foreground="{StaticResource TealBrush}" FontWeight="SemiBold"/>
+                                                           Foreground="{DynamicResource Accent.1}" FontWeight="SemiBold"/>
                                             </Border>
                                             <!-- Quantization -->
                                             <Border Style="{StaticResource QuantBadge}"
                                                     Visibility="{Binding QuantizationType, Converter={StaticResource BoolVis}}">
                                                 <TextBlock Text="{Binding QuantizationType}" FontSize="10"
-                                                           Foreground="{StaticResource MauveBrush}" FontWeight="SemiBold"/>
+                                                           Foreground="{DynamicResource Accent.2}" FontWeight="SemiBold"/>
                                             </Border>
                                             <!-- Param size -->
                                             <Border Style="{StaticResource TagBadge}"
                                                     Visibility="{Binding ParameterDisplay, Converter={StaticResource BoolVis}}">
                                                 <TextBlock Text="{Binding ParameterDisplay}" FontSize="10"
-                                                           Foreground="{StaticResource PeachBrush}" FontWeight="SemiBold"/>
+                                                           Foreground="{DynamicResource Status.Warning}" FontWeight="SemiBold"/>
                                             </Border>
                                             <!-- Downloads -->
                                             <Border Style="{StaticResource TagBadge}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets"
-                                                               FontSize="9" Foreground="{StaticResource Overlay0Brush}"
+                                                               FontSize="9" Foreground="{DynamicResource Text.Muted}"
                                                                VerticalAlignment="Center" Margin="0,0,3,0"/>
                                                     <TextBlock Text="{Binding DownloadsDisplay}" FontSize="10"
-                                                               Foreground="{StaticResource Overlay0Brush}"/>
+                                                               Foreground="{DynamicResource Text.Muted}"/>
                                                 </StackPanel>
                                             </Border>
                                             <!-- Likes -->
@@ -801,10 +757,10 @@
                                                     Visibility="{Binding Likes, Converter={StaticResource BoolVis}}">
                                                 <StackPanel Orientation="Horizontal">
                                                     <TextBlock Text="&#xEB52;" FontFamily="Segoe MDL2 Assets"
-                                                               FontSize="9" Foreground="{StaticResource RedBrush}"
+                                                               FontSize="9" Foreground="{DynamicResource Status.Danger}"
                                                                VerticalAlignment="Center" Margin="0,0,3,0"/>
                                                     <TextBlock Text="{Binding LikesDisplay}" FontSize="10"
-                                                               Foreground="{StaticResource Overlay0Brush}"/>
+                                                               Foreground="{DynamicResource Text.Muted}"/>
                                                 </StackPanel>
                                             </Border>
                                         </StackPanel>
@@ -820,10 +776,10 @@
                                             <StackPanel Orientation="Horizontal">
                                                 <TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets"
                                                            FontSize="11" VerticalAlignment="Center"
-                                                           Foreground="{StaticResource BlueBrush}"
+                                                           Foreground="{DynamicResource Accent.1}"
                                                            Margin="0,0,4,0"/>
                                                 <TextBlock Text="{services:Loc models.readMore}" FontSize="11"
-                                                           Foreground="{StaticResource BlueBrush}"
+                                                           Foreground="{DynamicResource Accent.1}"
                                                            VerticalAlignment="Center"/>
                                             </StackPanel>
                                         </Button>
@@ -856,9 +812,9 @@
                             Visibility="{Binding HasSearchResults, Converter={StaticResource BoolVis}}">
                     <Button Content="{services:Loc modelsm.prev}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding PrevSearchPageCommand}" Padding="12,4" FontSize="11"/>
-                    <TextBlock Text="{Binding SearchPageInfo}" Foreground="{StaticResource TextBrush}"
+                    <TextBlock Text="{Binding SearchPageInfo}" Foreground="{DynamicResource Text.Primary}"
                                FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"
-                               Margin="16,0" FontFamily="{StaticResource MonoFont}"/>
+                               Margin="16,0" FontFamily="{DynamicResource Font.Mono.Display}"/>
                     <Button Content="{services:Loc modelsm.next}" Style="{StaticResource SecondaryButton}"
                             Command="{Binding NextSearchPageCommand}" Padding="12,4" FontSize="11"/>
                 </StackPanel>
@@ -870,8 +826,8 @@
             <StackPanel Visibility="{Binding IsChecked, ElementName=SourcesTab, Converter={StaticResource BoolVis}}"
                         Margin="0,16,0,0">
                 <TextBlock Text="{services:Loc models.whereToGetTitle}" FontWeight="SemiBold"
-                           Foreground="{StaticResource TextBrush}" FontSize="15" Margin="0,0,0,4"/>
-                <TextBlock Text="{services:Loc modelsm.ggufIntro}" Foreground="{StaticResource Overlay0Brush}"
+                           Foreground="{DynamicResource Text.Primary}" FontSize="15" Margin="0,0,0,4"/>
+                <TextBlock Text="{services:Loc modelsm.ggufIntro}" Foreground="{DynamicResource Text.Muted}"
                            FontSize="12" Margin="0,0,0,16" TextWrapping="Wrap"/>
 
                 <!-- Model Sources -->
@@ -891,29 +847,29 @@
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Border Background="{StaticResource Surface1Brush}" CornerRadius="8"
+                                                <Border Background="{DynamicResource Surface.Raised}" CornerRadius="8"
                                                         Width="40" Height="40" Margin="0,0,14,0">
                                                     <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets"
-                                                               FontSize="18" Foreground="{StaticResource BlueBrush}"
+                                                               FontSize="18" Foreground="{DynamicResource Accent.1}"
                                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                 </Border>
                                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
-                                                               Foreground="{StaticResource TextBrush}" FontSize="14"/>
+                                                               Foreground="{DynamicResource Text.Primary}" FontSize="14"/>
                                                     <TextBlock Text="{Binding Description}"
-                                                               Foreground="{StaticResource Subtext0Brush}"
+                                                               Foreground="{DynamicResource Text.Secondary}"
                                                                FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0"/>
                                                 </StackPanel>
                                                 <TextBlock Grid.Column="2" Text="&#xE8A7;"
                                                            FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                                           Foreground="{StaticResource Overlay0Brush}"
+                                                           Foreground="{DynamicResource Text.Muted}"
                                                            VerticalAlignment="Center" Margin="10,0,0,0"/>
                                             </Grid>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
                                                 <Setter TargetName="CardBorder" Property="Background"
-                                                        Value="{StaticResource Surface1Brush}"/>
+                                                        Value="{DynamicResource Surface.Raised}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -927,26 +883,26 @@
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <StackPanel>
                         <TextBlock Text="{services:Loc models.tipsTitle}" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextBrush}" FontSize="14" Margin="0,0,0,10"/>
+                                   Foreground="{DynamicResource Text.Primary}" FontSize="14" Margin="0,0,0,10"/>
 
-                        <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
+                        <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12"
                                    TextWrapping="Wrap" Margin="0,0,0,6">
-                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipQuantTitle}"/></Bold>
+                            <Bold Foreground="{DynamicResource Accent.1}"><Run Text="{services:Loc modelsm.tipQuantTitle}"/></Bold>
                             <Run Text="{services:Loc modelsm.tipQuant}"/>
                         </TextBlock>
-                        <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
+                        <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12"
                                    TextWrapping="Wrap" Margin="0,0,0,6">
-                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipVramTitle}"/></Bold>
+                            <Bold Foreground="{DynamicResource Accent.1}"><Run Text="{services:Loc modelsm.tipVramTitle}"/></Bold>
                             <Run Text="{services:Loc modelsm.tipVram}"/>
                         </TextBlock>
-                        <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
+                        <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12"
                                    TextWrapping="Wrap" Margin="0,0,0,6">
-                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipCodingTitle}"/></Bold>
+                            <Bold Foreground="{DynamicResource Accent.1}"><Run Text="{services:Loc modelsm.tipCodingTitle}"/></Bold>
                             <Run Text="{services:Loc modelsm.tipCoding}"/>
                         </TextBlock>
-                        <TextBlock Foreground="{StaticResource Subtext0Brush}" FontSize="12"
+                        <TextBlock Foreground="{DynamicResource Text.Secondary}" FontSize="12"
                                    TextWrapping="Wrap">
-                            <Bold Foreground="{StaticResource TealBrush}"><Run Text="{services:Loc modelsm.tipPortableTitle}"/></Bold>
+                            <Bold Foreground="{DynamicResource Accent.1}"><Run Text="{services:Loc modelsm.tipPortableTitle}"/></Bold>
                             <Run Text="{services:Loc modelsm.tipPortable}"/>
                         </TextBlock>
                     </StackPanel>

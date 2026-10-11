@@ -17,6 +17,9 @@ public enum MessageRole
     /// above it, which replaces those messages in what is SENT to the model — the transcript itself (screen and
     /// database) keeps every message. Stored as role 8; appended last so older rows keep their numbers.</summary>
     ContextSummary,
+    /// <summary>The agent asks the user (ask_user): the question, its options and a free answer box. Stored as role 9.
+    /// Never sent back to the model as a turn — the answer reaches it as the tool's result.</summary>
+    Question,
 }
 
 /// <summary>How an inline permission prompt was answered.</summary>
@@ -164,6 +167,41 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>Elapsed time for tool execution display (e.g. "1.2s").</summary>
     public string? ToolElapsedTime { get; set; }
 
+    // ─── Tool row look: icon, verb, target ───
+    /// <summary>The tool this row is for (read_file, edit_file, mcp__…): picks its icon.</summary>
+    public string? ToolKind { get; set; }
+    /// <summary>What the tool did in the user's language ("อ่านไฟล์") and on what ("scripts/main.gd"). Rows saved
+    /// before these existed have neither and show <see cref="ToolName"/> instead.</summary>
+    public string? ToolVerb { get; set; }
+    private string? _toolTarget;
+    public string? ToolTarget { get => _toolTarget; set { _toolTarget = value; OnPropertyChanged(); } }
+    public bool HasToolVerb => !string.IsNullOrEmpty(ToolVerb);
+    public string ToolGlyph => ToolLook.Of(ToolKind ?? (CollapsedToolNames.Count > 0 ? CollapsedToolNames[0] : null)).Glyph;
+
+    /// <summary>The diff's +/- counts for the row header ("+27  −12").</summary>
+    public int DiffAdded { get; set; }
+    public int DiffRemoved { get; set; }
+    public string DiffAddedText => DiffAdded > 0 ? $"+{DiffAdded}" : "";
+    public string DiffRemovedText => DiffRemoved > 0 ? $"−{DiffRemoved}" : "";
+
+    private List<DiffPairRow>? _diffPairs;
+    /// <summary>The diff as before/after columns (built once, on first display).</summary>
+    public List<DiffPairRow>? DiffPairs => DiffLines is { Count: > 0 } lines ? _diffPairs ??= Models.DiffPairs.SideBySide(lines) : null;
+
+    // ─── The agent's plan (todo_write), shown as a checklist card ───
+    private List<PlanItemView>? _planItems;
+    private string _planHeader = "";
+    public List<PlanItemView>? PlanItems
+    {
+        get => _planItems;
+        set { _planItems = value; OnPropertyChanged(); OnPropertyChanged(nameof(IsPlan)); }
+    }
+    public bool IsPlan => _planItems is { Count: > 0 };
+    /// <summary>"กำลังดำเนินการ (4/5)" · and how long the run has been going.</summary>
+    public string PlanHeader { get => _planHeader; set { _planHeader = value; OnPropertyChanged(); } }
+    private string _planElapsed = "";
+    public string PlanElapsed { get => _planElapsed; set { _planElapsed = value; OnPropertyChanged(); } }
+
     // ─── Tool Call Grouping ───
     /// <summary>Whether this ToolAction is collapsed into a group summary.</summary>
     private bool _isCollapsedGroup;
@@ -177,9 +215,45 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>Individual tool names in this collapsed group.</summary>
     public List<string> CollapsedToolNames { get; set; } = new();
 
+    // ─── ask_user question ───
+    public List<string> QuestionOptions { get; set; } = new();
+    /// <summary>Resolves the agent's waiting ask_user with the answer (null on a row read back from the database).</summary>
+    public Action<string>? QuestionCallback { get; set; }
+    private bool _questionAnswered;
+    /// <summary>Answered, cancelled, or a row from an earlier session (nobody is waiting for it any more).</summary>
+    public bool QuestionAnswered => _questionAnswered || QuestionCallback == null;
+    public bool HasQuestionOptions => QuestionOptions.Count > 0;
+    private string _answerDraft = "";
+    public string AnswerDraft { get => _answerDraft; set { _answerDraft = value; OnPropertyChanged(); } }
+
+    /// <summary>Answer once: the answer is kept under the question (it is saved with it) and the agent continues.</summary>
+    public bool AnswerQuestion(string? answer)
+    {
+        answer = answer?.Trim() ?? "";
+        if (QuestionAnswered || answer.Length == 0) return false;
+        _questionAnswered = true;
+        Content += "\n→ " + answer;
+        OnPropertyChanged(nameof(QuestionAnswered));
+        try { QuestionCallback?.Invoke(answer); } catch { /* already resolved */ }
+        return true;
+    }
+
+    /// <summary>Nobody will answer it any more (the run was stopped): say so under the question.</summary>
+    public void CloseQuestion(string note)
+    {
+        if (_questionAnswered) return;
+        _questionAnswered = true;
+        Content += "\n→ " + note;
+        OnPropertyChanged(nameof(QuestionAnswered));
+    }
+
     // ─── Permission Request Fields ───
     /// <summary>Callback invoked when user clicks Allow/Deny on a permission request.</summary>
     public Action<bool>? PermissionCallback { get; set; }
+
+    /// <summary>A prompt that always asks (the user's own Ask rule, code run in their browser): switching the chat to
+    /// "allow everything" leaves it for the user to answer.</summary>
+    public bool PermissionAlwaysAsk { get; set; }
 
     private PermissionOutcome _permissionOutcome;
     /// <summary>How the prompt was answered. Notifies, so the Allow/Deny buttons collapse and the outcome label
@@ -251,4 +325,24 @@ public class ChatSession
     public string ProjectName => string.IsNullOrEmpty(ProjectPath)
         ? ""
         : System.IO.Path.GetFileName(ProjectPath.TrimEnd('\\', '/'));
+
+    /// <summary>Display-only: the sidebar's group — today, yesterday, this week, earlier (in the UI language).</summary>
+    public string DateGroupLabel
+    {
+        get
+        {
+            var day = UpdatedAt.Date;
+            var today = DateTime.Today;
+            string key = day >= today ? "sidebar.group.today"
+                : day >= today.AddDays(-1) ? "sidebar.group.yesterday"
+                : day >= today.AddDays(-6) ? "sidebar.group.week"
+                : "sidebar.group.earlier";
+            return CluadeX.Services.LocalizedResources.Instance[key];
+        }
+    }
+
+    /// <summary>Display-only: "21:58" today, "Oct 9" before.</summary>
+    public string ListTimeLabel => UpdatedAt.Date >= DateTime.Today
+        ? UpdatedAt.ToString("HH:mm")
+        : UpdatedAt.ToString("MMM d", System.Globalization.CultureInfo.InvariantCulture);
 }

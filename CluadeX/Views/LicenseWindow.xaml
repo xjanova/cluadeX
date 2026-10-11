@@ -5,34 +5,26 @@
         Title="{services:Loc licensem.windowTitle}" Width="620" SizeToContent="Height"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
-        FontFamily="{StaticResource MainFont}" Foreground="{StaticResource TextBrush}">
+        FontFamily="{DynamicResource Font.Ui}" Foreground="{DynamicResource Text.Soft}">
 
     <Window.Resources>
         <Style x:Key="SectionLabel" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource NeonInk2Brush}"/>
-            <Setter Property="FontFamily" Value="{StaticResource NeonMonoFont}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Mono.Display}"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
         <Style x:Key="Benefit" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12.5"/>
-            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Soft.Secondary}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </Window.Resources>
 
-    <Border Margin="18" CornerRadius="16" BorderThickness="1" BorderBrush="#55A672FF">
-        <Border.Background>
-            <LinearGradientBrush StartPoint="0,0" EndPoint="0.4,1">
-                <GradientStop Color="#FA171B42" Offset="0"/>
-                <GradientStop Color="#FA0A0C22" Offset="1"/>
-            </LinearGradientBrush>
-        </Border.Background>
-        <Border.Effect>
-            <DropShadowEffect Color="Black" BlurRadius="30" ShadowDepth="0" Opacity="0.65"/>
-        </Border.Effect>
+    <Border Margin="18" CornerRadius="16" BorderThickness="1" BorderBrush="{DynamicResource Dialog.Border}"
+            Background="{DynamicResource Dialog.Background}" Effect="{DynamicResource Shadow.Dialog}">
 
         <StackPanel Margin="26,22,26,20">
 
@@ -43,26 +35,18 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Border Width="48" Height="48" CornerRadius="24" VerticalAlignment="Top">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                            <GradientStop Color="#FF5CA8" Offset="0"/>
-                            <GradientStop Color="#A672FF" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                    <Border.Effect>
-                        <DropShadowEffect Color="#FF5CA8" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
-                    </Border.Effect>
-                    <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="White"
+                <Border Width="48" Height="48" CornerRadius="24" VerticalAlignment="Top"
+                        Background="{DynamicResource License.Avatar.Background}" Effect="{DynamicResource Glow.License.Avatar}">
+                    <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="{DynamicResource Text.OnAccent}"
                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <StackPanel Grid.Column="1" Margin="14,2,10,0">
                     <TextBlock Text="{Binding Title}" FontSize="20" FontWeight="Bold" TextWrapping="Wrap"
-                               Foreground="{StaticResource TextBrush}"/>
+                               Foreground="{DynamicResource Text.Soft}"/>
                     <TextBlock Text="{Binding Subtitle}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0"
-                               Foreground="{StaticResource Subtext0Brush}"/>
+                               Foreground="{DynamicResource Text.Soft.Secondary}"/>
                     <TextBlock Text="{Binding StatusKey}" FontSize="11.5" Margin="0,6,0,0"
-                               FontFamily="{StaticResource NeonMonoFont}" Foreground="{StaticResource NeonMintBrush}"
+                               FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Status.Success}"
                                Visibility="{Binding StatusKey, Converter={StaticResource BoolVis}}"/>
                 </StackPanel>
                 <Button Grid.Column="2" Width="30" Height="30" VerticalAlignment="Top" Cursor="Hand"
@@ -71,12 +55,12 @@
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="bd" Background="Transparent" CornerRadius="15">
                                 <TextBlock Text="&#xE8BB;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                           Foreground="{StaticResource NeonInk2Brush}"
+                                           Foreground="{DynamicResource Text.Muted}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -86,10 +70,10 @@
 
             <!-- ── Why the dialog opened by itself ── -->
             <Border Margin="0,16,0,0" CornerRadius="10" Padding="14,10" BorderThickness="1"
-                    Background="#1F5CFFB0" BorderBrush="#665CFFB0"
+                    Background="{DynamicResource Status.Success.Tint}" BorderBrush="{DynamicResource Status.Success.Border}"
                     Visibility="{Binding HasBanner, Converter={StaticResource BoolVis}}">
                 <TextBlock Text="{Binding Banner}" TextWrapping="Wrap" FontSize="12.5"
-                           Foreground="{StaticResource TextBrush}"/>
+                           Foreground="{DynamicResource Text.Soft}"/>
             </Border>
 
             <!-- ── What Pro unlocks ── -->
@@ -97,19 +81,19 @@
                 <TextBlock Text="{services:Loc license.benefitsTitle}" Style="{StaticResource SectionLabel}"/>
                 <UniformGrid Columns="2">
                     <StackPanel Orientation="Horizontal" Margin="0,0,10,8">
-                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="✓" Foreground="{DynamicResource Status.Success}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
                         <TextBlock Text="{services:Loc license.benefit1}" Style="{StaticResource Benefit}" MaxWidth="235"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="✓" Foreground="{DynamicResource Status.Success}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
                         <TextBlock Text="{services:Loc license.benefit2}" Style="{StaticResource Benefit}" MaxWidth="235"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,10,0">
-                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="✓" Foreground="{DynamicResource Status.Success}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
                         <TextBlock Text="{services:Loc license.benefit3}" Style="{StaticResource Benefit}" MaxWidth="235"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="✓" Foreground="{StaticResource NeonMintBrush}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock Text="✓" Foreground="{DynamicResource Status.Success}" FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Top"/>
                         <TextBlock Text="{services:Loc license.benefit4}" Style="{StaticResource Benefit}" MaxWidth="235"/>
                     </StackPanel>
                 </UniformGrid>
@@ -127,12 +111,12 @@
                             <Border Margin="0,0,10,0" CornerRadius="12" Padding="16,12" BorderThickness="1">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#14FFFFFF"/>
-                                        <Setter Property="BorderBrush" Value="#22FFFFFF"/>
+                                        <Setter Property="Background" Value="{DynamicResource Dialog.Card.Background}"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource Dialog.Card.Border}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsBest}" Value="True">
-                                                <Setter Property="Background" Value="#26A672FF"/>
-                                                <Setter Property="BorderBrush" Value="#AAFF5CA8"/>
+                                                <Setter Property="Background" Value="{DynamicResource License.Plan.Best.Background}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Brand.Pro.Border}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -140,18 +124,18 @@
                                 <StackPanel>
                                     <Grid>
                                         <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource Subtext0Brush}"/>
+                                                   Foreground="{DynamicResource Text.Soft.Secondary}"/>
                                         <Border HorizontalAlignment="Right" CornerRadius="8" Padding="7,1"
-                                                Background="#FF5CA8"
+                                                Background="{DynamicResource Brand.Pro}"
                                                 Visibility="{Binding IsBest, Converter={StaticResource BoolVis}}">
-                                            <TextBlock Text="{Binding BestLabel}" FontSize="10" FontWeight="Bold" Foreground="#1E1E2E"/>
+                                            <TextBlock Text="{Binding BestLabel}" FontSize="10" FontWeight="Bold" Foreground="{DynamicResource Text.Inverse}"/>
                                         </Border>
                                     </Grid>
                                     <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                         <TextBlock Text="{Binding Price}" FontSize="26" FontWeight="Bold"
-                                                   Foreground="{StaticResource TextBrush}"/>
+                                                   Foreground="{DynamicResource Text.Soft}"/>
                                         <TextBlock Text="{Binding Per}" FontSize="11.5" Margin="8,0,0,5" VerticalAlignment="Bottom"
-                                                   Foreground="{StaticResource Overlay0Brush}"/>
+                                                   Foreground="{DynamicResource Text.Soft.Muted}"/>
                                     </StackPanel>
                                     <Button Content="{services:Loc license.buy}" Style="{StaticResource PrimaryButton}"
                                             Margin="0,10,0,0" Padding="12,7"
@@ -162,7 +146,7 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Text="{services:Loc license.buyHint}" FontSize="11" Margin="0,6,0,0"
-                           Foreground="{StaticResource Overlay0Brush}"/>
+                           Foreground="{DynamicResource Text.Soft.Muted}"/>
             </StackPanel>
 
             <!-- ── Enter a key ── -->
@@ -173,15 +157,15 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <Border Background="#33000000" CornerRadius="8" BorderBrush="#44A672FF" BorderThickness="1" Padding="12,0">
+                    <Border Background="{DynamicResource Dialog.Input.Background}" CornerRadius="8" BorderBrush="{DynamicResource Dialog.Input.Border}" BorderThickness="1" Padding="12,0">
                         <Grid>
-                            <TextBlock Text="XXXX-XXXX-XXXX-XXXX" FontFamily="{StaticResource NeonMonoFont}" FontSize="14"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" IsHitTestVisible="False"
+                            <TextBlock Text="XXXX-XXXX-XXXX-XXXX" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="14"
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" IsHitTestVisible="False"
                                        Visibility="{Binding KeyInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                             <TextBox x:Name="KeyBox" Text="{Binding KeyInput, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0" CharacterCasing="Upper"
-                                     Foreground="{StaticResource TextBrush}" CaretBrush="{StaticResource MauveBrush}"
-                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="14" Padding="0,9"
+                                     Foreground="{DynamicResource Text.Soft}" CaretBrush="{DynamicResource Accent.2.Soft}"
+                                     FontFamily="{DynamicResource Font.Mono.Display}" FontSize="14" Padding="0,9"
                                      VerticalAlignment="Center"/>
                         </Grid>
                     </Border>
@@ -194,7 +178,7 @@
                         Visibility="{Binding ShowTransfer, Converter={StaticResource BoolVis}}">
                     <Button.Style>
                         <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-                            <Setter Property="Background" Value="#44FAB387"/>
+                            <Setter Property="Background" Value="{DynamicResource Button.Caution.Background}"/>
                         </Style>
                     </Button.Style>
                 </Button>
@@ -205,10 +189,10 @@
                        Visibility="{Binding HasMessage, Converter={StaticResource BoolVis}}">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">
-                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                        <Setter Property="Foreground" Value="{DynamicResource Status.Success.Soft}"/>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding MessageIsError}" Value="True">
-                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Status.Danger.Soft}"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
@@ -227,8 +211,8 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding DeviceId}" FontFamily="{StaticResource NeonMonoFont}" FontSize="10.5"
-                           Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding DeviceId}" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10.5"
+                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
                     <Button Content="{services:Loc license.deactivate}" Style="{StaticResource SecondaryButton}"
                             Padding="12,6" FontSize="12" Margin="0,0,8,0"

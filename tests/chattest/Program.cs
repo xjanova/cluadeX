@@ -243,7 +243,7 @@ internal static class Program
         await TestPersistenceAndHistory();    // L4 (database + history)
         await TestRetryLogic();               // L3 + L7
         await TestHoverRetry();               // L10
-        await TestSwitchMidTurn();            // L2
+        await TestBackgroundRuns();           // R (was L2: switching mid-turn stopped the turn)
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6
@@ -254,6 +254,8 @@ internal static class Program
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail
+        await TestAskUserAndPinnedFolder();   // Q + S
+        await TestControlStrip();             // U7: model / approvals / budget / spend under the input box
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
         Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
@@ -647,47 +649,182 @@ internal static class Program
 
     // ═══════════════════════════════════════════ L2 ═══════════════════════════════════════════
 
-    static async Task TestSwitchMidTurn()
+    static ChatSession ChatInDb(string title, string user, string reply)
     {
-        Log("\n## L2 — switching chats mid-turn stops the turn; its output stays in its own chat");
+        var c = new ChatSession { Title = title };
+        c.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = user });
+        c.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = reply });
+        Persist.SaveSession(c);
+        Vm.Sessions.Insert(0, new ChatSession { Id = c.Id, Title = c.Title });
+        return c;
+    }
+
+    static async Task Open(string sessionId)
+    {
+        Vm.LoadSessionCommand.Execute(sessionId);
+        await WaitUntil(() => Vm.CurrentSession?.Id == sessionId);
+        await Render();
+    }
+
+    static async Task TestBackgroundRuns()
+    {
+        Log("\n## R — a run belongs to its chat: switching never stops it; several chats run at once");
         await FreshChat();
         var chatA = Vm.CurrentSession!;
-        Fake.Script.Enqueue(FakeStep.Hang());
-        await Send("long task in A");
-        Check("L2 the turn in chat A is running", await WaitUntil(() => Vm.IsGenerating));
+        var gateA = new SemaphoreSlim(0);
+        Fake.ScriptFor["[A1]"] = new Queue<FakeStep>([FakeStep.Gated(["A is", " working"], gateA, [" — A done."])]);
+        await Send("[A1] long task in A");
+        Check("R1 the run in chat A is streaming", await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.Assistant && m.Content.StartsWith("A is"))));
 
-        var chatB = new ChatSession { Title = "chat B" };
-        chatB.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "hi B" });
-        chatB.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "hello B" });
-        Persist.SaveSession(chatB);
-        Vm.Sessions.Insert(0, new ChatSession { Id = chatB.Id, Title = chatB.Title });
-
-        ConfirmAnswer = false;
+        var chatB = ChatInDb("chat B", "hi B", "hello B");
         ConfirmTitles.Clear();
-        Vm.LoadSessionCommand.Execute(chatB.Id);
-        await Task.Delay(300);
-        Check("L2 the user is asked before a running reply is stopped", ConfirmTitles.Contains(L("chat.busy.title")));
-        Check("L2 declining keeps chat A and its running turn", ReferenceEquals(Vm.CurrentSession, chatA) && Vm.IsGenerating);
+        await Open(chatB.Id);
+        Check("R1 opening another chat mid-run asks nothing and switches", Vm.CurrentSession?.Id == chatB.Id && ConfirmTitles.Count == 0, string.Join(",", ConfirmTitles));
+        Check("R1 chat B shows only its own messages", Vm.Messages.Any(m => m.Content == "hello B") && !Vm.Messages.Any(m => m.Content.Contains("A is")));
+        Check("R1 chat A's run goes on in the background; chat B is free to send", Vm.HasRunningElsewhere && Vm.RunningElsewhereText.Length > 0 && !Vm.IsGenerating && Vm.CanSend,
+            Vm.RunningElsewhereText);
 
-        ConfirmAnswer = true;
-        Vm.LoadSessionCommand.Execute(chatB.Id);
-        Check("L2 accepting stops the turn and opens chat B", await WaitUntil(() => Vm.CurrentSession?.Id == chatB.Id) && !Vm.IsGenerating);
-        await Render();
-        Check("L2 chat B shows only its own messages", Vm.Messages.Any(m => m.Content == "hello B") && !Vm.Messages.Any(m => m.Content.Contains("long task in A")));
+        gateA.Release();
+        bool aDone = await WaitUntil(() => !Vm.HasRunningElsewhere, 20000);
         var storedA = Persist.LoadSession(chatA.Id);
-        Check("L2 chat A keeps its question and the interrupted note", storedA != null
-            && storedA.Messages.Any(m => m.Content == "long task in A") && storedA.Messages.Any(m => m.IsInterrupted || m.Content.Contains(L("chat.interruptedNote"))),
+        Check("R2 it finished in the background and its answer is stored in chat A", aDone && storedA != null && storedA.Messages.Any(m => m.Content.Contains("A done")),
             storedA == null ? "not stored" : string.Join(" | ", storedA.Messages.Select(m => m.Content)));
+        Check("R2 …and never appeared in chat B", !Vm.Messages.Any(m => m.Content.Contains("A done")));
+        await Open(chatA.Id);
+        Check("R2 opening chat A shows that answer once", Vm.Messages.Count(m => m.Content.Contains("A done")) == 1, string.Join(" | ", Vm.Messages.Select(m => m.Content)));
 
-        // A late tool callback from chat A's turn (queued before the switch) must land in chat A, not B.
-        SetField(Vm, "_turnSession", chatA);
-        var agent = Field<CodeAgentService>(Vm, "_agentService");
-        var handler = (Action<ToolResult>)typeof(CodeAgentService).GetField("OnToolExecuted", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(agent);
-        handler?.Invoke(new ToolResult { ToolName = "read_file", Success = true, Output = "late output", Summary = "late tool row from A" });
+        var gateC = new SemaphoreSlim(0);
+        Fake.ScriptFor["[A3]"] = new Queue<FakeStep>([FakeStep.Gated(["live", " text"], gateC, [" — finished live."])]);
+        await Send("[A3] again in A");
+        await WaitUntil(() => Vm.Messages.Any(m => m.IsStreaming && m.Content.StartsWith("live")));
+        var liveList = Vm.Messages;
+        ConfirmTitles.Clear();
+        Vm.NewSessionCommand.Execute(null);
         await Render();
-        SetField(Vm, "_turnSession", null);
-        Check("L2 a late tool row from chat A's turn does not appear in chat B", !Vm.Messages.Any(m => m.Content == "late tool row from A"));
-        Check("L2 …it is stored in chat A instead", Persist.LoadSession(chatA.Id)?.Messages.Any(m => m.Content == "late tool row from A") == true);
+        Check("R3 New chat mid-run: no question, an empty chat, the run goes on", ConfirmTitles.Count == 0 && Vm.Messages.Count == 0 && Vm.HasRunningElsewhere);
+        await Open(chatA.Id);
+        Check("R3 back in chat A: its live list (still streaming) and Stop offered", ReferenceEquals(Vm.Messages, liveList) && Vm.IsGenerating
+            && Vm.Messages.Any(m => m.IsStreaming && m.Content.StartsWith("live")));
+        gateC.Release();
+        await WaitIdle();
+        Check("R3 it finishes on screen with one final answer", Vm.Messages.Count(m => m.Content.Contains("finished live")) == 1);
+
+        // Two chats at once.
+        var gateD = new SemaphoreSlim(0);
+        Fake.ScriptFor["[D]"] = new Queue<FakeStep>([FakeStep.Gated(["D working"], gateD, [" — D finished."])]);
+        await Send("[D] slow task");
+        await WaitUntil(() => Vm.Messages.Any(m => m.Content.StartsWith("D working")));
+        var chatD = Vm.CurrentSession!;
+        await FreshChat();
+        Fake.ScriptFor["[E]"] = new Queue<FakeStep>([FakeStep.Reply("E answered", " quickly.")]);
+        await Send("[E] quick question");
+        bool eDone = await WaitUntil(() => Vm.Messages.Any(m => m.Content.Contains("E answered quickly")) && !Vm.IsGenerating, 20000);
+        await Render();
+        Check("R4 a second chat runs and answers while the first is still working", eDone && Vm.HasRunningElsewhere,
+            string.Join(" | ", Vm.Messages.Select(m => m.Content)));
+        var eCall = Fake.Calls.LastOrDefault(c => c.Input.Contains("[E]"));
+        Check("R4 each run sends only its own conversation", eCall != null && eCall.History.All(h => !h.Content.Contains("[D]")) && !eCall.Input.Contains("[D]"));
+        var eBubble = Vm.Messages.LastOrDefault(m => m.Content.Contains("E answered"));
+        Check("R4 the second chat's answer is on screen", eBubble != null && Container(eBubble)?.Visibility == Visibility.Visible);
+        gateD.Release();
+        bool dDone = await WaitUntil(() => !Vm.HasRunningElsewhere, 20000);
+        Check("R4 the first finishes in its own chat, not on the screen showing the second", dDone
+            && Persist.LoadSession(chatD.Id)?.Messages.Any(m => m.Content.Contains("D finished")) == true && !Vm.Messages.Any(m => m.Content.Contains("D finished")));
+
+        // Stop is per chat.
+        Fake.ScriptFor["[F]"] = new Queue<FakeStep>([FakeStep.Hang()]);
+        Fake.ScriptFor["[G]"] = new Queue<FakeStep>([FakeStep.Hang()]);
+        await FreshChat();
+        await Send("[F] waits forever");
+        var chatF = Vm.CurrentSession!;
+        await WaitUntil(() => Vm.IsGenerating);
+        await FreshChat();
+        await Send("[G] waits forever too");
+        await WaitUntil(() => Vm.IsGenerating);
+        Vm.StopGenerationCommand.Execute(null);
+        bool gStopped = await WaitUntil(() => !Vm.IsGenerating, 10000);
+        Check("R5 Stop stops the run of the chat on screen only; the other keeps running", gStopped && Vm.HasRunningElsewhere);
+        await Open(chatF.Id);
+        Check("R5 …which is still running in its chat", Vm.IsGenerating);
+        Vm.StopGenerationCommand.Execute(null);
+        await WaitIdle();
+        Check("R5 stopping it too leaves nothing running", !Vm.IsGenerating && !Vm.HasRunningElsewhere
+            && Vm.Messages.Any(m => m.IsInterrupted || m.Content.Contains(L("chat.interruptedNote"))));
+
+        // Deleting a chat whose run goes on elsewhere stops that run first (asked).
+        Fake.ScriptFor["[H]"] = new Queue<FakeStep>([FakeStep.Hang()]);
+        await FreshChat();
+        await Send("[H] hangs");
+        var chatH = Vm.CurrentSession!;
+        await WaitUntil(() => Vm.IsGenerating);
+        await Open(chatB.Id);
+        ConfirmTitles.Clear();
+        ConfirmAnswer = true;
+        Vm.DeleteSessionCommand.Execute(chatH.Id);
+        bool gone = await WaitUntil(() => !Vm.HasRunningElsewhere && !Vm.Sessions.Any(x => x.Id == chatH.Id), 20000);
+        Check("R6 deleting a chat whose run goes on elsewhere asks, stops it and deletes it", gone && ConfirmTitles.Contains(L("chat.busy.title"))
+            && Persist.LoadSession(chatH.Id) == null && Vm.CurrentSession?.Id == chatB.Id, string.Join(",", ConfirmTitles));
+        Fake.ScriptFor.Clear();
+    }
+
+    /// <summary>ask_user (nothing listened for it before: it failed every time) and a run's pinned folder.</summary>
+    static async Task TestAskUserAndPinnedFolder()
+    {
+        Log("\n## Q — ask_user: the question in the chat, answered by a click; S — a run keeps its folder");
+        var fs = Sp.GetRequiredService<FileSystemService>();
+        Vm.SetWorkingDirectory(ProjA);
+        Vm.AgenticMode = true;
+        await FreshChat();
+        Fake.ScriptFor["[Q]"] = new Queue<FakeStep>([
+            FakeStep.Reply("Let me ask.\n[ACTION: ask_user]\nquestion: Which colour?\noptions: red, blue\n[/ACTION]"),
+        ]);
+        // The loop's follow-up request carries the tool result, not the chat's marker: it takes the general script.
+        Fake.Script.Clear();
+        Fake.Script.Enqueue(FakeStep.Reply("You chose blue — done."));
+        await Send("[Q] pick a colour");
+        ChatMessage q = null;
+        bool asked = await WaitUntil(() => (q = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Question && !m.QuestionAnswered)) != null, 20000);
+        await Render();
+        Check("Q1 ask_user shows the question and its options in the chat", asked && q.Content.Contains("Which colour?") && q.QuestionOptions.SequenceEqual(new[] { "red", "blue" }),
+            $"agentic={Vm.AgenticMode} project={Vm.HasProject} msgs=" + string.Join(" | ", Vm.Messages.Select(m => $"{m.Role}:{m.Content.Replace('\n', '⏎')}")));
+        var blue = q == null || Container(q) == null ? null : Find<Button>(Container(q)).FirstOrDefault(b => b.Content as string == "blue");
+        Check("Q1 …as buttons on screen", blue is { IsVisible: true });
+        if (blue != null) Click(blue);
+        bool done = await WaitIdle(20000);
+        bool toldAgent = Fake.Calls.Any(c => c.Input.Contains("User answered: blue") || c.History.Any(h => h.Content.Contains("User answered: blue")));
+        Check("Q2 clicking an option answers it: the agent is told 'User answered: blue' and carries on", done && toldAgent && Vm.Messages.Any(m => m.Content.Contains("You chose blue")),
+            $"done={done} told={toldAgent}");
+        Check("Q2 the answer stays under the question (saved with the chat)", q != null && q.QuestionAnswered && q.Content.Contains("→ blue"));
+
+        Fake.ScriptFor["[Q3]"] = new Queue<FakeStep>([FakeStep.Reply("[ACTION: ask_user]\nquestion: Continue?\n[/ACTION]")]);
+        await Send("[Q3] ask, then be stopped");
+        ChatMessage q3 = null;
+        await WaitUntil(() => (q3 = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Question && !m.QuestionAnswered)) != null, 20000);
+        Vm.StopGenerationCommand.Execute(null);
+        await WaitIdle();
+        Check("Q3 Stop while a question is open withdraws it ('not answered') and the run ends", q3 != null && q3.QuestionAnswered && q3.Content.Contains(L("chat.ask.cancelled")) && !Vm.IsGenerating);
+
+        // S — the user opens another project while a run waits; the run's write still lands in its own folder.
+        string inA = Path.Combine(ProjA, "pinned.txt"), inB = Path.Combine(ProjB, "pinned.txt");
+        File.Delete(inA); File.Delete(inB);
+        await FreshChat();
+        Fake.ScriptFor["[PIN]"] = new Queue<FakeStep>([
+            FakeStep.Reply("[ACTION: write_file]\npath: pinned.txt\ncontent: hello\n[/ACTION]"),
+            FakeStep.Reply("written."),
+        ]);
+        await Send("[PIN] write a file");
+        ChatMessage perm = null;
+        bool prompted = await WaitUntil(() => (perm = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered)) != null, 20000);
+        Vm.SetWorkingDirectory(ProjB);
+        await Render();
+        bool appOnB = SamePath(fs.AppWorkingDirectory, ProjB);
+        perm?.ResolvePermission(PermissionOutcome.Allowed);
+        await WaitUntil(() => !Vm.IsGenerating && !Vm.HasRunningElsewhere, 20000);
+        Check("S1 opening project B while a run in A waits: its write still lands in A, never in B", prompted && appOnB && File.Exists(inA) && !File.Exists(inB),
+            $"prompted={prompted} appOnB={appOnB} A={File.Exists(inA)} B={File.Exists(inB)}");
+        Vm.SetWorkingDirectory(ProjA);
+        Fake.ScriptFor.Clear();
+        await Render();
     }
 
     // ═══════════════════════════════════════════ L6 + L7 ═══════════════════════════════════════════
@@ -744,7 +881,11 @@ internal static class Program
         ConfirmTitles.Clear();
         Vm.AutoExecute = false;
         Check("U5 turning it off needs no confirmation", !Vm.AutoExecute && ConfirmTitles.Count == 0);
-        var labels = Find<CheckBox>(View).Select(c => c.Content as string).Where(s => s != null).ToList();
+        // The switches live in the composer's "+" menu (and the view's own check boxes): every label once.
+        var menu = ((Button)View.FindName("MoreButton")).ContextMenu;
+        var labels = Find<CheckBox>(View).Select(c => c.Content as string)
+            .Concat(menu.Items.OfType<MenuItem>().Where(m => m.IsCheckable).Select(m => m.Header as string))
+            .Where(s => s != null).ToList();
         Check("U5 no two toggles share a label (two different 'Auto' switches before)", labels.Count == labels.Distinct().Count(), string.Join(", ", labels));
         Check("U5 'Steps' appears once", labels.Count(l => l == L("chat.stepsLabel")) == 1);
     }
@@ -1086,7 +1227,7 @@ internal static class Program
         Log("\n## T5 — a pipe run that ran tools but wrote no summary is not shown as an error (same as a typed turn)");
         await FreshChat();
         var liveType = typeof(ChatViewModel).GetNestedType("LiveRunView", BindingFlags.NonPublic)!;
-        object NewLive() => Activator.CreateInstance(liveType, BindingFlags.Public | BindingFlags.Instance, null, [Vm, Vm.CurrentSession], null)!;
+        object NewLive() => Activator.CreateInstance(liveType, BindingFlags.Public | BindingFlags.Instance, null, [Vm, Vm.CurrentSession, null], null)!;
         var finish = liveType.GetMethod("Finish")!;
         finish.Invoke(NewLive(), [null, 3]);
         var withTools = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Assistant);
@@ -1115,6 +1256,273 @@ internal static class Program
         return (await task, prompted || Vm.Messages.Count(m => m.Role == MessageRole.PermissionRequest) > before);
     }
 
+    /// <summary>The Approvals box read as the old Accept edits switch: checked = "edits".</summary>
+    sealed class ApprovalView(ComboBox box)
+    {
+        public bool? IsChecked => box == null ? null : (string)box.SelectedValue == "edits";
+    }
+
+    static async Task TestControlStrip()
+    {
+        Log("\n## U7 — the control strip under the input: model, approvals, budget, what it costs");
+        await FreshChat();
+        var tools = Sp.GetRequiredService<AgentToolService>();
+        var cost = Sp.GetRequiredService<CostTrackingService>();
+
+        // Model box: the models of every API provider that has a key; a cloud pick is the paid tier.
+        Settings.UpdateSettings(s => s.ProviderConfigs["Anthropic"] = new ProviderConfig { ApiKey = "sk-ant-harness-not-a-key", SelectedModel = "claude-sonnet-5-5" });
+        await Render();
+        var modelBox = (ComboBox)View.FindName("ChatModelBox");
+        Check("U7 model box: shown once a provider has a key, listing its models", modelBox is { IsVisible: true }
+            && Vm.ChatModelChoices.Any(c => c.Model == "claude-sonnet-5-5") && Vm.ChatModelChoices.Any(c => c.Model == "claude-haiku-5-5"),
+            $"{Vm.ChatModelChoices.Count} choices");
+        Check("U7 model box: nothing selected while a model on this PC answers", Vm.SelectedChatModel == null);
+        Vm.SelectedChatModel = Vm.ChatModelChoices.First(c => c.Model == "claude-haiku-5-5");
+        await Task.Delay(100); await Render();
+        Check("U7 model box: a cloud model without a licence is refused, says why, and changes nothing",
+            Providers.ActiveProviderType == AiProviderType.Local && Settings.Settings.ProviderConfigs["Anthropic"].SelectedModel == "claude-sonnet-5-5"
+            && Vm.StatusText == L("settings.activationRequired") && Vm.SelectedChatModel == null, Vm.StatusText);
+
+        // Approvals: ask first → allow everything (confirmed) → back.
+        Vm.SetWorkingDirectory(ProjA);
+        await Render();
+        var approvals = (ComboBox)View.FindName("ApprovalBox");
+        Check("U7 approvals: three picks, \"ask first\" by default", Vm.ApprovalChoices.Count == 3 && Vm.ApprovalMode == "ask" && (string)approvals.SelectedValue == "ask");
+        ConfirmTitles.Clear(); ConfirmAnswer = false;
+        Vm.ApprovalMode = "all";
+        await Render();
+        Check("U7 approvals: \"allow everything\" asks first; declined, it stays on ask", ConfirmTitles.Contains(L("chat.approval.allConfirmTitle")) && Vm.ApprovalMode == "ask" && (string)approvals.SelectedValue == "ask");
+
+        // A prompt already waiting is answered by switching to "allow everything".
+        var waiting = tools.ExecuteToolAsync(new ToolCall { Type = ToolType.RunCommand, ToolName = "run_command", Arguments = new() { ["command"] = "echo pending" } });
+        ChatMessage pending = null;
+        await WaitUntil(() => (pending = Vm.Messages.FirstOrDefault(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered)) != null, 5000);
+        ConfirmAnswer = true;
+        Vm.ApprovalMode = "all";
+        await Render();
+        bool pendingRan = await WaitUntil(() => waiting.IsCompleted, 10000) && waiting.Result.Success;
+        Check("U7 approvals: confirmed — the chat says so, and the prompt that was waiting is approved",
+            Vm.ApprovalMode == "all" && Vm.Messages.Any(m => m.Role == MessageRole.System && m.Content.Contains(L("chat.approval.allOn")))
+            && pending?.PermissionOutcome == PermissionOutcome.Allowed && pendingRan, pending?.PermissionOutcome.ToString());
+        var (cmd, cmdAsked) = await Gate(new ToolCall { Type = ToolType.RunCommand, ToolName = "run_command", Arguments = new() { ["command"] = "echo hi" } });
+        Check("U7 approvals: in \"allow everything\" a command runs without a prompt", !cmdAsked && cmd.Success, cmd.Error);
+        bool auto = (bool)typeof(ChatViewModel).GetMethod("AutoApproves", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(Vm, [new PermissionRequestInfo { ToolName = "mcp__chrome__javascript_tool", AlwaysAsk = true }, Vm.CurrentSession])!;
+        bool asked = !auto;
+        Check("U7 approvals: a request that always asks (code in the browser, the user's own Ask rule) still asks", asked);
+        await FreshChat();
+        Check("U7 approvals: per chat — a new chat starts on ask first", Vm.ApprovalMode == "ask");
+        var (cmd2, cmd2Asked) = await Gate(new ToolCall { Type = ToolType.RunCommand, ToolName = "run_command", Arguments = new() { ["command"] = "echo again" } });
+        Check("U7 approvals: …and a command there asks again", cmd2Asked);
+
+        // Budget box + the spend guard (the real CodeAgentService method, the real ask_user row).
+        var budgetBox = (ComboBox)View.FindName("BudgetBox");
+        Check("U7 budget: $0.50 … $20 and No limit, $2 by default", Vm.BudgetChoices.Count == 7 && Vm.RunBudgetUsd == 2m
+            && Vm.BudgetChoices.Any(c => c.Usd == 0m && c.Label == L("chat.budget.none")), string.Join(",", Vm.BudgetChoices.Select(c => c.Label)));
+        var agent = Sp.GetRequiredService<CodeAgentService>();
+        var guard = typeof(CodeAgentService).GetMethod("ContinueWithinBudgetAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        async Task<(bool Go, ChatMessage Q)> Guarded(AgentRunScope scope, string answer)
+        {
+            var t = Task.Run(async () =>
+            {
+                AgentRunScope.Enter(scope);
+                return await (Task<bool>)guard.Invoke(agent, [false, CancellationToken.None])!;
+            });
+            ChatMessage q = null;
+            if (answer != null)
+            {
+                await WaitUntil(() => (q = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Question && !m.QuestionAnswered)) != null, 5000);
+                q?.AnswerQuestion(answer);
+            }
+            await WaitUntil(() => t.IsCompleted, 5000);
+            return (t.IsCompleted && t.Result, q);
+        }
+        var under = new AgentRunScope("budget-under", null);
+        under.AddCost(1.2m);
+        var (goUnder, qUnder) = await Guarded(under, null);
+        Check("U7 budget: under it, the run goes on without a word", goUnder && !Vm.Messages.Any(m => m.Role == MessageRole.Question && !m.QuestionAnswered));
+        var over = new AgentRunScope("budget-over", null);
+        over.AddCost(2.3m);
+        var (goStop, qStop) = await Guarded(over, "Stop here");
+        Check("U7 budget: past it, the run asks in the chat with what it spent — \"Stop here\" stops it",
+            !goStop && qStop != null && qStop.Content.Contains("$2.30") && qStop.QuestionOptions.Count == 2, qStop?.Content);
+        var (goOn, _) = await Guarded(over, qStop?.QuestionOptions[0] ?? "Go on");
+        Check("U7 budget: \"go on\" allows another full budget from there", goOn && over.BudgetGrantedUsd == 2.3m, over.BudgetGrantedUsd.ToString());
+        var (goNext, qNext) = await Guarded(over, null);
+        Check("U7 budget: …so the next step goes on without asking again", goNext && qNext == null);
+        Vm.RunBudgetUsd = 0m;
+        await Render();
+        var (goNoLimit, _) = await Guarded(new AgentRunScope("budget-none", null) , null);
+        Check("U7 budget: \"No limit\" never asks, and the pick is saved", goNoLimit && Settings.Settings.RunBudgetUsd == 0m && budgetBox.SelectedValue is decimal d0 && d0 == 0m);
+        Vm.RunBudgetUsd = 2m;
+
+        // Spend: a request inside a run counts for that run and for today; today survives a restart.
+        var runScope = new AgentRunScope("spend", null);
+        decimal todayBefore = cost.TodayCostUsd;
+        await Task.Run(() =>
+        {
+            AgentRunScope.Enter(runScope);
+            cost.RecordUsage("claude-sonnet-5-5", 1000, 1000, 0, 100_000, cacheWrite1hTokens: 100_000);
+        });
+        // 1000 in × $2 + 1000 out × $10 + 100k 1-hour writes × $4 (2x input) per MTok = $0.412
+        Check("U7 spend: a request in a run is that run's cost; 1-hour cache writes are billed at 2x input",
+            runScope.CostUsd == 0.412m && cost.TodayCostUsd - todayBefore == 0.412m, $"run={runScope.CostUsd} today+={cost.TodayCostUsd - todayBefore}");
+        cost.RecordUsage("claude-sonnet-5-5", 1000, 0);
+        Check("U7 spend: one made outside any run counts only for today", runScope.CostUsd == 0.412m);
+        cost.FlushLedger();
+        var reread = new CostTrackingService(Settings);
+        Check("U7 spend: today's total is kept in usage-daily.json and read back after a restart",
+            File.Exists(Path.Combine(Settings.DataRoot, "usage-daily.json")) && reread.TodayCostUsd == cost.TodayCostUsd, $"{reread.TodayCostUsd} vs {cost.TodayCostUsd}");
+        await Task.Delay(50); await Render();
+        Check("U7 spend: the top strip shows today's spend", Vm.TodayCostText.StartsWith("Today $"), Vm.TodayCostText);
+
+        // A look at the real page, in both languages (bin/…/chat-strip-th.png, chat-strip-en.png) — as Claude answers
+        // (the setting only: the fake provider keeps answering), so the model and budget boxes show.
+        Settings.UpdateSettings(s => s.ActiveProvider = AiProviderType.Anthropic);
+        await WaitUntil(() => Vm.EstimateText.Length > 0, 5000);   // the estimate is worked out off the UI thread
+        foreach (var lang in new[] { "th", "en" })
+        {
+            LocSvc.SetLanguage(lang);
+            await Task.Delay(150); await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, $"chat-strip-{lang}.png"));
+        }
+        // …and in every theme (Thai), with a short conversation on screen: the redesign has to hold in all three.
+        var themes = Sp.GetRequiredService<ThemeService>();
+        LocSvc.SetLanguage("th");
+        bool stepsBefore = Vm.ShowAgentInternals;
+        Vm.ShowAgentInternals = true;   // the tool rows are part of the look
+        Vm.Messages.Clear();
+        Vm.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "ช่วยตรวจฟิสิกส์ลูกสนุกให้สมจริงขึ้น แล้วรันเกมทดสอบ" });
+        Vm.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "ได้ครับ ผมจะตรวจโครงสร้างโปรเจกต์ก่อน แล้วปรับค่าการชนของลูกให้สมจริงขึ้น จากนั้นรันเกมเพื่อทดสอบ" });
+        Vm.Messages.Add(new ChatMessage
+        {
+            Role = MessageRole.System, Content = "plan",
+            PlanHeader = L("chat.plan.working").Replace("{0}", "4").Replace("{1}", "5"), PlanElapsed = "1m 24s",
+            PlanItems =
+            [
+                new PlanItemView(1, "ตรวจสอบโครงสร้างโปรเจกต์และไฟล์ที่เกี่ยวข้อง", "done"),
+                new PlanItemView(2, "วิเคราะห์โค้ดฟิสิกส์ลูกสนุก", "done"),
+                new PlanItemView(3, "แก้ไขค่าการชนและแรงเสียดทาน", "done"),
+                new PlanItemView(4, "รันโปรเจกต์เพื่อทดสอบ", "done"),
+                new PlanItemView(5, "สรุปผลการแก้ไข", "active"),
+            ],
+        });
+        ChatMessage Tool(string kind, string verbKey, string target, string time, bool ok = true) => new()
+        {
+            Role = MessageRole.ToolAction, ToolKind = kind, ToolVerb = L(verbKey), ToolTarget = target, ToolName = kind,
+            Content = target, ToolSuccess = ok, ToolElapsedTime = time, CollapsedToolNames = [kind],
+        };
+        Vm.Messages.Add(Tool("read_file", "tool.verb.read", "project.godot", "0.3s"));
+        Vm.Messages.Add(Tool("read_file", "tool.verb.read", "scripts/main.gd", "0.8s"));
+        Vm.Messages.Add(Tool("read_file", "tool.verb.read", "scripts/Ball.gd", "0.7s"));
+        var edit = Tool("edit_file", "tool.verb.edit", "scripts/main.gd", "1.2s");
+        edit.DiffAdded = 27; edit.DiffRemoved = 12;
+        edit.DiffLines =
+        [
+            new EditDiffLine { Kind = EditDiffKind.Hunk, Text = "@@ -45 +45 @@" },
+            new EditDiffLine { Kind = EditDiffKind.Context, Text = "func _on_ball_collided(ball: RigidBody2D, other: RigidBody2D):" },
+            new EditDiffLine { Kind = EditDiffKind.Remove, Text = "    var impulse = ball.linear_velocity.length()" },
+            new EditDiffLine { Kind = EditDiffKind.Remove, Text = "    if impulse > 200:" },
+            new EditDiffLine { Kind = EditDiffKind.Add, Text = "    var impulse = ball.linear_velocity.length()" },
+            new EditDiffLine { Kind = EditDiffKind.Add, Text = "    var energy = clamp(impulse * 0.85, 50, 800)" },
+            new EditDiffLine { Kind = EditDiffKind.Add, Text = "    ball.linear_velocity *= 0.96  # rolling friction" },
+            new EditDiffLine { Kind = EditDiffKind.Context, Text = "        play_collision_sound()" },
+        ];
+        Vm.Messages.Add(edit);
+        var runRow = Tool("run_command", "tool.verb.run", "godot --headless --export-release Web build/web", "12.4s");
+        runRow.ToolOutput = "Godot Engine v4.2.2.stable.official\nExport complete: build/web/index.html";
+        Vm.Messages.Add(runRow);
+        Vm.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "ปรับแล้วครับ:\n- แรงเสียดทานผ้า **0.96** (เดิม 0.9)\n- ลูกชนกันเสียพลังงาน 5%\n\nรันเกมผ่าน ไม่มี error" });
+        Vm.Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "💸 รอบนี้ใช้ $0.42 · 12 ขั้น · ~$0.035/ขั้น · อ่านจาก cache 91%" });
+        Vm.ShowCompactionToast = false;
+        await Render();
+        foreach (var id in new[] { ThemeIds.Classic, ThemeIds.Midnight, ThemeIds.NeonCyber })
+        {
+            themes.Apply(id, persist: false);
+            await Task.Delay(200); await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, $"chat-{id.ToLowerInvariant()}-th.png"));
+        }
+        themes.Apply(ThemeIds.Midnight, persist: false);
+        Vm.ShowAgentInternals = stepsBefore;
+        LocSvc.SetLanguage("en");
+        await Render();
+        await WaitUntil(() => Vm.EstimateText.Length > 0, 5000);
+        Check("U7 estimate: as Claude, the strip says what a step should cost and how many steps the budget buys",
+            Vm.EstimateText.Contains("/step") && Vm.EstimateText.Contains("$2 ≈") && Vm.EstimateTip.Contains("claude-sonnet-5-5"),
+            Vm.EstimateText + " | " + Vm.EstimateTip.Split('\n')[0]);
+        Check("U7 estimate: every model in the box shows its price (input / output per MTok)",
+            Vm.ChatModelChoices.All(c => c.PriceLabel.StartsWith("$") && c.PriceLabel.Contains(" / $"))
+            && Vm.ChatModelChoices.First(c => c.Model == "claude-sonnet-5-5").PriceLabel == "$2 / $10",
+            Vm.ChatModelChoices.First(c => c.Model == "claude-sonnet-5-5").PriceLabel);
+        Check("U7 look: as Claude, the model box shows the saved model and the budget box shows $2",
+            Vm.SelectedChatModel?.Model == "claude-sonnet-5-5" && budgetBox.IsVisible && budgetBox.SelectedValue is decimal d2 && d2 == 2m,
+            $"{Vm.SelectedChatModel?.Model} budgetVisible={budgetBox.IsVisible}");
+
+        // BrainX's cowork room picks through the same box (cluadex.choose_model over the cluadex-mcp pipe).
+        string effortBefore = Vm.ReasoningEffort;
+        string? why = await Vm.ChooseFromOutsideAsync("claude-haiku-5-5", "high");
+        await Render();
+        Check("U7 outside pick: BrainX's room switches the chat's model and effort through the model box",
+            why == null && Vm.SelectedChatModel?.Model == "claude-haiku-5-5"
+            && Settings.Settings.ProviderConfigs["Anthropic"].SelectedModel == "claude-haiku-5-5" && Vm.ReasoningEffort == "high",
+            why ?? $"{Vm.SelectedChatModel?.Model} effort={Vm.ReasoningEffort}");
+        why = await Vm.ChooseFromOutsideAsync("qwen2.5-coder-7b-q4_k_m.gguf", null);
+        Check("U7 outside pick: a model the box does not list (one on this PC) is refused by name, nothing changes",
+            why != null && why.Contains("qwen2.5-coder-7b-q4_k_m.gguf") && Vm.SelectedChatModel?.Model == "claude-haiku-5-5", why ?? "accepted");
+        why = await Vm.ChooseFromOutsideAsync(null, "turbo");
+        Check("U7 outside pick: an effort level CluadeX does not have is refused", why != null && Vm.ReasoningEffort == "high", why ?? "accepted");
+        await Vm.ChooseFromOutsideAsync("claude-sonnet-5-5", effortBefore == EffortLevels.Auto ? null : effortBefore);
+        Vm.ReasoningEffort = effortBefore;
+        Settings.UpdateSettings(s => s.ActiveProvider = AiProviderType.Local);
+
+        // A paid run ends: one line in its chat with what it cost; its real numbers feed the next estimate.
+        var runType = typeof(ChatViewModel).GetNestedType("ChatRun", BindingFlags.NonPublic)!;
+        var fakeRun = Activator.CreateInstance(runType)!;
+        runType.GetProperty("Session")!.SetValue(fakeRun, Vm.CurrentSession);
+        runType.GetProperty("Messages")!.SetValue(fakeRun, Vm.Messages);
+        var ended = new AgentRunScope("ended", null);
+        ended.AddUsage(0.30m, 100, 2_000, 0, 30_000, true);
+        ended.AddUsage(0.20m, 100, 1_000, 60_000, 6_000, true);
+        runType.GetProperty("Scope")!.SetValue(fakeRun, ended);
+        typeof(ChatViewModel).GetMethod("PostRunCostSummary", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(Vm, [fakeRun]);
+        var summary = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.System && m.Content.StartsWith("💸"));
+        Check("U7 spend: a paid run ends with one line — cost, steps, per step, cache share, tokens out",
+            summary != null && summary.Content.Contains("$0.50") && summary.Content.Contains("2 steps") && summary.Content.Contains("$0.25/step")
+            && summary.Content.Contains("62%") && Field<int>(Vm, "_measuredOutPerStep") == 1500, summary?.Content);
+
+        // Readable text: the strip and the bars use 12-13 px, and the Credit button shows its words.
+        Check("U7 text: the strip's boxes use 13 px", approvals.FontSize >= 13 && budgetBox.FontSize >= 13 && modelBox.FontSize >= 13,
+            $"{approvals.FontSize}/{budgetBox.FontSize}/{modelBox.FontSize}");
+        Settings.UpdateSettings(s => s.ProviderConfigs.Remove("Anthropic"));
+        await Task.Delay(50); await Render();
+        Check("U7 text: no key, no model box", !Vm.HasChatModelChoices);
+        // The credit link moved to the window's title bar (the "today" chip's menu): MainWindow, not this view.
+        Check("U7 text: the composer's \"+\" menu carries the agent switches and the chat actions",
+            ((Button)View.FindName("MoreButton")).ContextMenu.Items.OfType<MenuItem>().Count() >= 9);
+    }
+
+    static void SaveShot(string path)
+    {
+        var el = (FrameworkElement)Win.Content;
+        var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap((int)el.ActualWidth, (int)el.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bmp.Render(el);
+        var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+        using var fs = File.Create(path);
+        enc.Save(fs);
+    }
+
+    static T FindVisual<T>(DependencyObject root, Func<T, bool> match) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var c = VisualTreeHelper.GetChild(root, i);
+            if (c is T t && match(t)) return t;
+            if (FindVisual(c, match) is { } found) return found;
+        }
+        return null;
+    }
+
     static async Task TestAcceptEdits()
     {
         Log("\n## T5 — Accept edits: file edits inside the project run without a prompt; nothing else does");
@@ -1122,9 +1530,10 @@ internal static class Program
         await FreshChat();
         File.WriteAllText(Path.Combine(ProjA, "app.txt"), "one\ntwo\n");
         await Render();
-        var toggle = (CheckBox)View.FindName("AcceptEditsToggle");
-        Check("A1 with a project open the switch shows in the status bar, off by default", toggle is { IsVisible: true } && toggle.IsChecked == false && !Vm.AcceptEdits);
-        Check("A1 its tooltip states the scope", toggle?.ToolTip is string tip && tip.Contains("inside the open project") && tip.Contains("still ask"), toggle?.ToolTip?.ToString());
+        var approvals = (ComboBox)View.FindName("ApprovalBox");
+        var toggle = new ApprovalView(approvals);
+        Check("A1 with a project open the Approvals box shows under the input, on \"ask first\" by default", approvals is { IsVisible: true } && toggle.IsChecked == false && !Vm.AcceptEdits);
+        Check("A1 its tooltip states the scope", approvals?.ToolTip is string tip && tip.Contains("inside the open project") && tip.Contains("still ask"), approvals?.ToolTip?.ToString());
 
         ConfirmTitles.Clear();
         ConfirmAnswer = false;
@@ -1313,6 +1722,9 @@ internal sealed record FakeCall(List<(MessageRole Role, string Content)> History
 internal sealed class FakeProvider : IAiProvider
 {
     public readonly Queue<FakeStep> Script = new();
+    /// <summary>Scripts keyed by a marker in the conversation ("[A1]"): with several chats running at once, each
+    /// conversation takes its own steps instead of whichever is next in <see cref="Script"/>.</summary>
+    public readonly Dictionary<string, Queue<FakeStep>> ScriptFor = new();
     public readonly List<FakeCall> Calls = new();
     public string ProviderId => "Fake";
     public string DisplayName => "Fake provider";
@@ -1329,7 +1741,16 @@ internal sealed class FakeProvider : IAiProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         lock (Calls) Calls.Add(new FakeCall(history.Select(h => (h.Role, h.Content)).ToList(), userMessage));
-        var step = Script.Count > 0 ? Script.Dequeue() : FakeStep.Reply("ok");
+        FakeStep step;
+        lock (Script)
+        {
+            // The marker in the new message first; else the newest one in the conversation that still has steps.
+            var key = ScriptFor.Keys.FirstOrDefault(k => userMessage.Contains(k))
+                ?? history.AsEnumerable().Reverse().SelectMany(h => ScriptFor.Keys.Where(k => h.Content?.Contains(k) == true))
+                          .FirstOrDefault(k => ScriptFor[k].Count > 0);
+            step = key != null && ScriptFor[key].Count > 0 ? ScriptFor[key].Dequeue()
+                 : Script.Count > 0 ? Script.Dequeue() : FakeStep.Reply("ok");
+        }
         await Task.Delay(30, ct);
         if (step.HangUntilCancelled) await Task.Delay(Timeout.Infinite, ct);
         if (step.Error != null) throw step.Error;

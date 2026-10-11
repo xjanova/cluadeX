@@ -81,6 +81,9 @@ public class AppSettings
     public int BgMaxProcesses { get; set; } = 8;
     /// <summary>Tool images kept in the conversation sent to the model; older ones become a text note with the file path.</summary>
     public int KeepRecentImages { get; set; } = 2;
+    /// <summary>Older tool images may pile up this many past KeepRecentImages before they are cut back in one go
+    /// (each cut rewrites an earlier turn: one prompt-cache restart per cut instead of one per screenshot).</summary>
+    public int ImagePruneSlack { get; set; } = 3;
 
     // ─── Claude in Chrome connector (through Claude Code) ───
     /// <summary>The user switched the "Browser (Claude in Chrome)" connector on.</summary>
@@ -206,6 +209,18 @@ public class AppSettings
     /// <summary>"auto" or low / medium / high / xhigh / max — see <see cref="EffortLevels"/>.</summary>
     public string ReasoningEffort { get; set; } = EffortLevels.Auto;
     public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
+    /// <summary>Claude loads MCP tools on demand (server-side tool search) instead of carrying every definition in
+    /// every request. Off = all tools up front, as before.</summary>
+    public bool ToolSearchEnabled { get; set; } = true;
+    /// <summary>A paid run that has spent this much (USD) stops and asks before going on; each "go on" allows the
+    /// same again. 0 = never asks.</summary>
+    public decimal RunBudgetUsd { get; set; } = 2m;
+    /// <summary>A paid run asks before going on once CluadeX has spent this much today (USD, all chats). 0 = no daily cap.</summary>
+    public decimal DailyBudgetUsd { get; set; }
+    /// <summary>The chat page's right-hand panel (project files, latest image, latest run) is shown.</summary>
+    public bool ChatSidePanel { get; set; } = true;
+    /// <summary>Widths the user dragged panels to, by <see cref="Views.ResizeGrip.Key"/> (px).</summary>
+    public Dictionary<string, double> PanelWidths { get; set; } = new();
     public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 
     /// <summary>
@@ -232,6 +247,17 @@ public class AppSettings
     // persist them as memory files. Runs in background; never blocks the UI. Off by
     // default to avoid surprising the user with LLM calls they didn't ask for.
     public bool SessionMemoryEnabled { get; set; } = false;
+
+    /// <summary>Background work nobody waits for (session-memory and instinct extraction) goes through the
+    /// provider's batch API when it has one — Anthropic and OpenAI: half the price, the result lands within
+    /// minutes to hours instead of seconds. Off → those calls run live, as before.</summary>
+    public bool BatchBackgroundWork { get; set; } = true;
+
+    /// <summary>The desktop pet says things now and then (moods, builds, late nights).</summary>
+    public bool PetTalks { get; set; } = true;
+
+    /// <summary>The pet may follow the mouse around to tease you.</summary>
+    public bool PetMischief { get; set; } = true;
 
     /// <summary>
     /// Instinct learning loop. When ON, after a session ends CluadeX runs a background LLM pass over the

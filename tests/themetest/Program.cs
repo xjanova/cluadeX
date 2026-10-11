@@ -43,11 +43,13 @@ namespace ThemeTest;
 ///   dotnet run -p:CluadeXBin=X\ -- --golden [--force]    capture the baseline (refuses to overwrite without --force)
 ///   dotnet run -p:CluadeXBin=X\                          render every theme, compare Midnight, run the theme checks
 ///   options: --out &lt;dir&gt;  --tol &lt;0-255&gt;  --max-pct &lt;percent&gt;  --themes Midnight,Classic
+///            --all-pages  --only &lt;page,page&gt;  --probe   (Probe.cs)
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     const int W = 1440, H = 900;
     static string OutRoot = @"E:\cluadex-bld\themes";
+    const string FixtureRoot = @"E:\cluadex-bld\themes";
     static int Tolerance = 8;
     static double MaxChangedPct = 0.1;
     static bool GoldenMode, Force;
@@ -58,13 +60,14 @@ internal static class Program
     static readonly List<string> Failures = new();
 
     static ServiceProvider Sp;
+    static string FixtureProject = "";
     static SettingsService Settings;
     static MainViewModel MainVm;
     static Window MainWin;
     static readonly List<string> BlockedRequests = new();
 
     /// <summary>Main pages: file name, the NavigateTo target, the label on the contact sheet.</summary>
-    static readonly (string Key, string Nav, string Label)[] Pages =
+    static (string Key, string Nav, string Label)[] Pages =
     {
         ("chat", "Chat", "Chat"),
         ("code-editor", "Code", "Code Editor"),
@@ -76,8 +79,11 @@ internal static class Program
         ("plugins", "Plugins", "Plugins"),
         ("skills", "Skills", "Skills"),
         ("task-manager", "Tasks", "Task Manager"),
+        ("time-machine", "TimeMachine", "Time Machine"),
+        ("hex-editor", "HexEditor", "Hex Editor"),
+        ("debug-log", "DebugLog", "Debug Log"),
     };
-    static readonly (string Key, string Label)[] Dialogs =
+    static (string Key, string Label)[] Dialogs =
     {
         ("license", "License"), ("brainx-invite", "BrainX invite"), ("dgx-spark", "DGX Spark"), ("preview-pane", "Preview pane"),
     };
@@ -96,12 +102,16 @@ internal static class Program
             {
                 case "--golden": GoldenMode = true; break;
                 case "--force": Force = true; break;
+                case "--probe": ProbeMode = true; break;
                 case "--out" when i + 1 < args.Length: OutRoot = args[++i]; break;
                 case "--tol" when i + 1 < args.Length: Tolerance = int.Parse(args[++i]); break;
                 case "--max-pct" when i + 1 < args.Length: MaxChangedPct = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--themes" when i + 1 < args.Length: OnlyThemes = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
+                case "--all-pages": AllPages = true; break;
+                case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
         }
+        SelectPages();
 
         var app = new CluadeX.App();
         app.InitializeComponent();                    // App.xaml resources — the merged theme + styles
@@ -180,6 +190,69 @@ internal static class Program
 
     static object Prop(object o, string name) => o?.GetType().GetProperty(name)?.GetValue(o);
 
+    /// <summary>
+    /// No dead buttons: every button a user can see on the page must be what a click at its centre reaches. Born from
+    /// the Edit page's "Open Folder", which rendered fine while an empty, transparent file tree lay over it and took
+    /// every click. Buttons scrolled out of view, faded to nothing or off the window are skipped.
+    /// </summary>
+    static void ClickableButtons(string set, string page)
+    {
+        var root = (UIElement)RootVisual(MainWin);
+        var covered = new List<string>();
+        int seen = 0;
+        foreach (var b in Find<ButtonBase>(root))
+        {
+            if (!b.IsVisible || !b.IsEnabled || !b.IsHitTestVisible || b.ActualWidth < 8 || b.ActualHeight < 8) continue;
+            Point c;
+            try { c = b.TransformToAncestor(root).Transform(new Point(b.ActualWidth / 2, b.ActualHeight / 2)); }
+            catch (InvalidOperationException) { continue; }
+            if (c.X < 0 || c.Y < 0 || c.X >= W || c.Y >= H) continue;
+            if (!InViewAndOpaque(b, c, root)) continue;
+            seen++;
+            var hit = root.InputHitTest(c) as DependencyObject;
+            if (hit != null && IsWithin(hit, b)) continue;
+            covered.Add($"{Describe(b)} covered by {Describe(hit)}");
+        }
+        Check($"{set}/{page}: every visible button is reachable by a click ({seen} checked)", covered.Count == 0,
+              string.Join("; ", covered.Take(6)));
+    }
+
+    /// <summary>The point is inside every scroll viewport above the element, and nothing above it is see-through.</summary>
+    static bool InViewAndOpaque(DependencyObject el, Point inRoot, UIElement root)
+    {
+        for (var p = VisualTreeHelper.GetParent(el); p != null && !ReferenceEquals(p, root); p = VisualTreeHelper.GetParent(p))
+        {
+            if (p is UIElement { Opacity: < 0.05 }) return false;
+            if (p is ScrollContentPresenter sp)
+            {
+                Rect view;
+                try { view = sp.TransformToAncestor(root).TransformBounds(new Rect(0, 0, sp.ActualWidth, sp.ActualHeight)); }
+                catch (InvalidOperationException) { return false; }
+                if (!view.Contains(inRoot)) return false;
+            }
+        }
+        return el is not UIElement { Opacity: < 0.05 };
+    }
+
+    static bool IsWithin(DependencyObject hit, DependencyObject ancestor)
+    {
+        for (var d = hit; d != null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (ReferenceEquals(d, ancestor)) return true;
+        return false;
+    }
+
+    static string Describe(DependencyObject d)
+    {
+        if (d == null) return "nothing";
+        string name = (d as FrameworkElement)?.Name ?? "";
+        string label = System.Windows.Automation.AutomationProperties.GetName(d);
+        if (string.IsNullOrEmpty(label) && d is ContentControl { Content: string s }) label = s;
+        if (string.IsNullOrEmpty(label) && d is FrameworkElement { ToolTip: string t }) label = t;
+        if (string.IsNullOrEmpty(label) && d is DependencyObject)
+            label = Find<TextBlock>(d).Select(tb => tb.Text).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? "";
+        return $"{d.GetType().Name}{(name.Length > 0 ? "#" + name : "")}{(label.Length > 0 ? " '" + label + "'" : "")}";
+    }
+
     static IEnumerable<T> Find<T>(DependencyObject root) where T : DependencyObject
     {
         int n = VisualTreeHelper.GetChildrenCount(root);
@@ -234,9 +307,12 @@ internal static class Program
         Directory.CreateDirectory(Settings.DataRoot);
 
         // The debug log writes to ~/.cluadex/logs from its constructor (one line, as in every harness) — from
-        // here on it writes next to this exe.
+        // here on it writes into the fixture area: a FIXED path, because the Debug Log page shows it and its golden
+        // must not depend on where this harness was built.
         var dbg = Sp.GetRequiredService<DebugLogService>();
-        SetField(dbg, "_logDir", Path.Combine(Settings.DataRoot, "logs"));
+        string logDir = Path.Combine(FixtureRoot, "fixture", "logs");
+        try { if (Directory.Exists(logDir)) Directory.Delete(logDir, true); } catch { }
+        SetField(dbg, "_logDir", logDir);
 
         // No network. Each replaced client is checked BEFORE anything can use it (a mock must prove itself).
         var update = Sp.GetRequiredService<AutoUpdateService>();
@@ -292,6 +368,7 @@ internal static class Program
         var chat = MainVm.ChatVM;
         Check("setup: chat VM finished its startup load", await WaitUntil(() => chat.CurrentSession != null));
         Invoke(chat, "ApplyWorkingDirectory", project, false, false);
+        FixtureProject = project;
         await MainVm.CodeEditorVM.OpenPathAsync(Path.Combine(project, "src", "Greeter.cs"));
         SeedChat(chat);
         FreezeVolatile();
@@ -308,6 +385,9 @@ internal static class Program
         string startTheme = themes == null ? "midnight" : ((string)Prop(themes, "CurrentThemeId")).ToLowerInvariant();
         var midnight = await RenderSet(startTheme);
         CompareWithGolden(startTheme, midnight);
+
+        // The probe (opt-in): every token inverted LIVE on each page — what does not invert ignores the theme.
+        if (ProbeMode && themes != null) await RunProbe();
 
         if (themes == null)
         {
@@ -336,6 +416,7 @@ internal static class Program
         await Idle(200);
         var back = await RenderSet("midnight-roundtrip");
         CompareWithGolden("midnight-roundtrip", back);
+
 
         return Finish();
     }
@@ -369,7 +450,9 @@ internal static class Program
 
     static string WriteFixtureProject()
     {
-        string dir = Path.Combine(OutRoot, "fixture", "demo-project");
+        // Always the same path, whatever --out says: the project path is ON the rendered pages (title bar, Task
+        // Manager's working directory), and the golden was captured with this one.
+        string dir = Path.Combine(FixtureRoot, "fixture", "demo-project");
         if (Directory.Exists(dir)) Directory.Delete(dir, true);
         Directory.CreateDirectory(Path.Combine(dir, "src"));
         File.WriteAllText(Path.Combine(dir, "README.md"), "# demo-project\n\nA tiny project the theme harness opens.\n");
@@ -411,6 +494,60 @@ internal static class Program
         MainVm.ShowUpdateBar = false;
         MainVm.GpuStatus = "GPU";
         MainVm.ModelStatus = "No model loaded";
+        FreezeDebugLog();
+        FreezeAnimations();
+    }
+
+    /// <summary>The Debug Log page shows the app's own live log (timestamps, startup lines): replace it with a fixed
+    /// set — one line per level and per coloured category — and stop the live tail.</summary>
+    static void FreezeDebugLog()
+    {
+        var svc = Sp.GetRequiredService<DebugLogService>();
+        typeof(DebugLogService).GetField("OnEntry", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(svc, null);
+        foreach (var (prop, n) in new[] { ("WarningCount", 1), ("ErrorCount", 1), ("CriticalCount", 1) })
+            typeof(DebugLogService).GetProperty(prop)?.SetValue(svc, n);
+        var vm = MainVm.DebugLogVM;
+        if (vm.Entries.Count == FixedLog.Length && vm.Entries.Select(e => e.Message).SequenceEqual(FixedLog.Select(e => e.Message))) return;
+        vm.Entries.Clear();
+        foreach (var e in FixedLog) vm.Entries.Add(e);
+        vm.StatusMessage = "";
+        foreach (var p in new[] { "WarningCount", "ErrorCount", "CriticalCount", "TotalCount" })
+            try { Invoke(vm, "OnPropertyChanged", p); } catch { }
+    }
+
+    static readonly LogEntry[] FixedLog =
+    {
+        new() { Timestamp = FixedTime, Level = LogLevel.Trace, Category = "UI", Message = "Layout pass: 3 panels" },
+        new() { Timestamp = FixedTime.AddSeconds(1), Level = LogLevel.Debug, Category = "FileIO", Message = "Opened src/Greeter.cs (19 lines)" },
+        new() { Timestamp = FixedTime.AddSeconds(2), Level = LogLevel.Info, Category = "Agent", Message = "Session started · model: none" },
+        new() { Timestamp = FixedTime.AddSeconds(3), Level = LogLevel.Info, Category = "Tool", Message = "read_file src/Greeter.cs → 612 bytes" },
+        new() { Timestamp = FixedTime.AddSeconds(4), Level = LogLevel.Info, Category = "MCP", Message = "brainx: 42 tools ready" },
+        new() { Timestamp = FixedTime.AddSeconds(5), Level = LogLevel.Warning, Category = "Provider", Message = "Rate limit at 80 % — slowing down" },
+        new() { Timestamp = FixedTime.AddSeconds(6), Level = LogLevel.Error, Category = "Git", Message = "git status failed: not a repository", Exception = "System.InvalidOperationException: not a git repository" },
+        new() { Timestamp = FixedTime.AddSeconds(7), Level = LogLevel.Critical, Category = "Update", Message = "Update check refused (offline harness)" },
+    };
+
+    /// <summary>The Time Machine's backdrop orbs drift forever (storyboards on their transforms) and its logo halo spins —
+    /// park them, so two renders of the page are the same picture.</summary>
+    static void FreezeAnimations()
+    {
+        var page = Find<UserControl>(MainWin).FirstOrDefault(u => u.GetType().Name == "TimeMachineView");
+        if (page == null) return;
+        foreach (var fe in Find<FrameworkElement>(page))
+        {
+            switch (fe.RenderTransform)
+            {
+                case TranslateTransform t:
+                    t.BeginAnimation(TranslateTransform.XProperty, null); t.BeginAnimation(TranslateTransform.YProperty, null);
+                    break;
+                case RotateTransform r:
+                    r.BeginAnimation(RotateTransform.AngleProperty, null); r.Angle = 0;
+                    break;
+                case ScaleTransform s:
+                    s.BeginAnimation(ScaleTransform.ScaleXProperty, null); s.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                    break;
+            }
+        }
     }
 
     // ═══════════════════════════════════════════ rendering ═══════════════════════════════════════════
@@ -491,12 +628,22 @@ internal static class Program
                 MainVm.NavigateToCommand.Execute(nav);
                 last = nav;
             }
-            if (nav == "Settings") settingsVm.SelectedCategory = key == "settings-general" ? "general" : "provider";
+            if (nav == "Settings") settingsVm.SelectedCategory = SettingsCategoryOf(key);
             FreezeVolatile();
             var bmp = await Stable(() => (RootVisual(MainWin), W, H), $"{set}/{key}");
             string path = Path.Combine(dir, key + ".png");
             SavePng(bmp, path);
             saved[key] = path;
+            ClickableButtons(set, key);
+            if (key == "code-editor")
+            {
+                // The empty state too: with no folder open, the explorer offers "Open Folder" — and must take the click.
+                Invoke(MainVm.ChatVM, "ApplyWorkingDirectory", "", false, false);
+                await Idle(200);
+                ClickableButtons(set, "code-editor (no folder)");
+                Invoke(MainVm.ChatVM, "ApplyWorkingDirectory", FixtureProject, false, false);
+                await Idle(200);
+            }
         }
         settingsVm.SelectedCategory = "provider";
         MainVm.NavigateToCommand.Execute("Chat");

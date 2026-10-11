@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Godot text resources: scenes (.tscn), resources (.tres), project.godot, .import, ConfigFile .cfg.
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, PropertyName -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="Godot Resource" extensions=".tscn;.tres;.godot;.import;.cfg" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="; comment" />
+  <Color name="String" foreground="#CE9178" exampleText="&quot;res://player.gd&quot;" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="48.5" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="true" />
+  <Color name="SectionType" foreground="#4EC9B0" exampleText="[node name=&quot;Player&quot;]" />
+  <Color name="PropertyName" foreground="#9CDCFE" exampleText="config/name" />
+  <Color name="Function" foreground="#DCDCAA" exampleText="ExtResource()" />
+
+  <RuleSet>
+    <Span color="Comment" begin=";" />
+    <!-- Godot writes a multi-line text value as one quoted string across lines. -->
+    <Span color="String" multiline="true">
+      <Begin>[&amp;^]?"</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Span color="SectionType" ruleSet="Header">
+      <Begin>^\[(?=[A-Za-z_])</Begin>
+      <End>\]</End>
+    </Span>
+
+    <!-- key = value (config/name, metadata/_edit_group_, 0/position ...) -->
+    <Rule color="PropertyName">^\s*[^\s=;"\[\]{}()]+(?=\s*=)</Rule>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word><Word>null</Word><Word>inf</Word><Word>nan</Word>
+    </Keywords>
+    <Rule color="Number">(?&lt;![\w.])-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w.])</Rule>
+    <!-- ExtResource("1_x"), SubResource(...), Vector2(...), PackedStringArray(...) -->
+    <Rule color="Function">\b[A-Za-z_]\w*(?=\()</Rule>
+  </RuleSet>
+
+  <!-- Inside [gd_scene load_steps=3 uid="..."] / [node name="x" instance=ExtResource("2")] -->
+  <RuleSet name="Header">
+    <Span color="String">
+      <Begin>[&amp;^]?"</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Rule color="PropertyName">\b[A-Za-z_][\w/]*(?==)</Rule>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word><Word>null</Word>
+    </Keywords>
+    <Rule color="Number">(?&lt;![\w.])-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w.])</Rule>
+    <Rule color="Function">\b[A-Za-z_]\w*(?=\()</Rule>
+  </RuleSet>
+</SyntaxDefinition>

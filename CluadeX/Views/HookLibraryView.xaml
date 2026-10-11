@@ -8,8 +8,8 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:HookLibraryViewModel}"
-             Background="{StaticResource NeonBg0Brush}"
-             FontFamily="{StaticResource NeonUiFont}">
+             Background="{DynamicResource Bg.Window}"
+             FontFamily="{DynamicResource Font.Ui.Display}">
     <UserControl.Resources>
 
         <!-- Card per bundled hook -->
@@ -20,18 +20,14 @@
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="bd" Padding="14,12" CornerRadius="10"
-                                BorderThickness="1" BorderBrush="{StaticResource NeonLineBrush}"
-                                Background="{StaticResource NeonCardFill}">
+                                BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                                Background="{DynamicResource Surface.Card}">
                             <ContentPresenter/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
-                                <Setter TargetName="bd" Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect Color="#4CDFFF" BlurRadius="14" ShadowDepth="0" Opacity="0.35"/>
-                                    </Setter.Value>
-                                </Setter>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.Card.Hover}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -44,28 +40,28 @@
 
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding Name}" FontFamily="{StaticResource NeonMonoFont}"
+                            <TextBlock Text="{Binding Name}" FontFamily="{DynamicResource Font.Mono.Display}"
                                        FontSize="13" FontWeight="Bold"
-                                       Foreground="{StaticResource NeonInk0Brush}"/>
+                                       Foreground="{DynamicResource Text.Primary}"/>
                             <!-- Phase chip -->
                             <Border Margin="10,0,0,0" Padding="6,1" CornerRadius="3"
-                                    BorderThickness="1" BorderBrush="{StaticResource NeonCyanBrush}"
-                                    Background="#224CDFFF">
+                                    BorderThickness="1" BorderBrush="{DynamicResource Accent.1}"
+                                    Background="{DynamicResource Accent.1.Tint}">
                                 <TextBlock Text="{Binding Phase}" FontSize="9" FontWeight="Bold"
-                                           FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonCyanBrush}"/>
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Accent.1}"/>
                             </Border>
                             <!-- Risk chip (color depends on risk) -->
                             <Border Margin="6,0,0,0" Padding="5,1" CornerRadius="3"
-                                    BorderThickness="1" BorderBrush="{StaticResource NeonAmberBrush}"
-                                    Background="#22FFD166">
+                                    BorderThickness="1" BorderBrush="{DynamicResource Status.Warning}"
+                                    Background="{DynamicResource Status.Warning.Tint}">
                                 <TextBlock Text="{Binding Category}" FontSize="9"
-                                           FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonAmberBrush}"/>
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Status.Warning}"/>
                             </Border>
                         </StackPanel>
                         <TextBlock Text="{Binding Description}" FontSize="11"
-                                   Foreground="{StaticResource NeonInk2Brush}" Margin="0,4,0,0"
+                                   Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,0"
                                    TextWrapping="Wrap" MaxHeight="40" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
 
@@ -76,17 +72,17 @@
                         <CheckBox.Template>
                             <ControlTemplate TargetType="CheckBox">
                                 <Border x:Name="track" Width="42" Height="22" CornerRadius="11"
-                                        BorderThickness="1" BorderBrush="{StaticResource NeonLineBrush}"
-                                        Background="#22000000">
+                                        BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                                        Background="{DynamicResource Surface.Inset}">
                                     <Ellipse x:Name="knob" Width="16" Height="16"
                                              HorizontalAlignment="Left" VerticalAlignment="Center"
-                                             Margin="2,0,0,0" Fill="{StaticResource NeonInk2Brush}"/>
+                                             Margin="2,0,0,0" Fill="{DynamicResource Text.Muted}"/>
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsChecked" Value="True">
-                                        <Setter TargetName="track" Property="Background" Value="#445CFFB0"/>
-                                        <Setter TargetName="track" Property="BorderBrush" Value="{StaticResource NeonMintBrush}"/>
-                                        <Setter TargetName="knob" Property="Fill" Value="{StaticResource NeonMintBrush}"/>
+                                        <Setter TargetName="track" Property="Background" Value="{DynamicResource Status.Success.Tint.Strong}"/>
+                                        <Setter TargetName="track" Property="BorderBrush" Value="{DynamicResource Status.Success}"/>
+                                        <Setter TargetName="knob" Property="Fill" Value="{DynamicResource Status.Success}"/>
                                         <Setter TargetName="knob" Property="HorizontalAlignment" Value="Right"/>
                                         <Setter TargetName="knob" Property="Margin" Value="0,0,2,0"/>
                                     </Trigger>
@@ -100,14 +96,7 @@
     </UserControl.Resources>
 
     <Grid>
-        <Rectangle IsHitTestVisible="False">
-            <Rectangle.Fill>
-                <RadialGradientBrush Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
-                    <GradientStop Color="#225CFFB0" Offset="0"/>
-                    <GradientStop Color="#06071A" Offset="1"/>
-                </RadialGradientBrush>
-            </Rectangle.Fill>
-        </Rectangle>
+        <Rectangle IsHitTestVisible="False" Fill="{DynamicResource Page.Wash.Success}"/>
 
         <Grid>
             <Grid.RowDefinitions>
@@ -117,13 +106,8 @@
             </Grid.RowDefinitions>
 
             <!-- Header -->
-            <Border Grid.Row="0" Padding="24,16" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                        <GradientStop Color="#7F141838" Offset="0"/>
-                        <GradientStop Color="Transparent" Offset="1"/>
-                    </LinearGradientBrush>
-                </Border.Background>
+            <Border Grid.Row="0" Padding="24,16" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"
+                    Background="{DynamicResource Page.Header.Background}">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -131,24 +115,17 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <Border Grid.Column="0" Width="46" Height="46" CornerRadius="11">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                <GradientStop Color="#5CFFB0" Offset="0"/>
-                                <GradientStop Color="#4CDFFF" Offset="1"/>
-                            </LinearGradientBrush>
-                        </Border.Background>
-                        <Border.Effect>
-                            <DropShadowEffect Color="#5CFFB0" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
-                        </Border.Effect>
-                        <TextBlock Text="&#xE9F5;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="White"
+                    <Border Grid.Column="0" Width="46" Height="46" CornerRadius="11"
+                            Background="{DynamicResource IconTile.Success-Accent.1}"
+                            Effect="{DynamicResource Glow.IconTile.Success}">
+                        <TextBlock Text="&#xE9F5;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource IconTile.Foreground}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
 
                     <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="{services:Loc hooks.title}" FontSize="20" FontWeight="Bold"
-                                   Foreground="{StaticResource NeonInk0Brush}"/>
-                        <TextBlock FontSize="11" Foreground="{StaticResource NeonInk2Brush}" Margin="0,2,0,0">
+                                   Foreground="{DynamicResource Text.Primary}"/>
+                        <TextBlock FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,2,0,0">
                             <Run Text="{services:Loc hooks.bundledCount}"/>
                             <Run Text="{Binding EnabledCount, Mode=OneWay}"/>
                             <Run Text="/"/>
@@ -160,24 +137,46 @@
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBox Width="180" Margin="0,0,8,0" Padding="8,5" FontSize="11"
                                  Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
-                                 Background="#22000000" Foreground="{StaticResource NeonInk0Brush}"
-                                 BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
-                                 FontFamily="{StaticResource NeonMonoFont}"
+                                 Background="{DynamicResource Surface.Inset}" Foreground="{DynamicResource Text.Primary}"
+                                 BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                                 FontFamily="{DynamicResource Font.Mono.Display}"
                                  VerticalContentAlignment="Center">
                             <TextBox.Resources>
                                 <VisualBrush x:Key="hint" TileMode="None" Stretch="None" AlignmentX="Left">
                                     <VisualBrush.Visual>
-                                        <TextBlock Text="{services:Loc hooks.filter}" Foreground="{StaticResource NeonInk3Brush}" FontSize="11"
-                                                   FontFamily="{StaticResource NeonMonoFont}"/>
+                                        <TextBlock Text="{services:Loc hooks.filter}" Foreground="{DynamicResource Text.Faint}" FontSize="11"
+                                                   FontFamily="{DynamicResource Font.Mono.Display}"/>
                                     </VisualBrush.Visual>
                                 </VisualBrush>
                             </TextBox.Resources>
+                            <!-- Own template: the Windows one turned the border its own blue on hover / focus whatever
+                                 the theme said. Same shape; Midnight's Input.Plain.* tokens hold those Windows blues. -->
+                            <TextBox.Template>
+                                <ControlTemplate TargetType="TextBox">
+                                    <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+                                        <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                                      HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter TargetName="border" Property="Opacity" Value="0.56"/>
+                                        </Trigger>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource Input.Plain.Hover.Border}"/>
+                                        </Trigger>
+                                        <Trigger Property="IsKeyboardFocused" Value="True">
+                                            <Setter TargetName="border" Property="BorderBrush" Value="{DynamicResource Input.Plain.Focus.Border}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </TextBox.Template>
                         </TextBox>
                         <Button FontFamily="Segoe UI"
                                 Command="{Binding OpenBundleFolderCommand}"
                                 Padding="12,7" Margin="0,0,6,0" Cursor="Hand"
-                                Background="#7028326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                Foreground="{StaticResource NeonInk0Brush}" FontSize="11">
+                                Background="{DynamicResource Button.Action.Background}" BorderBrush="{DynamicResource Button.Action.Border}" BorderThickness="1"
+                                Foreground="{DynamicResource Button.Action.Foreground}" FontSize="11">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border Background="{TemplateBinding Background}" CornerRadius="6"
@@ -196,8 +195,8 @@
                         <Button FontFamily="Segoe UI"
                                 Command="{Binding RefreshCommand}"
                                 Padding="12,7" Cursor="Hand"
-                                Background="#7028326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                Foreground="{StaticResource NeonInk0Brush}" FontSize="11">
+                                Background="{DynamicResource Button.Action.Background}" BorderBrush="{DynamicResource Button.Action.Border}" BorderThickness="1"
+                                Foreground="{DynamicResource Button.Action.Foreground}" FontSize="11">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border Background="{TemplateBinding Background}" CornerRadius="6"
@@ -226,12 +225,9 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- List -->
-                <Border Grid.Column="0" Background="{StaticResource NeonPanelFill}"
-                        BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
-                        CornerRadius="10">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="Black" Opacity="0.5"/>
-                    </Border.Effect>
+                <Border Grid.Column="0" Background="{DynamicResource Surface.Panel}"
+                        BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                        CornerRadius="10" Effect="{DynamicResource Shadow.Panel.Soft}">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14">
                         <ItemsControl ItemsSource="{Binding Bundles}"
                                       ItemTemplate="{StaticResource HookCardTemplate}"/>
@@ -239,13 +235,11 @@
                 </Border>
 
                 <!-- Detail -->
-                <Border Grid.Column="2" Background="{StaticResource NeonPanelFill}"
-                        BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
+                <Border Grid.Column="2" Background="{DynamicResource Surface.Panel}"
+                        BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
                         CornerRadius="10"
-                        Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}}">
-                    <Border.Effect>
-                        <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="Black" Opacity="0.5"/>
-                    </Border.Effect>
+                        Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}}"
+                        Effect="{DynamicResource Shadow.Panel.Soft}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -255,44 +249,37 @@
                         <!-- Title bar -->
                         <StackPanel Grid.Row="0" Margin="20,20,20,10">
                             <StackPanel Orientation="Horizontal">
-                                <Border Width="56" Height="56" CornerRadius="14">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                            <GradientStop Color="#5CFFB0" Offset="0"/>
-                                            <GradientStop Color="#4CDFFF" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                    <Border.Effect>
-                                        <DropShadowEffect Color="#5CFFB0" BlurRadius="26" ShadowDepth="0" Opacity="0.6"/>
-                                    </Border.Effect>
+                                <Border Width="56" Height="56" CornerRadius="14"
+                                        Background="{DynamicResource IconTile.Success-Accent.1}"
+                                        Effect="{DynamicResource Glow.IconTile.Large.Success}">
                                     <TextBlock Text="&#xE9F5;" FontFamily="Segoe MDL2 Assets" FontSize="28"
-                                               Foreground="White"
+                                               Foreground="{DynamicResource IconTile.Foreground}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
                                 <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Selected.Name}" FontFamily="{StaticResource NeonMonoFont}"
+                                    <TextBlock Text="{Binding Selected.Name}" FontFamily="{DynamicResource Font.Mono.Display}"
                                                FontSize="20" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}"/>
+                                               Foreground="{DynamicResource Text.Primary}"/>
                                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                        <Border Padding="6,2" CornerRadius="3" Background="#224CDFFF"
-                                                BorderThickness="1" BorderBrush="{StaticResource NeonCyanBrush}">
+                                        <Border Padding="6,2" CornerRadius="3" Background="{DynamicResource Accent.1.Tint}"
+                                                BorderThickness="1" BorderBrush="{DynamicResource Accent.1}">
                                             <TextBlock Text="{Binding Selected.Phase}" FontSize="9" FontWeight="Bold"
-                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                                       Foreground="{DynamicResource Accent.1}"/>
                                         </Border>
                                         <Border Padding="6,2" CornerRadius="3" Margin="6,0,0,0"
-                                                Background="#22FFD166"
-                                                BorderThickness="1" BorderBrush="{StaticResource NeonAmberBrush}">
+                                                Background="{DynamicResource Status.Warning.Tint}"
+                                                BorderThickness="1" BorderBrush="{DynamicResource Status.Warning}">
                                             <TextBlock Text="{Binding Selected.Category}" FontSize="9"
-                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                       Foreground="{StaticResource NeonAmberBrush}"/>
+                                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                                       Foreground="{DynamicResource Status.Warning}"/>
                                         </Border>
                                         <Border Padding="6,2" CornerRadius="3" Margin="6,0,0,0"
-                                                Background="#22FF6B6B"
-                                                BorderThickness="1" BorderBrush="#FF6B6B">
+                                                Background="{DynamicResource Status.Danger.Tint}"
+                                                BorderThickness="1" BorderBrush="{DynamicResource Status.Danger}">
                                             <TextBlock FontSize="9"
-                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                       Foreground="#FF6B6B">
+                                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                                       Foreground="{DynamicResource Status.Danger}">
                                                 <Run Text="{services:Loc hooklib.riskPrefix}"/><Run Text="{Binding Selected.Risk, Mode=OneWay}"/>
                                             </TextBlock>
                                         </Border>
@@ -301,7 +288,7 @@
                             </StackPanel>
 
                             <TextBlock Text="{Binding Selected.Description}" FontSize="13"
-                                       Foreground="{StaticResource NeonInk1Brush}"
+                                       Foreground="{DynamicResource Text.Secondary}"
                                        TextWrapping="Wrap" Margin="0,12,0,0"/>
 
                             <Grid Margin="0,12,0,0">
@@ -310,17 +297,17 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock FontSize="10" FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonInk3Brush}">
+                                    <TextBlock FontSize="10" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Faint}">
                                         <Run Text="{services:Loc hooks.matcherLabel}"/>
-                                        <Run Text="{Binding Selected.Matcher}" Foreground="{StaticResource NeonCyanBrush}"/>
+                                        <Run Text="{Binding Selected.Matcher}" Foreground="{DynamicResource Accent.1}"/>
                                         <Run Text="{services:Loc hooks.timeoutLabel}"/>
-                                        <Run Text="{Binding Selected.TimeoutMs}" Foreground="{StaticResource NeonCyanBrush}"/>
+                                        <Run Text="{Binding Selected.TimeoutMs}" Foreground="{DynamicResource Accent.1}"/>
                                         <Run Text="{services:Loc hooklib.msSuffix}"/>
                                     </TextBlock>
                                     <TextBlock Text="{Binding SelectedScriptPath}" FontSize="10"
-                                               FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonInk3Brush}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Faint}"
                                                TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
                                 </StackPanel>
 
@@ -328,8 +315,8 @@
                                         Command="{Binding ToggleCommand}"
                                         CommandParameter="{Binding Selected}"
                                         Padding="14,8" Cursor="Hand"
-                                        Background="#445CFFB0" BorderBrush="{StaticResource NeonMintBrush}" BorderThickness="1"
-                                        Foreground="{StaticResource NeonInk0Brush}" FontSize="11" FontWeight="Bold">
+                                        Background="{DynamicResource Status.Success.Tint.Strong}" BorderBrush="{DynamicResource Status.Success}" BorderThickness="1"
+                                        Foreground="{DynamicResource Text.Primary}" FontSize="11" FontWeight="Bold">
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
                                             <Border Background="{TemplateBinding Background}" CornerRadius="6"
@@ -346,22 +333,22 @@
 
                         <!-- Script preview -->
                         <Border Grid.Row="1" Margin="20,8,20,20" Padding="14" CornerRadius="6"
-                                Background="#7011152E"
-                                BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
+                                Background="{DynamicResource Surface.Input}"
+                                BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
                                 </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="{services:Loc hooks.scriptPreview}" FontFamily="{StaticResource NeonMonoFont}"
+                                <TextBlock Grid.Row="0" Text="{services:Loc hooks.scriptPreview}" FontFamily="{DynamicResource Font.Mono.Display}"
                                            FontSize="9" FontWeight="Bold"
-                                           Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,8"/>
+                                           Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,8"/>
                                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                                     <TextBox Text="{Binding SelectedScriptContent, Mode=OneWay}"
                                              IsReadOnly="True" AcceptsReturn="True"
-                                             FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                                              Background="Transparent" BorderThickness="0"
-                                             Foreground="{StaticResource NeonInk1Brush}"
+                                             Foreground="{DynamicResource Text.Secondary}"
                                              Padding="0" TextWrapping="NoWrap"/>
                                 </ScrollViewer>
                             </Grid>
@@ -372,10 +359,10 @@
 
             <!-- Status bar -->
             <Border Grid.Row="2" Padding="20,8" BorderThickness="0,1,0,0"
-                    BorderBrush="{StaticResource NeonLineBrush}" Background="#88141838">
+                    BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Page.Footer.Background}">
                 <TextBlock Text="{Binding StatusMessage}" FontSize="11"
-                           FontFamily="{StaticResource NeonMonoFont}"
-                           Foreground="{StaticResource NeonInk2Brush}"/>
+                           FontFamily="{DynamicResource Font.Mono.Display}"
+                           Foreground="{DynamicResource Text.Muted}"/>
             </Border>
         </Grid>
     </Grid>

@@ -11,7 +11,7 @@ namespace CluadeX.Services;
 /// Integrates SmartEditingService for code validation and context enrichment.
 /// Integrates ContextMemoryService for automatic context compaction.
 /// </summary>
-public class CodeAgentService
+public partial class CodeAgentService
 {
     private readonly AiProviderManager _providerManager;
     private readonly CodeExecutionService _codeExecutionService;
@@ -72,10 +72,7 @@ public class CodeAgentService
     /// Matched on the leaf of mcp__{server}__{tool} so it works whatever the user
     /// named the server.
     /// </summary>
-    private static readonly HashSet<string> PinnedMcpToolNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "brain_search", "brain_semantic_search", "brain_get_note",
-    };
+    private static readonly HashSet<string> PinnedMcpToolNames = AgentToolService.PinnedMcpToolLeaves;
 
     /// <summary>
     /// Newest-first token-budgeted history for a local window. Static so the
@@ -154,6 +151,66 @@ public class CodeAgentService
         int last = qualifiedName.LastIndexOf("__", StringComparison.Ordinal);
         string leaf = last >= 0 ? qualifiedName[(last + 2)..] : qualifiedName;
         return PinnedMcpToolNames.Contains(leaf);
+    }
+
+    /// <summary>
+    /// The per-run spend guard. True = go on. Past <see cref="AppSettings.RunBudgetUsd"/> the user is asked in the run's
+    /// chat; "go on" allows the same amount again. No budget, no run scope, or nobody to ask (headless) = go on.
+    /// </summary>
+    private async Task<bool> ContinueWithinBudgetAsync(bool isThai, CancellationToken ct)
+    {
+        if (!await ContinueWithinDailyBudgetAsync(isThai, ct)) return false;
+        var scope = AgentRunScope.Current;
+        decimal per = _settingsService.Settings.RunBudgetUsd;
+        if (scope == null || per <= 0) return true;
+        decimal budget = per + scope.BudgetGrantedUsd;
+        if (scope.CostUsd < budget) return true;
+
+        string goOn = isThai ? $"ทำต่อ (อีก ${per:0.##})" : $"Go on (another ${per:0.##})";
+        string stop = isThai ? "หยุดตรงนี้" : "Stop here";
+        string q = isThai
+            ? $"💸 รอบนี้ใช้ไป ${scope.CostUsd:0.00} ถึงงบต่อรอบแล้ว (${budget:0.##}) — ทำต่อไหม?"
+            : $"💸 This run has spent ${scope.CostUsd:0.00}, its budget (${budget:0.##}). Keep going?";
+        _debugLog?.Info("Agent", $"spend guard: ${scope.CostUsd:0.0000} ≥ budget ${budget:0.##} — asking");
+        string? answer = await _agentToolService.AskUserAsync(q, [goOn, stop]);
+        ct.ThrowIfCancellationRequested();
+        if (answer == null) return true;   // nobody to ask: never stall a headless run here
+        string a = answer.Trim();   // the button, or a typed "stop" / "หยุด"
+        if (a.Equals(stop, StringComparison.OrdinalIgnoreCase) || a.Contains("หยุด", StringComparison.Ordinal)
+            || a.StartsWith("stop", StringComparison.OrdinalIgnoreCase)) return false;
+        scope.BudgetGrantedUsd = scope.CostUsd;   // another full budget from here
+        return true;
+    }
+
+    // "Go on" past the daily cap: allowed up to today's spend + another day's budget (for this calendar day only).
+    private decimal _dailyGrantedUsd;
+    private DateTime _dailyGrantDay;
+
+    /// <summary>The daily cap (<see cref="AppSettings.DailyBudgetUsd"/>, all chats): once today's spend reaches it, a paid
+    /// run asks before its next request. No cap, no cost tracker, or nobody to ask = go on.</summary>
+    private async Task<bool> ContinueWithinDailyBudgetAsync(bool isThai, CancellationToken ct)
+    {
+        decimal daily = _settingsService.Settings.DailyBudgetUsd;
+        if (daily <= 0 || _costTrackingService == null) return true;
+        if (_dailyGrantDay != DateTime.Today) { _dailyGrantDay = DateTime.Today; _dailyGrantedUsd = 0; }
+        decimal today = _costTrackingService.TodayCostUsd;
+        decimal cap = daily + _dailyGrantedUsd;
+        if (today < cap) return true;
+
+        string goOn = isThai ? $"ทำต่อ (อีก ${daily:0.##})" : $"Go on (another ${daily:0.##})";
+        string stop = isThai ? "หยุดตรงนี้" : "Stop here";
+        string q = isThai
+            ? $"💸 วันนี้ใช้ไป ${today:0.00} ถึงงบรายวันแล้ว (${cap:0.##}) — ทำต่อไหม?"
+            : $"💸 Today's spend is ${today:0.00}, the daily budget (${cap:0.##}). Keep going?";
+        _debugLog?.Info("Agent", $"daily spend guard: ${today:0.0000} ≥ ${cap:0.##} — asking");
+        string? answer = await _agentToolService.AskUserAsync(q, [goOn, stop]);
+        ct.ThrowIfCancellationRequested();
+        if (answer == null) return true;
+        string a = answer.Trim();
+        if (a.Equals(stop, StringComparison.OrdinalIgnoreCase) || a.Contains("หยุด", StringComparison.Ordinal)
+            || a.StartsWith("stop", StringComparison.OrdinalIgnoreCase)) return false;
+        _dailyGrantedUsd = today;   // another full day's budget from here
+        return true;
     }
 
     /// <summary>Server key out of a qualified MCP name (mcp__{server}__{tool}).</summary>
@@ -354,6 +411,8 @@ public class CodeAgentService
     private bool _cachedNativeTools;
     /// <summary>Whether the cached prompt told the model it can see tool images.</summary>
     private bool _cachedVision;
+    /// <summary>The project the cached prompt describes: two chats can run at once in different projects.</summary>
+    private string? _cachedPromptDir;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -366,6 +425,7 @@ public class CodeAgentService
         // The vision line is a fact about the active model AND loop: switching to a blind one inside the 30 s window
         // must not leave a prompt that says "you can see images".
         bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
+        string dirNow = _fileSystemService.WorkingDirectory ?? "";
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
         // thing. A reconnect or a death inside the window rebuilds the prompt now.
@@ -374,7 +434,8 @@ public class CodeAgentService
             if (_cachedSystemPrompt != null && DateTime.UtcNow < _promptCacheExpiry
                 && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal)
                 && _cachedNativeTools == nativeNow
-                && _cachedVision == visionNow)
+                && _cachedVision == visionNow
+                && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase))
                 return _cachedSystemPrompt;
         }
 
@@ -386,10 +447,32 @@ public class CodeAgentService
             _cachedBrainStatusLine = brainNow;
             _cachedNativeTools = nativeNow;
             _cachedVision = visionNow;
+            _cachedPromptDir = dirNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
         return prompt;
+    }
+
+    /// <summary>
+    /// What the next agent request will carry before the conversation: the system prompt and the tool definitions the model
+    /// gets up front (deferred tools only by name, when the provider searches for them). Characters; for the cost estimate.
+    /// </summary>
+    public async Task<(int SystemChars, int ToolChars, int DeferredTools)> MeasurePromptAsync()
+    {
+        string system = await GetSystemPromptAsync();
+        var tools = _agentToolService.BuildNativeToolSchemas();
+        var type = _providerManager.ActiveProviderType;
+        var s = _settingsService.Settings;
+        bool search = false;
+        if (type == AiProviderType.Anthropic && s.ProviderConfigs.TryGetValue(type.ToString(), out var cfg))
+            search = Services.Providers.AnthropicProvider.UseToolSearch(
+                string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? Services.Providers.AnthropicProvider.DefaultModel : cfg.EffectiveModelId!,
+                cfg.BaseUrl, s.ToolSearchEnabled, tools);
+        int toolChars = tools.Where(t => !search || !t.DeferLoading)
+            .Sum(t => t.Name.Length + t.Description.Length + t.InputSchema.GetRawText().Length + 40);
+        if (search) toolChars += Services.Providers.AnthropicProvider.DeferredToolsNote(tools).Length;
+        return (system.Length, toolChars, search ? tools.Count(t => t.DeferLoading) : 0);
     }
 
     /// <summary>True when this turn will run the native tool_use loop — the very test ExecuteAgenticAsync
@@ -991,6 +1074,8 @@ public class CodeAgentService
         _providerManager = providerManager;
         _codeExecutionService = codeExecutionService;
         _agentToolService = agentToolService;
+        // agent_spawn runs real sub-agents (CodeAgentService.SubAgents.cs)
+        _agentToolService.OnAgentSpawnRequested += RunSubAgentAsync;
         _fileSystemService = fileSystemService;
         _settingsService = settingsService;
         _smartEditingService = smartEditingService;
@@ -1268,8 +1353,14 @@ public class CodeAgentService
         // next to the exe, or it failed to start and fell back) ExecuteAgenticAsync takes the [ACTION:] loop.
         // Keyed on the setting alone, that turn got a prompt with no [ACTION:] catalogue and a function-call
         // few-shot: the model could only announce "I'll call read_file" and stop (observed with Qwen2.5-Coder).
-        bool localNativeTools = isLocalProvider && ActiveProviderHasNativeTools();
-        bool includeToolDefs     = !isLocalProvider || (!localNativeTools && contextTokens >= 8000);
+        bool nativeTools = ActiveProviderHasNativeTools();
+        bool localNativeTools = isLocalProvider && nativeTools;
+        // The [ACTION:] text catalogue only for a loop that reads [ACTION:] blocks. With native tool use (every API
+        // provider, llama-server) the schemas ride the request's "tools" field: the text copy repeated all of them —
+        // the brain's 128 MCP tools included — as ~55k tokens of system prompt on EVERY request (Snooker run
+        // 2026-10-11: sysPrompt ~61k tokens, 121k written to the cache on step 1), told the model to answer in a
+        // format the loop does not parse, and undid tool search by describing every deferred tool in full anyway.
+        bool includeToolDefs     = !nativeTools && (!isLocalProvider || contextTokens >= 8000);
         // Heavy tier at ≥32k for local, not ≥16k: the full tree + 6k-char codebase map +
         // key-file dump measures ~3-4k tokens, which at 16384 would eat back everything
         // the compact base prompt just freed. A 16k local model gets the shallow tree +
@@ -1361,7 +1452,7 @@ public class CodeAgentService
             {
                 sb.AppendLine(_agentToolService.GetToolDefinitionsPrompt());
             }
-            else if (localNativeTools)
+            else if (nativeTools)
             {
                 // Native tool use: schemas ride the API "tools" field, so the prompt only needs the
                 // discipline line — not a token-expensive text copy of every tool. It MUST describe the
@@ -1426,7 +1517,8 @@ public class CodeAgentService
                 {
                     sb.AppendLine("You ALSO have MCP tools from " + string.Join(", ", mcpServers.Select(s => $"'{s}'"))
                         + ". They are REAL callable tools, named mcp__<server>__<tool> — call them by that full "
-                        + "qualified name, and only the ones actually present in your tool list. Never answer that "
+                        + "qualified name, and only the ones actually present in your tool list (when some are listed as "
+                        + "loaded on demand, search for the one you need first). Never answer that "
                         + "you 'will use' one or ask the user to go ahead: call it now, then answer from its result.");
                 }
             }
@@ -2613,10 +2705,26 @@ public class CodeAgentService
         // step's images always go out whatever this is (KeepNewestImages) — it only bounds the older ones.
         int keepImages = Math.Clamp(_settingsService.Settings.KeepRecentImages, 1, 20);
 
+        // The first message microcompact leaves verbatim (null = none shortened yet). Kept by reference, so a list the
+        // loop rebuilds (413 recovery, role repair) simply starts over instead of pointing at the wrong message.
+        Services.Providers.NativeMessage? compactMark = null;
+
         for (int iteration = 0; iteration < iterationBudget; iteration++)
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
+
+            // Spend guard: a paid run that has used its budget asks before the next request (each step re-sends the
+            // whole conversation; a long run on a strong model is tens of dollars). "Stop" ends here, nothing more sent.
+            if (iteration > 0 && !loopIsLocal && !await ContinueWithinBudgetAsync(isThai, ct))
+            {
+                result.StopReason = "budget";
+                result.Success = true;
+                result.FinalResponse = isThai
+                    ? $"หยุดตามงบแล้ว — รอบนี้ใช้ไป ${AgentRunScope.Current?.CostUsd ?? 0:0.00} พิมพ์ \"ทำต่อ\" ถ้าต้องการให้ทำต่อจากจุดเดิม"
+                    : $"Stopped at the budget — this run spent ${AgentRunScope.Current?.CostUsd ?? 0:0.00}. Say \"continue\" to pick up where it left off.";
+                break;
+            }
 
             // Last step of the budget: no more tools. The model reports what it found, what it changed and
             // what is left, so a long task ends with the work so far instead of an empty bubble (agenttest on
@@ -2644,7 +2752,10 @@ public class CodeAgentService
 
             // Older screenshots → "[screenshot omitted — saved at …]": in place, every step, whatever the size. The
             // newest step's images (not seen yet) always go out.
-            int imagesDropped = Vision.ToolImageWire.KeepNewestImages(nativeMessages, keepImages);
+            // In batches, like microcompact: replacing an old screenshot rewrites an earlier turn, which restarts the
+            // prompt cache and (on models that bind thinking to the history) drops every later thinking block. So the
+            // older ones are let pile up to keepImages + ImagePruneSlack (a setting) and then cut back to keepImages in one go.
+            int imagesDropped = PruneToolImagesBatched(nativeMessages, keepImages, _settingsService.Settings.ImagePruneSlack);
             if (imagesDropped > 0)
                 _debugLog?.Info("Agent", $"step {iteration + 1}: {imagesDropped} older tool image(s) replaced by their file path (keep {keepImages})");
 
@@ -2654,8 +2765,16 @@ public class CodeAgentService
             // at step 2 was cut to 800 characters, so the model re-read it in slices (30 read_file calls on a
             // 1,200-line file, the step budget gone, no answer), and every cut changed the prompt prefix so
             // prompt caching never hit.
-            bool willCompact = _settingsService.Settings.MicrocompactEnabled && nativeMessages.Count > 6
-                && (loopIsLocal || EstimateNativeTokens(nativeMessages) > ApiCompactThresholdTokens);
+            // API models compact in STEPS, not on every request: everything before compactMark is shortened, and
+            // the mark only moves when the shortened conversation is still over the threshold. Moving it on every
+            // request (as before) changed an old message each time, so the prompt cache missed on every step past
+            // 90k tokens (Snooker run 2026-10-10: 47 requests, 2.2M uncached input tokens, $11.87). Local models
+            // keep compacting every step — their window is the limit, not the cache.
+            int compactBoundary = NextCompactBoundary(nativeMessages, compactMark,
+                _settingsService.Settings.MicrocompactEnabled, loopIsLocal,
+                _settingsService.Settings.MicrocompactKeepRecentTurns,
+                _settingsService.Settings.MicrocompactMaxOldResultChars, out bool willCompact);
+            compactMark = compactBoundary > 0 && compactBoundary < nativeMessages.Count ? nativeMessages[compactBoundary] : null;
 
             // PreCompact hook fires once per loop iteration where compaction would run,
             // BEFORE the trimming so a snapshot hook can capture the full history.
@@ -2675,10 +2794,8 @@ public class CodeAgentService
                 catch { /* best-effort */ }
             }
 
-            var outboundMessages = willCompact
-                ? MicrocompactNativeMessages(nativeMessages,
-                    _settingsService.Settings.MicrocompactKeepRecentTurns,
-                    _settingsService.Settings.MicrocompactMaxOldResultChars)
+            var outboundMessages = compactBoundary > 0
+                ? MicrocompactUpTo(nativeMessages, compactBoundary, _settingsService.Settings.MicrocompactMaxOldResultChars)
                 : nativeMessages;
 
             // Call API with native tools. Two fixes for the "feels frozen / no response" problems live here:
@@ -2816,6 +2933,8 @@ public class CodeAgentService
 
             _debugLog?.Info("Agent", $"step {iteration + 1}: stop={response.StopReason} toolCalls={response.ToolCalls.Count} "
                 + $"textLen={(response.TextContent ?? "").Length} in={response.InputTokens} out={response.OutputTokens}"
+                + (response.CacheReadTokens + response.CacheWriteTokens > 0 ? $" cacheR={response.CacheReadTokens} cacheW={response.CacheWriteTokens}" : "")
+                + (response.ToolSearches > 0 ? $" toolSearch={response.ToolSearches}" : "")
                 + (response.ToolCalls.Count > 0 ? $" [{string.Join(",", response.ToolCalls.Select(t => t.Name))}]" : ""));
 
             // Recorded from what the model ASKED for, not from what succeeded: a brain call
@@ -3817,7 +3936,16 @@ public class CodeAgentService
     /// </summary>
     /// <summary>Conversation size (tokens) above which old tool results are shrunk for an API model.
     /// Every API model CluadeX offers has a window of 128k tokens or more.</summary>
-    internal const int ApiCompactThresholdTokens = 90_000;
+    public const int ApiCompactThresholdTokens = 90_000;
+
+    /// <summary>Cut older tool images back to <paramref name="keep"/> only once more than keep + slack have piled up;
+    /// returns how many were replaced by their saved path (0 = the conversation was not touched). Public for the
+    /// contract harness.</summary>
+    public static int PruneToolImagesBatched(List<Services.Providers.NativeMessage> messages, int keep, int slack)
+        => Vision.ToolImageWire.CountImages(messages) > keep + Math.Clamp(slack, 0, 20)
+            ? Vision.ToolImageWire.KeepNewestImages(messages, keep)
+            : 0;
+
 
     /// <summary>Rough token count of a native conversation: characters / 4 over every block's text payload, plus
     /// ceil(w×h/750) per tool image — never its base64 length (a 1568-px screenshot is ~1,600 tokens, not the
@@ -3862,9 +3990,52 @@ public class CodeAgentService
     {
         if (messages.Count == 0) return messages;
         if (keepRecentTurns < 1) keepRecentTurns = 1;
+        return MicrocompactUpTo(messages, Math.Max(0, messages.Count - keepRecentTurns), maxOldResultChars);
+    }
+
+    /// <summary>
+    /// Where microcompact cuts for this step: the index of the first message sent verbatim (0 = nothing shortened).
+    /// API models: the cut stays where <paramref name="mark"/> put it until the conversation, already shortened up to
+    /// there, is still over <see cref="ApiCompactThresholdTokens"/>; only then it moves up to the last
+    /// <paramref name="keepRecent"/> messages. So the shortened prefix is byte-identical from step to step and the prompt
+    /// cache keeps hitting. Local models: it moves every step (their window is the limit). <paramref name="advanced"/>
+    /// = the cut moved this step (the PreCompact hook's moment). Public for the contract harness.
+    /// </summary>
+    public static int NextCompactBoundary(List<Services.Providers.NativeMessage> messages, Services.Providers.NativeMessage? mark,
+        bool enabled, bool isLocal, int keepRecent, int maxOldResultChars, out bool advanced)
+    {
+        advanced = false;
+        int boundary = CompactBoundaryOf(messages, mark);
+        if (!enabled || messages.Count <= 6) return boundary;
+        var shortened = boundary > 0 ? MicrocompactUpTo(messages, boundary, maxOldResultChars) : messages;
+        if (!isLocal && EstimateNativeTokens(shortened) <= ApiCompactThresholdTokens) return boundary;
+        int next = Math.Max(boundary, messages.Count - Math.Max(1, keepRecent));
+        advanced = next > boundary;
+        return next;
+    }
+
+    /// <summary>Index of the first message microcompact leaves verbatim, found by reference; 0 when there is no mark or
+    /// the list no longer holds it (it was rebuilt). Public for the contract harness.</summary>
+    public static int CompactBoundaryOf(List<Services.Providers.NativeMessage> messages, Services.Providers.NativeMessage? mark)
+    {
+        if (mark == null) return 0;
+        for (int i = 0; i < messages.Count; i++)
+            if (ReferenceEquals(messages[i], mark)) return i;
+        return 0;
+    }
+
+    /// <summary>A copy of <paramref name="messages"/> with every message before <paramref name="boundary"/> shortened
+    /// (old tool results capped, images and long timestamps stripped). Deterministic: the same boundary gives the
+    /// same bytes, which is what keeps the prompt-cache prefix stable. Public for the contract harness.</summary>
+    public static List<Services.Providers.NativeMessage> MicrocompactUpTo(
+        List<Services.Providers.NativeMessage> messages,
+        int boundary,
+        int maxOldResultChars)
+    {
+        if (messages.Count == 0) return messages;
         if (maxOldResultChars < 100) maxOldResultChars = 100;
 
-        int oldBoundary = Math.Max(0, messages.Count - keepRecentTurns);
+        int oldBoundary = Math.Clamp(boundary, 0, messages.Count);
         var result = new List<Services.Providers.NativeMessage>(messages.Count);
 
         for (int i = 0; i < messages.Count; i++)

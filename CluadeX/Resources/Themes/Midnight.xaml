@@ -2,6 +2,11 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
+    <!-- Slim, arrow-less scroll bars (Classic keeps its XP bars) -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="/CluadeX;component/Resources/Themes/ModernScrollBars.xaml"/>
+    </ResourceDictionary.MergedDictionaries>
+
     <!--
         ═══════════════════════════════════════════════════════════════════════════════════════════════
         THEME: Midnight — the CluadeX look as it was before themes existed (neon on navy). DEFAULT.
@@ -548,6 +553,9 @@
     <SolidColorBrush x:Key="Syntax.Number" Color="#FFC66D"/>
     <SolidColorBrush x:Key="Syntax.Preprocessor" Color="#FF5EC4"/>
     <SolidColorBrush x:Key="Syntax.Comment" Color="#7E8AA8"/>
+    <SolidColorBrush x:Key="Syntax.Function" Color="#ECEF9A"/>
+    <SolidColorBrush x:Key="Syntax.Control" Color="#FFB0F0"/>
+    <SolidColorBrush x:Key="Syntax.Variable" Color="#86B0FF"/>
 
     <!-- Shadows and glows -->
     <DropShadowEffect x:Key="Shadow.Card" BlurRadius="16" ShadowDepth="4" Direction="270" Color="#0A0A14" Opacity="0.6"/>
@@ -558,6 +566,211 @@
     <DropShadowEffect x:Key="Glow.Accent.2" Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
     <DropShadowEffect x:Key="Glow.Accent.3" Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
     <DropShadowEffect x:Key="Glow.Success" Color="#5CFFB0" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+
+    <!-- Chat + code editor (team A): one-off colours of the chat transcript, the compaction toast and the code
+         workbench that no shared token matched within 8/255. Values = the hard-coded colours they replaced. -->
+    <SolidColorBrush x:Key="Accent.1.Tint.Faint" Color="#144CDFFF"/>
+    <SolidColorBrush x:Key="Accent.1.Border.Soft" Color="#444CDFFF"/>
+    <SolidColorBrush x:Key="Accent.2.Hover" Color="#C78AFF"/>
+    <SolidColorBrush x:Key="State.Hover.Danger" Color="#33FF6E6E"/>
+    <SolidColorBrush x:Key="Banner.Warning.Background" Color="#F9E2AF" Opacity="0.1"/>
+    <SolidColorBrush x:Key="Banner.Danger.Background" Color="#70301028"/>
+    <SolidColorBrush x:Key="Button.Flat.Background" Color="#3328326E"/>
+    <SolidColorBrush x:Key="Button.Flat.Hover.Background" Color="#5528326E"/>
+    <SolidColorBrush x:Key="Button.Flat.Foreground" Color="#E8ECFF"/>
+    <SolidColorBrush x:Key="Button.Success.Background" Color="#5528A06E"/>
+    <SolidColorBrush x:Key="Button.Danger.Solid.Background" Color="#66C2185B"/>
+    <SolidColorBrush x:Key="Chat.Permission.Background" Color="#20F9E2AF"/>
+    <SolidColorBrush x:Key="Chat.Badge.Warning.Background" Color="#30F9E2AF"/>
+    <SolidColorBrush x:Key="Chat.Badge.Danger.Background" Color="#30F38BA8"/>
+    <SolidColorBrush x:Key="Chat.Diff.Added.Background" Color="#1A40A02B"/>
+    <SolidColorBrush x:Key="Chat.Diff.Removed.Background" Color="#1AF38BA8"/>
+    <SolidColorBrush x:Key="Chat.Diff.Hunk.Foreground" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="Editor.Diff.Added.Background" Color="#3A2ECC71"/>
+    <SolidColorBrush x:Key="Editor.Diff.Removed.Background" Color="#3AFF4D6D"/>
+    <SolidColorBrush x:Key="Completion.Kind.Lsp" Color="#7EE0A3"/>
+    <SolidColorBrush x:Key="Completion.Kind.Type" Color="#8AB8FF"/>
+    <SolidColorBrush x:Key="Completion.Kind.Method" Color="#FFD37E"/>
+    <SolidColorBrush x:Key="Completion.Kind.Keyword" Color="#C79AFF"/>
+    <SolidColorBrush x:Key="Completion.Kind.Other" Color="#8A8FB0"/>
+    <SolidColorBrush x:Key="Syntax.DocComment" Color="#808080"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Fill" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Stroke" Color="#818181"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Expanded.Fill" Color="#595959"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Expanded.Stroke" Color="#262626"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Fill" Color="#CCEEFB"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Stroke" Color="#27C7F7"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Expanded.Fill" Color="#82DFFB"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Expanded.Stroke" Color="#1CC4F7"/>
+    <DropShadowEffect x:Key="Glow.Toast.Info" Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
+    <DropShadowEffect x:Key="Glow.Toast.Warning" Color="#FFD166" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
+    <DropShadowEffect x:Key="Glow.Toast.Danger" Color="#FF6E6E" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+
+    <!-- ── Settings and the manager pages (Plugins, Skills, Sub-agents, Hook library, Instincts, Security shield,
+         Model manager, Features). Classic.xaml / NeonCyber.xaml carry these Midnight values until their theme team
+         paints them; Tokens.md names the general token each one is closest to in meaning. ── -->
+
+    <!-- Page chrome of the manager pages: header band, footer status strip, filter toolbar, the coloured wash behind
+         the page, the soft panel shadow, the glow on a hovered list card -->
+    <LinearGradientBrush x:Key="Page.Header.Background" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#7F141838" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Page.Footer.Background" Color="#88141838"/>
+    <SolidColorBrush x:Key="Page.Toolbar.Background" Color="#5511152E"/>
+    <!-- an opaque page background (MCP servers paints its own) -->
+    <SolidColorBrush x:Key="Page.Background" Color="#181825"/>
+    <RadialGradientBrush x:Key="Page.Wash.Accent.2" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22A672FF" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Wash.Accent.3" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22FF5EC4" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Wash.Success" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#225CFFB0" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Wash.Warning" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22FFD166" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Shadow.Panel.Soft" BlurRadius="30" ShadowDepth="0" Color="Black" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.Card.Hover" Color="#4CDFFF" BlurRadius="14" ShadowDepth="0" Opacity="0.35"/>
+
+    <!-- Icon tiles: the gradient squares with a glyph on the page headers, list cards and detail panes
+         (named by their accent pair, start-end), the glyph on them, and their glows -->
+    <LinearGradientBrush x:Key="IconTile.Accent.1-2" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.2-1" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#A672FF" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.4-2" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF8AA6" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.4-3" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF8AA6" Offset="0"/>
+        <GradientStop Color="#FF5EC4" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.1-Success" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#5CFFB0" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Success-Accent.1" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#5CFFB0" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Warning-Accent.3" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FFD166" Offset="0"/>
+        <GradientStop Color="#FF5EC4" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.3-Danger" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#FF6E6E" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="IconTile.Foreground" Color="White"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Accent.1" Color="#4CDFFF" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Accent.2" Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Accent.3" Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Success" Color="#5CFFB0" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Warning" Color="#FFD166" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Small.Accent.1" Color="#4CDFFF" BlurRadius="16" ShadowDepth="0" Opacity="0.4"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Small.Accent.3" Color="#FF5EC4" BlurRadius="16" ShadowDepth="0" Opacity="0.4"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Medium.Accent.1" Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Large.Success" Color="#5CFFB0" BlurRadius="26" ShadowDepth="0" Opacity="0.6"/>
+
+    <!-- Action buttons of the manager pages (the header / detail-pane buttons) and their three primary looks:
+         Primary (Plugins), Accent.3 (Security shield), Success (Instincts) -->
+    <SolidColorBrush x:Key="Button.Action.Background" Color="#7028326E"/>
+    <SolidColorBrush x:Key="Button.Action.Border" Color="#A0B4FF" Opacity="0.18"/>
+    <SolidColorBrush x:Key="Button.Action.Foreground" Color="#E8ECFF"/>
+    <SolidColorBrush x:Key="Button.Action.Hover.Background" Color="#B22E3870"/>
+    <SolidColorBrush x:Key="Button.Action.Hover.Border" Color="#4CDFFF"/>
+    <LinearGradientBrush x:Key="Button.Action.Primary.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#992C5A" Offset="0"/>
+        <GradientStop Color="#5A2A99" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Button.Action.Primary.Border" Color="#FF5EC4"/>
+    <SolidColorBrush x:Key="Button.Action.Primary.Foreground" Color="White"/>
+    <DropShadowEffect x:Key="Glow.Button.Action.Primary" Color="#FF5EC4" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+    <LinearGradientBrush x:Key="Button.Action.Accent.3.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.Button.Action.Accent.3" Color="#FF5EC4" BlurRadius="18" ShadowDepth="0" Opacity="0.5"/>
+    <LinearGradientBrush x:Key="Button.Action.Success.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#5CFFB0" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Button.Action.Success.Border" Color="#5CFFB0"/>
+    <SolidColorBrush x:Key="Button.Action.Success.Foreground" Color="#06071A"/>
+    <DropShadowEffect x:Key="Glow.Button.Action.Success" Color="#5CFFB0" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+
+    <!-- Settings: the category list on the left -->
+    <SolidColorBrush x:Key="SettingsNav.Foreground" Color="#C0C6EE"/>
+    <SolidColorBrush x:Key="SettingsNav.Hover.Background" Color="#1428326E"/>
+    <SolidColorBrush x:Key="SettingsNav.Selected.Background" Color="#2A4CDFFF"/>
+    <SolidColorBrush x:Key="SettingsNav.Selected.Foreground" Color="#E8ECFF"/>
+    <SolidColorBrush x:Key="SettingsNav.Indicator" Color="#4CDFFF"/>
+
+    <!-- Fills: a recessed well (filter box, switch track), fainter tints, a neutral (offline) chip, a caution tint -->
+    <SolidColorBrush x:Key="Surface.Inset" Color="#22000000"/>
+    <SolidColorBrush x:Key="Status.Success.Tint.Faint" Color="#1A5CFFB0"/>
+    <SolidColorBrush x:Key="Status.Neutral.Tint" Color="#1A8388BD"/>
+    <SolidColorBrush x:Key="Status.Neutral.Border" Color="#558388BD"/>
+    <SolidColorBrush x:Key="Status.Caution.Tint" Color="#44FAB387"/>
+
+    <!-- Features › activation: the tier badge of an activated key -->
+    <LinearGradientBrush x:Key="License.Tier.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#A6E3A1" Offset="0"/>
+        <GradientStop Color="#94E2D5" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="License.Tier.Foreground" Color="#1E1E2E"/>
+
+    <!-- Model manager: quantization / size / installed badges and the hardware-fit tiers of a catalogue card -->
+    <SolidColorBrush x:Key="Badge.Quant.Background" Color="#CBA6F7" Opacity="0.15"/>
+    <SolidColorBrush x:Key="Badge.Size.Background" Color="#94E2D5" Opacity="0.15"/>
+    <SolidColorBrush x:Key="Badge.Installed.Background" Color="#A6E3A1" Opacity="0.15"/>
+    <SolidColorBrush x:Key="Fit.Excellent.Tint" Color="#A6E3A1" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.Good.Tint" Color="#94E2D5" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.Partial.Tint" Color="#F9E2AF" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.Poor.Tint" Color="#FAB387" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.TooLarge.Tint" Color="#F38BA8" Opacity="0.2"/>
+
+    <!-- Dark text on a solid status-coloured pill: MCP server state (running / stopped …) and the permission rule
+         action (allow / deny / ask) -->
+    <SolidColorBrush x:Key="Badge.Status.Foreground" Color="#06071A"/>
+    <SolidColorBrush x:Key="Badge.Rule.Foreground" Color="#0F1230"/>
+    <!-- Model manager star rating. It never had a colour, so Midnight keeps the system black it always showed
+         (dark on navy — a candidate to fix once the owner accepts a new golden) -->
+    <SolidColorBrush x:Key="Rating.Star" Color="Black"/>
+
+    <!-- "Plain" controls: buttons, toggles, a text box and list rows that used to get the WINDOWS (Aero2) template,
+         which paints its own greys and blues whatever the theme says (Settings › Show key, Model manager list/grid
+         switch, the Copy buttons, Hook library filter, Settings › memories list). They now have their own templates
+         of the same shape; Midnight keeps exactly the Windows colours it always showed. -->
+    <SolidColorBrush x:Key="Button.Plain.Background" Color="#DDDDDD"/>
+    <SolidColorBrush x:Key="Button.Plain.Border" Color="#707070"/>
+    <SolidColorBrush x:Key="Button.Plain.Foreground" Color="Black"/>
+    <SolidColorBrush x:Key="Button.Plain.Hover.Background" Color="#BEE6FD"/>
+    <SolidColorBrush x:Key="Button.Plain.Hover.Border" Color="#3C7FB1"/>
+    <SolidColorBrush x:Key="Button.Plain.Pressed.Background" Color="#C4E5F6"/>
+    <SolidColorBrush x:Key="Button.Plain.Pressed.Border" Color="#2C628B"/>
+    <SolidColorBrush x:Key="Button.Plain.Checked.Background" Color="#BCDDEE"/>
+    <SolidColorBrush x:Key="Button.Plain.Checked.Border" Color="#245A83"/>
+    <SolidColorBrush x:Key="Input.Plain.Hover.Border" Color="#7EB4EA"/>
+    <SolidColorBrush x:Key="Input.Plain.Focus.Border" Color="#569DE5"/>
+    <SolidColorBrush x:Key="ListRow.Hover.Background" Color="#1F26A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Hover.Border" Color="#A826A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Background" Color="#3D26A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Border" Color="#26A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Inactive.Background" Color="#3DDADADA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Inactive.Border" Color="#DADADA"/>
 
     <!-- ═════════════════════════════════════ 3. LEGACY PALETTE ═════════════════════════════════════ -->
     <!-- Moved here verbatim from Resources/Theme.xaml. Views still use these with StaticResource; the
@@ -794,5 +1007,252 @@
 
     <FontFamily x:Key="MainFont">Segoe UI, Arial</FontFamily>
     <FontFamily x:Key="MonoFont">Cascadia Code, Consolas, Courier New</FontFamily>
+
+    <!-- ══════ GROUP C ADDITIONS (tool pages, dialogs, preview, chat roles + markdown, diffs) ══════ -->
+    <!-- Tokens the remaining views and the C# colour code needed (Tokens.md › Group C additions). The values
+         are the exact colours those views hard-coded, so Midnight stays pixel-identical. -->
+
+    <!-- Dialogs (License, BrainX invite, DGX Spark, the code-built input dialog) -->
+    <LinearGradientBrush x:Key="Dialog.Background" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#FA171B42" Offset="0"/>
+        <GradientStop Color="#FA0A0C22" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Dialog.Background.Brainx" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#FA1D1442" Offset="0"/>
+        <GradientStop Color="#FA0A0C22" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Dialog.Background.Spark" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#FA132A1E" Offset="0"/>
+        <GradientStop Color="#FA0A0C22" Offset="0.55"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Dialog.Border" Color="#55A672FF"/>
+    <SolidColorBrush x:Key="Dialog.Border.Spark" Color="#5576D16B"/>
+    <DropShadowEffect x:Key="Shadow.Dialog" Color="Black" BlurRadius="30" ShadowDepth="0" Opacity="0.65"/>
+    <SolidColorBrush x:Key="Dialog.Card.Background" Color="#14FFFFFF"/>
+    <SolidColorBrush x:Key="Dialog.Card.Border" Color="#22FFFFFF"/>
+    <SolidColorBrush x:Key="Dialog.Input.Background" Color="#33000000"/>
+    <SolidColorBrush x:Key="Dialog.Input.Border" Color="#44A672FF"/>
+    <SolidColorBrush x:Key="Dialog.Input.Border.Spark" Color="#5576D16B"/>
+    <SolidColorBrush x:Key="Dialog.Simple.Background" Color="#1E1E2E"/>
+    <SolidColorBrush x:Key="Dialog.Simple.Field" Color="#181825"/>
+    <SolidColorBrush x:Key="Dialog.Simple.Border" Color="#313244"/>
+    <DropShadowEffect x:Key="Shadow.Dialog.Simple" Color="Black" BlurRadius="24" ShadowDepth="0" Opacity="0.55"/>
+    <LinearGradientBrush x:Key="License.Avatar.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5CA8" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.License.Avatar" Color="#FF5CA8" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
+    <SolidColorBrush x:Key="License.Plan.Best.Background" Color="#26A672FF"/>
+    <SolidColorBrush x:Key="Button.Caution.Background" Color="#44FAB387"/>
+    <DropShadowEffect x:Key="Glow.Brainx.Avatar" Color="#A672FF" BlurRadius="20" ShadowDepth="0" Opacity="0.7"/>
+    <LinearGradientBrush x:Key="Spark.Avatar.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#9BE26B" Offset="0"/>
+        <GradientStop Color="#3FA34D" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Spark.Avatar.Foreground" Color="#0B1A10"/>
+    <DropShadowEffect x:Key="Glow.Spark.Avatar" Color="#76D16B" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
+    <SolidColorBrush x:Key="Spark.Card.Active.Background" Color="#2276D16B"/>
+    <LinearGradientBrush x:Key="Spark.Campaign.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#33FFD166" Offset="0"/>
+        <GradientStop Color="#1476D16B" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Spark.Campaign.Border" Color="#88FFD166"/>
+
+    <!-- Tool pages (Debug Log, Hex Editor, Time Machine): backdrop, header strip, toolbars, the page icon tile -->
+    <RadialGradientBrush x:Key="Page.Backdrop.DebugLog" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22FF6E6E" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Backdrop.HexEditor" Center="0.5,0" RadiusX="0.7" RadiusY="0.6">
+        <GradientStop Color="#284CDFFF" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Backdrop.TimeMachine" Center="0.5,0" RadiusX="0.8" RadiusY="0.6">
+        <GradientStop Color="#33A672FF" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <SolidColorBrush x:Key="Page.Strip.Background" Color="#3311152E"/>
+    <SolidColorBrush x:Key="Page.StatusBar.Background" Color="#88141838"/>
+    <LinearGradientBrush x:Key="PageIcon.DebugLog.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF6E6E" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.PageIcon.DebugLog" Color="#FF6E6E" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <LinearGradientBrush x:Key="PageIcon.HexEditor.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.PageIcon.HexEditor" Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
+    <LinearGradientBrush x:Key="PageIcon.TimeMachine.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <RadialGradientBrush x:Key="PageIcon.TimeMachine.Halo">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="0.5"/>
+        <GradientStop Color="Transparent" Offset="1"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Glow.PageIcon.TimeMachine" Color="#FF5EC4" BlurRadius="20" ShadowDepth="0" Opacity="0.6"/>
+
+    <!-- Buttons of the tool pages: glass (neutral), ghost (toolbar pill), accent (the magenta call to action) -->
+    <SolidColorBrush x:Key="Button.Glass.Background" Color="#7028326E"/>
+    <SolidColorBrush x:Key="Button.Glass.Hover.Background" Color="#B22E3870"/>
+    <SolidColorBrush x:Key="Button.Glass.Border" Color="#A0B4FF" Opacity="0.18"/>
+    <SolidColorBrush x:Key="Button.Glass.Hover.Border" Color="#4CDFFF"/>
+    <SolidColorBrush x:Key="Button.Glass.Foreground" Color="#E8ECFF"/>
+    <SolidColorBrush x:Key="Button.Ghost.Background" Color="#2228326E"/>
+    <SolidColorBrush x:Key="Button.Ghost.Hover.Background" Color="#4428326E"/>
+    <LinearGradientBrush x:Key="Button.Accent.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#992C5A" Offset="0"/>
+        <GradientStop Color="#5A2A99" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Button.Accent.Hover.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#B7367A" Offset="0"/>
+        <GradientStop Color="#7036C2" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Button.Accent.Border" Color="#FF5EC4"/>
+    <SolidColorBrush x:Key="Button.Accent.Foreground" Color="White"/>
+    <DropShadowEffect x:Key="Glow.Button.Accent" Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.45"/>
+
+    <!-- Lists, chips, scrims -->
+    <SolidColorBrush x:Key="List.Row.Background" Color="#0AFFFFFF"/>
+    <SolidColorBrush x:Key="List.Row.Selected.Background" Color="#30A672FF"/>
+    <LinearGradientBrush x:Key="List.Header.Divider" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#F2F2F2" Offset="0"/>
+        <GradientStop Color="#D5D5D5" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Surface.Badge.Subtle" Color="#15FFFFFF"/>
+    <SolidColorBrush x:Key="Text.OnStatus" Color="#06071A"/>
+    <SolidColorBrush x:Key="Accent.2.Border.Strong" Color="#66A672FF"/>
+    <SolidColorBrush x:Key="Bg.Scrim.Dialog" Color="#B2060718"/>
+    <SolidColorBrush x:Key="Bg.Scrim.Busy" Color="#D9060718"/>
+
+    <!-- Diffs (Time Machine diff lines), git status (source control list), commit avatars -->
+    <SolidColorBrush x:Key="Diff.Added" Color="#5CFFB0"/>
+    <SolidColorBrush x:Key="Diff.Deleted" Color="#FF6E6E"/>
+    <SolidColorBrush x:Key="Diff.Hunk" Color="#A672FF"/>
+    <SolidColorBrush x:Key="Diff.Context" Color="#C0C6EE"/>
+    <SolidColorBrush x:Key="Diff.Added.Background" Color="#245CFFB0"/>
+    <SolidColorBrush x:Key="Diff.Deleted.Background" Color="#24FF6E6E"/>
+    <SolidColorBrush x:Key="Diff.Hunk.Background" Color="#20A672FF"/>
+    <SolidColorBrush x:Key="Git.Added" Color="#7EE0A3"/>
+    <SolidColorBrush x:Key="Git.Deleted" Color="#FF7A93"/>
+    <SolidColorBrush x:Key="Git.Renamed" Color="#8AB8FF"/>
+    <SolidColorBrush x:Key="Git.Modified" Color="#FFD37E"/>
+    <LinearGradientBrush x:Key="Avatar.Ai" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#A672FF" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Avatar.Human" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#5CFFB0" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Chat message roles (RoleToBrush / RoleToBackground converters) -->
+    <SolidColorBrush x:Key="Role.User" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="Role.Assistant" Color="#A6E3A1"/>
+    <SolidColorBrush x:Key="Role.Exec" Color="#F9E2AF"/>
+    <SolidColorBrush x:Key="Role.Tool" Color="#94E2D5"/>
+    <SolidColorBrush x:Key="Role.System" Color="#CBA6F7"/>
+    <SolidColorBrush x:Key="Role.Status" Color="#9C9CAC"/>
+    <SolidColorBrush x:Key="Role.Default" Color="#CDD6F4"/>
+    <SolidColorBrush x:Key="Role.User.Background" Color="#2F3D5C"/>
+    <SolidColorBrush x:Key="Role.Assistant.Background" Color="#313244"/>
+    <SolidColorBrush x:Key="Role.Exec.Background" Color="#3A3530"/>
+    <SolidColorBrush x:Key="Role.Tool.Background" Color="#2D3A3E"/>
+    <SolidColorBrush x:Key="Role.Status.Background" Color="#1E1E2E"/>
+
+    <!-- Chat markdown (Helpers/MarkdownHelper): text, headings, quotes, tables, code blocks and their syntax colours -->
+    <SolidColorBrush x:Key="Markdown.Text" Color="#CDD6F4"/>
+    <SolidColorBrush x:Key="Markdown.Muted" Color="#6C7086"/>
+    <SolidColorBrush x:Key="Markdown.Heading" Color="#CBA6F7"/>
+    <SolidColorBrush x:Key="Markdown.Heading.Minor" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="Markdown.Emphasis" Color="#F5E0DC"/>
+    <SolidColorBrush x:Key="Markdown.Link" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="Markdown.Rule" Color="#45475A"/>
+    <SolidColorBrush x:Key="Markdown.Quote.Background" Color="#18CBA6F7"/>
+    <SolidColorBrush x:Key="Markdown.Quote.Border" Color="#CBA6F7"/>
+    <SolidColorBrush x:Key="Markdown.Code" Color="#94E2D5"/>
+    <SolidColorBrush x:Key="Markdown.Code.Background" Color="#313244"/>
+    <SolidColorBrush x:Key="Markdown.Border" Color="#313244"/>
+    <SolidColorBrush x:Key="Markdown.CodeBlock.Background" Color="#11111B"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Added" Color="#A6E3A1"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Added.Background" Color="#30A6E3A1"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Deleted" Color="#F38BA8"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Deleted.Background" Color="#30F38BA8"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Hunk" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Text" Color="#CDD6F4"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Comment" Color="#6C7086"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.String" Color="#A6E3A1"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Number" Color="#FAB387"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Keyword" Color="#CBA6F7"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Type" Color="#F9E2AF"/>
+
+    <!-- Time Machine: commit spheres, the timeline spine, the rewind beam and overlay -->
+    <RadialGradientBrush x:Key="TimeMachine.Halo.Ai">
+        <GradientStop Color="#A672FF" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="0.7"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="TimeMachine.Halo.Human">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="0.7"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="TimeMachine.Sphere.Ai" Center="0.28,0.28" RadiusX="0.75" RadiusY="0.75">
+        <GradientStop Color="#FFFFFF" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="0.4"/>
+        <GradientStop Color="#4F2A8C" Offset="1"/>
+    </RadialGradientBrush>
+    <SolidColorBrush x:Key="TimeMachine.Sphere.Ai.Stroke" Color="#7E4DCE"/>
+    <RadialGradientBrush x:Key="TimeMachine.Sphere.Human" Center="0.28,0.28" RadiusX="0.75" RadiusY="0.75">
+        <GradientStop Color="#FFFFFF" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="0.4"/>
+        <GradientStop Color="#1D6E8C" Offset="1"/>
+    </RadialGradientBrush>
+    <SolidColorBrush x:Key="TimeMachine.Sphere.Human.Stroke" Color="#286E94"/>
+    <SolidColorBrush x:Key="TimeMachine.Highlight" Color="#80FFFFFF"/>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Head" Color="#5CFFB0" BlurRadius="14" ShadowDepth="0" Opacity="0.8"/>
+    <LinearGradientBrush x:Key="TimeMachine.Spine" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="0.4"/>
+        <GradientStop Color="#FF5EC4" Offset="0.75"/>
+        <GradientStop Color="#5CFFB0" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="TimeMachine.Beam" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="Transparent" Offset="0"/>
+        <GradientStop Color="#FF5EC4" Offset="0.4"/>
+        <GradientStop Color="#4CDFFF" Offset="0.5"/>
+        <GradientStop Color="#FF5EC4" Offset="0.6"/>
+        <GradientStop Color="Transparent" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Beam" Color="#FF5EC4" BlurRadius="40" ShadowDepth="0" Opacity="0.9"/>
+    <RadialGradientBrush x:Key="TimeMachine.CornerGlow">
+        <GradientStop Color="#3CFF5EC4" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="0.6"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Avatar" Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Rewind" Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.Accent.3.Small" Color="#FF5EC4" BlurRadius="10" ShadowDepth="0" Opacity="0.8"/>
+    <RadialGradientBrush x:Key="TimeMachine.Rewind.Orb">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Rewind.Orb" Color="#FF5EC4" BlurRadius="44" ShadowDepth="0" Opacity="0.9"/>
+    <LinearGradientBrush x:Key="TimeMachine.Rewind.Title" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Preview pane (built-in browser): toolbar, origin badges, the web-page canvas -->
+    <SolidColorBrush x:Key="Preview.Toolbar.Background" Color="#8C0A0C22"/>
+    <SolidColorBrush x:Key="Preview.Badge.Local.Background" Color="#332ECC71"/>
+    <SolidColorBrush x:Key="Preview.Badge.External.Background" Color="#55FF8A3D"/>
+    <SolidColorBrush x:Key="Preview.Driving.Background" Color="#33FFB020"/>
+    <SolidColorBrush x:Key="Preview.Page.Button.Background" Color="#3328326E"/>
+    <SolidColorBrush x:Key="Preview.Page.Button.Hover.Background" Color="#5528326E"/>
+    <SolidColorBrush x:Key="Preview.Page.Background" Color="White"/>
+    <SolidColorBrush x:Key="Preview.Page.Foreground" Color="#30344A"/>
+    <SolidColorBrush x:Key="Preview.Page.Muted" Color="#60657A"/>
+    <SolidColorBrush x:Key="Preview.Page.Icon" Color="#9098B0"/>
+    <!-- ══════ END GROUP C ADDITIONS ══════ -->
 
 </ResourceDictionary>

@@ -310,8 +310,14 @@ internal static class ImageWire
             {
                 string golden = File.Exists(ImageWireGolden.GoldenPath(fixtures, model)) ? File.ReadAllText(ImageWireGolden.GoldenPath(fixtures, model)) : null;
                 string now = await ImageWireGolden.CaptureAsync(svc, am, model);
-                Check("wire", $"Anthropic {model}: no-image body byte-identical to the golden from before images",
-                    golden != null && now == golden, golden == null ? "golden missing" : FirstDiff(golden, now));
+                // The conversation cache breakpoints (2026-10-10, PromptCacheReuse checks them) are a deliberate wire
+                // change, and so is the system prefix's 1-hour TTL (same day, ToolSearchWire); images must not change
+                // anything else, so both sides are compared without cache_control.
+                static string NoCache(string? s) => (s ?? "")
+                    .Replace(",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}", "")
+                    .Replace(",\"cache_control\":{\"type\":\"ephemeral\"}", "");
+                Check("wire", $"Anthropic {model}: no-image body byte-identical to the golden from before images (cache breakpoints aside)",
+                    golden != null && NoCache(now) == NoCache(golden), golden == null ? "golden missing" : FirstDiff(NoCache(golden), NoCache(now)));
             }
 
             ImageWireGolden.Pin(svc.Settings, "claude-opus-5-5", am.Root);
@@ -788,6 +794,7 @@ internal static class ImageWire
             s.BrainAutoRecallEnabled = false;
             s.EscalationEnabled = false;
             s.KeepRecentImages = 2;
+            s.ImagePruneSlack = 0;   // these checks pin the per-step cut; the batched cut (slack 3) has its own section
             s.MaxAgentIterations = 12;
             s.ExtendedThinkingEnabled = false;
             s.LocalNativeToolUseEnabled = true;
@@ -1140,6 +1147,114 @@ internal static class ImageWire
             Check("loop", "deleting a chat deletes its saved screenshots (control: another chat's and a non-screenshot file stay)",
                 before >= 4 && after == 0 && File.Exists(foreign) && File.Exists(freshShot), $"{before} → {after} jpg · foreign {(File.Exists(foreign) ? "kept" : "GONE")} · other chat {(File.Exists(freshShot) ? "kept" : "GONE")}");
 
+            // ── sub-agents: agent_spawn runs real sub-agents, several at once (CodeAgentService.SubAgents.cs) ──
+            await providers.SwitchProviderAsync(AiProviderType.Anthropic);   // the sections above ended on Ollama
+            Check("subagent", "switched back to the mocked Anthropic", providers.ActiveProvider is AnthropicProvider, providers.ActiveProvider?.ProviderId);
+            fs.WorkingDirectory = project;
+            File.WriteAllText(Path.Combine(project, "a.txt"), "ALPHA-CONTENT " + new string('x', 3000));
+            var subCalls = new System.Collections.Concurrent.ConcurrentQueue<(string Id, int Msgs, long Ms, string Tools)>();
+            var clock = Stopwatch.StartNew();
+            anth.Responder = body =>
+            {
+                using var d = JsonDocument.Parse(body);
+                var root = d.RootElement;
+                string sys = root.TryGetProperty("system", out var sy) && sy.ValueKind == JsonValueKind.Array
+                    ? string.Concat(sy.EnumerateArray().Select(x => Str(x, "text"))) : "";
+                var msgs = root.GetProperty("messages");
+                if (sys.Contains("You are a sub-agent of CluadeX"))
+                {
+                    string first = msgs[0].GetProperty("content").ValueKind == JsonValueKind.Array
+                        ? string.Concat(msgs[0].GetProperty("content").EnumerateArray().Select(x => Str(x, "text"))) : msgs[0].GetProperty("content").GetString() ?? "";
+                    string id = first.Contains("TASK-A") ? "A" : first.Contains("TASK-B") ? "B" : "?";
+                    string tools = string.Join(",", root.GetProperty("tools").EnumerateArray().Select(t => Str(t, "name")));
+                    subCalls.Enqueue((id, msgs.GetArrayLength(), clock.ElapsedMilliseconds, tools));
+                    if (msgs.GetArrayLength() == 1)
+                    {
+                        Thread.Sleep(500);   // a slow first step: run one after the other, B could not start before A finished
+                        return (200, "text/event-stream", ToolUseSse("toolu_s" + id, "read_file", "{\"path\":\"a.txt\"}"));
+                    }
+                    return (200, "text/event-stream", TextSse("REPORT-" + id + (body.Contains("ALPHA-CONTENT") ? " saw-alpha" : " blind")));
+                }
+                return body.Contains("REPORT-A") && body.Contains("REPORT-B")
+                    ? (200, "text/event-stream", TextSse("MAIN-DONE"))
+                    : (200, "text/event-stream", MultiToolUseSse(("toolu_m1", "agent_spawn", "{\"task\":\"TASK-A: read a.txt and report\"}"),
+                                                                 ("toolu_m2", "agent_spawn", "{\"task\":\"TASK-B: read a.txt and report\",\"type\":\"explore\"}")));
+            };
+            int subStart = anth.Count;
+            agent.InvalidateSystemPromptCache();
+            // The prompt names no file: a prompt that names one gets that file attached to the main conversation up front.
+            var subRes = await Turn(new List<ChatMessage>(), "Investigate the project with two sub-agents.");
+            var subBodies = anth.Bodies().Skip(subStart).ToList();
+            var mainBodies = subBodies.Where(b => !b.Contains("You are a sub-agent of CluadeX")).ToList();
+            var calls = subCalls.ToList();
+            Check("subagent", "agent_spawn ran two real sub-agents; their reports came back to the main agent, which answered",
+                subRes.Success && subRes.FinalResponse == "MAIN-DONE" && mainBodies.Count >= 2
+                && mainBodies[^1].Contains("REPORT-A saw-alpha") && mainBodies[^1].Contains("REPORT-B saw-alpha"),
+                $"final={subRes.FinalResponse} main requests={mainBodies.Count} sub requests={calls.Count}");
+            long aSecond = calls.Where(c => c.Id == "A" && c.Msgs > 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
+            long bSecond = calls.Where(c => c.Id == "B" && c.Msgs > 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
+            long aFirst = calls.Where(c => c.Id == "A" && c.Msgs == 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
+            long bFirst = calls.Where(c => c.Id == "B" && c.Msgs == 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
+            Check("subagent", "the two sub-agents ran at the same time (each started before the other's second step)",
+                aFirst < bSecond && bFirst < aSecond, $"A first {aFirst} ms / second {aSecond} ms · B first {bFirst} ms / second {bSecond} ms");
+            string subToolList = calls.FirstOrDefault().Tools ?? "";
+            Check("subagent", "an explore sub-agent gets read tools only: read_file yes; agent_spawn, write_file, run_command, git_push no",
+                subToolList.Contains("read_file") && !subToolList.Split(',').Any(t => t is "agent_spawn" or "write_file" or "run_command" or "git_push" or "edit_file"),
+                Trunc(subToolList, 200));
+            string leak = mainBodies.Select((b, i) => (b, i)).Where(x => x.b.Contains("ALPHA-CONTENT"))
+                .Select(x => $"main request {x.i}: …{x.b.Substring(Math.Max(0, x.b.IndexOf("ALPHA-CONTENT") - 160), 200)}…").FirstOrDefault() ?? "";
+            Check("subagent", "the file the sub-agents read never entered the main conversation (only their reports did)",
+                leak.Length == 0, Trunc(leak, 400));
+            var general = CodeAgentService.SubAgentTools(ats.BuildNativeToolSchemas(), "general").Select(t => t.Name).ToHashSet();
+            Check("subagent", "a general sub-agent may edit (write_file, edit_file) but never commits, pushes, asks the user or spawns",
+                general.Contains("write_file") && general.Contains("edit_file") && !general.Overlaps(new[] { "git_commit", "git_push", "ask_user", "agent_spawn" }),
+                $"{general.Count} tools");
+
+            // subagent_invoke: a specialist runs as its own sub-agent too (it used to swap its persona into the main
+            // agent and latch the main agent's tools to its own list).
+            string? specialistTools = null, specialistSys = null;
+            anth.Responder = body =>
+            {
+                using var d = JsonDocument.Parse(body);
+                var root = d.RootElement;
+                string sys = root.TryGetProperty("system", out var sy) && sy.ValueKind == JsonValueKind.Array
+                    ? string.Concat(sy.EnumerateArray().Select(x => Str(x, "text"))) : "";
+                if (sys.Contains("You are a sub-agent of CluadeX"))
+                {
+                    specialistSys = sys;
+                    specialistTools = string.Join(",", root.GetProperty("tools").EnumerateArray().Select(t => Str(t, "name")));
+                    return root.GetProperty("messages").GetArrayLength() == 1
+                        ? (200, "text/event-stream", ToolUseSse("toolu_c1", "read_file", "{\"path\":\"a.txt\"}"))
+                        : (200, "text/event-stream", TextSse("REPORT-C " + (body.Contains("ALPHA-CONTENT") ? "saw-alpha" : "blind")));
+                }
+                return body.Contains("REPORT-C")
+                    ? (200, "text/event-stream", TextSse("MAIN-DONE"))
+                    : (200, "text/event-stream", ToolUseSse("toolu_m3", "subagent_invoke", "{\"type\":\"code-reviewer\",\"prompt\":\"TASK-C: review the project\"}"));
+            };
+            int invokeStart = anth.Count;
+            agent.InvalidateSystemPromptCache();
+            var invokeRes = await Turn(new List<ChatMessage>(), "Review the project with the code-reviewer specialist.");
+            var invokeMain = anth.Bodies().Skip(invokeStart).Where(b => !b.Contains("You are a sub-agent of CluadeX")).ToList();
+            Check("subagent", "subagent_invoke runs the specialist as a real sub-agent: its persona, its report back to the main agent",
+                invokeRes.FinalResponse == "MAIN-DONE" && invokeMain.Count >= 2 && invokeMain[^1].Contains("Report from code-reviewer")
+                && invokeMain[^1].Contains("REPORT-C saw-alpha") && (specialistSys ?? "").Contains("Your role: code-reviewer"),
+                $"final={invokeRes.FinalResponse} main={invokeMain.Count}");
+            var specSet = (specialistTools ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+            Check("subagent", "the specialist gets exactly its allowed tools (read_file, grep → grep_search, glob, git_diff, git_log), nothing else",
+                specSet.Contains("read_file") && specSet.Contains("grep_search") && specSet.Contains("glob") && specSet.Contains("git_diff")
+                && specSet.Contains("git_log") && specSet.Count == 5, specialistTools ?? "(no sub-agent request)");
+            Check("subagent", "the main agent's tools are not latched to the specialist's list afterwards", ats.ActiveSkillAllowedTools == null,
+                ats.ActiveSkillAllowedTools == null ? "" : string.Join(",", ats.ActiveSkillAllowedTools));
+
+            // ── tool images are cut back in batches, not on every new screenshot ──
+            NativeMessage ImageTurn(int i) => new() { Role = "user", Content = { new ContentBlock { Type = "tool_result", ToolUseId = "img" + i, Content = "[image 1 attached]", Images = [new ToolImage("image/jpeg", b64, 320, 160, $@"C:\s\{i}.jpg")] } } };
+            var imgs = Enumerable.Range(0, 5).Select(ImageTurn).ToList();
+            int under = CodeAgentService.PruneToolImagesBatched(imgs, 2, 3);
+            imgs.Add(ImageTurn(5));
+            int over = CodeAgentService.PruneToolImagesBatched(imgs, 2, 3);
+            Check("loop", "images: 5 with keep 2 + slack 3 → nothing touched; the 6th → one cut back to the newest 2",
+                under == 0 && over == 4 && ToolImageWire.CountImages(imgs) == 2, $"under={under} over={over} left={ToolImageWire.CountImages(imgs)}");
+
             Check("home", "the hooks stayed silenced for the whole section (nothing reloaded the owner's hooks)",
                 ReferenceEquals(hookCache.GetValue(hooks), silent) && silent.Count == 0, "");
         }
@@ -1263,6 +1378,15 @@ internal static class ImageWire
         "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":" + JsonSerializer.Serialize(inputJson) + "}}\n\n" +
         "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
         "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}\n\n" +
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+    /// <summary>A plain text answer (end_turn).</summary>
+    static string TextSse(string text) =>
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n" +
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":" + JsonSerializer.Serialize(text) + "}}\n\n" +
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n" +
         "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
     /// <summary>Several tool_use blocks in one assistant turn (parallel tool calls).</summary>

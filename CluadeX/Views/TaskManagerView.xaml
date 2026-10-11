@@ -5,35 +5,6 @@
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
-        <!-- ── Neon retheme — local override of Catppuccin keys ── -->
-        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
-        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
-        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
-        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
-        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
-        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
-        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
-        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
-        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
-        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
-        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
-        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
-        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>
-        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
-        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
-        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
-        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>
-        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
-        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
-        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
-        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
-
         <!-- Status badge style -->
         <Style x:Key="StatusBadge" TargetType="Border">
             <Setter Property="CornerRadius" Value="8"/>
@@ -44,7 +15,7 @@
         <vm:TaskKindLabelConverter x:Key="TaskKindLabel"/>
     </UserControl.Resources>
 
-    <Grid Background="{StaticResource BaseBrush}">
+    <Grid Background="{DynamicResource Bg.Elevated}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -61,10 +32,10 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="{services:Loc tasks.title}" FontSize="24" FontWeight="Bold"
-                               Foreground="{StaticResource TextBrush}"
-                               FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
+                               Foreground="{DynamicResource Text.Primary}"
+                               FontFamily="{DynamicResource Font.Ui.Display}" Margin="0,0,0,4"/>
                     <TextBlock Text="{services:Loc tasks.subtitle}"
-                               Foreground="{StaticResource Subtext0Brush}" FontSize="13"/>
+                               Foreground="{DynamicResource Text.Secondary}" FontSize="13"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- Asks first: the agent's dev servers are in this list too. -->
@@ -80,34 +51,26 @@
         </Border>
 
         <!-- ═══════ TASK LIST ═══════ -->
-        <Border Grid.Row="1" Margin="24,8,24,8" Background="{StaticResource Surface0Brush}"
+        <Border Grid.Row="1" Margin="24,8,24,8" Background="{DynamicResource Surface.Sunken}"
                 CornerRadius="8" Padding="0">
             <ListView ItemsSource="{Binding Tasks}"
                       SelectedItem="{Binding SelectedTask}"
                       Background="Transparent" BorderThickness="0"
-                      Foreground="{StaticResource TextBrush}"
+                      Foreground="{DynamicResource Text.Primary}"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-
-                <ListView.Resources>
-                    <!-- Remove default selection highlight -->
-                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#45475A"/>
-                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#313244"/>
-                    <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#CDD6F4"/>
-                    <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#CDD6F4"/>
-                </ListView.Resources>
 
                 <ListView.View>
                     <GridView>
                         <GridView.ColumnHeaderContainerStyle>
                             <Style TargetType="GridViewColumnHeader">
-                                <Setter Property="Background" Value="{StaticResource Surface0Brush}"/>
-                                <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
-                                <Setter Property="FontFamily" Value="{StaticResource MainFont}"/>
+                                <Setter Property="Background" Value="{DynamicResource Surface.Sunken}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                <Setter Property="FontFamily" Value="{DynamicResource Font.Ui.Display}"/>
                                 <Setter Property="FontSize" Value="11"/>
                                 <Setter Property="FontWeight" Value="Bold"/>
                                 <Setter Property="Padding" Value="12,8"/>
                                 <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                <Setter Property="BorderBrush" Value="{StaticResource Surface1Brush}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource Surface.Raised}"/>
                                 <Setter Property="HorizontalContentAlignment" Value="Left"/>
                             </Style>
                         </GridView.ColumnHeaderContainerStyle>
@@ -116,8 +79,8 @@
                         <GridViewColumn Header="ID" Width="50">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding Id}" Foreground="{StaticResource Overlay0Brush}"
-                                               FontFamily="{StaticResource MonoFont}" FontSize="12"
+                                    <TextBlock Text="{Binding Id}" Foreground="{DynamicResource Text.Muted}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                                Margin="4,2"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
@@ -127,8 +90,8 @@
                         <GridViewColumn Header="{services:Loc tasks.colName}" Width="160">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}" FontSize="12"
+                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource Text.Primary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}" FontSize="12"
                                                ToolTip="{Binding Cwd}"
                                                TextTrimming="CharacterEllipsis" Margin="4,2"/>
                                 </DataTemplate>
@@ -145,40 +108,40 @@
                                                 <Setter Property="CornerRadius" Value="8"/>
                                                 <Setter Property="Padding" Value="8,3"/>
                                                 <Setter Property="HorizontalAlignment" Value="Left"/>
-                                                <Setter Property="Background" Value="{StaticResource Overlay0Brush}"/>
+                                                <Setter Property="Background" Value="{DynamicResource Text.Muted}"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding Status}" Value="running">
-                                                        <Setter Property="Background" Value="{StaticResource GreenBrush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding Status}" Value="completed">
-                                                        <Setter Property="Background" Value="{StaticResource BlueBrush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Accent.1}"/>
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding Status}" Value="failed">
-                                                        <Setter Property="Background" Value="{StaticResource RedBrush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding Status}" Value="stopped">
-                                                        <Setter Property="Background" Value="{StaticResource YellowBrush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
                                         <TextBlock Text="{Binding Status, Converter={StaticResource TaskStatusLabel}}" FontSize="11"
-                                                   FontFamily="{StaticResource MainFont}" FontWeight="SemiBold">
+                                                   FontFamily="{DynamicResource Font.Ui.Display}" FontWeight="SemiBold">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding Status}" Value="running">
-                                                            <Setter Property="Foreground" Value="{StaticResource CrustBrush}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Text.OnStatus}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Status}" Value="completed">
-                                                            <Setter Property="Foreground" Value="{StaticResource CrustBrush}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Text.OnStatus}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Status}" Value="failed">
-                                                            <Setter Property="Foreground" Value="{StaticResource CrustBrush}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Text.OnStatus}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Status}" Value="stopped">
-                                                            <Setter Property="Foreground" Value="{StaticResource CrustBrush}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Text.OnStatus}"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
@@ -194,8 +157,8 @@
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Kind, Converter={StaticResource TaskKindLabel}}"
-                                               Foreground="{StaticResource Subtext0Brush}"
-                                               FontFamily="{StaticResource MainFont}" FontSize="11"
+                                               Foreground="{DynamicResource Text.Secondary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}" FontSize="11"
                                                TextTrimming="CharacterEllipsis" Margin="4,2"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
@@ -205,8 +168,8 @@
                         <GridViewColumn Header="{services:Loc tasks.colPort}" Width="60">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding PortText}" Foreground="{StaticResource Subtext0Brush}"
-                                               FontFamily="{StaticResource MonoFont}" FontSize="11" Margin="4,2"/>
+                                    <TextBlock Text="{Binding PortText}" Foreground="{DynamicResource Text.Secondary}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11" Margin="4,2"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
@@ -215,11 +178,11 @@
                         <GridViewColumn Header="{services:Loc tasks.colUrl}" Width="200">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Margin="4,2" FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                    <TextBlock Margin="4,2" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                                                TextTrimming="CharacterEllipsis">
                                         <Hyperlink Command="{Binding DataContext.OpenUrlCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
                                                    CommandParameter="{Binding}"
-                                                   Foreground="{StaticResource BlueBrush}"
+                                                   Foreground="{DynamicResource Text.Link}"
                                                    ToolTip="{services:Loc tasks.openUrlTip}">
                                             <Run Text="{Binding Url, Mode=OneWay}"/>
                                         </Hyperlink>
@@ -232,8 +195,8 @@
                         <GridViewColumn Header="{services:Loc tasks.colExit}" Width="56">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding ExitCodeText}" Foreground="{StaticResource Overlay1Brush}"
-                                               FontFamily="{StaticResource MonoFont}" FontSize="11" Margin="4,2"/>
+                                    <TextBlock Text="{Binding ExitCodeText}" Foreground="{DynamicResource Text.Tertiary}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11" Margin="4,2"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
@@ -242,8 +205,8 @@
                         <GridViewColumn Header="{services:Loc tasks.colCommand}" Width="260">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding Command}" Foreground="{StaticResource Subtext0Brush}"
-                                               FontFamily="{StaticResource MonoFont}" FontSize="11"
+                                    <TextBlock Text="{Binding Command}" Foreground="{DynamicResource Text.Secondary}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                                                TextTrimming="CharacterEllipsis" Margin="4,2"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
@@ -285,7 +248,7 @@
         </Border>
 
         <!-- ═══════ NEW TASK FORM ═══════ -->
-        <Border Grid.Row="2" Margin="24,4,24,8" Background="{StaticResource Surface0Brush}"
+        <Border Grid.Row="2" Margin="24,4,24,8" Background="{DynamicResource Surface.Sunken}"
                 CornerRadius="8" Padding="16,12">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -319,17 +282,17 @@
 
                 <TextBlock Grid.Row="1" Grid.ColumnSpan="3" Margin="2,6,0,0" FontSize="11"
                            Text="{Binding WorkingDirectoryText}"
-                           Foreground="{StaticResource Overlay0Brush}" TextTrimming="CharacterEllipsis"/>
+                           Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
 
                 <!-- Why a start was refused / what Stop all did — empty most of the time. -->
                 <TextBlock Grid.Row="2" Grid.ColumnSpan="3" Margin="2,4,0,0" FontSize="11"
                            Text="{Binding StatusText}" TextWrapping="Wrap"
-                           Foreground="{StaticResource YellowBrush}"/>
+                           Foreground="{DynamicResource Status.Warning}"/>
             </Grid>
         </Border>
 
         <!-- ═══════ OUTPUT PANE ═══════ -->
-        <Border Grid.Row="3" Margin="24,0,24,16" Background="{StaticResource CrustBrush}"
+        <Border Grid.Row="3" Margin="24,0,24,16" Background="{DynamicResource Bg.Window}"
                 CornerRadius="8" Padding="2">
             <Grid>
                 <Grid.RowDefinitions>
@@ -338,14 +301,14 @@
                 </Grid.RowDefinitions>
 
                 <!-- Output header -->
-                <Border Grid.Row="0" Padding="12,8" Background="{StaticResource MantleBrush}"
+                <Border Grid.Row="0" Padding="12,8" Background="{DynamicResource Bg.Panel}"
                         CornerRadius="8,8,0,0">
-                    <TextBlock FontFamily="{StaticResource MainFont}" FontSize="12"
-                               Foreground="{StaticResource Subtext0Brush}">
+                    <TextBlock FontFamily="{DynamicResource Font.Ui.Display}" FontSize="12"
+                               Foreground="{DynamicResource Text.Secondary}">
                         <Run Text="{services:Loc tasks.output}"/>
                         <Run Text=" - "/>
                         <Run Text="{Binding SelectedTaskTitle, Mode=OneWay}"
-                             Foreground="{StaticResource TealBrush}"/>
+                             Foreground="{DynamicResource Accent.1}"/>
                     </TextBlock>
                 </Border>
 
@@ -356,14 +319,14 @@
                     <TextBox Text="{Binding SelectedTask.Output, Mode=OneWay, FallbackValue=''}"
                              IsReadOnly="True"
                              Background="Transparent"
-                             Foreground="{StaticResource TextBrush}"
-                             FontFamily="{StaticResource MonoFont}"
+                             Foreground="{DynamicResource Text.Primary}"
+                             FontFamily="{DynamicResource Font.Mono.Display}"
                              FontSize="12"
                              BorderThickness="0"
                              TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Disabled"
                              Padding="12,8"
-                             CaretBrush="{StaticResource TextBrush}"/>
+                             CaretBrush="{DynamicResource Text.Primary}"/>
                 </ScrollViewer>
             </Grid>
         </Border>

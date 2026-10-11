@@ -941,7 +941,7 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
     private OpenFileTab? _typingTab;
     private string _typingFinal = "";
 
-    private async void OnAgentFileMutated(string relPath, int firstLine)
+    private async void OnAgentFileMutated(string relPath, int firstLine, EditDiffResult? diff)
     {
         try
         {
@@ -969,8 +969,15 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
             {
                 Tabs.Add(loaded);
                 ActiveTab = loaded;
-                StatusMessage = T("ide.agentEdited", Path.GetFileName(full));
-                ScrollToLineRequested?.Invoke(firstLine);
+                // Not open before: the old text is gone, but the diff says which lines are new — show the file
+                // without them and type them in, as for an open tab.
+                if (!_settings.Settings.LiveCodingAnimationEnabled
+                    || AddedBlockOf(loaded.Content, diff, firstLine) is not { } before
+                    || !TryStartTypingReveal(loaded, before, loaded.Content))
+                {
+                    StatusMessage = T("ide.agentEdited", Path.GetFileName(full));
+                    ScrollToLineRequested?.Invoke(firstLine);
+                }
             }
             else
             {
@@ -1042,10 +1049,43 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Live-typing reveal: instantly remove the OLD changed region, then "type" the new region in
-    /// chunks (~1s total) so the agent's edit unfolds in the editor like a human typing, with the
-    /// view following the insertion point. Implemented as successive MarkOpened states — binding-
-    /// friendly and never marks the tab dirty. Returns false when the change doesn't animate well
+    /// <paramref name="text"/> without the first block of lines the diff marks as added (searched from
+    /// <paramref name="firstLine"/>), i.e. roughly the file before the edit — what a tab that was not open yet starts
+    /// from so the new lines can be typed in. Null when there is no such block or it cannot be found exactly.
+    /// </summary>
+    public static string? AddedBlockOf(string text, EditDiffResult? diff, int firstLine)
+    {
+        if (diff == null || text.Length == 0) return null;
+        var added = new List<string>();
+        foreach (var line in diff.Lines)
+        {
+            if (line.Kind == EditDiffKind.Add) added.Add(line.Text);
+            else if (added.Count > 0) break;   // the first contiguous run only
+        }
+        if (added.Count == 0) return null;
+
+        string nl = text.Contains("\r\n") ? "\r\n" : "\n";
+        string block = string.Join(nl, added);
+        int from = 0;
+        for (int line = 1; line < firstLine && from >= 0; line++)
+        {
+            from = text.IndexOf('\n', from);
+            if (from >= 0) from++;
+        }
+        if (from < 0) from = 0;
+        int at = text.IndexOf(block, from, StringComparison.Ordinal);
+        if (at < 0) at = text.IndexOf(block, StringComparison.Ordinal);
+        if (at < 0) return null;
+        int end = at + block.Length;
+        if (end + nl.Length <= text.Length && string.CompareOrdinal(text, end, nl, 0, nl.Length) == 0) end += nl.Length;
+        return text[..at] + text[end..];
+    }
+
+    /// <summary>
+    /// Live-typing reveal: instantly remove the OLD changed region, then "type" the new region so the agent's edit
+    /// unfolds in the editor like someone typing — about 900 characters a second, at least 0.6 s and at most 2.5 s
+    /// whatever the size — with the view following the insertion point. Implemented as successive MarkOpened
+    /// states — binding-friendly and never marks the tab dirty. Returns false when the change doesn't animate well
     /// (identical text, pure deletion, or a huge rewrite) — caller falls back to instant refresh.
     /// </summary>
     private bool TryStartTypingReveal(OpenFileTab tab, string oldText, string newText)
@@ -1063,7 +1103,7 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
 
         int insertLen = newText.Length - prefix - suffix;
         if (insertLen <= 0) return false;                // pure deletion — nothing to "type"
-        if (insertLen > 6000) return false;              // huge rewrite — instant is kinder
+        if (insertLen > 20_000) return false;            // huge rewrite — instant is kinder
 
         string head = newText[..prefix];
         string tail = newText[(prefix + insertLen)..];
@@ -1076,7 +1116,9 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
 
         int pos = 0;
         int tick = 0;
-        int chunk = Math.Max(4, insertLen / 56);         // ~56 frames ≈ 0.9s at 16ms/frame
+        double seconds = Math.Clamp(insertLen / 900.0, 0.6, 2.5);
+        int frames = Math.Max(1, (int)(seconds * 1000 / 16));
+        int chunk = Math.Max(1, (int)Math.Ceiling(insertLen / (double)frames));
 
         _typeTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
         {
@@ -2477,9 +2519,9 @@ public class GitChangeItem
     /// <summary>VS Code-style status color: modified=amber, added/untracked=green, deleted=red.</summary>
     public string StatusColor => Status switch
     {
-        "A" or "??" => "#7EE0A3",
-        "D" => "#FF7A93",
-        "R" => "#8AB8FF",
-        _ => "#FFD37E",
+        "A" or "??" => ThemeColors.Hex("Git.Added", "#7EE0A3"),
+        "D" => ThemeColors.Hex("Git.Deleted", "#FF7A93"),
+        "R" => ThemeColors.Hex("Git.Renamed", "#8AB8FF"),
+        _ => ThemeColors.Hex("Git.Modified", "#FFD37E"),
     };
 }

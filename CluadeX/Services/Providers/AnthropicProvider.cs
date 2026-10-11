@@ -8,7 +8,7 @@ using CluadeX.Models;
 
 namespace CluadeX.Services.Providers;
 
-public class AnthropicProvider : ApiProviderBase, IModelLister
+public partial class AnthropicProvider : ApiProviderBase, IModelLister
 {
     private readonly CostTrackingService? _costTracker;
 
@@ -42,6 +42,82 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
     // Thinking tokens count against max_tokens. The shared MaxTokens setting is sized for local models
     // (4096) and would cut a thinking model off mid-answer; streaming means a high cap costs nothing.
     private const int ThinkingMaxTokensFloor = 32000;
+
+    // Server-side tool search: deferred tools stay in the request (the API searches and expands them) but out of the
+    // model's context until it looks for them. The brain alone is 128 MCP tools, ~59k tokens a request.
+    public const string ToolSearchType = "tool_search_tool_bm25_20251119";
+    public const string ToolSearchName = "tool_search_tool_bm25";
+    /// <summary>Below this many deferrable tools the search step costs more than it saves.</summary>
+    public const int ToolSearchMinDeferred = 8;
+    /// <summary>The API refused tool search once (a proxy, an older deployment): send every tool up front from then on.</summary>
+    private bool _toolSearchRefused;
+
+    /// <summary>Models the tool search tool runs on: Opus/Sonnet/Haiku 4.5 and later, Fable and Mythos.</summary>
+    public static bool SupportsToolSearch(string? model)
+    {
+        var m = Regex.Match(model?.ToLowerInvariant() ?? "", @"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d)(?!\d))?");
+        if (!m.Success) return false;
+        if (m.Groups[1].Value is "fable" or "mythos") return true;
+        int v = int.Parse(m.Groups[2].Value) * 10 + (m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0);
+        return v >= 45;
+    }
+
+    /// <summary>Whether this request defers tools: enabled, a model that can search, Anthropic's own endpoint (a remote
+    /// proxy may not run server tools; a loopback one is a test double or a pass-through, and a refusal falls back
+    /// anyway), and enough deferrable tools to be worth a search. Public for the contract harness.</summary>
+    public static bool UseToolSearch(string model, string? baseUrl, bool enabled, IReadOnlyCollection<ToolSchema> tools)
+    {
+        if (!enabled || !SupportsToolSearch(model)) return false;
+        if (!string.IsNullOrWhiteSpace(baseUrl)
+            && !(Uri.TryCreate(baseUrl, UriKind.Absolute, out var u)
+                 && (u.IsLoopback || u.Host.EndsWith("anthropic.com", StringComparison.OrdinalIgnoreCase))))
+            return false;
+        return tools.Count(t => t.DeferLoading) >= ToolSearchMinDeferred;
+    }
+
+    /// <summary>The "tools" array: with search, the search tool first and the deferrable tools marked defer_loading
+    /// (except one a forced tool_choice names). Same order every step, so the cached prefix holds. Public for the harness.</summary>
+    public static List<Dictionary<string, object>> BuildToolDefs(IEnumerable<ToolSchema> tools, bool search, string? forcedTool = null)
+    {
+        var defs = new List<Dictionary<string, object>>();
+        if (search) defs.Add(new() { ["type"] = ToolSearchType, ["name"] = ToolSearchName });
+        foreach (var t in tools)
+        {
+            var d = new Dictionary<string, object>
+            {
+                ["name"] = t.Name,
+                ["description"] = t.Description,
+                ["input_schema"] = t.InputSchema,
+            };
+            if (search && t.DeferLoading && t.Name != forcedTool) d["defer_loading"] = true;
+            defs.Add(d);
+        }
+        return defs;
+    }
+
+    /// <summary>What the model is told about the tools it has to search for: their names, by server. Names only —
+    /// a few tokens each, against the full definitions they replace. Public for the harness.</summary>
+    public static string DeferredToolsNote(IEnumerable<ToolSchema> tools)
+    {
+        static string PrefixOf(string name)
+        {
+            if (!name.StartsWith("mcp__", StringComparison.Ordinal)) return "";
+            int e = name.IndexOf("__", 5, StringComparison.Ordinal);
+            return e > 5 ? name[..(e + 2)] : "";
+        }
+        var groups = tools.Where(t => t.DeferLoading).GroupBy(t => PrefixOf(t.Name)).OrderBy(g => g.Key, StringComparer.Ordinal);
+        var sb = new StringBuilder();
+        sb.AppendLine("# Tools loaded on demand");
+        sb.AppendLine($"These tools exist but are not loaded yet. To use one, first call {ToolSearchName} with a short description of what you need "
+            + "(e.g. \"open a browser tab\", \"brain create note\"); the tools it finds become callable by their full name. "
+            + "Search before telling the user a tool is missing.");
+        foreach (var g in groups)
+        {
+            var names = g.Select(t => g.Key.Length > 0 ? t.Name[g.Key.Length..] : t.Name);
+            sb.AppendLine(g.Key.Length > 0 ? $"- {g.Key}*: {string.Join(", ", names)}" : $"- {string.Join(", ", names)}");
+        }
+        return sb.ToString().TrimEnd();
+    }
 
     /// <summary>What a model's request surface accepts. Every Claude generation moved these — sampling
     /// removed (4.7+), adaptive thinking (4.6+), thinking that can't be switched off (Opus 5+, Fable,
@@ -342,19 +418,57 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
         return messages;
     }
 
-    private static object BuildSystem(string? systemPrompt, AppSettings settings)
+    /// <param name="hour">Cache the prefix (tools + system) for an hour instead of five minutes: an agent run waits on
+    /// approvals, builds and the browser, and every wait past five minutes used to re-write the whole prefix. The 1-hour
+    /// write costs 2x input once; it comes before the conversation's 5-minute breakpoints, as the API requires.</param>
+    private static object BuildSystem(string? systemPrompt, AppSettings settings, bool hour = false)
     {
         // Prompt caching is GA — cache_control needs no beta header.
         if (!settings.PromptCachingEnabled) return systemPrompt!;
+        var cache = new Dictionary<string, string> { ["type"] = "ephemeral" };
+        if (hour) cache["ttl"] = "1h";
         return new[]
         {
             new Dictionary<string, object>
             {
                 ["type"] = "text",
                 ["text"] = systemPrompt!,
-                ["cache_control"] = new Dictionary<string, string> { ["type"] = "ephemeral" },
+                ["cache_control"] = cache,
             },
         };
+    }
+
+    /// <summary>
+    /// Conversation cache breakpoints, as Claude Code places them: one on the last block of the last message (this
+    /// request's prefix is written to the cache) and one on the last block of the previous user turn (the prefix the
+    /// previous request wrote, read back). With only the system prompt marked, every agent step re-sent the whole
+    /// conversation as uncached input. With the system breakpoint that is 3 of the API's 4. Thinking blocks never take
+    /// cache_control; the nearest other block before them does. Public for the contract harness.
+    /// </summary>
+    public static void MarkConversationCache(List<Dictionary<string, object>> messages)
+    {
+        if (messages.Count == 0) return;
+        var ephemeral = new Dictionary<string, string> { ["type"] = "ephemeral" };
+        int marked = 0;
+        // The last message, then the user message before the last assistant one.
+        var targets = new List<int> { messages.Count - 1 };
+        for (int i = messages.Count - 2; i >= 0; i--)
+            if (Equals(messages[i]["role"], "user") && i < messages.Count - 1) { targets.Add(i); break; }
+        foreach (int idx in targets.Distinct())
+        {
+            if (messages[idx]["content"] is not List<object> blocks) continue;
+            for (int b = blocks.Count - 1; b >= 0; b--)
+            {
+                if (blocks[b] is not Dictionary<string, object> block) continue;
+                string type = block.TryGetValue("type", out var t) ? t as string ?? "" : "";
+                if (type is "thinking" or "redacted_thinking") continue;
+                if (type == "text" && block.TryGetValue("text", out var tx) && string.IsNullOrEmpty(tx as string)) continue;
+                block["cache_control"] = ephemeral;
+                marked++;
+                break;
+            }
+            if (marked >= 2) break;
+        }
     }
 
     public override async IAsyncEnumerable<string> ChatAsync(
@@ -552,8 +666,17 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
             ["type"] = "redacted_thinking",
             ["data"] = block.Data ?? "",
         },
+        // A server tool's call and result (tool search): passed back unchanged, as the API requires.
+        "provider_item" when block.Provider == "anthropic" && !string.IsNullOrEmpty(block.Data) =>
+            JsonDocument.Parse(block.Data).RootElement.Clone(),
         _ => new Dictionary<string, object> { ["type"] = "text", ["text"] = block.Text ?? "" },
     };
+
+    /// <summary>The blocks of one message as this request sends them: other providers' raw state never, and this
+    /// provider's server-tool blocks only while tool search is in the request (without it the API can't read them).</summary>
+    private static List<object> WireContent(NativeMessage m, bool search) =>
+        m.Content.Where(b => b.Type != "provider_item" || (search && b.Provider == "anthropic"))
+            .Select(SerializeBlock).ToList();
 
     /// <summary>tool_result content with images: the text first (never an empty text block — the API rejects
     /// those), then one base64 image block per image, in order.</summary>
@@ -600,13 +723,13 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
         string model = ModelOf(config);
         var settings = _settingsService.Settings;
 
-        // Build tool definitions
-        var toolDefs = tools.Select(t => new Dictionary<string, object>
-        {
-            ["name"] = t.Name,
-            ["description"] = t.Description,
-            ["input_schema"] = t.InputSchema,
-        }).ToList();
+        // Build tool definitions. A forced tool_choice that names one tool keeps that tool loaded.
+        bool search = !_toolSearchRefused && UseToolSearch(model, config.BaseUrl, settings.ToolSearchEnabled, tools);
+        string? forcedTool = toolChoice is { Length: > 0 } tc && tc is not ("auto" or "none" or "required" or "any") ? tc : null;
+        var toolDefs = BuildToolDefs(tools, search, forcedTool);
+        string requestSystem = search
+            ? (string.IsNullOrWhiteSpace(systemPrompt) ? DeferredToolsNote(tools) : systemPrompt + "\n\n" + DeferredToolsNote(tools))
+            : systemPrompt;
 
         // Build request
         var requestObj = new Dictionary<string, object>
@@ -615,8 +738,7 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
             ["messages"] = messages.Select(m => new Dictionary<string, object>
             {
                 ["role"] = m.Role,
-                // provider_item blocks are another provider's raw state (OpenAI reasoning, Gemini parts)
-                ["content"] = m.Content.Where(b => b.Type != "provider_item").Select(SerializeBlock).ToList(),
+                ["content"] = WireContent(m, search),
             }).ToList(),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,
@@ -625,8 +747,11 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
 
-        if (!string.IsNullOrWhiteSpace(systemPrompt))
-            requestObj["system"] = BuildSystem(systemPrompt, settings);
+        if (!string.IsNullOrWhiteSpace(requestSystem))
+            requestObj["system"] = BuildSystem(requestSystem, settings, hour: true);
+
+        if (settings.PromptCachingEnabled)
+            MarkConversationCache((List<Dictionary<string, object>>)requestObj["messages"]);
 
         // Forced tool choice (planner / forced recovery). Forcing is a 400 while the model thinks and on
         // models that dropped it — there the loop's own instruction steers instead, under "auto".
@@ -670,6 +795,16 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
                 retried.ImagesRefused = true;
                 retried.ImagesRefusedReason = why;
                 return retried;
+            }
+            // Tool search refused (a proxy, a deployment without it): every tool up front from now on, and this
+            // request again — once.
+            if (search && (int)response.StatusCode == 400
+                && (error.Contains("tool_search", StringComparison.OrdinalIgnoreCase)
+                    || error.Contains("defer_loading", StringComparison.OrdinalIgnoreCase)
+                    || error.Contains("tool_reference", StringComparison.OrdinalIgnoreCase)))
+            {
+                _toolSearchRefused = true;
+                return await ChatWithToolsAsync(messages, systemPrompt, tools, onTextDelta, ct, toolChoice);
             }
             throw new HttpRequestException(
                 DescribeApiError((int)response.StatusCode, error, config, model),
@@ -717,9 +852,14 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
                             int inTokens = startUsage.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var itv) ? itv : 0;
                             int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) && cr.TryGetInt32(out var crv) ? crv : 0;
                             int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) && cc.TryGetInt32(out var ccv) ? ccv : 0;
+                            int cache1h = startUsage.TryGetProperty("cache_creation", out var cbd)
+                                && cbd.ValueKind == JsonValueKind.Object
+                                && cbd.TryGetProperty("ephemeral_1h_input_tokens", out var c1) && c1.TryGetInt32(out var c1v) ? c1v : 0;
                             result.InputTokens = inTokens;
+                            result.CacheReadTokens = cacheRead;
+                            result.CacheWriteTokens = cacheCreate;
                             if (_costTracker != null && (inTokens > 0 || cacheRead > 0 || cacheCreate > 0))
-                                _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate);
+                                _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate, cacheWrite1hTokens: cache1h);
                         }
                         break;
 
@@ -745,6 +885,13 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
                                     break;
                                 case "redacted_thinking":
                                     sb.Data = cb.TryGetProperty("data", out var dp) ? dp.GetString() : null;
+                                    break;
+                                case "server_tool_use":   // its input streams as input_json_delta, like tool_use
+                                    sb.Id = cb.TryGetProperty("id", out var sid) ? sid.GetString() ?? "" : "";
+                                    sb.Name = cb.TryGetProperty("name", out var sname) ? sname.GetString() ?? "" : "";
+                                    break;
+                                default:   // a server tool's result (tool_search_tool_result …) arrives whole
+                                    sb.Data = cb.GetRawText();
                                     break;
                             }
                             blocks[sIdx] = sb;
@@ -834,6 +981,30 @@ public class AnthropicProvider : ApiProviderBase, IModelLister
                     }
                     result.ToolCalls.Add(new NativeToolCall { Id = b.Id ?? "", Name = b.Name ?? "", Input = input });
                     result.Blocks.Add(new ContentBlock { Type = "tool_use", Id = b.Id, Name = b.Name, Input = input });
+                    break;
+                case "server_tool_use":
+                {
+                    JsonElement sInput = _emptyJsonObject;
+                    string sRaw = b.Json.ToString();
+                    if (!string.IsNullOrWhiteSpace(sRaw))
+                    {
+                        try { using var sd = JsonDocument.Parse(sRaw); sInput = sd.RootElement.Clone(); }
+                        catch { sInput = _emptyJsonObject; }
+                    }
+                    if (b.Name == ToolSearchName) result.ToolSearches++;
+                    result.Blocks.Add(new ContentBlock
+                    {
+                        Type = "provider_item", Provider = "anthropic",
+                        Data = JsonSerializer.Serialize(new Dictionary<string, object>
+                        {
+                            ["type"] = "server_tool_use", ["id"] = b.Id ?? "", ["name"] = b.Name ?? "", ["input"] = sInput,
+                        }),
+                    });
+                    break;
+                }
+                default:   // a server tool's result block: kept verbatim for the next request
+                    if (!string.IsNullOrEmpty(b.Data))
+                        result.Blocks.Add(new ContentBlock { Type = "provider_item", Provider = "anthropic", Data = b.Data });
                     break;
             }
         }

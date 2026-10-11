@@ -17,48 +17,16 @@
         <conv:RoleToAlignmentConverter x:Key="RoleAlign"/>
         <conv:RoleToMarginConverter x:Key="RoleMargin"/>
         <conv:RoleToCornerRadiusConverter x:Key="RoleCorner"/>
+        <conv:RoleToPaddingConverter x:Key="RolePadding"/>
         <conv:InverseBoolConverter x:Key="InvertBool"/>
         <conv:BoolToStringConverter x:Key="BoolStr"/>
         <conv:ContextUsageBrushConverter x:Key="CtxBrush"/>
         <conv:ContextLedGateConverter x:Key="CtxLedGate"/>
 
-        <!-- ═══════════════════════════════════════════════════════════ -->
-        <!-- NEON RETHEME — local overrides of Catppuccin keys.            -->
-        <!-- Scope: this UserControl only. The brush keys used throughout  -->
-        <!-- ChatView are bound to StaticResource — by re-declaring them   -->
-        <!-- here we recolor the entire surface without touching any of    -->
-        <!-- the 1000+ bindings below. Other Catppuccin-themed views are  -->
-        <!-- unaffected because resource resolution is local-first.        -->
-        <!-- ═══════════════════════════════════════════════════════════ -->
-        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
-        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
-        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
-        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
-        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
-        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
-        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
-        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
-        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
-        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
-        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
-        <!-- Accent rainbow: keep semantic mapping (Blue=action, Mauve=AI, etc.) -->
-        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>  <!-- user msg / focus -->
-        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
-        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>  <!-- success / additions -->
-        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
-        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
-        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
-        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>  <!-- assistant / agent -->
-        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
-        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
-        <!-- Fonts -->
-        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
-        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
+        <!-- Colours and fonts: every one is a theme token ({DynamicResource …}, Resources/Themes/Tokens.md), so
+             this view follows a theme switch live. The old "neon retheme" block that redefined the Catppuccin keys
+             here is gone — never re-add a colour key to these resources: a DynamicResource lookup finds a local
+             key before the theme's. -->
 
         <!-- ═══ Reusable Pulse Animation Style ═══ -->
         <Style x:Key="PulseDot" TargetType="Ellipse">
@@ -80,147 +48,23 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid>
+    <Grid Background="{DynamicResource Bg.Elevated}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-
-        <StackPanel Grid.Row="0">
-        <!-- USAGE STRIP — always visible: what answers this chat, rate limit left, what it cost -->
-        <Border Background="{StaticResource MantleBrush}" Padding="12,5"
-                BorderThickness="0,0,0,1" BorderBrush="{StaticResource Surface0Brush}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" ToolTip="{services:Loc chat.usage.modelTip}">
-                    <Ellipse Width="7" Height="7" Fill="{StaticResource GreenBrush}" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding ActiveProviderLabel}" Foreground="{StaticResource Subtext0Brush}"
-                               FontSize="11" VerticalAlignment="Center" Margin="6,0,8,0"/>
-                    <Border CornerRadius="4" Padding="7,1" Background="#22A672FF" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding ActiveModelLabel}" Foreground="{StaticResource MauveBrush}"
-                                   FontSize="11" FontFamily="{StaticResource MonoFont}"/>
-                    </Border>
-                </StackPanel>
-
-                <!-- Quota gauge: rate-limit headroom from the last response's headers -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0"
-                            ToolTip="{Binding RateLimitTip}" Background="Transparent">
-                    <TextBlock Text="{services:Loc chat.usage.quota}" Foreground="{StaticResource Overlay0Brush}"
-                               FontSize="10" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <Grid Width="110" Height="6" VerticalAlignment="Center"
-                          Visibility="{Binding HasRateLimit, Converter={StaticResource BoolVis}}">
-                        <Border Background="{StaticResource Surface1Brush}" CornerRadius="3"/>
-                        <Border CornerRadius="3" RenderTransformOrigin="0,0.5"
-                                Background="{Binding RateLimitUsedPercent, Converter={StaticResource CtxBrush}}">
-                            <Border.RenderTransform>
-                                <ScaleTransform ScaleX="{Binding RateLimitFraction}"/>
-                            </Border.RenderTransform>
-                        </Border>
-                    </Grid>
-                    <TextBlock Text="{Binding RateLimitText}" Foreground="{StaticResource Subtext0Brush}"
-                               FontSize="10" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center" Margin="6,0,0,0"/>
-                </StackPanel>
-
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding SessionCostText}" Foreground="{StaticResource MauveBrush}"
-                               FontSize="10" FontFamily="{StaticResource MonoFont}" VerticalAlignment="Center"
-                               ToolTip="{Binding CostText}"/>
-                    <Button Style="{StaticResource IconButton}" Command="{Binding OpenBillingCommand}"
-                            Padding="6,1" Margin="8,0,0,0" ToolTip="{services:Loc chat.usage.creditTip}"
-                            Visibility="{Binding HasBillingPage, Converter={StaticResource BoolVis}}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{services:Loc chat.usage.credit}" FontSize="10" VerticalAlignment="Center"/>
-                            <TextBlock Text="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="9" VerticalAlignment="Center" Margin="4,0,0,0"/>
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- PROJECT BAR -->
-        <Border Background="{StaticResource Surface0Brush}"
-                Padding="12,8"
-                Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                           Foreground="{StaticResource TealBrush}"
-                           FontSize="14" VerticalAlignment="Center"
-                           Margin="0,0,8,0"/>
-
-                <TextBlock Grid.Column="1" Text="{Binding WorkingDirectory}"
-                           Foreground="{StaticResource Subtext0Brush}"
-                           FontSize="12" VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis"
-                           FontFamily="{StaticResource MonoFont}"/>
-
-                <!-- Git Branch Badge -->
-                <Border Grid.Column="2" CornerRadius="4" Padding="6,2" Margin="8,0"
-                        Background="{StaticResource Surface1Brush}"
-                        Visibility="{Binding GitBranch, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE8AD;" FontFamily="Segoe MDL2 Assets"
-                                   FontSize="10" Foreground="{StaticResource GreenBrush}"
-                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="{Binding GitBranch}"
-                                   Foreground="{StaticResource GreenBrush}"
-                                   FontSize="11" FontFamily="{StaticResource MonoFont}"
-                                   VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-
-                <!-- Agent + Thinking Toggles. "Steps" lives on the bottom bar only (it was here too). The
-                     autonomous loop has its own explicit label: it used to be a second "Auto" next to the
-                     bottom bar's run-code "Auto", with a different meaning. -->
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                    <CheckBox Content="{services:Loc chat.agentLabel}" Margin="8,0,4,0"
-                              IsChecked="{Binding AgenticMode}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="10" VerticalAlignment="Center"
-                              ToolTip="{services:Loc chat.agentTip}"/>
-                    <CheckBox Content="{services:Loc chat.autonomousLabel}" Margin="4,0"
-                              IsChecked="{Binding AutonomousMode}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="10" VerticalAlignment="Center"
-                              ToolTip="{services:Loc chat.autoTip}"/>
-                    <CheckBox Content="{services:Loc chat.showThinkingLabel}" Margin="4,0"
-                              IsChecked="{Binding ShowThinking}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="10" VerticalAlignment="Center"
-                              ToolTip="{services:Loc chat.thinkingTip}"/>
-                </StackPanel>
-
-                <Button Grid.Column="4" Content="&#xE711;"
-                        FontFamily="Segoe MDL2 Assets"
-                        Style="{StaticResource IconButton}"
-                        Command="{Binding CloseFolderCommand}"
-                        ToolTip="{services:Loc chat.closeProjectTip}"
-                        FontSize="11" Padding="6,4"/>
-            </Grid>
-        </Border>
-        </StackPanel>
 
         <!-- ═══ IN-CHAT SEARCH BAR (Ctrl+F) ═══ -->
         <Border Grid.Row="1" VerticalAlignment="Top" Panel.ZIndex="10"
-                Background="{StaticResource MantleBrush}"
+                Background="{DynamicResource Bg.Panel}"
                 Padding="12,6" BorderThickness="0,0,0,1"
-                BorderBrush="{StaticResource Surface0Brush}"
+                BorderBrush="{DynamicResource Surface.Sunken}"
                 Visibility="{Binding IsChatSearchVisible, Converter={StaticResource BoolVis}}">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -230,16 +74,16 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                           Foreground="{StaticResource Overlay0Brush}"
+                           Foreground="{DynamicResource Text.Muted}"
                            VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <TextBox Grid.Column="1" x:Name="ChatSearchBox"
                          Text="{Binding ChatSearchQuery, UpdateSourceTrigger=PropertyChanged}"
                          Style="{StaticResource GlowTextBox}"
-                         FontSize="13" FontFamily="{StaticResource MonoFont}"
+                         FontSize="13" FontFamily="{DynamicResource Font.Mono}"
                          Padding="8,4" Height="28"/>
                 <TextBlock Grid.Column="2"
-                           Foreground="{StaticResource Overlay0Brush}"
-                           FontSize="11" FontFamily="{StaticResource MonoFont}"
+                           Foreground="{DynamicResource Text.Muted}"
+                           FontSize="11" FontFamily="{DynamicResource Font.Mono}"
                            VerticalAlignment="Center" Margin="8,0">
                     <Run Text="{Binding SearchMatchCount, Mode=OneWay}"/><Run Text="{services:Loc chat.search.matchesSuffix}"/>
                 </TextBlock>
@@ -251,10 +95,10 @@
         </Border>
 
         <!-- ═══ CHAT MESSAGES AREA (Virtualized) ═══ -->
-        <Border Grid.Row="1" Background="{StaticResource BaseBrush}">
-                <ListBox x:Name="ChatList" ItemsSource="{Binding Messages}" Margin="8,0"
+        <Border Grid.Row="1" Background="Transparent">
+                <ListBox x:Name="ChatList" ItemsSource="{Binding Messages}" Margin="0"
                          Background="Transparent" BorderThickness="0"
-                         Padding="0,8"
+                         Padding="0,12"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          VirtualizingStackPanel.IsVirtualizing="True"
@@ -324,6 +168,16 @@
                                     </MultiDataTrigger.Conditions>
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </MultiDataTrigger>
+                                <!-- A finished "⏵ Reading main.gd" line of a TOOL folds away even with Steps on: the tool's
+                                     own row right after it says the same, with the result and the time. -->
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}"/>
+                                        <Condition Binding="{Binding IsStreaming}" Value="False"/>
+                                        <Condition Binding="{Binding ToolKind, Converter={StaticResource BoolVis}}" Value="Visible"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </MultiDataTrigger>
                                 <MultiDataTrigger>
                                     <MultiDataTrigger.Conditions>
                                         <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.Thinking}"/>
@@ -341,7 +195,8 @@
                                  only. (The grid had no rows and the normal bubble was hidden only for AgentStatus,
                                  so on a permission prompt it was drawn on top with an opaque background and took
                                  every click meant for Allow / Deny: no "Ask" could be answered with the mouse.) -->
-                            <Grid Margin="0,1,0,1"
+                            <!-- The reading column: at most 1000 px wide, centred (Stretch + MaxWidth centres in WPF). -->
+                            <Grid Margin="24,1,24,1" MaxWidth="1000"
                                   MouseEnter="MessageBubble_MouseEnter"
                                   MouseLeave="MessageBubble_MouseLeave">
                                 <Grid.RowDefinitions>
@@ -351,21 +206,21 @@
 
                                 <!-- ═══ Thinking Block (collapsible) ═══ -->
                                 <Border Grid.Row="0" HorizontalAlignment="Left"
-                                        Margin="12,2,200,2"
-                                        Background="#18CBA6F7"
+                                        Margin="20,2,40,2"
+                                        Background="{DynamicResource State.Fill.Faint}"
                                         CornerRadius="8" Padding="10,4"
                                         Visibility="{Binding HasThinking, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Cursor="Hand"
                                                     MouseLeftButtonDown="ThinkingHeader_Click">
                                             <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets"
-                                                       FontSize="10" Foreground="{StaticResource MauveBrush}"
+                                                       FontSize="10" Foreground="{DynamicResource Accent.2}"
                                                        VerticalAlignment="Center" Margin="0,0,6,0"/>
                                             <TextBlock Text="{services:Loc chat.thinkingToggle}" FontSize="11" FontStyle="Italic"
-                                                       Foreground="{StaticResource MauveBrush}"
+                                                       Foreground="{DynamicResource Accent.2}"
                                                        VerticalAlignment="Center"/>
-                                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="8"
-                                                       Foreground="{StaticResource Overlay0Brush}"
+                                            <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                       Foreground="{DynamicResource Text.Muted}"
                                                        VerticalAlignment="Center" Margin="6,0,0,0">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
@@ -383,23 +238,70 @@
                                                 Visibility="{Binding IsThinkingExpanded, Converter={StaticResource BoolVis}}">
                                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                                 <TextBlock Text="{Binding ThinkingContent}"
-                                                           Foreground="{StaticResource Overlay0Brush}"
+                                                           Foreground="{DynamicResource Text.Muted}"
                                                            FontSize="11" FontStyle="Italic"
-                                                           FontFamily="{StaticResource MonoFont}"
+                                                           FontFamily="{DynamicResource Font.Mono}"
                                                            TextWrapping="Wrap"/>
                                             </ScrollViewer>
                                         </Border>
                                     </StackPanel>
                                 </Border>
 
-                                <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
+                                <!-- ═══ ask_user: the agent's question, its options and a free answer ═══ -->
                                 <Border Grid.Row="1" HorizontalAlignment="Left"
-                                        Margin="12,4,100,4"
-                                        Background="#20F9E2AF"
-                                        BorderBrush="{StaticResource YellowBrush}"
+                                        Margin="20,4,40,4"
+                                        Background="#2089B4FA"
+                                        BorderBrush="{DynamicResource Accent.1}"
                                         BorderThickness="2,0,0,0"
                                         CornerRadius="0,8,8,0"
                                         Padding="12,8">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Question}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Primary}"
+                                                   FontSize="13" FontFamily="{DynamicResource Font.Ui}" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                        <StackPanel Visibility="{Binding QuestionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                            <ItemsControl ItemsSource="{Binding QuestionOptions}" Margin="0,0,0,6"
+                                                          Visibility="{Binding HasQuestionOptions, Converter={StaticResource BoolVis}}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Content="{Binding}" Padding="12,4" Margin="0,0,6,6" FontSize="12"
+                                                                Style="{StaticResource SecondaryButton}"
+                                                                Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                Click="QuestionOption_Click"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition MinWidth="220"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                <TextBox Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12" Padding="6,3"
+                                                         ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
+                                                <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="12,3" Margin="6,0,0,0"
+                                                        FontSize="12" Style="{StaticResource PrimaryButton}" Click="QuestionSend_Click"/>
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
+                                <Border Grid.Row="1" HorizontalAlignment="Left"
+                                        Margin="20,4,40,4"
+                                        Background="{DynamicResource Chat.Permission.Background}"
+                                        BorderBrush="{DynamicResource Status.Warning}"
+                                        BorderThickness="2,0,0,0"
+                                        CornerRadius="0,6,6,0"
+                                        Padding="10,6">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -413,42 +315,42 @@
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                             <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets"
-                                                       FontSize="14" Foreground="{StaticResource YellowBrush}"
+                                                       FontSize="14" Foreground="{DynamicResource Status.Warning}"
                                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
                                             <TextBlock Text="{Binding Content}"
-                                                       Foreground="{StaticResource TextBrush}"
-                                                       FontSize="13" FontFamily="{StaticResource MainFont}"
+                                                       Foreground="{DynamicResource Text.Primary}"
+                                                       FontSize="13" FontFamily="{DynamicResource Font.Ui.Display}"
                                                        TextWrapping="Wrap"/>
                                         </StackPanel>
                                         <!-- Preview diff of the change being requested (file edits/writes) -->
-                                        <Border Background="{StaticResource Surface0Brush}"
+                                        <Border Background="{DynamicResource Surface.Sunken}"
                                                 CornerRadius="6" Padding="0,4,0,4" Margin="22,0,0,8"
                                                 Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                             <StackPanel>
-                                                <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
-                                                           Foreground="{StaticResource Subtext0Brush}" Margin="10,2,10,4"/>
+                                                <TextBlock Text="{Binding DiffStat}" FontFamily="{DynamicResource Font.Mono}" FontSize="10"
+                                                           Foreground="{DynamicResource Text.Secondary}" Margin="10,2,10,4"/>
                                                 <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto"
                                                               HorizontalScrollBarVisibility="Auto">
                                                     <ItemsControl ItemsSource="{Binding DiffLines}">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
-                                                                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}"
+                                                                <TextBlock Text="{Binding Display}" FontFamily="{DynamicResource Font.Mono}"
                                                                            FontSize="11" Padding="10,0" TextWrapping="NoWrap">
                                                                     <TextBlock.Style>
                                                                         <Style TargetType="TextBlock">
-                                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
+                                                                            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
                                                                             <Setter Property="Background" Value="Transparent"/>
                                                                             <Style.Triggers>
                                                                                 <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Add}">
-                                                                                    <Setter Property="Foreground" Value="#A6E3A1"/>
-                                                                                    <Setter Property="Background" Value="#1A40A02B"/>
+                                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Success.Soft}"/>
+                                                                                    <Setter Property="Background" Value="{DynamicResource Chat.Diff.Added.Background}"/>
                                                                                 </DataTrigger>
                                                                                 <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Remove}">
-                                                                                    <Setter Property="Foreground" Value="#F38BA8"/>
-                                                                                    <Setter Property="Background" Value="#1AF38BA8"/>
+                                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                                                    <Setter Property="Background" Value="{DynamicResource Chat.Diff.Removed.Background}"/>
                                                                                 </DataTrigger>
                                                                                 <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Hunk}">
-                                                                                    <Setter Property="Foreground" Value="#89B4FA"/>
+                                                                                    <Setter Property="Foreground" Value="{DynamicResource Chat.Diff.Hunk.Foreground}"/>
                                                                                     <Setter Property="FontStyle" Value="Italic"/>
                                                                                 </DataTrigger>
                                                                             </Style.Triggers>
@@ -465,11 +367,11 @@
                                         <!-- Allow / Deny until answered; then the outcome, localized -->
                                         <StackPanel Orientation="Horizontal" Margin="22,0,0,0"
                                                     Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
-                                            <Button Content="{services:Loc chat.allow}" Padding="16,4" Margin="0,0,8,0"
+                                            <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionAllow_Click"/>
-                                            <Button Content="{services:Loc chat.deny}" Padding="16,4"
+                                            <Button Content="{services:Loc chat.deny}" Padding="14,3"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionDeny_Click"/>
@@ -477,7 +379,7 @@
                                         <Grid Margin="22,0,0,0"
                                               Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}}">
                                             <TextBlock Text="{services:Loc chat.perm.allowed}" FontSize="12" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource GreenBrush}">
+                                                       Foreground="{DynamicResource Status.Success}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -490,7 +392,7 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                             <TextBlock Text="{services:Loc chat.perm.denied}" FontSize="12" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource RedBrush}">
+                                                       Foreground="{DynamicResource Status.Danger}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -503,7 +405,7 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                             <TextBlock Text="{services:Loc chat.perm.cancelled}" FontSize="12" FontStyle="Italic"
-                                                       Foreground="{StaticResource Overlay1Brush}">
+                                                       Foreground="{DynamicResource Text.Tertiary}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -516,7 +418,7 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                             <TextBlock Text="{services:Loc chat.perm.dismissed}" FontSize="12" FontStyle="Italic"
-                                                       Foreground="{StaticResource Overlay1Brush}">
+                                                       Foreground="{DynamicResource Text.Tertiary}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -534,7 +436,7 @@
 
                                 <!-- ═══ Compaction marker: where the model's context now starts ═══ -->
                                 <Border Grid.Row="1" Margin="40,10,40,10" Padding="12,8" CornerRadius="8"
-                                        Background="#144CDFFF" BorderBrush="#444CDFFF" BorderThickness="1">
+                                        Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1.Border.Soft}" BorderThickness="1">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -548,24 +450,24 @@
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                                       Foreground="{StaticResource TealBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                       Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                             <TextBlock Text="{services:Loc chat.compact.markerTitle}" FontSize="12" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource TealBrush}" VerticalAlignment="Center"/>
+                                                       Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="{services:Loc chat.compact.marker}" FontSize="11" Margin="20,2,0,0"
-                                                   Foreground="{StaticResource Subtext0Brush}" TextWrapping="Wrap"/>
+                                                   Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
                                         <!-- Bound, not local: the ListBox recycles containers, and a local IsExpanded
                                              would carry over to whichever row reuses this one. -->
                                         <Expander Margin="16,4,0,0" Style="{StaticResource ToolExpander}" IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
                                                 <TextBlock Text="{services:Loc chat.compact.showSummary}" FontSize="11"
-                                                           Foreground="{StaticResource Overlay0Brush}"/>
+                                                           Foreground="{DynamicResource Text.Muted}"/>
                                             </Expander.Header>
-                                            <Border Background="{StaticResource Surface0Brush}" CornerRadius="6" Padding="10,8"
+                                            <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="6" Padding="10,8"
                                                     Margin="0,4,0,0" MaxHeight="300">
                                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                                    <TextBlock Text="{Binding Content}" FontFamily="{StaticResource MonoFont}" FontSize="11"
-                                                               Foreground="{StaticResource Subtext0Brush}" TextWrapping="Wrap"/>
+                                                    <TextBlock Text="{Binding Content}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                               Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
                                                 </ScrollViewer>
                                             </Border>
                                         </Expander>
@@ -574,10 +476,9 @@
 
                                 <!-- ═══ AgentStatus: inline tool indicator ═══ -->
                                 <Border Grid.Row="1" HorizontalAlignment="Left"
-                                        Margin="12,2,200,2"
-                                        Background="{StaticResource Surface0Brush}"
-                                        CornerRadius="8"
-                                        Padding="10,6">
+                                        Margin="20,1,40,1"
+                                        Background="Transparent"
+                                        Padding="2,3">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -593,11 +494,11 @@
                                                  VerticalAlignment="Center">
                                             <Ellipse.Style>
                                                 <Style TargetType="Ellipse">
-                                                    <Setter Property="Fill" Value="{StaticResource Overlay0Brush}"/>
+                                                    <Setter Property="Fill" Value="{DynamicResource Text.Muted}"/>
                                                     <Setter Property="Opacity" Value="0.5"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                            <Setter Property="Fill" Value="{StaticResource MauveBrush}"/>
+                                                            <Setter Property="Fill" Value="{DynamicResource Accent.2}"/>
                                                             <Setter Property="Opacity" Value="1"/>
                                                             <DataTrigger.EnterActions>
                                                                 <BeginStoryboard x:Name="StatusPulse">
@@ -618,15 +519,78 @@
                                         </Ellipse>
                                         <!-- Status text + elapsed time -->
                                         <TextBlock Text="{Binding Content}"
-                                                   Foreground="{StaticResource TextBrush}"
-                                                   FontSize="13"
-                                                   FontFamily="{StaticResource MonoFont}"
+                                                   Foreground="{DynamicResource Text.Secondary}"
+                                                   FontSize="12"
+                                                   FontFamily="{DynamicResource Font.Ui}"
                                                    VerticalAlignment="Center"/>
                                         <TextBlock Text="{Binding ToolElapsedTime}"
-                                                   Foreground="{StaticResource Overlay0Brush}"
-                                                   FontSize="10" FontFamily="{StaticResource MonoFont}"
+                                                   Foreground="{DynamicResource Text.Muted}"
+                                                   FontSize="10" FontFamily="{DynamicResource Font.Mono}"
                                                    VerticalAlignment="Center" Margin="8,0,0,0"
                                                    Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══ The agent's plan (todo_write): a checklist card that updates in place ═══ -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10" CornerRadius="8" BorderThickness="1"
+                                        Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Border.Subtle}"
+                                        Visibility="{Binding IsPlan, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel>
+                                        <Grid Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
+                                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <TextBlock Text="{Binding PlanHeader}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                                           VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding PlanElapsed}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
+                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                        </Grid>
+                                        <ItemsControl ItemsSource="{Binding PlanItems}" Margin="2,0,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                        <Grid Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,10,0">
+                                                            <Ellipse StrokeThickness="1.4">
+                                                                <Ellipse.Style>
+                                                                    <Style TargetType="Ellipse">
+                                                                        <Setter Property="Stroke" Value="{DynamicResource Text.Muted}"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                                <Setter Property="Stroke" Value="{DynamicResource Status.Success}"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                                <Setter Property="Stroke" Value="{DynamicResource Accent.1}"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Ellipse.Style>
+                                                            </Ellipse>
+                                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="9" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                       Foreground="{DynamicResource Status.Success}"
+                                                                       Visibility="{Binding IsDone, Converter={StaticResource BoolVis}}"/>
+                                                            <Ellipse Width="6" Height="6" Fill="{DynamicResource Accent.1}"
+                                                                     Visibility="{Binding IsActive, Converter={StaticResource BoolVis}}"/>
+                                                        </Grid>
+                                                        <TextBlock FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="700">
+                                                            <Run Text="{Binding Number, Mode=OneWay}"/><Run Text=". "/><Run Text="{Binding Text, Mode=OneWay}"/>
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                                                                            <Setter Property="FontWeight" Value="SemiBold"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                     </StackPanel>
                                 </Border>
 
@@ -649,28 +613,51 @@
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ContextSummary}">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Question}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsPlan}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Grid.Style>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
 
-                                    <!-- ⎿ Gutter line for ToolAction (Claude Code-style vertical connector) -->
-                                    <Border Grid.Column="0" Width="2" Margin="14,0,0,0"
-                                            Background="{StaticResource Overlay0Brush}"
-                                            CornerRadius="1">
+                                    <!-- Avatars: CluadeX's logo beside its reply, a person beside the user's message -->
+                                    <Border Grid.Column="0" Width="28" Height="28" CornerRadius="14" Margin="0,8,12,0" VerticalAlignment="Top"
+                                            Background="{DynamicResource Accent.2.Tint}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
                                         <Border.Style>
                                             <Style TargetType="Border">
                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                 <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                    <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Assistant}">
                                                         <Setter Property="Visibility" Value="Visible"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
+                                        <Image Source="/CluadeX;component/Assets/logo.png" Width="18" Height="18"
+                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                    </Border>
+                                    <Border Grid.Column="2" Width="28" Height="28" CornerRadius="14" Margin="10,8,0,0" VerticalAlignment="Top"
+                                            Background="{DynamicResource Surface.Raised}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.User}">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Text.Secondary}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
 
                                 <Border Grid.Column="1"
@@ -678,7 +665,17 @@
                                         Margin="{Binding Role, Converter={StaticResource RoleMargin}}"
                                         Background="{Binding Role, Converter={StaticResource RoleBg}}"
                                         CornerRadius="{Binding Role, Converter={StaticResource RoleCorner}}"
-                                        Padding="14,10">
+                                        Padding="{Binding Role, Converter={StaticResource RolePadding}}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                    <Setter Property="BorderThickness" Value="1"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <Grid>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
@@ -697,7 +694,7 @@
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
 
-                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
                                                 <StackPanel.Style>
                                                     <Style TargetType="StackPanel">
                                                         <Setter Property="Visibility" Value="Visible"/>
@@ -711,88 +708,163 @@
 
                                                 <TextBlock Text="{Binding Role, Converter={StaticResource RoleLabel}}"
                                                            Foreground="{Binding Role, Converter={StaticResource RoleBrush}}"
-                                                           FontWeight="SemiBold" FontSize="11"
-                                                           FontFamily="{StaticResource MainFont}"/>
+                                                           FontWeight="SemiBold" FontSize="12"
+                                                           FontFamily="{DynamicResource Font.Ui.Display}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.System}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Assistant}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
 
-                                                <!-- Tool Name Badge -->
-                                                <Border CornerRadius="4" Padding="6,1" Margin="8,0,0,0"
-                                                        Background="{StaticResource Surface1Brush}"
-                                                        Visibility="{Binding ToolName, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                    <TextBlock Text="{Binding ToolName}"
-                                                               Foreground="{StaticResource TealBrush}"
-                                                               FontSize="10" FontFamily="{StaticResource MonoFont}"/>
-                                                </Border>
+                                                <!-- Tool row: its icon, what it did, on what -->
+                                                <TextBlock Text="{Binding ToolGlyph}" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                                           Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" Margin="0,0,10,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="{Binding ToolVerb}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                                                           VerticalAlignment="Center" Margin="0,0,10,0"
+                                                           Visibility="{Binding HasToolVerb, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <TextBlock Text="{Binding ToolTarget}" FontSize="12" Foreground="{DynamicResource Text.Primary}"
+                                                           VerticalAlignment="Center" MaxWidth="440" TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Content}"
+                                                           Visibility="{Binding HasToolVerb, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <!-- Rows saved before the verbs existed: the old name and summary -->
+                                                <TextBlock Text="{Binding ToolName}" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource Accent.1}"
+                                                           FontSize="12" FontFamily="{DynamicResource Font.Mono}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding ToolName, Converter={StaticResource BoolVis}}" Value="Visible"/>
+                                                                        <Condition Binding="{Binding HasToolVerb}" Value="False"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="{Binding Content}" VerticalAlignment="Center" MaxWidth="440"
+                                                           Foreground="{DynamicResource Text.Primary}" FontSize="12"
+                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Content}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                                                        <Condition Binding="{Binding HasToolVerb}" Value="False"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
 
                                                 <!-- Collapsed group count badge -->
                                                 <Border CornerRadius="8" Padding="5,1" Margin="4,0,0,0"
-                                                        Background="{StaticResource MauveBrush}"
+                                                        Background="{DynamicResource Accent.2}"
                                                         Visibility="{Binding IsCollapsedGroup, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                                     <TextBlock Text="{Binding CollapsedCount}"
-                                                               Foreground="{StaticResource BaseBrush}"
-                                                               FontSize="9" FontWeight="Bold"
-                                                               FontFamily="{StaticResource MonoFont}"/>
+                                                               Foreground="{DynamicResource Bg.Elevated}"
+                                                               FontSize="11" FontWeight="Bold"
+                                                               FontFamily="{DynamicResource Font.Mono}"/>
                                                 </Border>
-
-                                                <!-- Success/Fail indicator -->
-                                                <TextBlock Text="&#x2713;" Foreground="{StaticResource GreenBrush}"
-                                                           FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
-                                                           VerticalAlignment="Center">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                                            <Style.Triggers>
-                                                                <MultiDataTrigger>
-                                                                    <MultiDataTrigger.Conditions>
-                                                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
-                                                                        <Condition Binding="{Binding ToolSuccess}" Value="True"/>
-                                                                    </MultiDataTrigger.Conditions>
-                                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                                </MultiDataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-
-                                                <TextBlock Text="&#x2717;" Foreground="{StaticResource RedBrush}"
-                                                           FontSize="11" FontWeight="Bold" Margin="6,0,0,0"
-                                                           VerticalAlignment="Center">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                                            <Style.Triggers>
-                                                                <MultiDataTrigger>
-                                                                    <MultiDataTrigger.Conditions>
-                                                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
-                                                                        <Condition Binding="{Binding ToolSuccess}" Value="False"/>
-                                                                    </MultiDataTrigger.Conditions>
-                                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                                </MultiDataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
 
                                                 <!-- Interrupted indicator -->
                                                 <Border CornerRadius="4" Padding="4,1" Margin="6,0,0,0"
-                                                        Background="#30F38BA8"
+                                                        Background="{DynamicResource Chat.Badge.Danger.Background}"
                                                         Visibility="{Binding IsInterrupted, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                    <TextBlock Text="{services:Loc chat.interrupted}" FontSize="9"
-                                                               Foreground="{StaticResource RedBrush}"
-                                                               FontFamily="{StaticResource MonoFont}"/>
+                                                    <TextBlock Text="{services:Loc chat.interrupted}" FontSize="11"
+                                                               Foreground="{DynamicResource Status.Danger}"
+                                                               FontFamily="{DynamicResource Font.Mono}"/>
                                                 </Border>
 
                                                 <!-- Retry countdown -->
                                                 <Border CornerRadius="4" Padding="4,1" Margin="6,0,0,0"
-                                                        Background="#30F9E2AF"
+                                                        Background="{DynamicResource Chat.Badge.Warning.Background}"
                                                         Visibility="{Binding IsRetrying, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                                    <TextBlock Text="{Binding RetryCountdown}" FontSize="9"
-                                                               Foreground="{StaticResource YellowBrush}"
-                                                               FontFamily="{StaticResource MonoFont}"/>
+                                                    <TextBlock Text="{Binding RetryCountdown}" FontSize="11"
+                                                               Foreground="{DynamicResource Status.Warning}"
+                                                               FontFamily="{DynamicResource Font.Mono}"/>
                                                 </Border>
                                             </StackPanel>
 
-                                            <!-- ═══ Hover Action Buttons (Copy + Retry) ═══ -->
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                            <!-- ═══ Right side: the diff's +/-, the tool's outcome and time; hover: Copy + Retry ═══ -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                            <TextBlock Text="{Binding DiffAddedText}" Foreground="{DynamicResource Status.Success}" FontSize="12"
+                                                       FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,4,0"
+                                                       Visibility="{Binding DiffAddedText, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                            <TextBlock Text="{Binding DiffRemovedText}" Foreground="{DynamicResource Status.Danger}" FontSize="12"
+                                                       FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                       Visibility="{Binding DiffRemovedText, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <Ellipse Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,6,0">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="{DynamicResource Status.Danger}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding ToolSuccess}" Value="True">
+                                                                    <Setter Property="Fill" Value="{DynamicResource Status.Success}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+                                                <TextBlock FontSize="12" VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="{services:Loc chat.tool.failed}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding ToolSuccess}" Value="True">
+                                                                    <Setter Property="Text" Value="{services:Loc chat.tool.done}"/>
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding ToolElapsedTime}" Foreground="{DynamicResource Text.Muted}"
+                                                       FontSize="11" FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,4,0"
+                                                       Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                            <StackPanel Orientation="Horizontal"
                                                         Visibility="{Binding IsHovered, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                                 <!-- Copy message -->
                                                 <Button Content="&#xE8C8;" FontFamily="Segoe MDL2 Assets"
@@ -810,11 +882,12 @@
                                                         Click="RetryMessage_Click"
                                                         Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                             </StackPanel>
+                                            </StackPanel>
                                         </Grid>
 
                                         <!-- Row 1: Tool Arguments (truncated, structured) -->
                                         <Border Grid.Row="1" Margin="0,4,0,0"
-                                                Background="{StaticResource CrustBrush}"
+                                                Background="{DynamicResource Bg.Window}"
                                                 CornerRadius="4" Padding="8,5"
                                                 MaxHeight="120">
                                             <Border.Style>
@@ -825,6 +898,7 @@
                                                             <MultiDataTrigger.Conditions>
                                                                 <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
                                                                 <Condition Binding="{Binding ToolArguments, Converter={StaticResource BoolVis}}" Value="Visible"/>
+                                                                <Condition Binding="{Binding IsExpanded}" Value="True"/>
                                                             </MultiDataTrigger.Conditions>
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                         </MultiDataTrigger>
@@ -834,8 +908,8 @@
                                             <ScrollViewer VerticalScrollBarVisibility="Auto"
                                                           HorizontalScrollBarVisibility="Disabled">
                                                 <TextBlock Text="{Binding ToolArguments}"
-                                                           Foreground="{StaticResource Subtext0Brush}"
-                                                           FontFamily="{StaticResource MonoFont}"
+                                                           Foreground="{DynamicResource Text.Secondary}"
+                                                           FontFamily="{DynamicResource Font.Mono}"
                                                            FontSize="11" TextWrapping="Wrap"
                                                            MaxHeight="100"
                                                            TextTrimming="CharacterEllipsis"/>
@@ -843,8 +917,18 @@
                                         </Border>
 
                                         <!-- Row 2: Message Content with Markdown -->
-                                        <StackPanel Grid.Row="2" Margin="0,3,0,0"
-                                                    helpers:MarkdownHelper.Markdown="{Binding Content}"/>
+                                        <StackPanel Grid.Row="2" Margin="0,2,0,0"
+                                                    helpers:MarkdownHelper.Markdown="{Binding Content}">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
+                                        </StackPanel>
 
                                         <!-- Row 3: Typing Indicator -->
                                         <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,4,0,0">
@@ -862,21 +946,21 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </StackPanel.Style>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}" Margin="0,0,4,0"
+                                            <Ellipse Width="8" Height="8" Fill="{DynamicResource Accent.2}" Margin="0,0,4,0"
                                                      Style="{StaticResource PulseDot}"/>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}" Margin="0,0,4,0"
+                                            <Ellipse Width="8" Height="8" Fill="{DynamicResource Accent.2}" Margin="0,0,4,0"
                                                      Style="{StaticResource PulseDot}"/>
-                                            <Ellipse Width="8" Height="8" Fill="{StaticResource MauveBrush}"
+                                            <Ellipse Width="8" Height="8" Fill="{DynamicResource Accent.2}"
                                                      Style="{StaticResource PulseDot}"/>
                                             <TextBlock Text="{services:Loc chat.thinkingInline}"
-                                                       Foreground="{StaticResource Subtext0Brush}"
+                                                       Foreground="{DynamicResource Text.Secondary}"
                                                        FontSize="11" FontStyle="Italic"
-                                                       FontFamily="{StaticResource MainFont}"
+                                                       FontFamily="{DynamicResource Font.Ui.Display}"
                                                        VerticalAlignment="Center" Margin="4,0,0,0"/>
                                         </StackPanel>
 
                                         <!-- Row 4: inline diff (file edits) + collapsible tool output -->
-                                        <StackPanel Grid.Row="4" Margin="0,6,0,0">
+                                        <StackPanel Grid.Row="4" Margin="0,2,0,0">
 
                                         <!-- Image the tool returned (a screenshot): a small thumbnail of the saved
                                              file; click opens it full size. Only a path is bound — never the bytes. -->
@@ -887,8 +971,8 @@
                                                 Visibility="{Binding ThumbnailPath, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                             <Button.Template>
                                                 <ControlTemplate TargetType="Button">
-                                                    <Border CornerRadius="6" BorderThickness="1" BorderBrush="{StaticResource Surface2Brush}"
-                                                            Background="{StaticResource CrustBrush}" Padding="2">
+                                                    <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Surface.Raised.Strong}"
+                                                            Background="{DynamicResource Bg.Window}" Padding="2">
                                                         <ContentPresenter/>
                                                     </Border>
                                                 </ControlTemplate>
@@ -900,72 +984,111 @@
                                             </Grid>
                                         </Button>
 
-                                        <!-- Colorized before/after diff — shown for every file edit/write -->
-                                        <Border Background="{StaticResource Surface0Brush}"
-                                                CornerRadius="6" Padding="0,4,0,4" Margin="0,0,0,4"
+                                        <!-- The edit, before / after side by side — shown for every file edit/write -->
+                                        <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                                                Background="{DynamicResource Surface.Sunken}" Margin="0,6,0,2" ClipToBounds="True"
                                                 Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                            <StackPanel>
-                                                <StackPanel Orientation="Horizontal" Margin="10,2,10,4">
-                                                    <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                               Foreground="{StaticResource Overlay0Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                                    <TextBlock Text="{services:Loc chat.changes}" FontSize="10" Foreground="{StaticResource Overlay0Brush}"
-                                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                                    <TextBlock Text="{Binding DiffStat}" FontFamily="{StaticResource MonoFont}" FontSize="10"
-                                                               Foreground="{StaticResource Subtext0Brush}" VerticalAlignment="Center"/>
-                                                </StackPanel>
-                                                <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto"
-                                                              HorizontalScrollBarVisibility="Auto">
-                                                    <ItemsControl ItemsSource="{Binding DiffLines}">
+                                            <Grid>
+                                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                <Border Background="{DynamicResource Chat.Diff.Removed.Background}" Padding="10,4">
+                                                    <TextBlock FontSize="11" Foreground="{DynamicResource Status.Danger}">
+                                                        <Run Text="− "/><Run Text="{services:Loc chat.diff.before}"/>
+                                                    </TextBlock>
+                                                </Border>
+                                                <Border Grid.Column="1" Background="{DynamicResource Chat.Diff.Added.Background}" Padding="10,4">
+                                                    <TextBlock FontSize="11" Foreground="{DynamicResource Status.Success}">
+                                                        <Run Text="+ "/><Run Text="{services:Loc chat.diff.after}"/>
+                                                    </TextBlock>
+                                                </Border>
+                                                <ScrollViewer Grid.Row="1" Grid.ColumnSpan="2" MaxHeight="300" VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <ItemsControl ItemsSource="{Binding DiffPairs}" Margin="0,2,0,4">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
-                                                                <TextBlock Text="{Binding Display}" FontFamily="{StaticResource MonoFont}"
-                                                                           FontSize="11" Padding="10,0" TextWrapping="NoWrap">
-                                                                    <TextBlock.Style>
-                                                                        <Style TargetType="TextBlock">
-                                                                            <Setter Property="Foreground" Value="{StaticResource Subtext0Brush}"/>
-                                                                            <Setter Property="Background" Value="Transparent"/>
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Add}">
-                                                                                    <Setter Property="Foreground" Value="#A6E3A1"/>
-                                                                                    <Setter Property="Background" Value="#1A40A02B"/>
-                                                                                </DataTrigger>
-                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Remove}">
-                                                                                    <Setter Property="Foreground" Value="#F38BA8"/>
-                                                                                    <Setter Property="Background" Value="#1AF38BA8"/>
-                                                                                </DataTrigger>
-                                                                                <DataTrigger Binding="{Binding Kind}" Value="{x:Static models:EditDiffKind.Hunk}">
-                                                                                    <Setter Property="Foreground" Value="#89B4FA"/>
-                                                                                    <Setter Property="FontStyle" Value="Italic"/>
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </TextBlock.Style>
-                                                                </TextBlock>
+                                                                <Grid TextElement.FontFamily="{DynamicResource Font.Mono}" TextElement.FontSize="11">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
+                                                                        <ColumnDefinition Width="36"/><ColumnDefinition Width="*"/>
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <!-- hunk header across both sides -->
+                                                                    <TextBlock Grid.ColumnSpan="4" Text="{Binding Hunk}" Foreground="{DynamicResource Chat.Diff.Hunk.Foreground}"
+                                                                               FontStyle="Italic" Padding="10,2"
+                                                                               Visibility="{Binding IsHunk, Converter={StaticResource BoolVis}}"/>
+                                                                    <Border Grid.ColumnSpan="2">
+                                                                        <Border.Style>
+                                                                            <Style TargetType="Border">
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding OldKind}" Value="{x:Static models:EditDiffKind.Remove}">
+                                                                                        <Setter Property="Background" Value="{DynamicResource Chat.Diff.Removed.Background}"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </Border.Style>
+                                                                    </Border>
+                                                                    <Border Grid.Column="2" Grid.ColumnSpan="2">
+                                                                        <Border.Style>
+                                                                            <Style TargetType="Border">
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding NewKind}" Value="{x:Static models:EditDiffKind.Add}">
+                                                                                        <Setter Property="Background" Value="{DynamicResource Chat.Diff.Added.Background}"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </Border.Style>
+                                                                    </Border>
+                                                                    <TextBlock Text="{Binding OldNo}" Foreground="{DynamicResource Text.Muted}" TextAlignment="Right" Padding="0,0,8,0"/>
+                                                                    <TextBlock Grid.Column="1" Text="{Binding OldText}" TextTrimming="CharacterEllipsis" Padding="0,0,8,0">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding OldKind}" Value="{x:Static models:EditDiffKind.Remove}">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                    <TextBlock Grid.Column="2" Text="{Binding NewNo}" Foreground="{DynamicResource Text.Muted}" TextAlignment="Right" Padding="0,0,8,0"/>
+                                                                    <TextBlock Grid.Column="3" Text="{Binding NewText}" TextTrimming="CharacterEllipsis" Padding="0,0,8,0">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding NewKind}" Value="{x:Static models:EditDiffKind.Add}">
+                                                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Success.Soft}"/>
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                </Grid>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>
                                                 </ScrollViewer>
-                                            </StackPanel>
+                                            </Grid>
                                         </Border>
 
                                         <!-- Raw tool output (collapsible) -->
                                         <Expander IsExpanded="{Binding IsExpanded}">
                                             <Expander.Header>
-                                                <TextBlock Foreground="{StaticResource Overlay0Brush}" FontSize="11">
+                                                <TextBlock Foreground="{DynamicResource Text.Muted}" FontSize="11">
                                                     <Run Text="{services:Loc chat.showOutput}"/>
                                                     <Run Text=" ("/>
                                                     <Run Text="{Binding ToolOutputLines, Mode=OneWay}"/>
                                                     <Run Text="{services:Loc chat.linesSuffix}"/>
                                                 </TextBlock>
                                             </Expander.Header>
-                                            <Border Background="{StaticResource Surface0Brush}"
+                                            <Border Background="{DynamicResource Surface.Sunken}"
                                                     CornerRadius="6" Padding="10,8" Margin="0,4,0,0"
                                                     MaxHeight="300">
                                                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                                                               HorizontalScrollBarVisibility="Auto">
                                                     <TextBlock Text="{Binding ToolOutput}"
-                                                               Foreground="{StaticResource Subtext0Brush}"
-                                                               FontFamily="{StaticResource MonoFont}"
+                                                               Foreground="{DynamicResource Text.Secondary}"
+                                                               FontFamily="{DynamicResource Font.Mono}"
                                                                FontSize="11" TextWrapping="Wrap"/>
                                                 </ScrollViewer>
                                             </Border>
@@ -973,9 +1096,13 @@
                                                 <Style TargetType="Expander" BasedOn="{StaticResource ToolExpander}">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}">
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
+                                                                <Condition Binding="{Binding ToolOutput, Converter={StaticResource BoolVis}}" Value="Visible"/>
+                                                            </MultiDataTrigger.Conditions>
                                                             <Setter Property="Visibility" Value="Visible"/>
-                                                        </DataTrigger>
+                                                        </MultiDataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Expander.Style>
@@ -984,10 +1111,10 @@
 
                                         <!-- Row 5: Error bar with retry hint — only where Retry is actually offered -->
                                         <Border Grid.Row="5" Margin="0,4,0,0" Padding="6,3"
-                                                Background="#20F38BA8" CornerRadius="4"
+                                                Background="{DynamicResource Status.Danger.Tint}" CornerRadius="4"
                                                 Visibility="{Binding CanRetry, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
-                                            <TextBlock FontSize="10" Foreground="{StaticResource RedBrush}"
-                                                       FontFamily="{StaticResource MainFont}">
+                                            <TextBlock FontSize="10" Foreground="{DynamicResource Status.Danger}"
+                                                       FontFamily="{DynamicResource Font.Ui.Display}">
                                                 <Run Text="&#xE783;" FontFamily="Segoe MDL2 Assets" FontSize="10"/>
                                                 <Run Text="{services:Loc chat.errorHover}"/>
                                             </TextBlock>
@@ -995,21 +1122,35 @@
 
                                         <!-- Row 6: Footer — streaming dots + timestamp -->
                                         <StackPanel Grid.Row="6" Orientation="Horizontal"
-                                                    HorizontalAlignment="Right" Margin="0,6,0,0">
+                                                    HorizontalAlignment="Right" Margin="0,2,0,0">
                                             <!-- Compact streaming indicator -->
                                             <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
                                                         Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}}">
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0"
+                                                <Ellipse Width="5" Height="5" Fill="{DynamicResource Accent.2}" Margin="1,0"
                                                          Style="{StaticResource PulseDot}"/>
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0"
+                                                <Ellipse Width="5" Height="5" Fill="{DynamicResource Accent.2}" Margin="1,0"
                                                          Style="{StaticResource PulseDot}"/>
-                                                <Ellipse Width="5" Height="5" Fill="{StaticResource MauveBrush}" Margin="1,0"
+                                                <Ellipse Width="5" Height="5" Fill="{DynamicResource Accent.2}" Margin="1,0"
                                                          Style="{StaticResource PulseDot}"/>
                                             </StackPanel>
 
                                             <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm}'}"
-                                                       Foreground="{StaticResource Overlay0Brush}"
-                                                       FontSize="9" VerticalAlignment="Center"/>
+                                                       Foreground="{DynamicResource Text.Muted}"
+                                                       FontSize="11" VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.User}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Assistant}">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -1025,12 +1166,12 @@
                     Visibility="{Binding Messages.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}">
             <TextBlock Text="&#x2728;" FontSize="48" HorizontalAlignment="Center" Margin="0,0,0,16"/>
             <TextBlock Text="{services:Loc chat.welcomeTitle}"
-                       Foreground="{StaticResource TextBrush}"
+                       Foreground="{DynamicResource Text.Primary}"
                        FontSize="24" FontWeight="Bold"
-                       FontFamily="{StaticResource MainFont}"
+                       FontFamily="{DynamicResource Font.Ui.Display}"
                        HorizontalAlignment="Center"/>
             <TextBlock Text="{services:Loc chat.welcomeSubtitle}"
-                       Foreground="{StaticResource Subtext0Brush}"
+                       Foreground="{DynamicResource Text.Secondary}"
                        FontSize="14" HorizontalAlignment="Center"
                        Margin="0,8,0,0"/>
 
@@ -1041,8 +1182,8 @@
                         Tag="{services:Loc chat.suggestExplainPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource MauveBrush}"/>
-                        <TextBlock Text="{services:Loc chat.suggestExplain}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Accent.2}"/>
+                        <TextBlock Text="{services:Loc chat.suggestExplain}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -1050,8 +1191,8 @@
                         Tag="{services:Loc chat.suggestBugsPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource RedBrush}"/>
-                        <TextBlock Text="{services:Loc chat.suggestBugs}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Status.Danger}"/>
+                        <TextBlock Text="{services:Loc chat.suggestBugs}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -1059,8 +1200,8 @@
                         Tag="{services:Loc chat.suggestTestsPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8A0;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource GreenBrush}"/>
-                        <TextBlock Text="{services:Loc chat.suggestTests}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Status.Success}"/>
+                        <TextBlock Text="{services:Loc chat.suggestTests}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
                     </StackPanel>
                 </Button>
                 <Button Style="{StaticResource SecondaryButton}" Margin="4" Padding="12,8"
@@ -1068,8 +1209,8 @@
                         Tag="{services:Loc chat.suggestReviewPrompt}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource TealBrush}"/>
-                        <TextBlock Text="{services:Loc chat.suggestReview}" FontSize="12" FontFamily="{StaticResource MainFont}"/>
+                                   VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Accent.1}"/>
+                        <TextBlock Text="{services:Loc chat.suggestReview}" FontSize="12" FontFamily="{DynamicResource Font.Ui.Display}"/>
                     </StackPanel>
                 </Button>
             </WrapPanel>
@@ -1082,7 +1223,7 @@
                         <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="16" VerticalAlignment="Center"
                                    Margin="0,0,8,0"/>
-                        <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.openProjectFolder}" FontFamily="{DynamicResource Font.Ui.Display}"
                                    FontSize="13" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -1092,114 +1233,42 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="16" VerticalAlignment="Center"
-                                   Margin="0,0,8,0" Foreground="{StaticResource MauveBrush}"/>
-                        <TextBlock Text="{services:Loc chat.connectRepo}" FontFamily="{StaticResource MainFont}"
+                                   Margin="0,0,8,0" Foreground="{DynamicResource Accent.2}"/>
+                        <TextBlock Text="{services:Loc chat.connectRepo}" FontFamily="{DynamicResource Font.Ui.Display}"
                                    FontSize="13" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
             </StackPanel>
             <TextBlock Text="{services:Loc chat.openHint}"
-                       Foreground="{StaticResource Overlay0Brush}"
+                       Foreground="{DynamicResource Text.Muted}"
                        FontSize="11" HorizontalAlignment="Center"
                        Margin="0,6,0,0"/>
         </StackPanel>
-
-        <!-- INPUT AREA -->
-        <Border Grid.Row="2" Background="{StaticResource MantleBrush}"
-                Padding="20,12" BorderThickness="0,1,0,0"
-                BorderBrush="{StaticResource Surface0Brush}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <Grid>
-                    <TextBox x:Name="InputBox"
-                             Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource GlowTextBox}"
-                             AcceptsReturn="True"
-                             TextWrapping="Wrap"
-                             FontFamily="{StaticResource MonoFont}"
-                             FontSize="14"
-                             MaxHeight="150"
-                             VerticalScrollBarVisibility="Auto"
-                             IsEnabled="{Binding IsGenerating, Converter={StaticResource InvertBool}}"/>
-
-                    <TextBlock Text="{services:Loc chat.placeholder}"
-                               FontFamily="{StaticResource MainFont}"
-                               FontSize="13"
-                               Foreground="{StaticResource Overlay0Brush}"
-                               VerticalAlignment="Center"
-                               Margin="14,0,0,0"
-                               IsHitTestVisible="False"
-                               Visibility="{Binding UserInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}"/>
-                </Grid>
-
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
-                    <Button Content="&#xE838;" Style="{StaticResource IconButton}"
-                            Command="{Binding OpenFolderCommand}"
-                            FontFamily="Segoe MDL2 Assets"
-                            ToolTip="{services:Loc chat.openProjectTip}"
-                            Margin="0,0,4,0"/>
-
-                    <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
-                            Command="{Binding SendMessageCommand}"
-                            FontFamily="Segoe MDL2 Assets" FontSize="16"
-                            Padding="14,10" Margin="0,0,4,0"
-                            ToolTip="{services:Loc chat.send}"
-                            Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
-
-                    <Button Content="&#xE71A;" Style="{StaticResource DangerButton}"
-                            Command="{Binding StopGenerationCommand}"
-                            FontFamily="Segoe MDL2 Assets" FontSize="16"
-                            Padding="14,10" Margin="0,0,4,0"
-                            ToolTip="{services:Loc chat.stop}"
-                            Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}"/>
-
-                    <Button Content="&#xE74D;" Style="{StaticResource IconButton}"
-                            Command="{Binding ClearChatCommand}"
-                            FontFamily="Segoe MDL2 Assets"
-                            ToolTip="{services:Loc chat.clearChatTip}"/>
-                </StackPanel>
-            </Grid>
-        </Border>
 
         <!-- ════ STRATEGIC COMPACTION TOAST (Sprint 2 #2) ════ -->
         <!-- Non-blocking nudge that fires at logical breakpoints (50+ tool calls /
              ctx ≥ 60% / ctx ≥ 75%) BEFORE the urgent warning bar below. Severity
              drives the color: info=cyan, warn=amber, critical=red. -->
-        <Border Grid.Row="3" Padding="14,10" Margin="12,6,12,0" CornerRadius="10"
+        <Border Grid.Row="2" Padding="14,10" Margin="16,6,16,0" CornerRadius="10" MaxWidth="1060"
                 BorderThickness="1"
                 Visibility="{Binding ShowCompactionToast, Converter={StaticResource BoolVis}}">
             <Border.Style>
                 <Style TargetType="Border">
-                    <!-- Default = info (cyan) -->
-                    <Setter Property="Background" Value="#1A4CDFFF"/>
-                    <Setter Property="BorderBrush" Value="#664CDFFF"/>
-                    <Setter Property="Effect">
-                        <Setter.Value>
-                            <DropShadowEffect Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
-                        </Setter.Value>
-                    </Setter>
+                    <!-- Default = info (cyan). Whole brush / effect tokens only: an inline DropShadowEffect
+                         or SolidColorBrush inside a style setter is sealed and cannot follow a theme. -->
+                    <Setter Property="Background" Value="{DynamicResource Accent.1.Tint}"/>
+                    <Setter Property="BorderBrush" Value="{DynamicResource Accent.1.Border}"/>
+                    <Setter Property="Effect" Value="{DynamicResource Glow.Toast.Info}"/>
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="warn">
-                            <Setter Property="Background" Value="#1AFFD166"/>
-                            <Setter Property="BorderBrush" Value="#66FFD166"/>
-                            <Setter Property="Effect">
-                                <Setter.Value>
-                                    <DropShadowEffect Color="#FFD166" BlurRadius="18" ShadowDepth="0" Opacity="0.35"/>
-                                </Setter.Value>
-                            </Setter>
+                            <Setter Property="Background" Value="{DynamicResource Status.Warning.Tint}"/>
+                            <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning.Border}"/>
+                            <Setter Property="Effect" Value="{DynamicResource Glow.Toast.Warning}"/>
                         </DataTrigger>
                         <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="critical">
-                            <Setter Property="Background" Value="#1AFF6E6E"/>
-                            <Setter Property="BorderBrush" Value="#66FF6E6E"/>
-                            <Setter Property="Effect">
-                                <Setter.Value>
-                                    <DropShadowEffect Color="#FF6E6E" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
-                                </Setter.Value>
-                            </Setter>
+                            <Setter Property="Background" Value="{DynamicResource Status.Danger.Tint}"/>
+                            <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger.Border}"/>
+                            <Setter Property="Effect" Value="{DynamicResource Glow.Toast.Danger}"/>
                         </DataTrigger>
                     </Style.Triggers>
                 </Style>
@@ -1219,27 +1288,15 @@
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
                             <Setter Property="Text" Value="&#xE946;"/>
-                            <Setter Property="Foreground">
-                                <Setter.Value>
-                                    <SolidColorBrush Color="#4CDFFF"/>
-                                </Setter.Value>
-                            </Setter>
+                            <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="warn">
                                     <Setter Property="Text" Value="&#xE7BA;"/>
-                                    <Setter Property="Foreground">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="#FFD166"/>
-                                        </Setter.Value>
-                                    </Setter>
+                                    <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding CompactionToastSeverity}" Value="critical">
                                     <Setter Property="Text" Value="&#xE783;"/>
-                                    <Setter Property="Foreground">
-                                        <Setter.Value>
-                                            <SolidColorBrush Color="#FF6E6E"/>
-                                        </Setter.Value>
-                                    </Setter>
+                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -1248,16 +1305,16 @@
 
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                     <TextBlock Text="{Binding CompactionToastTitle}" FontSize="13" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextBrush}"/>
+                               Foreground="{DynamicResource Text.Primary}"/>
                     <TextBlock Text="{Binding CompactionToastReason}" FontSize="11"
-                               Foreground="{StaticResource Subtext0Brush}"
+                               Foreground="{DynamicResource Text.Secondary}"
                                Margin="0,2,0,0" TextWrapping="Wrap"/>
                 </StackPanel>
 
                 <!-- Compact now (primary action) -->
                 <Button Grid.Column="2" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
                         Command="{Binding AcceptCompactionToastCommand}"
-                        Background="#A672FF" BorderThickness="0" Foreground="White"
+                        Background="{DynamicResource Accent.2}" BorderThickness="0" Foreground="{DynamicResource Text.OnAccent}"
                         ToolTip="{services:Loc chat.compactNowTip}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
@@ -1267,7 +1324,7 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="#C78AFF"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource Accent.2.Hover}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -1283,8 +1340,8 @@
                 <Button Grid.Column="3" Padding="10,6" Margin="0,0,6,0" Cursor="Hand"
                         Command="{Binding SnoozeCompactionToastCommand}"
                         Background="Transparent"
-                        BorderBrush="{StaticResource Surface2Brush}" BorderThickness="1"
-                        Foreground="{StaticResource Subtext0Brush}"
+                        BorderBrush="{DynamicResource Surface.Raised.Strong}" BorderThickness="1"
+                        Foreground="{DynamicResource Text.Secondary}"
                         ToolTip="{services:Loc chat.snoozeTip}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
@@ -1296,7 +1353,7 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="#11FFFFFF"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Fill.Faint}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -1317,12 +1374,12 @@
                         <ControlTemplate TargetType="Button">
                             <Border x:Name="bd" Background="Transparent" CornerRadius="14">
                                 <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                           Foreground="{StaticResource Overlay0Brush}"
+                                           Foreground="{DynamicResource Text.Muted}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -1333,8 +1390,8 @@
 
         <!-- CONTEXT WARNING BAR with action buttons -->
         <!-- Hidden when the strategic compaction toast is active to avoid visual stacking at Row 3 -->
-        <Border Grid.Row="3" Padding="10,6"
-                BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}">
+        <Border Grid.Row="2" Padding="10,6" Background="{DynamicResource Banner.Warning.Background}"
+                BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Surface.Sunken}">
             <Border.Style>
                 <Style TargetType="Border">
                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -1349,9 +1406,6 @@
                     </Style.Triggers>
                 </Style>
             </Border.Style>
-            <Border.Background>
-                <SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.1"/>
-            </Border.Background>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -1363,22 +1417,22 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets"
                                FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"
-                               Foreground="{StaticResource YellowBrush}"/>
+                               Foreground="{DynamicResource Status.Warning}"/>
                     <ProgressBar Value="{Binding ContextUsagePercent}" Maximum="100"
                                  Width="120" Height="8"
                                  Style="{StaticResource ContextProgressBar}"
                                  Foreground="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}"
                                  VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding ContextUsageText}"
-                               Foreground="{StaticResource YellowBrush}"
+                               Foreground="{DynamicResource Status.Warning}"
                                FontSize="11" FontWeight="SemiBold"
-                               FontFamily="{StaticResource MonoFont}"
+                               FontFamily="{DynamicResource Font.Mono}"
                                VerticalAlignment="Center" Margin="8,0,0,0"/>
                 </StackPanel>
 
                 <TextBlock Grid.Column="1" Text="{Binding ContextWarningText}"
-                           Foreground="{StaticResource YellowBrush}"
-                           FontSize="11" FontFamily="{StaticResource MainFont}"
+                           Foreground="{DynamicResource Status.Warning}"
+                           FontSize="11" FontFamily="{DynamicResource Font.Ui.Display}"
                            VerticalAlignment="Center" Margin="12,0,0,0"
                            TextTrimming="CharacterEllipsis"/>
 
@@ -1390,7 +1444,7 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="10" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                        <TextBlock Text="{services:Loc chat.compact}" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.compact}" FontFamily="{DynamicResource Font.Ui.Display}"
                                    FontSize="10" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -1403,234 +1457,321 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                        <TextBlock Text="{services:Loc chat.newChat}" FontFamily="{StaticResource MainFont}"
+                        <TextBlock Text="{services:Loc chat.newChat}" FontFamily="{DynamicResource Font.Ui.Display}"
                                    FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
             </Grid>
         </Border>
 
-        <!-- MODEL SELECTOR + STATUS BAR -->
-        <Border Grid.Row="4" Background="{StaticResource CrustBrush}" Padding="8,4"
-                BorderThickness="0,1,0,0" BorderBrush="{StaticResource Surface0Brush}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+        <!-- COMPOSER — one card under the reading column: a status line (what the agent is doing, context left), the
+             box, and along its bottom edge the controls that used to be spread over two bars: model, thinking, effort,
+             approvals, budget, the cost estimate, batch, and send. -->
+        <Border Grid.Row="3" Background="{DynamicResource Bg.Elevated}" Padding="16,4,16,12">
+            <Grid MaxWidth="1060">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <!-- Model Selector — only while a model on this PC answers the chat. Shown for every provider,
-                     it let a Claude chat load a GGUF and switch itself to Local without a word. -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
-                            Visibility="{Binding ShowLocalModelPicker, Converter={StaticResource BoolVis}}">
-                    <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets"
-                               FontSize="11" Foreground="{StaticResource MauveBrush}"
-                               VerticalAlignment="Center" Margin="4,0,6,0"/>
-                    <ComboBox ItemsSource="{Binding LocalModels}"
-                              SelectedItem="{Binding SelectedLocalModel}"
-                              Style="{StaticResource ModernComboBox}"
-                              Width="220" FontSize="11"
-                              ToolTip="{services:Loc chat.selectModelTip}">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding Name}" FontSize="11"
-                                               FontFamily="{StaticResource MainFont}"
-                                               VerticalAlignment="Center"/>
-                                    <TextBlock Text="{Binding QuantizationType}" FontSize="9"
-                                               Foreground="{StaticResource MauveBrush}"
-                                               VerticalAlignment="Center" Margin="6,0,0,0"
-                                               FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding FileSizeDisplay}" FontSize="9"
-                                               Foreground="{StaticResource Overlay0Brush}"
-                                               VerticalAlignment="Center" Margin="6,0,0,0"/>
+                <!-- The card -->
+                <Border Grid.Row="1" CornerRadius="12" BorderThickness="1" Padding="14,10,10,8">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{DynamicResource Surface.Input}"/>
+                            <Setter Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid>
+                            <!-- Borderless: the card is the box. -->
+                            <TextBox x:Name="InputBox" Style="{x:Null}"
+                                     Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
+                                     AcceptsReturn="True" TextWrapping="Wrap"
+                                     Background="Transparent" BorderThickness="0" Padding="0"
+                                     Foreground="{DynamicResource Text.Primary}" CaretBrush="{DynamicResource Text.Primary}"
+                                     SelectionBrush="{DynamicResource Accent.1}"
+                                     FontFamily="{DynamicResource Font.Ui}" FontSize="14"
+                                     MinHeight="44" MaxHeight="200"
+                                     VerticalScrollBarVisibility="Auto"
+                                     IsEnabled="{Binding IsGenerating, Converter={StaticResource InvertBool}}"/>
+                            <TextBlock Text="{services:Loc chat.placeholder}"
+                                       FontFamily="{DynamicResource Font.Ui}" FontSize="14"
+                                       Foreground="{DynamicResource Text.Muted}"
+                                       VerticalAlignment="Top" Margin="2,0,0,0" IsHitTestVisible="False"
+                                       Visibility="{Binding UserInput, Converter={StaticResource BoolVis}, ConverterParameter=Invert, FallbackValue=Visible}"/>
+                        </Grid>
+
+                        <Grid Grid.Row="1" Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <WrapPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                       TextElement.FontSize="12" TextElement.FontFamily="{DynamicResource Font.Ui}">
+                                <!-- "+": the switches and actions that don't need a pill of their own -->
+                                <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Width="30" Height="30" Margin="0,2,8,2"
+                                        Click="MoreButton_Click" ToolTip="{services:Loc chat.more.tip}">
+                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Text.Secondary}"/>
+                                    <Button.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="{services:Loc chat.agentLabel}" IsCheckable="True" IsChecked="{Binding AgenticMode}" ToolTip="{services:Loc chat.agentTip}"/>
+                                            <MenuItem Header="{services:Loc chat.autonomousLabel}" IsCheckable="True" IsChecked="{Binding AutonomousMode}" ToolTip="{services:Loc chat.autoTip}"/>
+                                            <MenuItem Header="{services:Loc chat.showThinkingLabel}" IsCheckable="True" IsChecked="{Binding ShowThinking}" ToolTip="{services:Loc chat.thinkingTip}"/>
+                                            <MenuItem Header="{services:Loc chat.stepsLabel}" IsCheckable="True" IsChecked="{Binding ShowAgentInternals}" ToolTip="{services:Loc chat.stepsTip}"/>
+                                            <MenuItem Header="{services:Loc chat.autoRunLabel}" IsCheckable="True" IsChecked="{Binding AutoExecute}" ToolTip="{services:Loc chat.autoRunWarnTip}"/>
+                                            <MenuItem Header="{services:Loc chat.side.toggle}" IsCheckable="True" IsChecked="{Binding ShowSidePanel}"/>
+                                            <Separator/>
+                                            <MenuItem Header="{services:Loc chat.reviewTip}" Command="{Binding ReviewCodeCommand}"
+                                                      Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}"/>
+                                            <MenuItem Header="{services:Loc chat.openProjectTip}" Command="{Binding OpenFolderCommand}"/>
+                                            <MenuItem Header="{services:Loc chat.clearChatTip}" Command="{Binding ClearChatCommand}"/>
+                                            <MenuItem Header="{services:Loc chat.newChat}" Command="{Binding NewSessionCommand}"/>
+                                        </ContextMenu>
+                                    </Button.ContextMenu>
+                                </Button>
+                                <!-- Model (an API provider with a key): shows its price; a model on this PC is named over it -->
+                                <Grid Margin="0,2,8,2" VerticalAlignment="Center"
+                                      Visibility="{Binding HasChatModelChoices, Converter={StaticResource BoolVis}}">
+                                    <ComboBox x:Name="ChatModelBox" ItemsSource="{Binding ChatModelChoices}" SelectedItem="{Binding SelectedChatModel}"
+                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="180"
+                                              ToolTip="{services:Loc chat.model.pickTip}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding PriceLabel}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
+                                                               FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                               ToolTip="{services:Loc chat.model.priceTip}"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <TextBlock Text="{Binding ChatModelPlaceholder}" Foreground="{DynamicResource Text.Muted}" FontSize="12"
+                                               VerticalAlignment="Center" Margin="12,0,30,0" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"
+                                               Visibility="{Binding ChatModelPlaceholder, Converter={StaticResource BoolVis}}"/>
+                                </Grid>
+
+                                <!-- A model on this PC (GGUF): only while one answers the chat — shown for every provider, it
+                                     let a Claude chat load a GGUF and switch itself to Local without a word. -->
+                                <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
+                                            Visibility="{Binding ShowLocalModelPicker, Converter={StaticResource BoolVis}}">
+                                    <ComboBox ItemsSource="{Binding LocalModels}" SelectedItem="{Binding SelectedLocalModel}"
+                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" Width="240"
+                                              ToolTip="{services:Loc chat.selectModelTip}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Name}" FontSize="13" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding QuantizationType}" FontSize="11" Foreground="{DynamicResource Accent.2}"
+                                                               VerticalAlignment="Center" Margin="6,0,0,0" FontWeight="SemiBold"/>
+                                                    <TextBlock Text="{Binding FileSizeDisplay}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
+                                                               VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Style="{StaticResource IconButton}"
+                                            Command="{Binding RefreshModelsCommand}" ToolTip="{services:Loc chat.refreshModelsTip}"
+                                            Width="26" Height="26" FontSize="11" Margin="2,0,0,0"/>
+                                    <TextBlock Text="{services:Loc chat.loading}" Foreground="{DynamicResource Status.Warning}"
+                                               FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0,0,0"
+                                               Visibility="{Binding IsLoadingModel, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
-                            Style="{StaticResource IconButton}"
-                            Command="{Binding RefreshModelsCommand}"
-                            ToolTip="{services:Loc chat.refreshModelsTip}"
-                            FontSize="10" Padding="4,4" Margin="2,0,0,0"/>
-                    <TextBlock Text="{services:Loc chat.loading}"
-                               Foreground="{StaticResource YellowBrush}"
-                               FontSize="10" FontWeight="SemiBold"
-                               VerticalAlignment="Center" Margin="6,0,0,0"
-                               Visibility="{Binding IsLoadingModel, Converter={StaticResource BoolVis}}"/>
-                </StackPanel>
 
-                <!-- Status Text + Generating Spinner -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="12,0,0,0"
-                            VerticalAlignment="Center">
-                    <TextBlock Text="{Binding StatusText}"
-                               Foreground="{StaticResource Subtext0Brush}"
-                               FontSize="11" VerticalAlignment="Center"
-                               FontFamily="{StaticResource MainFont}"
-                               TextTrimming="CharacterEllipsis"
-                               MaxWidth="300"/>
-                    <StackPanel Orientation="Horizontal" Margin="8,0,0,0"
-                                Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}">
-                        <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets"
-                                   FontSize="12" Foreground="{StaticResource MauveBrush}"
-                                   VerticalAlignment="Center" Margin="0,0,4,0"
-                                   RenderTransformOrigin="0.5,0.5">
-                            <TextBlock.RenderTransform>
-                                <RotateTransform Angle="0"/>
-                            </TextBlock.RenderTransform>
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsGenerating}" Value="True">
-                                            <DataTrigger.EnterActions>
-                                                <BeginStoryboard x:Name="StatusSpin">
-                                                    <Storyboard RepeatBehavior="Forever">
-                                                        <DoubleAnimation
-                                                            Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                            From="0" To="360" Duration="0:0:1.2"/>
-                                                    </Storyboard>
-                                                </BeginStoryboard>
-                                            </DataTrigger.EnterActions>
-                                            <DataTrigger.ExitActions>
-                                                <StopStoryboard BeginStoryboardName="StatusSpin"/>
-                                            </DataTrigger.ExitActions>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                        <TextBlock Text="{services:Loc chat.generating}"
-                                   Foreground="{StaticResource MauveBrush}"
-                                   FontSize="11" FontWeight="SemiBold"
-                                   VerticalAlignment="Center">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsGenerating}" Value="True">
-                                            <DataTrigger.EnterActions>
-                                                <BeginStoryboard x:Name="GenPulse">
-                                                    <Storyboard RepeatBehavior="Forever">
-                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                            From="1.0" To="0.4" Duration="0:0:0.8"
-                                                            AutoReverse="True"/>
-                                                    </Storyboard>
-                                                </BeginStoryboard>
-                                            </DataTrigger.EnterActions>
-                                            <DataTrigger.ExitActions>
-                                                <StopStoryboard BeginStoryboardName="GenPulse"/>
-                                            </DataTrigger.ExitActions>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </StackPanel>
-                </StackPanel>
+                                <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}" Foreground="{DynamicResource Accent.2}"
+                                          VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc chat.extendedThinkingTip}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{services:Loc chat.think}" FontSize="12" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </CheckBox>
 
-                <!-- LED Context Bar -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0"
-                            VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal" Margin="0,0,6,0"
-                                ToolTip="{services:Loc chat.ctxTip}">
-                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=0}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
-                        </Border>
-                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource GreenColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=25}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource TealColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
-                        </Border>
-                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=50}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource YellowColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
-                        </Border>
-                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=75}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource PeachColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
-                        </Border>
-                        <Border Width="14" Height="8" CornerRadius="2" Margin="1,0">
-                            <Border.Style><Style TargetType="Border"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.15"/></Setter.Value></Setter><Style.Triggers><DataTrigger Binding="{Binding ContextUsagePercent, Converter={StaticResource CtxLedGate}, ConverterParameter=90}" Value="True"><Setter Property="Background"><Setter.Value><SolidColorBrush Color="{StaticResource RedColor}" Opacity="0.9"/></Setter.Value></Setter></DataTrigger></Style.Triggers></Style></Border.Style>
-                        </Border>
-                    </StackPanel>
-                    <Border CornerRadius="3" Padding="4,1" VerticalAlignment="Center"
-                            Background="{Binding ContextUsagePercent, Converter={StaticResource CtxBrush}}"
-                            Opacity="0.8" Margin="0,0,4,0">
-                        <TextBlock Text="{Binding ContextLevelLabel}"
-                                   FontSize="8" FontWeight="ExtraBold"
-                                   Foreground="{StaticResource BaseBrush}"
-                                   FontFamily="{StaticResource MonoFont}"/>
-                    </Border>
-                    <TextBlock Foreground="{StaticResource Overlay0Brush}"
-                               FontSize="10" FontFamily="{StaticResource MonoFont}"
-                               VerticalAlignment="Center">
-                        <TextBlock.Text>
-                            <Binding Path="ContextUsagePercent" StringFormat="{}{0:F0}%"/>
-                        </TextBlock.Text>
-                    </TextBlock>
-                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center">
+                                    <TextBlock Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
+                                               Margin="0,0,5,0" ToolTip="{services:Loc chat.effortTip}"/>
+                                    <ComboBox x:Name="EffortBox" ItemsSource="{Binding EffortOptions}" SelectedItem="{Binding ReasoningEffort}"
+                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="92"
+                                              ToolTip="{services:Loc chat.effortTip}"/>
+                                </StackPanel>
 
-                <!-- Per-Turn Stats -->
-                <TextBlock Grid.Column="3" Text="{Binding LastTurnStats}"
-                           Foreground="{StaticResource Overlay0Brush}"
-                           FontSize="9" FontFamily="{StaticResource MonoFont}"
-                           VerticalAlignment="Center" Margin="6,0"
-                           ToolTip="{services:Loc chat.lastTurnTip}"/>
+                                <!-- Approvals: ask first / accept edits in the project / allow everything in this chat
+                                     (confirmed; the user's Deny and Ask rules and code run in their browser still apply). -->
+                                <ComboBox x:Name="ApprovalBox" ItemsSource="{Binding ApprovalChoices}"
+                                          SelectedValuePath="Key" SelectedValue="{Binding ApprovalMode}"
+                                          Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="150"
+                                          Margin="0,2,8,2" VerticalAlignment="Center" ToolTip="{services:Loc chat.approval.tip}">
+                                    <!-- An item template, not DisplayMemberPath: the closed box then shows the label too, and follows the language. -->
+                                    <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}"/></DataTemplate></ComboBox.ItemTemplate>
+                                </ComboBox>
 
-                <!-- Review + Auto-Execute -->
-                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Style="{StaticResource IconButton}"
-                            Command="{Binding ReviewCodeCommand}"
-                            ToolTip="{services:Loc chat.reviewTip}"
-                            FontSize="10" Padding="4,3" Margin="0,0,4,0"
-                            Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}">
-                        <TextBlock Text="&#xE7BE;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
-                    </Button>
-                    <!-- Runs AI-written code on this PC without asking: explicit label + warning tooltip, and
-                         the view model asks for confirmation whenever it is switched on. -->
-                    <CheckBox Content="{services:Loc chat.autoRunLabel}" IsChecked="{Binding AutoExecute}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="9" VerticalAlignment="Center"
-                              ToolTip="{services:Loc chat.autoRunWarnTip}"/>
-                    <!-- Accept edits: file edits inside the open project run without a prompt. Session-only, off by
-                         default, confirmed when switched on; shown only while a project is open (it is per project). -->
-                    <CheckBox x:Name="AcceptEditsToggle"
-                              Content="{services:Loc chat.acceptEdits.label}" IsChecked="{Binding AcceptEdits}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="{services:Loc chat.acceptEdits.tip}"
-                              Visibility="{Binding HasProject, Converter={StaticResource BoolVis}}"/>
-                    <!-- Lives on the BOTTOM bar, not the project bar: the project bar is
-                         hidden whenever no folder is open, and a plain chat with only the
-                         brain connected is exactly where the step spam is worst. -->
-                    <CheckBox Content="{services:Loc chat.stepsLabel}" IsChecked="{Binding ShowAgentInternals}"
-                              Foreground="{StaticResource Subtext0Brush}"
-                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="{services:Loc chat.stepsTip}"/>
-                    <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}"
-                              Foreground="{StaticResource MauveBrush}"
-                              FontSize="9" VerticalAlignment="Center" Margin="8,0,0,0"
-                              ToolTip="{services:Loc chat.extendedThinkingTip}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                       VerticalAlignment="Center" Margin="0,0,3,0"/>
-                            <TextBlock Text="{services:Loc chat.think}" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </CheckBox>
-                    <TextBlock Text="{services:Loc chat.effort}" Foreground="{StaticResource Subtext0Brush}"
-                               FontSize="9" VerticalAlignment="Center" Margin="10,0,4,0"
-                               ToolTip="{services:Loc chat.effortTip}"/>
-                    <ComboBox ItemsSource="{Binding EffortOptions}" SelectedItem="{Binding ReasoningEffort}"
-                              FontSize="9" Padding="6,1" MinWidth="62" Height="18" VerticalAlignment="Center"
-                              ToolTip="{services:Loc chat.effortTip}"/>
-                </StackPanel>
+                                <!-- Spend: a paid run stops and asks once it has spent this much -->
+                                <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
+                                            Visibility="{Binding HasBillingPage, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{services:Loc chat.budget.label}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
+                                               Margin="0,0,5,0" ToolTip="{services:Loc chat.budget.tip}"/>
+                                    <ComboBox x:Name="BudgetBox" ItemsSource="{Binding BudgetChoices}"
+                                              SelectedValuePath="Usd" SelectedValue="{Binding RunBudgetUsd}"
+                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="86"
+                                              ToolTip="{services:Loc chat.budget.tip}">
+                                        <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}"/></DataTemplate></ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
 
-                <Button Grid.Column="5" Style="{StaticResource IconButton}"
-                        Command="{Binding NewSessionCommand}"
-                        ToolTip="{services:Loc chat.newChat}"
-                        FontSize="12" Padding="6,4" Margin="4,0">
-                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="12"/>
-                </Button>
+                                <!-- Before a run: what a step should cost (tooltip: the arithmetic and how many steps the budget buys) -->
+                                <Border CornerRadius="6" Padding="8,4" Margin="0,2,8,2" VerticalAlignment="Center"
+                                        Background="{DynamicResource State.Fill.Faint}" ToolTip="{Binding EstimateTip}"
+                                        Visibility="{Binding EstimateShortText, Converter={StaticResource BoolVis}}">
+                                    <TextBlock x:Name="EstimateLabel" Text="{Binding EstimateShortText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12"/>
+                                </Border>
+
+                                <!-- Batch: the next questions go out at half price through the provider's batch API and the
+                                     answer lands in this chat later. Only shown when the active provider has one. -->
+                                <CheckBox IsChecked="{Binding BatchMode}" Foreground="{DynamicResource Status.Success}"
+                                          VerticalAlignment="Center" Margin="0,2,6,2" ToolTip="{services:Loc chat.batchTip}"
+                                          Visibility="{Binding CanUseBatch, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{services:Loc chat.batchLabel}" FontSize="12" VerticalAlignment="Center"/>
+                                </CheckBox>
+                                <TextBlock Text="{Binding BatchPendingText}" Foreground="{DynamicResource Status.Success}"
+                                           VerticalAlignment="Center" Margin="0,2,8,2" ToolTip="{services:Loc chat.batch.pendingTip}"
+                                           Visibility="{Binding BatchPendingText, Converter={StaticResource BoolVis}}"/>
+                            </WrapPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding SendMessageCommand}"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
+                                        ToolTip="{services:Loc chat.send}"
+                                        Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                <Button Content="&#xE71A;" Style="{StaticResource DangerButton}"
+                                        Command="{Binding StopGenerationCommand}"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
+                                        ToolTip="{services:Loc chat.stop}"
+                                        Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}"/>
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </Border>
             </Grid>
         </Border>
+
+        <!-- ═══ RIGHT PANEL — the project's files, the last image the agent looked at, its last run ═══ -->
+        <!-- SidePanelHost: the view hides it where it does not belong — inside the Edit page (which has its own
+             explorer and terminal) and when the chat itself is too narrow to give up 300 px. -->
+        <Grid x:Name="SidePanelHost" Grid.Column="1" Grid.RowSpan="4">
+        <Border x:Name="SidePanel" Width="300" Background="{DynamicResource Bg.Panel}"
+                BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0"
+                Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Files -->
+                <Grid Margin="0,8,0,0">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid Margin="14,0,6,4">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="{services:Loc chat.side.files}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                   VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Style="{StaticResource IconButton}" Width="26" Height="26" Click="SideTreeRefresh_Click"
+                                ToolTip="{services:Loc chat.side.refreshTip}">
+                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                        </Button>
+                        <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="26" Height="26" Click="SidePanelHide_Click"
+                                ToolTip="{services:Loc chat.side.hideTip}">
+                            <TextBlock Text="&#xE89F;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                        </Button>
+                    </Grid>
+                    <TreeView Grid.Row="1" x:Name="ProjectTreeView" ItemsSource="{Binding ProjectTree}" Background="Transparent" BorderThickness="0"
+                              Padding="6,0,6,6" MouseDoubleClick="ProjectTree_DoubleClick"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <TreeView.ItemContainerStyle>
+                            <Style TargetType="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                <Setter Property="Padding" Value="1,1"/>
+                            </Style>
+                        </TreeView.ItemContainerStyle>
+                        <TreeView.ItemTemplate>
+                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" ToolTip="{Binding FullPath}">
+                                    <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </HierarchicalDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                    <TextBlock Grid.Row="1" Text="{services:Loc chat.header.noProject}" FontSize="12" Foreground="{DynamicResource Text.Muted}"
+                               Margin="14,4" Visibility="{Binding HasProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                </Grid>
+
+                <!-- The last image the agent looked at (a game screenshot, a page it opened) -->
+                <Border Grid.Row="1" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="14,8,14,10"
+                        Visibility="{Binding LatestImagePath, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc chat.side.image}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,6"/>
+                        <Button Padding="0" Cursor="Hand" Background="Transparent" BorderThickness="0" Tag="{Binding LatestImagePath}" Click="ToolThumbnail_Click"
+                                ToolTip="{services:Loc chat.thumbnail.tip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Bg.Window}" Padding="2">
+                                        <ContentPresenter/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <Image Source="{Binding LatestImagePath, Converter={StaticResource ThumbSource}}" MaxHeight="160" Stretch="Uniform"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- The output of the last command / build / test -->
+                <Border Grid.Row="2" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="14,8,14,12"
+                        Visibility="{Binding LatestRunOutput, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc chat.side.run}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                        <TextBlock Text="{Binding LatestRunTitle}" FontSize="11" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"
+                                   TextTrimming="CharacterEllipsis" Margin="0,2,0,6" ToolTip="{Binding LatestRunTitle}"/>
+                        <Border CornerRadius="6" Background="{DynamicResource Surface.Sunken}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                                Padding="8,6" MaxHeight="190">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <TextBlock Text="{Binding LatestRunOutput}" FontSize="11" FontFamily="{DynamicResource Font.Mono}"
+                                           Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap"/>
+                            </ScrollViewer>
+                        </Border>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+        <!-- Drag the panel's left edge to resize it (remembered); double-click puts it back to 300. -->
+        <views:ResizeGrip HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
+                          Target="{Binding ElementName=SidePanel}"
+                          Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}"/>
+        </Grid>
     </Grid>
 </UserControl>

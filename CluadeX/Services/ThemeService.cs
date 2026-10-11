@@ -50,9 +50,11 @@ public sealed class ThemeService
 
     public IReadOnlyList<ThemeInfo> Themes { get; } =
     [
-        new(ThemeIds.Classic, "theme.classic.name", "theme.classic.desc", IsReady: false),
+        // Classic and Neon finished 2026-10-11: every page and dialog rendered in each (tests/themetest --all-pages)
+        // with no Midnight island left — the last were the manager pages' Page.* and Button.Action.* values.
+        new(ThemeIds.Classic, "theme.classic.name", "theme.classic.desc", IsReady: true),
         new(ThemeIds.Midnight, "theme.midnight.name", "theme.midnight.desc", IsReady: true),
-        new(ThemeIds.NeonCyber, "theme.neon.name", "theme.neon.desc", IsReady: false),
+        new(ThemeIds.NeonCyber, "theme.neon.name", "theme.neon.desc", IsReady: true),
     ];
 
     /// <summary>The theme on screen now. Midnight until <see cref="ApplySaved"/> / <see cref="Apply"/> says otherwise

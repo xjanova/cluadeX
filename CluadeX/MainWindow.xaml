@@ -53,6 +53,7 @@
     </Window.InputBindings>
 
     <Window.Resources>
+        <conv:EqualsMultiConverter x:Key="EqualsMulti"/>
         <DataTemplate DataType="{x:Type vm:ChatViewModel}">
             <views:ChatView/>
         </DataTemplate>
@@ -185,12 +186,27 @@
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                         Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}}">
                                 <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                           FontSize="11" Foreground="{DynamicResource Accent.1}"
-                                           VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{DynamicResource Font.Mono.Display}"
-                                           FontSize="11" Foreground="{DynamicResource Accent.1}"
-                                           VerticalAlignment="Center" MaxWidth="140" TextTrimming="CharacterEllipsis"
+                                           FontSize="13" Foreground="{DynamicResource Accent.1}"
+                                           VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{DynamicResource Font.Ui}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                           VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
                                            ToolTip="{Binding ChatVM.WorkingDirectory}"/>
+                                <TextBlock Text="{Binding ChatVM.WorkingDirectory}" FontFamily="{DynamicResource Font.Mono}"
+                                           FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="8,0,0,0"
+                                           VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding ChatVM.WorkingDirectory}"/>
+                                <Border CornerRadius="9" Padding="7,1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                        Background="{DynamicResource Status.Success.Tint}"
+                                        Visibility="{Binding ChatVM.GitBranch, Converter={StaticResource BoolVis}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8AD;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                   Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{Binding ChatVM.GitBranch}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                   Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center"
+                                                   MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChatVM.GitBranch}"/>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                             <TextBlock Text="{services:Loc nav.noProject}" FontFamily="{DynamicResource Font.Mono.Display}"
                                        FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"
@@ -227,6 +243,58 @@
                         <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
                              during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
                         <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- The model answering the chat: pick another here or in the composer (a model on this PC shows by name) -->
+                        <ComboBox x:Name="TitleModelBox" ItemsSource="{Binding ChatVM.ChatModelChoices}" SelectedItem="{Binding ChatVM.SelectedChatModel}"
+                                  Style="{StaticResource ModernComboBox}" Padding="10,3" FontSize="12" MinWidth="170" Height="28"
+                                  Margin="0,0,8,0" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True"
+                                  ToolTip="{services:Loc chat.model.pickTip}"
+                                  Visibility="{Binding ChatVM.HasChatModelChoices, Converter={StaticResource BoolVis}}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Accent.2}"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding PriceLabel}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                   Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+
+                        <!-- Today: what CluadeX spent on paid APIs, against the daily budget when one is set. Click: set it. -->
+                        <Button Margin="0,0,8,0" Cursor="Hand" Click="TodayChip_Click" VerticalAlignment="Center"
+                                WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{services:Loc chat.today.tip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" CornerRadius="6" Padding="8,3" Background="Transparent">
+                                        <ContentPresenter/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding ChatVM.TodayBudgetText}" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding ChatVM.TodayBudgetPercent}" FontSize="11" Margin="10,0,0,0"
+                                               FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                </Grid>
+                                <Grid Height="3" Margin="0,3,0,0" MinWidth="120"
+                                      Visibility="{Binding ChatVM.HasDailyBudget, Converter={StaticResource BoolVis}}">
+                                    <Border Background="{DynamicResource Surface.Raised}" CornerRadius="2"/>
+                                    <Border CornerRadius="2" HorizontalAlignment="Left" RenderTransformOrigin="0,0.5" Background="{DynamicResource Accent.1}">
+                                        <Border.RenderTransform><ScaleTransform ScaleX="{Binding ChatVM.TodayBudgetFraction}"/></Border.RenderTransform>
+                                        <Border.Width><Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType=Grid}"/></Border.Width>
+                                    </Border>
+                                </Grid>
+                            </StackPanel>
+                        </Button>
                         <!-- DGX Spark chip — opens the Spark window; solid green while CluadeX runs on a Spark -->
                         <Button Height="26" Margin="4,0,2,0" Cursor="Hand"
                                 Command="{Binding OpenDgxSparkCommand}"
@@ -354,7 +422,29 @@
                         </Button>
 
                         <!-- Notification bell -->
-                        <Button Grid.Column="8" Width="32" Height="32" Margin="6,0,0,0"
+                        <StackPanel Grid.Column="8" Orientation="Horizontal">
+                        <!-- Theme: one click to the list of themes, applied on the spot -->
+                        <Button x:Name="ThemeButton" Width="32" Height="32" Margin="6,0,0,0"
+                                Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                Click="ThemeButton_Click"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{services:Loc nav.themeTip}" AutomationProperties.Name="Theme">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="6">
+                                        <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14" Foreground="{DynamicResource Text.Muted}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button Width="32" Height="32" Margin="2,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding CheckUpdateCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -374,34 +464,28 @@
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
+                        </StackPanel>
 
                         <!-- Buddy chip -->
                         <Border Grid.Column="9" Margin="10,6,12,6" Padding="4,0,12,0"
                                 CornerRadius="14"
                                 Background="{DynamicResource Buddy.Chip.Background}"
                                 BorderBrush="{DynamicResource Buddy.Chip.Border}" BorderThickness="1"
-                                Cursor="Hand" MouseLeftButtonDown="Buddy_Pet"
+                                Cursor="Hand" MouseLeftButtonDown="Buddy_Pet" MouseRightButtonUp="Buddy_Menu" ToolTip="{Binding PetDetails}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 Effect="{DynamicResource Glow.Buddy.Chip}"
                                 Visibility="{Binding IsBuddyEnabled, Converter={StaticResource BoolVis}}">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border Width="22" Height="22" CornerRadius="11" Margin="0,0,8,0"
+                                <Border Width="24" Height="24" CornerRadius="12" Margin="0,0,8,0"
                                         Background="{DynamicResource Buddy.Avatar}">
-                                    <TextBlock Text="{Binding BuddyService.CurrentBuddy.DisplayEmoji, FallbackValue=🦎}"
-                                               FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Image Source="{Binding PetAvatar}" Width="22" Height="22"
+                                           RenderOptions.BitmapScalingMode="NearestNeighbor"/>
                                 </Border>
                                 <StackPanel VerticalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.Soul.Name, FallbackValue=Buddy}"
-                                                   FontSize="11" FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource Text.Primary}"/>
-                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.ShinyBadge, FallbackValue=''}"
-                                                   FontSize="10" Margin="2,0,0,0"/>
-                                    </StackPanel>
-                                    <TextBlock FontFamily="{DynamicResource Font.Mono.Display}"
-                                               FontSize="9" Foreground="{DynamicResource Status.Success}">
-                                        <Run Text="{Binding BuddyService.CurrentBuddy.Bones.Rarity, Mode=OneWay, FallbackValue=COMMON}"/>
-                                    </TextBlock>
+                                    <TextBlock Text="{Binding PetTitle}" FontSize="11" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Text.Primary}"/>
+                                    <TextBlock Text="{Binding PetSubtitle}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" Foreground="{DynamicResource Status.Success}"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
@@ -470,7 +554,11 @@
                             </StackPanel>
 
                             <!-- Activity icons -->
-                            <StackPanel Grid.Row="1" Margin="0,8,0,8">
+                            <!-- In a short window the list scrolls (wheel) instead of sliding under the Settings button, which
+                                 covered the last items and took their clicks. -->
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                                          Focusable="False" PanningMode="VerticalOnly">
+                            <StackPanel Margin="0,8,0,8">
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8BD;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Chat"
@@ -559,6 +647,7 @@
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.featuresTip}" AutomationProperties.Name="Features"/>
                             </StackPanel>
+                            </ScrollViewer>
 
                             <!-- Bottom: Settings -->
                             <StackPanel Grid.Row="2" Margin="0,4,0,12">
@@ -572,14 +661,15 @@
                     </Border>
 
                     <!-- ░░░ CONTEXTUAL PANEL (240px when Chat is selected) ░░░ -->
-                    <Border Grid.Column="1" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Sidebar.Border}"
+                    <Border x:Name="ChatSidebar" Grid.Column="1" Width="240" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Sidebar.Border}"
                             Background="{DynamicResource Sidebar.Background}">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Width" Value="0"/>
+                                <!-- Shown on the Chat page only; its width is the user's (ResizeGrip below) -->
+                                <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding SelectedNavItem}" Value="Chat">
-                                        <Setter Property="Width" Value="240"/>
+                                        <Setter Property="Visibility" Value="Visible"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -598,15 +688,26 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                        <TextBlock Text="{services:Loc sidebar.chatHistory}" FontSize="10" FontWeight="Bold"
-                                                   FontFamily="{DynamicResource Font.Mono.Display}"
-                                                   Foreground="{DynamicResource Text.Faint}"
-                                                   VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                    <ToggleButton Grid.Column="1" Width="22" Height="22"
+                                    <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Button Width="24" Height="24" Margin="0,0,2,0" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                            Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                    <ToggleButton Width="24" Height="24"
                                                   IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
                                                   Background="Transparent" BorderThickness="0" Cursor="Hand"
                                                   Foreground="{DynamicResource Text.Faint}"
@@ -629,6 +730,7 @@
                                             </ControlTemplate>
                                         </ToggleButton.Template>
                                     </ToggleButton>
+                                    </StackPanel>
                                 </Grid>
                             </Border>
 
@@ -668,6 +770,16 @@
                                 <Grid>
                                     <!-- Normal session list -->
                                     <ItemsControl ItemsSource="{Binding ChatVM.VisibleSessions}">
+                                        <ItemsControl.GroupStyle>
+                                            <GroupStyle>
+                                                <GroupStyle.HeaderTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" Margin="8,10,0,4"
+                                                                   Foreground="{DynamicResource Text.Muted}"/>
+                                                    </DataTemplate>
+                                                </GroupStyle.HeaderTemplate>
+                                            </GroupStyle>
+                                        </ItemsControl.GroupStyle>
                                         <ItemsControl.Style>
                                             <Style TargetType="ItemsControl">
                                                 <Setter Property="Visibility" Value="Visible"/>
@@ -688,41 +800,63 @@
                                                         Margin="0,1" Padding="10,7">
                                                     <Button.Template>
                                                         <ControlTemplate TargetType="Button">
+                                                            <Grid>
                                                             <Border x:Name="bd" Background="{TemplateBinding Background}"
                                                                     Padding="{TemplateBinding Padding}" CornerRadius="6"
                                                                     BorderThickness="1" BorderBrush="Transparent">
                                                                 <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
                                                             </Border>
+                                                            <Border x:Name="strip" Width="3" HorizontalAlignment="Left" Margin="0,6" CornerRadius="2"
+                                                                    Background="{DynamicResource Accent.1}" Visibility="Collapsed"/>
+                                                            </Grid>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
                                                                     <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
                                                                     <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
                                                                 </Trigger>
+                                                                <DataTrigger Value="True">
+                                                                    <DataTrigger.Binding>
+                                                                        <MultiBinding Converter="{StaticResource EqualsMulti}">
+                                                                            <Binding Path="Id"/>
+                                                                            <Binding Path="DataContext.ChatVM.CurrentSession.Id" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                                        </MultiBinding>
+                                                                    </DataTrigger.Binding>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
+                                                                    <Setter TargetName="strip" Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
                                                     </Button.Template>
                                                     <Grid>
                                                         <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <StackPanel>
+                                                        <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,2,10,0"
+                                                                   VerticalAlignment="Top" Foreground="{DynamicResource Text.Muted}"/>
+                                                        <StackPanel Grid.Column="1">
                                                             <TextBlock Text="{Binding Title}" FontSize="12"
-                                                                       Foreground="{DynamicResource Text.Secondary}"
-                                                                       TextTrimming="CharacterEllipsis" MaxWidth="170"/>
-                                                            <TextBlock Text="{Binding UpdatedAt, StringFormat='{}{0:MMM dd · HH:mm}'}"
-                                                                       FontSize="9" Margin="0,2,0,0"
-                                                                       FontFamily="{DynamicResource Font.Mono.Display}"
-                                                                       Foreground="{DynamicResource Text.Faint}"/>
+                                                                       Foreground="{DynamicResource Text.Primary}"
+                                                                       TextTrimming="CharacterEllipsis" MaxWidth="150"/>
+                                                            <TextBlock Text="{Binding ProjectName}" FontSize="11" Margin="0,1,0,0"
+                                                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis" MaxWidth="150"
+                                                                       Visibility="{Binding ProjectName, Converter={StaticResource BoolVis}}"/>
                                                         </StackPanel>
-                                                        <Button Grid.Column="1" Width="20" Height="20"
+                                                        <Grid Grid.Column="2">
+                                                        <TextBlock Text="{Binding ListTimeLabel}" FontSize="11" VerticalAlignment="Top" Margin="6,1,0,0"
+                                                                   FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"
+                                                                   Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                        <Button Width="20" Height="20" VerticalAlignment="Top"
                                                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}"
                                                                 Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                 CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
-                                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                                       Foreground="{DynamicResource Text.Faint}"
+                                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                       Foreground="{DynamicResource Text.Muted}"
                                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Button>
+                                                        </Grid>
                                                     </Grid>
                                                 </Button>
                                             </DataTemplate>
@@ -808,6 +942,12 @@
                             </ScrollViewer>
                         </Grid>
                     </Border>
+
+                    <!-- Drag the chat list's right edge to resize it (remembered); double-click puts it back to 240 -->
+                    <views:ResizeGrip Grid.Column="1" HorizontalAlignment="Right" Margin="0,0,-3,0"
+                                      Key="main.chatList" MinSize="180" MaxSize="520"
+                                      Target="{Binding ElementName=ChatSidebar}"
+                                      Visibility="{Binding Visibility, ElementName=ChatSidebar}"/>
 
                     <!-- ░░░ CENTER CONTENT ░░░ -->
                     <Grid Grid.Column="2">
@@ -900,24 +1040,10 @@
                                     </Style>
                                 </Ellipse.Style>
                             </Ellipse>
-                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
-                                        <Setter Property="Text" Value="OFFLINE"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsModelLoaded}" Value="True">
-                                                <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
-                                                <Setter Property="Text" Value="CONNECTED"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
-                                                <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
-                                                <Setter Property="Text" Value="LOADING…"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                            <!-- What the chat is doing now ("พร้อมใช้งาน", "ขั้นที่ 3/200 · กำลังคิด…") -->
+                            <TextBlock Text="{Binding ChatVM.StatusText}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" MaxWidth="360" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding ChatVM.StatusText}"/>
                         </StackPanel>
 
                         <!-- GPU info — VRAM + sparkline + temp chip -->
@@ -972,24 +1098,32 @@
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
                             <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                                        Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
-                                       Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center"
-                                       MaxWidth="160" TextTrimming="CharacterEllipsis"
+                            <TextBlock FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"
+                                       MaxWidth="200" TextTrimming="CharacterEllipsis"
                                        Text="{Binding ChatVM.LoadedModelName, FallbackValue='no model'}"/>
+                            <TextBlock Text="{Binding ChatVM.ContextWindowText}" FontSize="12" Margin="16,0,0,0"
+                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
                         </StackPanel>
 
-                        <!-- Tokens/sec + Cost -->
-                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
-                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="{Binding ChatVM.LastTurnStats, FallbackValue='—'}"
-                                       FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
-                                       Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"/>
-                            <TextBlock Text=" · " FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
-                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
-                            <TextBlock Text="{Binding ChatVM.CostText, FallbackValue='$0.00'}"
-                                       FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
-                                       Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center"/>
+                        <!-- How full the context is: tokens used of the window, as a bar -->
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
+                                    ToolTip="{services:Loc chat.ctxTip}">
+                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock FontSize="12" Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center">
+                                <Run Text="{Binding ChatVM.ContextUsageText, Mode=OneWay}"/>
+                                <Run Text=" tokens ("/><Run Text="{Binding ChatVM.ContextUsagePercent, Mode=OneWay, StringFormat={}{0:F0}}"/><Run Text="%)"/>
+                            </TextBlock>
+                            <Grid Width="120" Height="5" Margin="10,0,0,0" VerticalAlignment="Center">
+                                <Border Background="{DynamicResource Led.Off}" CornerRadius="3"/>
+                                <Border CornerRadius="3" HorizontalAlignment="Left" RenderTransformOrigin="0,0.5"
+                                        Background="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource CtxBrush}}" Width="120">
+                                    <Border.RenderTransform>
+                                        <ScaleTransform ScaleX="{Binding ChatVM.ContextFraction}"/>
+                                    </Border.RenderTransform>
+                                </Border>
+                            </Grid>
                         </StackPanel>
 
                         <!-- Two MCP chips, opposite directions:
@@ -1057,80 +1191,30 @@
 
                         </StackPanel>
 
-                        <!-- LED context bar (5 segments) -->
-                        <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
-                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
-                                       Foreground="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource CtxBrush}}">
-                                <Run Text="CTX "/>
-                                <Run Text="{Binding ChatVM.ContextUsagePercent, Mode=OneWay, StringFormat={}{0:F0}}"/>
-                                <Run Text="% · "/>
-                                <Run Text="{Binding ChatVM.ContextLevelLabel, Mode=OneWay, FallbackValue='FRESH'}"/>
-                            </TextBlock>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=0}" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
-                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Success}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=25}" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource Accent.1}"/>
-                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Accent}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=50}" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
-                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Warning}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=75}" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource Accent.4}"/>
-                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Caution}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="{DynamicResource Led.Off}"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=90}" Value="True">
-                                                <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
-                                                <Setter Property="Effect" Value="{DynamicResource Glow.Led.Danger}"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
+                        <!-- Right: other chats still running, this run's spend, files changed, the last turn -->
+                        <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <Button Command="{Binding ChatVM.ShowRunningChatCommand}" Style="{StaticResource IconButton}"
+                                    Width="Auto" Height="Auto" FontFamily="{DynamicResource Font.Ui}" Padding="6,1" Margin="0,0,14,0"
+                                    ToolTip="{services:Loc chat.runs.showTip}"
+                                    Visibility="{Binding ChatVM.HasRunningElsewhere, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{Binding ChatVM.RunningElsewhereText}" FontSize="12" Foreground="{DynamicResource Status.Warning}"/>
+                            </Button>
+                            <TextBlock Text="{Binding ChatVM.RunCostText}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Status.Warning}"
+                                       VerticalAlignment="Center" Margin="0,0,14,0" ToolTip="{services:Loc chat.spend.runTip}"
+                                       Visibility="{Binding ChatVM.RunCostText, Converter={StaticResource BoolVis}}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,0"
+                                        Visibility="{Binding ChatVM.FilesChangedText, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding ChatVM.FilesChangedText}" FontSize="12"
+                                           Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" ToolTip="{services:Loc chat.lastTurnTip}">
+                                <TextBlock Text="&#xE916;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding ChatVM.LastTurnStats, FallbackValue='—'}" FontSize="12" FontFamily="{DynamicResource Font.Mono}"
+                                           Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"/>
+                            </StackPanel>
                         </StackPanel>
 
                     </Grid>

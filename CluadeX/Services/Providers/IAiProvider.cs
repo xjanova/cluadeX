@@ -91,6 +91,10 @@ public class ToolSchema
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public JsonElement InputSchema { get; set; }
+
+    /// <summary>May be loaded on demand instead of up front: a provider with tool search (Anthropic) keeps the
+    /// definition out of the model's context until the model searches for it. Others send it as usual.</summary>
+    public bool DeferLoading { get; set; }
 }
 
 /// <summary>Native API message with structured content blocks.</summary>
@@ -140,6 +144,11 @@ public class NativeToolResponse
     public string StopReason { get; set; } = "end_turn"; // end_turn, tool_use, max_tokens, refusal
     public int InputTokens { get; set; }
     public int OutputTokens { get; set; }
+    /// <summary>Prompt-cache tokens this request read back / wrote (Anthropic) — for the step log.</summary>
+    public int CacheReadTokens { get; set; }
+    public int CacheWriteTokens { get; set; }
+    /// <summary>Server-side tool searches the model ran in this response (deferred tools it loaded).</summary>
+    public int ToolSearches { get; set; }
 
     /// <summary>The API refused the tool images of this request (a 400 that named the image) and the provider
     /// answered from a text-only retry. The agent loop then drops those images from its own conversation

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- YAML (CI workflows, docker-compose, app configs).
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, PropertyName -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="YAML" extensions=".yml;.yaml" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="# comment" />
+  <Color name="String" foreground="#CE9178" exampleText="&quot;8.0.x&quot;" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="3" />
+  <Color name="Keyword" foreground="#569CD6" exampleText="---" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="true" />
+  <Color name="PropertyName" foreground="#9CDCFE" exampleText="runs-on:" />
+  <Color name="Annotation" foreground="#D7BA7D" exampleText="&amp;defaults" />
+
+  <RuleSet>
+    <!-- # starts a comment only at the line start or after whitespace (a#b is a plain scalar). -->
+    <Span color="Comment" begin="(?&lt;!\S)#" />
+    <Span color="PropertyName">
+      <Begin>"(?=(?:[^"\\]|\\.)*"\s*:(?:\s|$))</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>'</Begin>
+      <End>'</End>
+    </Span>
+
+    <Rule color="Keyword">^(?:---|\.\.\.)(?=\s|$)</Rule>
+    <!-- key: (also "- key:" in a list). The key starts the line, so "a: b: c" has one key. -->
+    <Rule color="PropertyName">(?&lt;=^\s*(?:-\s+)?)[^\s#'"\[\]{},&amp;*!|&gt;%@`-][^#]*?(?=\s*:(?:\s|$))</Rule>
+    <!-- &amp;anchor, *alias, !!tag -->
+    <Rule color="Annotation">(?&lt;!\S)(?:[&amp;*][\w\-]+|!!?[\w\-/.:]*)</Rule>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word><Word>True</Word><Word>False</Word><Word>TRUE</Word><Word>FALSE</Word>
+      <Word>null</Word><Word>Null</Word><Word>NULL</Word>
+    </Keywords>
+    <Rule color="ConstantKeyword">(?&lt;!\S)~(?!\S)</Rule>
+    <!-- 3, -1.5e3, 0x1F, .inf, but not the 1.2.3 of a version or the 12 of 12:30 -->
+    <Rule color="Number">(?&lt;![\w.\-:/])[-+]?(?:0x[0-9A-Fa-f]+|0o[0-7]+|\d[\d_]*(?:\.\d+)?(?:[eE][+-]?\d+)?|\.(?:inf|Inf|INF|nan|NaN|NAN))(?![\w.\-:/])</Rule>
+    <!-- block scalar indicators: key: | and key: >- -->
+    <Rule color="Keyword">(?&lt;=\s)[|&gt;][-+]?\d*(?=\s*$)</Rule>
+  </RuleSet>
+</SyntaxDefinition>

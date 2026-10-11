@@ -11,7 +11,19 @@ public class PaletteItem
     public string Subtitle { get; set; } = "";
     /// <summary>Short badge: Page / Skill / File.</summary>
     public string Kind { get; set; } = "";
-    public string KindColor { get; set; } = "#8388BD";
+    /// <summary>Theme token of the badge colour (Accent.1 = page, Status.Warning = command, Status.Success = file …).</summary>
+    public string KindToken { get; set; } = "Text.Muted";
+    /// <summary>"#AARRGGBB" of <see cref="KindToken"/> in the theme on screen — what the badge binds to. Resolved when the
+    /// row is drawn (UI thread), so a list built on a worker thread still gets the current theme.</summary>
+    public string KindColor => CluadeX.Services.ThemeColors.Hex(KindToken, KindToken switch
+    {
+        "Accent.1" => "#4CDFFF",
+        "Accent.2" => "#A672FF",
+        "Status.Warning" => "#FFD166",
+        "Status.Success" => "#5CFFB0",
+        "Brand.Spark" => "#76D16B",
+        _ => "#8388BD",
+    });
     /// <summary>What running this row does.</summary>
     public Action Run { get; set; } = () => { };
     /// <summary>Lowercased haystack used for matching (title + subtitle).</summary>
@@ -177,7 +189,7 @@ public class CommandPaletteViewModel : ViewModelBase
             string title = L(titleKey), sub = L(subKey);
             return new PaletteItem
             {
-                Icon = glyph, Title = title, Subtitle = sub, Kind = L("palette.kind.command"), KindColor = "#FFD166",
+                Icon = glyph, Title = title, Subtitle = sub, Kind = L("palette.kind.command"), KindToken = "Status.Warning",
                 // English words stay in the haystack so "new chat" also finds the row in the Thai UI.
                 Haystack = (title + " " + sub + " " + extraWords).ToLowerInvariant(),
                 Run = run,
@@ -246,7 +258,7 @@ public class CommandPaletteViewModel : ViewModelBase
                     Title = name,
                     Subtitle = rel,
                     Kind = "File",
-                    KindColor = "#5CFFB0",
+                    KindToken = "Status.Success",
                     Haystack = (name + " " + rel).ToLowerInvariant(),
                     Run = () => openFile(captured),
                 };

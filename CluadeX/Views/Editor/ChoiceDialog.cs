@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
 
 namespace CluadeX.Views.Editor;
 
@@ -34,9 +33,6 @@ public static class ChoiceDialog
         if (!app.Dispatcher.CheckAccess())
             return app.Dispatcher.Invoke(() => Show(title, message, buttons, defaultIndex));
 
-        Brush Res(string key, Color fallback) =>
-            app.TryFindResource(key) as Brush ?? new SolidColorBrush(fallback);
-
         var window = new Window
         {
             Title = title,
@@ -46,22 +42,24 @@ public static class ChoiceDialog
             ShowInTaskbar = false,
             MinWidth = 380,
             MaxWidth = 640,
-            Background = Res("NeonBg0Brush", Color.FromRgb(0x0B, 0x0D, 0x22)),
         };
+        // Theme tokens as resource references (Tokens.md): the dialog takes the current theme's colours.
+        window.SetResourceReference(Control.BackgroundProperty, "Bg.Window");
         var owner = app.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? app.MainWindow;
         if (owner != null && owner != window && owner.IsLoaded) window.Owner = owner;
         else window.WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         var root = new StackPanel { Margin = new Thickness(22, 18, 22, 16) };
-        root.Children.Add(new TextBlock
+        var text = new TextBlock
         {
             Text = message,
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13,
-            Foreground = Res("NeonInk0Brush", Color.FromRgb(0xEE, 0xF0, 0xFF)),
             Margin = new Thickness(0, 0, 0, 18),
             MaxWidth = 590,
-        });
+        };
+        text.SetResourceReference(TextBlock.ForegroundProperty, "Text.Primary");
+        root.Children.Add(text);
 
         var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         for (int i = 0; i < buttons.Count; i++)

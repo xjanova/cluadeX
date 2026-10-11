@@ -6,7 +6,7 @@ using CluadeX.Services.Providers;
 
 namespace CluadeX.ViewModels;
 
-public class SettingsViewModel : ViewModelBase
+public partial class SettingsViewModel : ViewModelBase
 {
     private readonly SettingsService _settingsService;
     private readonly GpuDetectionService _gpuDetectionService;
@@ -70,6 +70,7 @@ public class SettingsViewModel : ViewModelBase
         [nameof(MicrocompactKeepRecentTurns)] = (vm, s) => s.MicrocompactKeepRecentTurns = Math.Clamp(vm.MicrocompactKeepRecentTurns, 1, 100),
         [nameof(MicrocompactMaxOldResultChars)] = (vm, s) => s.MicrocompactMaxOldResultChars = Math.Clamp(vm.MicrocompactMaxOldResultChars, 50, 20000),
         [nameof(SessionMemoryEnabled)] = (vm, s) => s.SessionMemoryEnabled = vm.SessionMemoryEnabled,
+        [nameof(BatchBackgroundWork)] = (vm, s) => s.BatchBackgroundWork = vm.BatchBackgroundWork,
         [nameof(EnableStrategicCompactionToast)] = (vm, s) => s.EnableStrategicCompactionToast = vm.EnableStrategicCompactionToast,
         // Local models
         [nameof(GpuBackend)] = (vm, s) => s.GpuBackend = vm.GpuBackend,
@@ -155,6 +156,8 @@ public class SettingsViewModel : ViewModelBase
     public int MicrocompactKeepRecentTurns { get => _microcompactKeepRecentTurns; set => SetProperty(ref _microcompactKeepRecentTurns, value); }
     public int MicrocompactMaxOldResultChars { get => _microcompactMaxOldResultChars; set => SetProperty(ref _microcompactMaxOldResultChars, value); }
     public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
+    private bool _batchBackgroundWork = true;
+    public bool BatchBackgroundWork { get => _batchBackgroundWork; set => SetProperty(ref _batchBackgroundWork, value); }
     public bool EnableStrategicCompactionToast { get => _compactionToast; set => SetProperty(ref _compactionToast, value); }
 
     // ── Local models ──
@@ -371,7 +374,9 @@ public class SettingsViewModel : ViewModelBase
         MemoryService memoryService,
         ActivationService activationService,
         DebugLogService? log = null,
-        ThemeService? themes = null)
+        ThemeService? themes = null,
+        Services.Batch.BatchService? batchService = null,
+        Services.Chrome.ClaudeInChromeConnector? chrome = null)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
@@ -447,6 +452,8 @@ public class SettingsViewModel : ViewModelBase
         finally { _loading = false; }
         DetectGpuInfo();
         RefreshMemories();
+        InitBatchJobs(batchService);
+        InitChrome(chrome);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -544,6 +551,7 @@ public class SettingsViewModel : ViewModelBase
         MicrocompactKeepRecentTurns = src.MicrocompactKeepRecentTurns;
         MicrocompactMaxOldResultChars = src.MicrocompactMaxOldResultChars;
         SessionMemoryEnabled = src.SessionMemoryEnabled;
+        BatchBackgroundWork = src.BatchBackgroundWork;
         EnableStrategicCompactionToast = src.EnableStrategicCompactionToast;
 
         GpuBackend = src.GpuBackend;

@@ -524,6 +524,9 @@ internal static class Program
 
         await ImageWire.Run(Check, Section);
         await StreamKeepAlive.Run(Check, Section);
+        await PromptCacheReuse.Run(Check, Section);
+        await BatchWire.Run(Check, Section);
+        await ToolSearchWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>

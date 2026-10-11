@@ -26,9 +26,9 @@ public sealed class PreviewDock : Grid
         var grip = new Thumb
         {
             Cursor = Cursors.SizeWE,
-            Background = new SolidColorBrush(Color.FromArgb(0x30, 0xA0, 0xB4, 0xFF)),
             Template = GripTemplate(),
         };
+        grip.SetResourceReference(Control.BackgroundProperty, "Border.Default");   // the theme's divider colour
         grip.DragDelta += (_, e) =>
         {
             Width = Math.Clamp(Width - e.HorizontalChange, MinPaneWidth, MaxPaneWidth);

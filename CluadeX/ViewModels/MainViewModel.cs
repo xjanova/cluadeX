@@ -12,7 +12,7 @@ public class MainViewModel : ViewModelBase
     private readonly AgentToolService _agentToolService;
     private readonly GpuDetectionService _gpuDetectionService;
     private readonly AiProviderManager _providerManager;
-    private readonly BuddyService _buddyService;
+    private readonly Services.Pet.PetService _pet;
     private readonly LocalizationService _loc;
     private readonly AutoUpdateService _autoUpdate;
     private readonly ActivationService? _activation;
@@ -87,10 +87,11 @@ public class MainViewModel : ViewModelBase
         get
         {
             int t = _liveGpuStats?.TemperatureC ?? 0;
-            if (t >= 85) return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF3, 0x8B, 0xA8)); // red
-            if (t >= 75) return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFA, 0xB3, 0x87)); // orange
-            if (t >= 60) return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF9, 0xE2, 0xAF)); // yellow
-            return new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xA6, 0xE3, 0xA1));               // green
+            // Theme tokens, live: the chip re-colours itself on a theme switch.
+            if (t >= 85) return ThemeColors.Live("Status.Danger.Soft", System.Windows.Media.Color.FromRgb(0xF3, 0x8B, 0xA8));
+            if (t >= 75) return ThemeColors.Live("Status.Caution.Soft", System.Windows.Media.Color.FromRgb(0xFA, 0xB3, 0x87));
+            if (t >= 60) return ThemeColors.Live("Status.Warning.Soft", System.Windows.Media.Color.FromRgb(0xF9, 0xE2, 0xAF));
+            return ThemeColors.Live("Status.Success.Soft", System.Windows.Media.Color.FromRgb(0xA6, 0xE3, 0xA1));
         }
     }
 
@@ -165,7 +166,12 @@ public class MainViewModel : ViewModelBase
     }
 
     // Buddy companion
-    public BuddyService BuddyService => _buddyService;
+    /// <summary>The desktop pet (title-bar chip).</summary>
+    public Services.Pet.PetService Pet => _pet;
+    public System.Windows.Media.Imaging.BitmapSource PetAvatar => _pet.Avatar;
+    public string PetTitle => _pet.Title;
+    public string PetSubtitle => _pet.Subtitle;
+    public string PetDetails => _pet.Details;
     public bool IsBuddyEnabled => _settingsService.Settings.Features.BuddyCompanion;
 
     // ─── ObsidianX bridge (named-pipe MCP host) ───
@@ -261,7 +267,7 @@ public class MainViewModel : ViewModelBase
             items.Add(new PaletteItem
             {
                 Icon = glyph, Title = title, Subtitle = "Go to page", Kind = "Page",
-                KindColor = "#4CDFFF",
+                KindToken = "Accent.1",
                 Haystack = (title + " page " + target).ToLowerInvariant(),
                 Run = () => NavigateTo(t),
             });
@@ -275,7 +281,7 @@ public class MainViewModel : ViewModelBase
             items.Add(new PaletteItem
             {
                 Icon = "", Title = "DGX Spark", Subtitle = L("spark.paletteSubtitle"), Kind = "Page",
-                KindColor = "#76D16B",
+                KindToken = "Brand.Spark",
                 Haystack = "dgx spark nvidia ollama gpu 128gb",
                 Run = OpenDgxSpark,
             });
@@ -290,7 +296,7 @@ public class MainViewModel : ViewModelBase
                 items.Add(new PaletteItem
                 {
                     Icon = "", Title = "/" + name, Subtitle = desc, Kind = "Skill",
-                    KindColor = "#A672FF",
+                    KindToken = "Accent.2",
                     Haystack = (name + " " + desc).ToLowerInvariant(),
                     Run = () =>
                     {
@@ -359,7 +365,7 @@ public class MainViewModel : ViewModelBase
         SettingsService settingsService,
         GpuDetectionService gpuDetectionService,
         AiProviderManager providerManager,
-        BuddyService buddyService,
+        Services.Pet.PetService pet,
         LocalizationService loc,
         AutoUpdateService autoUpdate,
         ActivationService? activation = null,
@@ -400,7 +406,7 @@ public class MainViewModel : ViewModelBase
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
         _providerManager = providerManager;
-        _buddyService = buddyService;
+        _pet = pet;
         _loc = loc;
         _isNavExpanded = settingsService.Settings.SidebarNavExpanded;
 
@@ -422,7 +428,13 @@ public class MainViewModel : ViewModelBase
         // pipe, where the user never opened Chat at all — the agent wrote files and the UI
         // just sat there. AutoOpenEditorOnAgentEdit is already the user's switch for this
         // behaviour; gating it a second time on the current page made the setting a lie.
-        chatVM.FileMutatedByAgent += (_, _) =>
+        // The chat's project panel: a double-clicked file opens in the code editor.
+        chatVM.OpenFileRequested += path =>
+        {
+            NavigateTo("Code");
+            _ = CodeEditorVM.OpenPathAsync(path);
+        };
+        chatVM.FileMutatedByAgent += (_, _, _) =>
         {
             if (_settingsService.Settings.AutoOpenEditorOnAgentEdit)
                 NavigateTo("Code");
@@ -442,7 +454,7 @@ public class MainViewModel : ViewModelBase
             Palette.Close();
             try { item.Run(); } catch (Exception ex) { CommandErrorSink.Report("CommandPalette", ex); }
         });
-        PetBuddyCommand = new RelayCommand(() => _buddyService.Pet());
+        PetBuddyCommand = new RelayCommand(() => _pet.Pat());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
         DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
         CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
@@ -504,13 +516,20 @@ public class MainViewModel : ViewModelBase
             App.Current?.Dispatcher.BeginInvoke(() =>
             {
                 OnPropertyChanged(nameof(IsBuddyEnabled));
+                if (_settingsService.Settings.Features.BuddyCompanion) _pet.Start();
+                _pet.ApplyVisibility();
                 OnPropertyChanged(nameof(ShowGpuStats));
                 OnPropertyChanged(nameof(IsSparkActive));
             });
 
-        // Forward buddy changes to UI
-        _buddyService.BuddyChanged += () =>
-            App.Current?.Dispatcher.Invoke(() => OnPropertyChanged(nameof(BuddyService)));
+        // Forward pet changes (hatching, progress, name) to the title-bar chip
+        _pet.Changed += () => App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            OnPropertyChanged(nameof(PetAvatar));
+            OnPropertyChanged(nameof(PetTitle));
+            OnPropertyChanged(nameof(PetSubtitle));
+            OnPropertyChanged(nameof(PetDetails));
+        });
 
         if (_activation != null)
         {
@@ -562,8 +581,9 @@ public class MainViewModel : ViewModelBase
     {
         try
         {
+            // Learning runs whenever the pet is enabled; ApplyVisibility puts it on (or takes it off) the desktop.
             if (_settingsService.Settings.Features.BuddyCompanion)
-                _buddyService.Initialize();
+                _pet.Start();
         }
         catch { /* Buddy is non-critical */ }
     }

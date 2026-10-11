@@ -903,6 +903,7 @@ public sealed class CodeIntelligenceService
                 string name = Path.GetFileName(sd);
                 if (name.StartsWith('.') && name is not ".claude" and not ".cluadex" and not ".github") continue;
                 if (Array.IndexOf(IgnoreDirs, name) >= 0) continue;
+                if (WorkspaceFiles.IsAgentWorktrees(dir, name)) continue;
                 try { if ((File.GetAttributes(sd) & FileAttributes.ReparsePoint) != 0) continue; } catch { continue; }
                 stack.Push(sd);
             }

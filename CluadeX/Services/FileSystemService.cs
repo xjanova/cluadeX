@@ -23,19 +23,28 @@ public class FileSystemService
     /// trust for the new folder and drop stale project hooks.</summary>
     public event Action? OnWorkingDirectoryChanged;
 
+    /// <summary>The project folder: the one a running agent started in (AgentRunScope) — so opening another project
+    /// while it runs never moves its tools — else the one the user has open. Setting it always changes the APP's
+    /// project (only the UI sets it; a run's folder is fixed when the run starts).</summary>
     public string WorkingDirectory
     {
-        get => _workingDirectory;
+        get => Root;
         set
         {
             if (string.Equals(_workingDirectory, value, StringComparison.OrdinalIgnoreCase)) return;
             _workingDirectory = value;
-            _readSnapshots.Clear();   // new project → the agent hasn't "read" anything here yet
+            // Not cleared: entries are full paths, so another project's never match — and a run still working in
+            // the previous project keeps its "has read this file" record.
             OnWorkingDirectoryChanged?.Invoke();
         }
     }
 
-    public bool HasWorkingDirectory => !string.IsNullOrEmpty(_workingDirectory) && Directory.Exists(_workingDirectory);
+    /// <summary>The project folder the user has open, ignoring any run (for the UI).</summary>
+    public string AppWorkingDirectory => _workingDirectory;
+
+    private string Root => AgentRunScope.Current?.WorkingDirectory ?? _workingDirectory;
+
+    public bool HasWorkingDirectory => !string.IsNullOrEmpty(Root) && Directory.Exists(Root);
 
     // ─── Read File ───
     public string ReadFile(string relativePath)
@@ -364,7 +373,7 @@ public class FileSystemService
     public ProjectCommand? DetectProjectCommand(bool test)
     {
         if (!HasWorkingDirectory) return null;
-        string root = _workingDirectory;
+        string root = Root;
 
         string? atRoot = DetectCommandIn(root, test);
         if (atRoot != null) return new ProjectCommand(atRoot, "the project root");
@@ -719,7 +728,7 @@ public class FileSystemService
         {
             foreach (var file in Directory.EnumerateFiles(fullPath, pattern, SearchOption.AllDirectories))
             {
-                string rel = Path.GetRelativePath(_workingDirectory, file).Replace('\\', '/');
+                string rel = Path.GetRelativePath(Root, file).Replace('\\', '/');
                 // Skip common ignore dirs
                 if (rel.Contains("node_modules/") || rel.Contains("/bin/") || rel.Contains("/obj/") ||
                     rel.Contains("/.git/") || rel.Contains("/__pycache__/") || rel.Contains("/.vs/"))
@@ -745,7 +754,7 @@ public class FileSystemService
         {
             foreach (var file in Directory.EnumerateFiles(fullPath, filePattern, SearchOption.AllDirectories))
             {
-                string rel = Path.GetRelativePath(_workingDirectory, file).Replace('\\', '/');
+                string rel = Path.GetRelativePath(Root, file).Replace('\\', '/');
                 if (rel.Contains("node_modules/") || rel.Contains("/bin/") || rel.Contains("/obj/") ||
                     rel.Contains("/.git/") || rel.Contains("/__pycache__/") || rel.Contains("/.vs/"))
                     continue;
@@ -806,8 +815,8 @@ public class FileSystemService
         if (!HasWorkingDirectory) return "(no working directory set)";
 
         var sb = new StringBuilder();
-        sb.AppendLine(Path.GetFileName(_workingDirectory) + "/");
-        BuildTree(sb, _workingDirectory, "", 0, maxDepth);
+        sb.AppendLine(Path.GetFileName(Root) + "/");
+        BuildTree(sb, Root, "", 0, maxDepth);
         return sb.ToString().TrimEnd();
     }
 
@@ -876,7 +885,7 @@ public class FileSystemService
             string rootedFull;
             try { rootedFull = Path.GetFullPath(normalized); }
             catch { throw new UnauthorizedAccessException("Absolute paths are not allowed. Use relative paths from the project root."); }
-            string wdFull = Path.GetFullPath(_workingDirectory);
+            string wdFull = Path.GetFullPath(Root);
             string wdSep = wdFull.EndsWith(Path.DirectorySeparatorChar) ? wdFull : wdFull + Path.DirectorySeparatorChar;
             if (rootedFull.Equals(wdFull, StringComparison.OrdinalIgnoreCase))
                 normalized = ".";
@@ -887,11 +896,11 @@ public class FileSystemService
                     $"Access denied: '{relativePath}' is outside the project root. Use relative paths from the project root.");
         }
 
-        string fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, normalized));
+        string fullPath = Path.GetFullPath(Path.Combine(Root, normalized));
 
         // Security: ensure path stays within working directory (handles .. traversal).
         // Compare with a trailing separator so "C:\App" doesn't accept sibling "C:\App-evil\secret".
-        string workDirFull = Path.GetFullPath(_workingDirectory);
+        string workDirFull = Path.GetFullPath(Root);
         string workDirSep = workDirFull.EndsWith(Path.DirectorySeparatorChar) ? workDirFull : workDirFull + Path.DirectorySeparatorChar;
         string compare = fullPath.EndsWith(Path.DirectorySeparatorChar) ? fullPath : fullPath + Path.DirectorySeparatorChar;
         if (!compare.StartsWith(workDirSep, StringComparison.OrdinalIgnoreCase))

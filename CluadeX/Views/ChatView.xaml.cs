@@ -20,6 +20,7 @@ public partial class ChatView : UserControl
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        SizeChanged += (_, _) => UpdateSidePanelRoom();
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
@@ -57,8 +58,24 @@ public partial class ChatView : UserControl
         };
     }
 
+    /// <summary>The same chat is also hosted in the Edit page's narrow right pane, which already shows the project's
+    /// files and a terminal: there the side panel only squeezed the conversation into a sliver.</summary>
+    private bool _hostedInEditor;
+
+    /// <summary>The conversation keeps at least this much width beside the side panel (whatever width it was dragged to).</summary>
+    private const double MinConversationWidth = 600;
+
+    private void UpdateSidePanelRoom()
+    {
+        double panel = double.IsNaN(SidePanel.Width) ? 300 : SidePanel.Width;
+        bool room = !_hostedInEditor && ActualWidth >= panel + MinConversationWidth;
+        SidePanelHost.Visibility = room ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        _hostedInEditor = FindAncestor<CodeEditorView>(this) != null;
+        UpdateSidePanelRoom();
         InputBox.Focus();
         HookScrollViewer();
 
@@ -66,8 +83,8 @@ public partial class ChatView : UserControl
         {
             if (_scrollHandler != null)
                 vm.ScrollToBottom -= _scrollHandler;
-            if (_collectionHandler != null)
-                vm.Messages.CollectionChanged -= _collectionHandler;
+            if (_collectionHandler != null && _watched != null)
+                _watched.CollectionChanged -= _collectionHandler;
 
             // Follow new output only while the reader is already at the bottom. This used to jump to the end
             // on every change and every 20 streamed tokens, so nobody could scroll up to read while a reply
@@ -91,8 +108,27 @@ public partial class ChatView : UserControl
             };
 
             vm.ScrollToBottom += _scrollHandler;
-            vm.Messages.CollectionChanged += _collectionHandler;
+            WatchMessages(vm);
+            vm.PropertyChanged -= OnVmPropertyChanged;
+            vm.PropertyChanged += OnVmPropertyChanged;
         }
+    }
+
+    private System.Collections.ObjectModel.ObservableCollection<ChatMessage>? _watched;
+
+    /// <summary>Follow the list on screen: each chat has its own list, swapped in when another chat is opened.</summary>
+    private void WatchMessages(ChatViewModel vm)
+    {
+        if (_watched != null && _collectionHandler != null) _watched.CollectionChanged -= _collectionHandler;
+        _watched = vm.Messages;
+        if (_collectionHandler != null) _watched.CollectionChanged += _collectionHandler;
+        _stickToBottom = true;
+        Dispatcher.InvokeAsync(ScrollToEnd, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ChatViewModel.Messages) && sender is ChatViewModel vm) WatchMessages(vm);
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -110,9 +146,11 @@ public partial class ChatView : UserControl
                 vm.ScrollToBottom -= _scrollHandler;
                 _scrollHandler = null;
             }
+            vm.PropertyChanged -= OnVmPropertyChanged;
             if (_collectionHandler != null)
             {
-                vm.Messages.CollectionChanged -= _collectionHandler;
+                if (_watched != null) _watched.CollectionChanged -= _collectionHandler;
+                _watched = null;
                 _collectionHandler = null;
             }
         }
@@ -164,6 +202,13 @@ public partial class ChatView : UserControl
             var found = FindVisualChild<T>(child);
             if (found != null) return found;
         }
+        return null;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject child) where T : DependencyObject
+    {
+        for (var p = VisualTreeHelper.GetParent(child); p != null; p = VisualTreeHelper.GetParent(p))
+            if (p is T t) return t;
         return null;
     }
 
@@ -225,6 +270,59 @@ public partial class ChatView : UserControl
 
     // Answering collapses the buttons and shows a localized outcome label (bound to PermissionOutcome) — they
     // used to stay clickable with a literal English "*Allowed*" appended to the prompt text.
+    /// <summary>Right panel: a double-clicked file opens in the code editor.</summary>
+    private void ProjectTree_DoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm && ProjectTreeView.SelectedItem is FileNode { IsDirectory: false } node)
+        {
+            vm.RequestOpenFile(node.FullPath);
+            e.Handled = true;
+        }
+    }
+
+    private void SideTreeRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm) vm.RefreshProjectTree(force: true);
+    }
+
+    private void SidePanelHide_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm) vm.ShowSidePanel = false;
+    }
+
+    /// <summary>The composer's "+": its menu opens on a left click, above the button.</summary>
+    private void MoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { ContextMenu: { } menu } button)
+        {
+            menu.DataContext = button.DataContext;
+            menu.PlacementTarget = button;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+            menu.IsOpen = true;
+        }
+    }
+
+    private void QuestionOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: ChatMessage msg } fe && fe.DataContext is string option)
+            msg.AnswerQuestion(option);
+    }
+
+    private void QuestionSend_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AnswerQuestion(msg.AnswerDraft);
+    }
+
+    private void QuestionBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter && sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+        {
+            msg.AnswerQuestion(msg.AnswerDraft);
+            e.Handled = true;
+        }
+    }
+
     private void PermissionAllow_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)

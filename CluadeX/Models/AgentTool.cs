@@ -165,6 +165,7 @@ public class ToolCall
         or ToolType.GitDiff or ToolType.GitBranch
         or ToolType.GhPrList or ToolType.GhIssueList or ToolType.GhRepoView
         or ToolType.WebSearch or ToolType.WebFetch
+        or ToolType.AgentSpawn   // each sub-agent has its own conversation; several run at once
         or ToolType.TaskList or ToolType.TaskOutput
         or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
         or ToolType.LspDiagnostics or ToolType.CodebaseSearch
@@ -233,6 +234,9 @@ public class PermissionRequestInfo
     public string Detail { get; set; } = string.Empty;
     /// <summary>Preview of the file change to be applied, shown before the user approves. Null = no preview.</summary>
     public EditDiffResult? Diff { get; set; }
+    /// <summary>Asked every time on purpose — the user's own "Ask" rule, or code run in their browser. A chat set to
+    /// "allow everything" still asks this one.</summary>
+    public bool AlwaysAsk { get; set; }
 }
 
 /// <summary>
@@ -254,3 +258,8 @@ public class TodoItem
     public string Status { get; set; } = "pending"; // pending, in_progress, completed
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 }
+
+/// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
+/// name, with its Persona and AllowedTools).</summary>
+public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
+    IReadOnlyCollection<string>? AllowedTools = null);

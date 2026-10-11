@@ -1,3 +1,6 @@
+using System.IO;
+using System.Text.Json;
+
 namespace CluadeX.Services;
 
 /// <summary>
@@ -23,11 +26,69 @@ public class CostTrackingService
     /// <summary>Fires when cost is updated.</summary>
     public event Action<CostSummary>? OnCostUpdated;
 
+    // ── Per-day ledger (usage-daily.json in the data folder): what CluadeX spent today across restarts ──
+    private readonly string? _ledgerPath;
+    private readonly Dictionary<string, DailyUsage> _days = new();
+    private DateTime _lastLedgerSave = DateTime.MinValue;
+    private bool _ledgerDirty;
+    private const int LedgerKeepDays = 90;
+
+    public CostTrackingService() { }
+
+    /// <summary>With the app's settings: the per-day ledger lives in its data folder (portable runs keep their own).</summary>
+    public CostTrackingService(SettingsService settings)
+    {
+        try
+        {
+            _ledgerPath = Path.Combine(settings.DataRoot, "usage-daily.json");
+            if (File.Exists(_ledgerPath))
+                foreach (var (day, u) in JsonSerializer.Deserialize<Dictionary<string, DailyUsage>>(File.ReadAllText(_ledgerPath)) ?? new())
+                    _days[day] = u;
+        }
+        catch { /* a damaged ledger starts over; it is only a display */ }
+    }
+
+    private static string DayKey(DateTime local) => local.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Spent today (local date), all CluadeX sessions today included.</summary>
+    public decimal TodayCostUsd { get { lock (_lock) return _days.TryGetValue(DayKey(DateTime.Now), out var d) ? d.Usd : 0m; } }
+
+    /// <summary>Today's requests (all sessions today).</summary>
+    public int TodayRequests { get { lock (_lock) return _days.TryGetValue(DayKey(DateTime.Now), out var d) ? d.Requests : 0; } }
+
+    /// <summary>Write the ledger now (app exit; otherwise it is written at most every few seconds).</summary>
+    public void FlushLedger()
+    {
+        string? json = null;
+        lock (_lock)
+        {
+            if (!_ledgerDirty || _ledgerPath == null) return;
+            foreach (var old in _days.Keys.OrderByDescending(k => k, StringComparer.Ordinal).Skip(LedgerKeepDays).ToList())
+                _days.Remove(old);
+            json = JsonSerializer.Serialize(_days);
+            _ledgerDirty = false;
+            _lastLedgerSave = DateTime.UtcNow;
+        }
+        try
+        {
+            string tmp = _ledgerPath + ".tmp";
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, _ledgerPath, overwrite: true);
+        }
+        catch { lock (_lock) _ledgerDirty = true; }
+    }
+
     /// <summary>Record usage from an API response.</summary>
     /// <param name="isNewRequest">True only for the first usage record of a request (avoids double-counting).</param>
+    /// <param name="priceFactor">Multiplier on the list price: 0.5 for a request run through a batch API.</param>
+    /// <param name="cacheWrite1hTokens">Of <paramref name="cacheCreationTokens"/>, the ones written with the 1-hour TTL:
+    /// billed at 2x input instead of the 5-minute write price.</param>
     public void RecordUsage(string model, int inputTokens, int outputTokens,
-        int cacheReadTokens = 0, int cacheCreationTokens = 0, bool isNewRequest = true)
+        int cacheReadTokens = 0, int cacheCreationTokens = 0, bool isNewRequest = true, decimal priceFactor = 1m,
+        int cacheWrite1hTokens = 0)
     {
+        decimal cost;
+        bool saveLedger;
         lock (_lock)
         {
             TotalInputTokens += inputTokens;
@@ -38,12 +99,22 @@ public class CostTrackingService
 
             // Calculate cost
             var pricing = GetPricing(model);
-            decimal cost =
+            int write1h = Math.Clamp(cacheWrite1hTokens, 0, Math.Max(0, cacheCreationTokens));
+            cost =
                 (inputTokens * pricing.InputPerMToken / 1_000_000m) +
                 (outputTokens * pricing.OutputPerMToken / 1_000_000m) +
                 (cacheReadTokens * pricing.CacheReadPerMToken / 1_000_000m) +
-                (cacheCreationTokens * pricing.CacheWritePerMToken / 1_000_000m);
+                ((cacheCreationTokens - write1h) * pricing.CacheWritePerMToken / 1_000_000m) +
+                (write1h * pricing.InputPerMToken * 2m / 1_000_000m);
+            cost *= priceFactor;   // batch requests bill at half price
             TotalCostUsd += cost;
+
+            string day = DayKey(DateTime.Now);
+            if (!_days.TryGetValue(day, out var du)) _days[day] = du = new DailyUsage();
+            du.Usd += cost;
+            if (isNewRequest) du.Requests++;
+            _ledgerDirty = true;
+            saveLedger = _ledgerPath != null && (DateTime.UtcNow - _lastLedgerSave).TotalSeconds >= 5;
 
             // Per-model tracking
             if (!_modelUsage.ContainsKey(model))
@@ -58,6 +129,9 @@ public class CostTrackingService
             mu.CostUsd += cost;
         }
 
+        // The run this request was made for (null outside any run: a title, a plain chat answer).
+        AgentRunScope.Current?.AddUsage(cost, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, isNewRequest);
+        if (saveLedger) FlushLedger();
         OnCostUpdated?.Invoke(GetSummary());
     }
 
@@ -114,6 +188,9 @@ public class CostTrackingService
     /// Cache write = 1.25x input price; cache read = 0.1x input, except where a model's row says otherwise.
     /// Order matters: "opus-5-5" must be tested before "opus-5", "fable-5-1" before "fable".
     /// </remarks>
+    /// <summary>List price per MTok for a model (the same table the costs are recorded with).</summary>
+    public static ModelPricing PricingOf(string model) => GetPricing(model);
+
     private static ModelPricing GetPricing(string model)
     {
         string m = model.ToLowerInvariant();
@@ -194,6 +271,13 @@ public class CostTrackingService
 
 public record ModelPricing(decimal InputPerMToken, decimal OutputPerMToken,
     decimal CacheReadPerMToken, decimal CacheWritePerMToken);
+
+/// <summary>One day of the ledger.</summary>
+public class DailyUsage
+{
+    public decimal Usd { get; set; }
+    public int Requests { get; set; }
+}
 
 public class ModelUsage
 {

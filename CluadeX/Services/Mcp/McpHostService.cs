@@ -673,13 +673,31 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
             name = "cluadex.get_active_model",
             description = "Report which AI provider + model CluadeX has loaded right now, so the orchestrator " +
                           "can verify model alignment before delegating tasks. Returns " +
-                          "{ provider, model, path, ready, vramUsedMB?, vramTotalMB? }. Use this to detect " +
+                          "{ provider, model, path, ready, vramUsedMB?, vramTotalMB?, effort, options[], efforts[] } — options and " +
+                          "efforts are what choose_model accepts. Use this to detect " +
                           "the case where ObsidianX's intern uses one model and CluadeX's worker uses " +
                           "another — running both at once on a single GPU is a recipe for VRAM OOM.",
             inputSchema = new
             {
                 type = "object",
                 properties = new { },
+            }
+        },
+        new
+        {
+            name = "cluadex.choose_model",
+            description = "Pick the model and/or effort CluadeX's chat answers with — what the owner does in BrainX's " +
+                          "cowork room. Only a model from get_active_model's `options` (API models with a key) is " +
+                          "accepted, never a model on this PC; a provider change waits until no reply is running. " +
+                          "Returns { ok, model, effort, reason }.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    model = new { type = "string", description = "A model id from get_active_model's options" },
+                    effort = new { type = "string", description = "One of get_active_model's efforts" },
+                },
             }
         },
         new

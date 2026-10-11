@@ -390,6 +390,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\cluadex-bld\locked.ps1 E:
 | `Syntax.Number` | brush | `#FFC66D` |
 | `Syntax.Preprocessor` | brush | `#FF5EC4` |
 | `Syntax.Comment` | brush | `#7E8AA8` |
+| `Syntax.Function` | brush | `#ECEF9A` — function / method names, definitions and calls (VS Code `#DCDCAA` family; Classic `#795E26`, Neon Cyber `#FFEE8A`) |
+| `Syntax.Control` | brush | `#FFB0F0` — control flow: `if` `elif` `else` `for` `while` `match` `return` `break` `continue` `pass` `yield` `await` (VS Code `#C586C0` family; Classic `#AF00DB`, Neon Cyber `#FFA8EC`) |
+| `Syntax.Variable` | brush | `#86B0FF` — members / properties, `$Node` paths, ALL_CAPS constants, shader built-ins, JSON / YAML / TOML / INI keys, shell `$VARS` (VS Code `#9CDCFE` family; Classic `#001080`, Neon Cyber `#8CC2FF`) |
 | **Shadows and glows** | | |
 | `Shadow.Card` | effect | shadow `#0A0A14` blur 16 depth 4 opacity 0.6 |
 | `Shadow.Button` | effect | shadow `#0A0A14` blur 8 depth 2 opacity 0.5 |
@@ -399,6 +402,265 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\cluadex-bld\locked.ps1 E:
 | `Glow.Accent.2` | effect | shadow `#A672FF` blur 22 depth 0 opacity 0.6 |
 | `Glow.Accent.3` | effect | shadow `#FF5EC4` blur 22 depth 0 opacity 0.6 |
 | `Glow.Success` | effect | shadow `#5CFFB0` blur 22 depth 0 opacity 0.6 |
+| **Chat + code editor (team A): one-offs no shared token matched within 8/255** | | |
+| `Accent.1.Tint.Faint` | brush | `#144CDFFF` — compaction marker fill |
+| `Accent.1.Border.Soft` | brush | `#444CDFFF` — compaction marker border |
+| `Accent.2.Hover` | brush | `#C78AFF` — a solid `Accent.2` button under the mouse ("Compact now") |
+| `State.Hover.Danger` | brush | `#33FF6E6E` — hover on a stop / destructive icon button |
+| `Banner.Warning.Background` | brush | `#F9E2AF` @ 0.1 — the context-full warning bar |
+| `Banner.Danger.Background` | brush | `#70301028` — the merge-conflict banner |
+| `Button.Flat.Background` | brush | `#3328326E` — the workbench's small buttons (Save, Save All, Preview rename, Accept …, debug transport) |
+| `Button.Flat.Hover.Background` | brush | `#5528326E` |
+| `Button.Flat.Foreground` | brush | `#E8ECFF` — text on `Button.Flat.*` and `Button.Success.Background` (paired with the face, so a light face never gets light text) |
+| `Button.Success.Background` | brush | `#5528A06E` — Commit |
+| `Button.Danger.Solid.Background` | brush | `#66C2185B` — Apply rename (text `Text.OnAccent`) |
+| `Chat.Permission.Background` | brush | `#20F9E2AF` — the inline Allow / Deny prompt |
+| `Chat.Badge.Warning.Background` | brush | `#30F9E2AF` — retry countdown chip |
+| `Chat.Badge.Danger.Background` | brush | `#30F38BA8` — "interrupted" chip |
+| `Chat.Diff.Added.Background` · `Chat.Diff.Removed.Background` | brush | `#1A40A02B` · `#1AF38BA8` — edit diff rows in the transcript (text: `Status.Success.Soft` / `Status.Danger.Soft`) |
+| `Chat.Diff.Hunk.Foreground` | brush | `#89B4FA` — `@@` hunk header |
+| `Editor.Diff.Added.Background` · `Editor.Diff.Removed.Background` | brush | `#3A2ECC71` · `#3AFF4D6D` — side-by-side diff cells (modified rows use the same two, ≈ Δ7) |
+| `Completion.Kind.Lsp` · `.Type` · `.Method` · `.Keyword` · `.Other` | brush | `#7EE0A3` · `#8AB8FF` · `#FFD37E` · `#C79AFF` · `#8A8FB0` — kind tag in the completion popup (the popup itself is AvalonEdit's unthemed system-white window) |
+| `Syntax.DocComment` | brush | `#808080` — `///` and `<summary>` tags (AvalonEdit's XmlDoc definition, tinted alongside C# / VB) |
+| `Tree.Glyph.Fill` · `.Stroke` | brush | `#FFFFFF` · `#818181` — the file tree's expand triangle, collapsed (WPF's own Aero2 values) |
+| `Tree.Glyph.Expanded.Fill` · `.Expanded.Stroke` | brush | `#595959` · `#262626` — expanded |
+| `Tree.Glyph.Hover.Fill` · `.Hover.Stroke` | brush | `#CCEEFB` · `#27C7F7` — under the mouse |
+| `Tree.Glyph.Hover.Expanded.Fill` · `.Hover.Expanded.Stroke` | brush | `#82DFFB` · `#1CC4F7` — expanded, under the mouse |
+| `Glow.Toast.Info` · `Glow.Toast.Warning` · `Glow.Toast.Danger` | effect | shadow `#4CDFFF` · `#FFD166` · `#FF6E6E`, blur 18 depth 0 opacity 0.35 · 0.35 · 0.45 — compaction toast |
+
+**Team A notes (ChatView, CodeEditorView, Views/Editor/*).** `Editor.Background` is what the AvalonEdit control, the
+diff overlay, the terminal output and the debug console paint (Midnight: transparent over `Bg.Window`) — make it
+opaque in a theme that wants a light code page; the syntax re-tint (`NeonHighlighting`) reads it to decide whether
+an unknown xshd colour must be lifted (dark page) or sunk (light page). The context LEDs are `Status.*.Soft` /
+`Progress.Context.Fill` at element opacity 0.15 (off) / 0.9 (on). Choices that differ from the table below (all
+≤ Δ8 over the real background): `#3311132E` input boxes → `Surface.Input`; `#22000000` monogram chips →
+`Surface.Sunken`; `#8C0A0C22` file-tree panel → `Sidebar.Background`, tab strip → `Bg.Panel`; `#7011152E`
+terminal drawer / diff header → `Bg.Panel`; `#2628326E` result-row hover → `Surface.Raised`; `#20F38BA8` error
+bar → `Status.Danger.Tint`; `#0A06071A` console surfaces → `Editor.Background`.
+
+**Syntax colours by name.** `NeonHighlighting` picks a `Syntax.*` token from each xshd colour's NAME: comment →
+`Comment`, string / char → `String`, number / digit → `Number`, preprocessor / regex / annotation → `Preprocessor`,
+method / function → `Function`, class / type → `Type`, variable / property → `Variable`, control / goto → `Control`,
+keyword / modifier / … → `Keyword`. AvalonEdit's built-in definitions keep their names; the bundled ones in
+`Resources/Syntax/*.xshd` (GDScript, Godot shader, Godot resource files, JSONC, YAML, TOML, shell) use only names
+that land in a token — `tests/syntaxtest` fails when one does not.
+
+### Settings and the manager pages (team B)
+
+Added for `SettingsView`, `FeaturesView`, `ModelManagerView`, `McpServersView`, `PermissionsView`, `PluginManagerView`,
+`SkillsView`, `SubAgentsView`, `HookLibraryView`, `InstinctsView`, `SecurityShieldView` — every value there had no exact
+token. Per rule 4, Classic.xaml and NeonCyber.xaml carry the **Midnight values** (marked "STILL MIDNIGHT'S VALUES") until
+their theme team paints them; the last column names the general token each is closest to in meaning — a starting point.
+(An alias entry — `<StaticResource x:Key="A" ResourceKey="B"/>` in the theme file — does NOT work: themetest T2 no longer
+sees those keys in the loaded dictionary. Give every key a real value.)
+
+| Token | Kind | Midnight value | Used for | Nearest general token |
+|---|---|---|---|---|
+| `Page.Header.Background` | gradient | linear `#7F141838` → `Transparent` (top → bottom) | header band of the manager pages | `Surface.Panel` |
+| `Page.Footer.Background` | brush | `#88141838` | status strip at the bottom of a manager page | `Surface.Card.Flat` |
+| `Page.Toolbar.Background` | brush | `#5511152E` | Security shield filter bar | `Surface.Sunken` |
+| `Page.Background` | brush | `#181825` | a page that paints its own opaque background (MCP servers — its root used the app-level `MantleBrush`, which a view's own `Resources` cannot override on the root element) | `Bg.Panel` |
+| `Page.Wash.Accent.2` · `.Accent.3` · `.Success` · `.Warning` | radial | radial (0.5,0 · 0.7 × 0.55) `#22A672FF` / `#22FF5EC4` / `#225CFFB0` / `#22FFD166` → `#06071A` | the coloured wash behind Sub-agents · Plugins + Security · Skills + Hooks · Instincts | `Backdrop.Nebula` |
+| `Shadow.Panel.Soft` | effect | shadow `Black` blur 30 depth 0 opacity 0.5 | list / detail panels of the manager pages | `Shadow.Panel` |
+| `Glow.Card.Hover` | effect | shadow `#4CDFFF` blur 14 depth 0 opacity 0.35 | a hovered list card | `Glow.Accent.1` |
+| `IconTile.Accent.1-2` · `.Accent.2-1` · `.Accent.4-2` · `.Accent.4-3` · `.Accent.1-Success` · `.Success-Accent.1` · `.Warning-Accent.3` · `.Accent.3-Danger` | gradient | linear 0,0 → 1,1 between the two named accents (`#4CDFFF`→`#A672FF`, `#A672FF`→`#4CDFFF`, `#FF8AA6`→`#A672FF`, `#FF8AA6`→`#FF5EC4`, `#4CDFFF`→`#5CFFB0`, `#5CFFB0`→`#4CDFFF`, `#FFD166`→`#FF5EC4`, `#FF5EC4`→`#FF6E6E`) | the gradient icon squares (page headers, list cards, detail panes) | `Accent.Gradient` |
+| `IconTile.Foreground` | brush | `White` | the glyph on an icon tile | `Text.OnAccent` |
+| `Glow.IconTile.Accent.1` · `.Accent.2` · `.Accent.3` · `.Success` · `.Warning` | effect | shadow in that accent, blur 22 depth 0 opacity 0.55 | glow under a header / detail tile | `Glow.Accent.1/2/3`, `Glow.Success`, `Glow.Led.Warning` |
+| `Glow.IconTile.Small.Accent.1` · `.Small.Accent.3` | effect | blur 16 opacity 0.4 (`#4CDFFF` / `#FF5EC4`) | Plugins list-card tiles | `Glow.Accent.1` / `.3` |
+| `Glow.IconTile.Medium.Accent.1` | effect | `#4CDFFF` blur 18 opacity 0.5 | Skills list-card tile | `Glow.Accent.1` |
+| `Glow.IconTile.Large.Success` | effect | `#5CFFB0` blur 26 opacity 0.6 | Hook library detail tile | `Glow.Success` |
+| `Button.Action.Background` · `.Border` · `.Foreground` | brush | `#7028326E` · `#A0B4FF` @ 0.18 · `#E8ECFF` | the action buttons of the manager pages (`NeonAction` styles + inline header buttons) | `Button.Secondary.*` |
+| `Button.Action.Hover.Background` · `.Hover.Border` | brush | `#B22E3870` · `#4CDFFF` | … hovered | `Button.Secondary.Hover.Background` · `Input.Focus.Border` |
+| `Button.Action.Primary.Background` · `.Border` · `.Foreground` | gradient · brush · brush | linear 0,0→1,1 `#992C5A` → `#5A2A99` · `#FF5EC4` · `White` | Plugins primary button (Enable / Install); Security shield reuses Border + Foreground | `Button.Primary.*` |
+| `Glow.Button.Action.Primary` | effect | `#FF5EC4` blur 18 opacity 0.45 | … its glow | `Shadow.Button` |
+| `Button.Action.Accent.3.Background` · `Glow.Button.Action.Accent.3` | gradient · effect | linear 0,0→1,1 `#FF5EC4` → `#A672FF` · `#FF5EC4` blur 18 opacity 0.5 | Security shield primary button (Scan) | `Button.Primary.Background` · `Shadow.Button` |
+| `Button.Action.Success.Background` · `.Border` · `.Foreground` · `Glow.Button.Action.Success` | gradient · brush · brush · effect | linear 0,0→1,1 `#5CFFB0` → `#4CDFFF` · `#5CFFB0` · `#06071A` · `#5CFFB0` blur 18 opacity 0.45 | Instincts primary button | `Button.Primary.*` · `Shadow.Button` |
+| `SettingsNav.Foreground` · `.Hover.Background` · `.Selected.Background` · `.Selected.Foreground` · `.Indicator` | brush | `#C0C6EE` · `#1428326E` · `#2A4CDFFF` · `#E8ECFF` · `#4CDFFF` | the category list on the left of Settings | `Nav.Foreground` · `State.Hover` · `State.Selected` · `Nav.Selected.Foreground` · `Accent.1` |
+| `Surface.Inset` | brush | `#22000000` | a recessed well: Hook library filter box, switch track | `Surface.Input` |
+| `Accent.1.Tint.Faint` | brush | `#144CDFFF` | Settings › Model info card | `Accent.1.Tint` |
+| `Status.Success.Tint.Faint` | brush | `#1A5CFFB0` | Settings › Provider "active provider" pill | `Status.Success.Tint` |
+| `Status.Neutral.Tint` · `Status.Neutral.Border` | brush | `#1A8388BD` · `#558388BD` | Instincts brain chip while the brain is offline | `Surface.Chip` · `Border.Default` |
+| `Status.Caution.Tint` | brush | `#44FAB387` | Features › activation "transfer to this PC" button | `Status.Warning.Tint` |
+| `License.Tier.Background` · `License.Tier.Foreground` | gradient · brush | linear 0,0→1,0 `#A6E3A1` → `#94E2D5` · `#1E1E2E` | Features › activation tier badge | `License.Chip.Active.*` |
+| `Badge.Quant.Background` · `Badge.Size.Background` · `Badge.Installed.Background` | brush | `#CBA6F7` / `#94E2D5` / `#A6E3A1` @ 0.15 | Model manager quantization / size / installed badges | `Accent.2.Tint` · `Accent.1.Tint` · `Status.Success.Tint` |
+| `Fit.Excellent.Tint` · `Fit.Good.Tint` · `Fit.Partial.Tint` · `Fit.Poor.Tint` · `Fit.TooLarge.Tint` | brush | `#A6E3A1` / `#94E2D5` / `#F9E2AF` / `#FAB387` / `#F38BA8` @ 0.2 | Model manager hardware-fit pill (Excellent … Too large) | `Status.Success.Tint` · `Accent.1.Tint` · `Status.Warning.Tint` ×2 · `Status.Danger.Tint` |
+| `Badge.Status.Foreground` · `Badge.Rule.Foreground` | brush | `#06071A` · `#0F1230` | dark text on a solid status pill: MCP server state, permission rule action (was the local `CrustBrush` / `BaseBrush` — a background colour used as text) | `Text.Inverse` |
+| `Rating.Star` | brush | `Black` | Model manager star rating. It had no colour, so it showed the system black (dark on navy, hard to see); Midnight keeps that black. **Candidate fix** (needs a golden update): `Status.Warning` | `Status.Warning` |
+| `Button.Plain.Background` · `.Border` · `.Foreground` | brush | `#DDDDDD` · `#707070` · `Black` | buttons that used to get the WINDOWS (Aero2) template and so ignored every theme: Settings › "Show" key / token toggles | `Button.Secondary.*` |
+| `Button.Plain.Hover.Background` · `.Hover.Border` · `.Pressed.Background` · `.Pressed.Border` · `.Checked.Background` · `.Checked.Border` | brush | `#BEE6FD` · `#3C7FB1` · `#C4E5F6` · `#2C628B` · `#BCDDEE` · `#245A83` (the Aero2 values) | … their hover / pressed / checked states, also the Model manager list / grid switch and the Skills / Sub-agents Copy buttons (which are transparent until hovered) | `Button.Secondary.Hover.Background` · `Input.Focus.Border` · `State.Pressed` · `Surface.Raised` |
+| `Input.Plain.Hover.Border` · `Input.Plain.Focus.Border` | brush | `#7EB4EA` · `#569DE5` (Aero2) | Hook library filter box border on hover / keyboard focus | `Input.Focus.Border` |
+| `ListRow.Hover.Background` · `.Hover.Border` · `.Selected.Background` · `.Selected.Border` · `.Selected.Inactive.Background` · `.Selected.Inactive.Border` | brush | `#1F26A0DA` · `#A826A0DA` · `#3D26A0DA` · `#26A0DA` · `#3DDADADA` · `#DADADA` (Aero2) | Settings › Context & Memory list rows | `ListItem.Hover.Background` · `State.Selected` |
+
+The `Button.Plain.*`, `Input.Plain.*` and `ListRow.*` tokens keep Midnight exactly as it rendered (Windows' own colours, now
+behind tokens with the same template shape and trigger order as Aero2); Classic and Neon Cyber can finally restyle them.
+They are **candidate Midnight fixes** too — e.g. `Button.Plain.*` → the `Button.Secondary.*` look — once the owner accepts
+a new golden.
+
+Team B mapped colours by meaning, not only by nearest value: `#3328326E` (snippet boxes) → `Surface.Raised.Strong` (Δ ≤ 1),
+`#22FFFFFF` → `State.Hover.Strong` in a hover trigger and `Surface.Badge` on a badge, `#22000000` → `Surface.Inset` (not
+`Bg.Overlay`), `#FF6B6B` / `#22FF6B6B` → `Status.Danger` / `.Tint` (Δ ≤ 3). The `HexToColor` bindings in Sub-agents,
+Instincts and Security shield are data colours (agent colour, confidence, severity, category) that come from the models —
+team C's part; the views keep binding them.
+
+## Group C additions
+
+Tokens added while converting the tool pages (Time Machine, Hex Editor, Debug Log, Task Manager), the License /
+BrainX / DGX Spark dialogs, the preview pane and the C# colour code (converters, models, view models, markdown).
+Midnight holds the exact colour each view hard-coded (pixel-identical). Classic and Neon Cyber LED hold values
+designed from the approved mockups (Main.dc.html / License / BrainXInvite for Classic, NeonMain.dc.html for Neon);
+the theme teams may retune them. A `<StaticResource x:Key="New" ResourceKey="Old"/>` alias does NOT work here:
+the aliased keys are missing from a theme dictionary loaded by URI (themetest T2 caught it), so every theme
+carries real values.
+
+| Token | Kind | Midnight | Classic | Neon Cyber LED |
+|---|---|---|---|---|
+| **Dialogs (License, BrainX invite, DGX Spark, the code-built input dialog)** | | | | |
+| `Dialog.Background` | gradient | linear `#FA171B42` → `#FA0A0C22` | linear `#FFFFFF` → `#ECECF0` → `#ECECF0` | linear `#F70E1228` → `#F7070812` |
+| `Dialog.Background.Brainx` | gradient | linear `#FA1D1442` → `#FA0A0C22` | linear `#FFFFFF` → `#ECECF0` → `#ECECF0` | linear `#F7180E2C` → `#F7070812` |
+| `Dialog.Background.Spark` | gradient | linear `#FA132A1E` → `#FA0A0C22` | linear `#F4FBEF` → `#ECECF0` → `#ECECF0` | linear `#F70C1A0A` → `#F7070812` |
+| `Dialog.Border` | brush | `#55A672FF` | `#7E8199` | `#8000E5FF` |
+| `Dialog.Border.Spark` | brush | `#5576D16B` | `#6E9A5A` | `#8CA6FF00` |
+| `Shadow.Dialog` | effect | shadow `Black` blur 30 depth 0 opacity 0.65 | shadow `Black` blur 14 depth 3 opacity 0.35 | shadow `#00E5FF` blur 24 depth 0 opacity 0.35 |
+| `Dialog.Card.Background` | brush | `#14FFFFFF` | `#FFFFFF` | `#0A00E5FF` |
+| `Dialog.Card.Border` | brush | `#22FFFFFF` | `#A5A9BF` | `#4000E5FF` |
+| `Dialog.Input.Background` | brush | `#33000000` | `#FFFFFF` | `#0A0E22` |
+| `Dialog.Input.Border` | brush | `#44A672FF` | `#7F9DB9` | `#8C00E5FF` |
+| `Dialog.Input.Border.Spark` | brush | `#5576D16B` | `#7F9DB9` | `#8CA6FF00` |
+| `Dialog.Simple.Background` | brush | `#1E1E2E` | `#ECECF0` | `#0E1228` |
+| `Dialog.Simple.Field` | brush | `#181825` | `#FFFFFF` | `#0A0E22` |
+| `Dialog.Simple.Border` | brush | `#313244` | `#7F9DB9` | `#8000E5FF` |
+| `Shadow.Dialog.Simple` | effect | shadow `Black` blur 24 depth 0 opacity 0.55 | shadow `Black` blur 14 depth 3 opacity 0.35 | shadow `#00E5FF` blur 20 depth 0 opacity 0.3 |
+| `License.Avatar.Background` | gradient | linear `#FF5CA8` → `#A672FF` | linear `#F3D27A` → `#C08A2B` | linear `#FF2BD6` → `#8A2BE2` |
+| `Glow.License.Avatar` | effect | shadow `#FF5CA8` blur 18 depth 0 opacity 0.6 | shadow `#8A5A10` blur 6 depth 1 opacity 0.35 | shadow `#FF2BD6` blur 18 depth 0 opacity 0.7 |
+| `License.Plan.Best.Background` | brush | `#26A672FF` | `#FFFDF6` | `#1FFF2BD6` |
+| `Button.Caution.Background` | brush | `#44FAB387` | linear `#FFFBEF` → `#FCE2A8` | `#33FFB000` |
+| `Glow.Brainx.Avatar` | effect | shadow `#A672FF` blur 20 depth 0 opacity 0.7 | shadow `#1B3E86` blur 6 depth 1 opacity 0.35 | shadow `#FF2BD6` blur 20 depth 0 opacity 0.6 |
+| `Spark.Avatar.Background` | gradient | linear `#9BE26B` → `#3FA34D` | linear `#8FD06B` → `#3E7B3E` | linear `#C8FF6B` → `#4F8A00` |
+| `Spark.Avatar.Foreground` | brush | `#0B1A10` | `#FFFFFF` | `#071000` |
+| `Glow.Spark.Avatar` | effect | shadow `#76D16B` blur 18 depth 0 opacity 0.6 | shadow `#24561A` blur 6 depth 1 opacity 0.35 | shadow `#A6FF00` blur 18 depth 0 opacity 0.7 |
+| `Spark.Card.Active.Background` | brush | `#2276D16B` | `#F1F8EC` | `#1AA6FF00` |
+| `Spark.Campaign.Background` | gradient | linear `#33FFD166` → `#1476D16B` | linear `#FFF6E2` → `#F1F8EC` | linear `#1FFFB000` → `#0FA6FF00` |
+| `Spark.Campaign.Border` | brush | `#88FFD166` | `#E8A23A` | `#99FFB000` |
+| **Tool pages (Debug Log, Hex Editor, Time Machine): backdrop, header strip, toolbars, the page icon tile** | | | | |
+| `Page.Backdrop.DebugLog` | radial | radial `#22FF6E6E` → `#06071A` | radial `#FFFFFF` → `#ECECF0` | radial `#1AFF5C7A` → `#070812` |
+| `Page.Backdrop.HexEditor` | radial | radial `#284CDFFF` → `#06071A` | radial `#FFFFFF` → `#ECECF0` | radial `#1400E5FF` → `#070812` |
+| `Page.Backdrop.TimeMachine` | radial | radial `#33A672FF` → `#06071A` | radial `#FFFFFF` → `#ECECF0` | radial `#22FF2BD6` → `#070812` |
+| `Page.Header.Background` | gradient | linear `#7F141838` → `Transparent` | linear `#FBFBFD` → `#F2F2F6` → `#E3E4EC` → `#B6B9CB` | linear `#B30E1228` → `Transparent` |
+| `Page.Toolbar.Background` | brush | `#5511152E` | `#F2F2F5` | `#990B0F22` |
+| `Page.Strip.Background` | brush | `#3311152E` | linear `#FFFFFF` → `#E5E6EE` | `#800B0F22` |
+| `Page.StatusBar.Background` | brush | `#88141838` | `#ECECF0` | `#05060F` |
+| `PageIcon.DebugLog.Background` | gradient | linear `#FF6E6E` → `#A672FF` | linear `#F4C2B4` → `#E07A5F` → `#D2563A` → `#8A3B2B` | linear `#FF5C7A` → `#FF2BD6` |
+| `Glow.PageIcon.DebugLog` | effect | shadow `#FF6E6E` blur 22 depth 0 opacity 0.55 | shadow `#8A3B2B` blur 4 depth 1 opacity 0.35 | shadow `#FF5C7A` blur 20 depth 0 opacity 0.7 |
+| `PageIcon.HexEditor.Background` | gradient | linear `#4CDFFF` → `#A672FF` | linear `#A9C4F0` → `#6C97E0` → `#316AC5` → `#1B3E86` | linear `#00E5FF` → `#0077FF` |
+| `Glow.PageIcon.HexEditor` | effect | shadow `#4CDFFF` blur 18 depth 0 opacity 0.6 | shadow `#1B3E86` blur 4 depth 1 opacity 0.35 | shadow `#00E5FF` blur 18 depth 0 opacity 0.7 |
+| `PageIcon.TimeMachine.Background` | gradient | linear `#FF5EC4` → `#A672FF` | linear `#C9BCF0` → `#8E7AD8` → `#5B45B0` → `#3A2A7A` | linear `#FF2BD6` → `#8A2BE2` |
+| `PageIcon.TimeMachine.Halo` | radial | radial `#FF5EC4` → `#A672FF` → `Transparent` | radial `#408E7AD8` → `#205B45B0` → `Transparent` | radial `#FF2BD6` → `#8A2BE2` → `Transparent` |
+| `Glow.PageIcon.TimeMachine` | effect | shadow `#FF5EC4` blur 20 depth 0 opacity 0.6 | shadow `#3A2A7A` blur 4 depth 1 opacity 0.35 | shadow `#FF2BD6` blur 20 depth 0 opacity 0.7 |
+| **Buttons of the tool pages: glass (neutral), ghost (toolbar pill), accent (the magenta call to action)** | | | | |
+| `Button.Glass.Background` | brush | `#7028326E` | linear `#FFFFFF` → `#F4F5F9` → `#DDE0EB` → `#C5C8D6` | `#1400E5FF` |
+| `Button.Glass.Hover.Background` | brush | `#B22E3870` | linear `#FFFDF4` → `#FFF3D2` → `#FDD889` → `#E5A01A` | `#3300E5FF` |
+| `Button.Glass.Border` | brush | `#A0B4FF` @ 0.18 | `#9A9DB4` | `#6600E5FF` |
+| `Button.Glass.Hover.Border` | brush | `#4CDFFF` | `#E5A01A` | `#00E5FF` |
+| `Button.Glass.Foreground` | brush | `#E8ECFF` | `#1C1E33` | `#E6F1FF` |
+| `Button.Ghost.Background` | brush | `#2228326E` | linear `#FFFFFF` → `#E1E3EC` | `#0D00E5FF` |
+| `Button.Ghost.Hover.Background` | brush | `#4428326E` | linear `#FFFDF4` → `#FDD889` | `#2600E5FF` |
+| `Button.Accent.Background` | gradient | linear `#992C5A` → `#5A2A99` | linear `#A9C4F0` → `#6C97E0` → `#316AC5` → `#1B3E86` | `#2EFF2BD6` |
+| `Button.Accent.Hover.Background` | gradient | linear `#B7367A` → `#7036C2` | linear `#C3D6F6` → `#8CB0EE` → `#3F7BD6` → `#1B3E86` | `#4DFF2BD6` |
+| `Button.Accent.Border` | brush | `#FF5EC4` | `#1B3E86` | `#FF2BD6` |
+| `Button.Accent.Foreground` | brush | `White` | `#FFFFFF` | `#FFFFFF` |
+| `Glow.Button.Accent` | effect | shadow `#FF5EC4` blur 22 depth 0 opacity 0.45 | shadow `#1B3E86` blur 4 depth 1 opacity 0.3 | shadow `#FF2BD6` blur 18 depth 0 opacity 0.6 |
+| **Lists, chips, scrims** | | | | |
+| `List.Row.Background` | brush | `#0AFFFFFF` | `#F7F8FB` | `#0800E5FF` |
+| `List.Row.Selected.Background` | brush | `#30A672FF` | `#C9D9F5` | `#3300E5FF` |
+| `List.Header.Divider` | gradient | linear `#F2F2F2` → `#D5D5D5` | linear `#FFFFFF` → `#C5C8D6` → `#A0A3B8` | `#6600E5FF` |
+| `Surface.Badge.Subtle` | brush | `#15FFFFFF` | `#F2F3F8` | `#1400E5FF` |
+| `Text.OnStatus` | brush | `#06071A` | `#FFFFFF` | `#05060F` |
+| `Accent.2.Border.Strong` | brush | `#66A672FF` | `#8A7CC0` | `#99FF2BD6` |
+| `Shadow.Panel.Soft` | effect | shadow `Black` blur 30 depth 0 opacity 0.5 | shadow `Black` blur 10 depth 2 opacity 0.25 | shadow `#00E5FF` blur 20 depth 0 opacity 0.2 |
+| `Bg.Scrim.Dialog` | brush | `#B2060718` | `#995C607E` | `#CC05060F` |
+| `Bg.Scrim.Busy` | brush | `#D9060718` | `#CC5C607E` | `#E605060F` |
+| **Diffs (Time Machine diff lines), git status (source control list), commit avatars** | | | | |
+| `Diff.Added` | brush | `#5CFFB0` | `#24561A` | `#A6FF00` |
+| `Diff.Deleted` | brush | `#FF6E6E` | `#A12B1F` | `#FF5C7A` |
+| `Diff.Hunk` | brush | `#A672FF` | `#2D4FA8` | `#00E5FF` |
+| `Diff.Context` | brush | `#C0C6EE` | `#4A4D68` | `#B9C4E8` |
+| `Diff.Added.Background` | brush | `#245CFFB0` | `#E6F4DD` | `#1AA6FF00` |
+| `Diff.Deleted.Background` | brush | `#24FF6E6E` | `#FBE3DF` | `#1AFF5C7A` |
+| `Diff.Hunk.Background` | brush | `#20A672FF` | `#E9EEFA` | `#1400E5FF` |
+| `Git.Added` | brush | `#7EE0A3` | `#24561A` | `#A6FF00` |
+| `Git.Deleted` | brush | `#FF7A93` | `#A12B1F` | `#FF5C7A` |
+| `Git.Renamed` | brush | `#8AB8FF` | `#2D4FA8` | `#00E5FF` |
+| `Git.Modified` | brush | `#FFD37E` | `#9A6A00` | `#FFB000` |
+| `Avatar.Ai` | gradient | linear `#A672FF` → `#4CDFFF` | linear `#6C97E0` → `#316AC5` | linear `#FF2BD6` → `#00E5FF` |
+| `Avatar.Human` | gradient | linear `#4CDFFF` → `#5CFFB0` | linear `#8FD06B` → `#3E7B3E` | linear `#00E5FF` → `#A6FF00` |
+| **Chat message roles (RoleToBrush / RoleToBackground converters)** | | | | |
+| `Role.User` | brush | `#89B4FA` | `#1F3A93` | `#00E5FF` |
+| `Role.Assistant` | brush | `#A6E3A1` | `#24561A` | `#A6FF00` |
+| `Role.Exec` | brush | `#F9E2AF` | `#7A4A00` | `#FFB000` |
+| `Role.Tool` | brush | `#94E2D5` | `#1B6F6A` | `#7DF4FF` |
+| `Role.System` | brush | `#CBA6F7` | `#5B45B0` | `#FF8AE9` |
+| `Role.Status` | brush | `#9C9CAC` | `#5A5D78` | `#7C88B8` |
+| `Role.Default` | brush | `#CDD6F4` | `#1C1E33` | `#E6F1FF` |
+| `Role.User.Background` | brush | `#2F3D5C` | `#E9EEFA` | `#1200E5FF` |
+| `Role.Assistant.Background` | brush | `#313244` | `#FFFFFF` | `#B30A0E20` |
+| `Role.Exec.Background` | brush | `#3A3530` | `#FFF6E2` | `#14FFB000` |
+| `Role.Tool.Background` | brush | `#2D3A3E` | `#EEF6F5` | `#0F7DF4FF` |
+| `Role.Status.Background` | brush | `#1E1E2E` | `#F2F3F8` | `#80070812` |
+| **Chat markdown (Helpers/MarkdownHelper): text, headings, quotes, tables, code blocks and their syntax colours** | | | | |
+| `Markdown.Text` | brush | `#CDD6F4` | `#1C1E33` | `#D5DEFA` |
+| `Markdown.Muted` | brush | `#6C7086` | `#5A5D78` | `#7C88B8` |
+| `Markdown.Heading` | brush | `#CBA6F7` | `#2D4FA8` | `#FF8AE9` |
+| `Markdown.Heading.Minor` | brush | `#89B4FA` | `#316AC5` | `#7DF4FF` |
+| `Markdown.Emphasis` | brush | `#F5E0DC` | `#4A4D68` | `#E6F1FF` |
+| `Markdown.Link` | brush | `#89B4FA` | `#1F3A93` | `#00E5FF` |
+| `Markdown.Rule` | brush | `#45475A` | `#C5C8D6` | `#4000E5FF` |
+| `Markdown.Quote.Background` | brush | `#18CBA6F7` | `#F2F3F8` | `#B30A0E20` |
+| `Markdown.Quote.Border` | brush | `#CBA6F7` | `#316AC5` | `#8000E5FF` |
+| `Markdown.Code` | brush | `#94E2D5` | `#1B6F6A` | `#7DF4FF` |
+| `Markdown.Code.Background` | brush | `#313244` | `#F2F3F8` | `#0B0F22` |
+| `Markdown.Border` | brush | `#313244` | `#C5C8D6` | `#4000E5FF` |
+| `Markdown.CodeBlock.Background` | brush | `#11111B` | `#FFFFFF` | `#05060F` |
+| `Markdown.Diff.Added` | brush | `#A6E3A1` | `#24561A` | `#A6FF00` |
+| `Markdown.Diff.Added.Background` | brush | `#30A6E3A1` | `#E6F4DD` | `#1AA6FF00` |
+| `Markdown.Diff.Deleted` | brush | `#F38BA8` | `#A12B1F` | `#FF5C7A` |
+| `Markdown.Diff.Deleted.Background` | brush | `#30F38BA8` | `#FBE3DF` | `#1AFF5C7A` |
+| `Markdown.Diff.Hunk` | brush | `#89B4FA` | `#2D4FA8` | `#00E5FF` |
+| `Markdown.Syntax.Text` | brush | `#CDD6F4` | `#1C1E33` | `#D5DEFA` |
+| `Markdown.Syntax.Comment` | brush | `#6C7086` | `#3E7B3E` | `#5E6A94` |
+| `Markdown.Syntax.String` | brush | `#A6E3A1` | `#A12B1F` | `#A6FF00` |
+| `Markdown.Syntax.Number` | brush | `#FAB387` | `#7A4A00` | `#FFB000` |
+| `Markdown.Syntax.Keyword` | brush | `#CBA6F7` | `#1F3A93` | `#FF2BD6` |
+| `Markdown.Syntax.Type` | brush | `#F9E2AF` | `#1B6F6A` | `#00E5FF` |
+| **Time Machine: commit spheres, the timeline spine, the rewind beam and overlay** | | | | |
+| `TimeMachine.Halo.Ai` | radial | radial `#A672FF` → `Transparent` | radial `#806C97E0` → `Transparent` | radial `#FF2BD6` → `Transparent` |
+| `TimeMachine.Halo.Human` | radial | radial `#4CDFFF` → `Transparent` | radial `#808FD06B` → `Transparent` | radial `#00E5FF` → `Transparent` |
+| `TimeMachine.Sphere.Ai` | radial | radial `#FFFFFF` → `#A672FF` → `#4F2A8C` | radial `#FFFFFF` → `#6C97E0` → `#1B3E86` | radial `#FFFFFF` → `#FF2BD6` → `#6A0F5A` |
+| `TimeMachine.Sphere.Ai.Stroke` | brush | `#7E4DCE` | `#1B3E86` | `#FF2BD6` |
+| `TimeMachine.Sphere.Human` | radial | radial `#FFFFFF` → `#4CDFFF` → `#1D6E8C` | radial `#FFFFFF` → `#8FD06B` → `#24561A` | radial `#FFFFFF` → `#00E5FF` → `#005F6E` |
+| `TimeMachine.Sphere.Human.Stroke` | brush | `#286E94` | `#24561A` | `#00E5FF` |
+| `TimeMachine.Highlight` | brush | `#80FFFFFF` | `#CCFFFFFF` | `#80FFFFFF` |
+| `Glow.TimeMachine.Head` | effect | shadow `#5CFFB0` blur 14 depth 0 opacity 0.8 | shadow `#3FAE3F` blur 8 depth 0 opacity 0.6 | shadow `#A6FF00` blur 14 depth 0 opacity 0.9 |
+| `TimeMachine.Spine` | gradient | linear `#4CDFFF` → `#A672FF` → `#FF5EC4` → `#5CFFB0` | linear `#6C97E0` → `#316AC5` → `#5B45B0` → `#3FAE3F` | linear `#A6FF00` → `#00E5FF` → `#FF2BD6` |
+| `TimeMachine.Beam` | gradient | linear `Transparent` → `#FF5EC4` → `#4CDFFF` → `#FF5EC4` → `Transparent` | linear `Transparent` → `#316AC5` → `#6C97E0` → `#316AC5` → `Transparent` | linear `Transparent` → `#FF2BD6` → `#00E5FF` → `#FF2BD6` → `Transparent` |
+| `Glow.TimeMachine.Beam` | effect | shadow `#FF5EC4` blur 40 depth 0 opacity 0.9 | shadow `#316AC5` blur 20 depth 0 opacity 0.6 | shadow `#FF2BD6` blur 40 depth 0 opacity 0.9 |
+| `TimeMachine.CornerGlow` | radial | radial `#3CFF5EC4` → `Transparent` | radial `#26316AC5` → `Transparent` | radial `#3CFF2BD6` → `Transparent` |
+| `Glow.TimeMachine.Avatar` | effect | shadow `#A672FF` blur 22 depth 0 opacity 0.5 | shadow `#1B3E86` blur 6 depth 1 opacity 0.35 | shadow `#FF2BD6` blur 22 depth 0 opacity 0.6 |
+| `Glow.TimeMachine.Rewind` | effect | shadow `#FF5EC4` blur 22 depth 0 opacity 0.5 | shadow `#1B3E86` blur 6 depth 1 opacity 0.35 | shadow `#FF2BD6` blur 22 depth 0 opacity 0.6 |
+| `Glow.Accent.3.Small` | effect | shadow `#FF5EC4` blur 10 depth 0 opacity 0.8 | shadow `#316AC5` blur 4 depth 0 opacity 0.4 | shadow `#FF2BD6` blur 10 depth 0 opacity 0.9 |
+| `TimeMachine.Rewind.Orb` | radial | radial `#FF5EC4` → `#A672FF` | radial `#A9C4F0` → `#316AC5` | radial `#FF2BD6` → `#8A2BE2` |
+| `Glow.TimeMachine.Rewind.Orb` | effect | shadow `#FF5EC4` blur 44 depth 0 opacity 0.9 | shadow `#316AC5` blur 24 depth 0 opacity 0.6 | shadow `#FF2BD6` blur 44 depth 0 opacity 0.9 |
+| `TimeMachine.Rewind.Title` | gradient | linear `#FF5EC4` → `#4CDFFF` | linear `#FFFFFF` → `#DCE6FA` | linear `#FF2BD6` → `#00E5FF` |
+| **Preview pane (built-in browser): toolbar, origin badges, the web-page canvas** | | | | |
+| `Preview.Toolbar.Background` | brush | `#8C0A0C22` | linear `#FBFBFD` → `#F2F2F6` → `#E3E4EC` → `#B6B9CB` | `#F20B0F22` |
+| `Preview.Badge.Local.Background` | brush | `#332ECC71` | `#D5ECC8` | `#33A6FF00` |
+| `Preview.Badge.External.Background` | brush | `#55FF8A3D` | `#FCE2A8` | `#40FFB000` |
+| `Preview.Driving.Background` | brush | `#33FFB020` | `#FCE2A8` | `#33FFB000` |
+| `Preview.Page.Button.Background` | brush | `#3328326E` | linear `#FFFFFF` → `#E2E3EA` | `#2600E5FF` |
+| `Preview.Page.Button.Hover.Background` | brush | `#5528326E` | linear `#FFFDF4` → `#FDD889` | `#4000E5FF` |
+| `Preview.Page.Background` | brush | `White` | `White` | `White` |
+| `Preview.Page.Foreground` | brush | `#30344A` | `#30344A` | `#30344A` |
+| `Preview.Page.Muted` | brush | `#60657A` | `#60657A` | `#60657A` |
+| `Preview.Page.Icon` | brush | `#9098B0` | `#9098B0` | `#9098B0` |
 
 ## Legacy keys → tokens
 
@@ -627,15 +889,115 @@ nothing close — add one (all three theme files) with this exact value, or acce
 
 | Where | Today | Token |
 |---|---|---|
-| `Views/CodeEditorView.xaml.cs` caret / selection | `#4CDFFF` / `#59A672FF` | `Editor.Caret` / `Editor.Selection` |
-| `Views/Editor/NeonHighlighting.cs` | violet / cyan / mint / `#FFC66D` / magenta / `#7E8AA8` | `Syntax.Keyword` / `.Type` / `.String` / `.Number` / `.Preprocessor` / `.Comment` |
-| `Views/Editor/MinimapControl.cs` | bar, comment, viewport, viewport pen, hover, caret, change | `Editor.Minimap.Bar` / `.Comment` / `.Viewport` / `.ViewportBorder` / `.Hover` / `.Caret` / `.Change` |
-| `Views/Editor/BreakpointMargin.cs` | breakpoint, halo, execution, gutter | `Editor.Breakpoint` / `.Breakpoint.Halo` / `Editor.ExecutionLine` (`.Fill`, `.Border`) / `Editor.Gutter` |
-| `Views/Editor/AgentGlowRenderer.cs` | `#A672FF` | `Editor.AgentGlow` |
-| `Views/Editor/MatchHighlight.cs` | `#66FFC54C` / `#FFF4D6` | `Editor.Match` / `Editor.Match.Foreground` |
+| `Views/CodeEditorView.xaml.cs` caret / selection | `#4CDFFF` / `#59A672FF` | done (A) — `Editor.Caret` (re-applied on ThemeChanged) / `Editor.Selection` (resource reference) |
+| `Views/Editor/NeonHighlighting.cs` | violet / cyan / mint / `#FFC66D` / magenta / `#7E8AA8` | done (A) — `Syntax.*`, re-tinted from the xshd originals when the palette changes |
+| `Views/Editor/MinimapControl.cs` | bar, comment, viewport, viewport pen, hover, caret, change | done (A) — `Editor.Minimap.*`, read on every paint |
+| `Views/Editor/BreakpointMargin.cs` | breakpoint, halo, execution, gutter | done (A) — `Editor.Breakpoint` / `.Breakpoint.Halo` / `.ExecutionLine` (`.Fill`, `.Border`) / `.Gutter`, read on every paint |
+| `Views/Editor/AgentGlowRenderer.cs` | `#A672FF` | done (A) — `Editor.AgentGlow`, read on every draw |
+| `Views/Editor/MatchHighlight.cs` | `#66FFC54C` / `#FFF4D6` | done (A) — resource references on the Run |
 | `ViewModels/MainViewModel.cs` `GpuTempBrush` | Catppuccin red / peach / yellow / green | `Status.Danger.Soft` / `Status.Caution.Soft` / `Status.Warning.Soft` / `Status.Success.Soft` |
 | `ViewModels/MainViewModel.cs` + `CommandPalette.cs` `KindColor` strings | `#4CDFFF` `#A672FF` `#76D16B` … | `Accent.1`, `Accent.2`, `Brand.Spark` … (hand the bound brush, not a hex string) |
 | `Converters/Converters.cs` (62) | diff kinds, AI/user avatars, file status, context-usage ramp | `Status.*`, `Accent.*`, `Chart.Series.*` — add `Diff.*` tokens for the diff colours |
 | `Models/*` (LogEntry levels, SecurityRule severities, SubAgent colours, Instinct, Buddy rarity, CodeEditorModels git badges) | literal hex | `Status.*` / `Accent.*`; add `Severity.*` / `Git.*` tokens if the meaning needs its own colour |
-| `Services/Helpers/InputDialog.cs`, `Views/Editor/ChoiceDialog.cs` | `TryFindResource(legacy key)` | the same call with the token name |
+| `Services/Helpers/InputDialog.cs`, `Views/Editor/ChoiceDialog.cs` (done (A): SetResourceReference) | `TryFindResource(legacy key)` | the same call with the token name |
 | `MainWindow.xaml.cs` DEV version chip | `#FF6E6E` | done — `SetResourceReference(…, "Status.Danger")` |
+
+## Theme: Classic (Windows XP Silver)
+
+`Resources/Themes/Classic.xaml` — design `Main` / `Settings` / `License` / `BrainXInvite` `.dc.html`. Every sales-video
+recording uses Classic, so a converted view must look intentional here, not only in Midnight.
+
+| Role | Classic | Role | Classic |
+|---|---|---|---|
+| window face `Bg.Window` | `#ECECF0` | panel / elevated | `#F4F4F8` / `#FCFCFE` |
+| text primary / secondary / muted / faint | `#1C1E33` / `#4A4D68` / `#63667F` / `#767990` | link | `#1F3A93` |
+| Luna blue `Accent.1`, `Focus.Ring` | `#316AC5` | accents 2 / 3 / 4 | `#5B4AA8` / `#C2600E` / `#C24E6E` |
+| borders subtle / default / strong | `#C5C8D6` / `#A5A9BF` / `#7E8199` | edit field border `Input.Border` | `#7F9DB9` |
+| success / warning / danger / info | `#2B7F2B` / `#A86A0C` / `#C42B1C` / `#2F63B8` | tooltip, update banner | `#FFFFE1` |
+| fonts `Font.Ui*` / `Font.Mono*` | Tahoma, Leelawadee UI / Consolas, Lucida Console, Tahoma | editor | white page, VS-2005 syntax colours |
+
+Metal follows the owner's xp.css recipe: multi-stop gradients (bright band at 8 %, fold at 50 % on gels, a dark line at
+the bottom), amber `#FDD889 → #E5A01A` for hover. Metal is used only on short chrome; tall panes get near-flat gradients.
+The title bar and status bar are square because they touch the window edge.
+
+**Where Classic means something different from Midnight (check when converting a view)**
+* Light theme: lighter = higher. `Text.Inverse` is **white** (text on a strong fill), and `Status.*.Soft` are mid-dark
+  tones: they work as text on silver and as a fill under white `Text.Inverse`.
+* `State.*` are Luna-blue washes, and `Surface.Badge` / `State.Fill.Faint` are faint *dark* washes, because a white
+  overlay disappears on silver. `State.Selected` is solid `#E1E9F7`.
+* Glows: XP has none. Most `Glow.*` have Opacity 0, `Glow.Accent.*` are faint halos, and `Glow.StatusBar.Chip` is
+  the amber hover.
+* **The ≈ rows of the hard-coded table were matched by pixels on Midnight's navy, not by role.** In Classic, a faint tint
+  mapped to `Text.Inverse` (`#1AF38BA8`, `#1AFFD166`, `#FA132A1E`) paints white. One mapped to `Border.Strong`
+  (`#30F9E2AF`, `#3CFF5EC4`) paints an opaque `#7E8199`. The same goes for `Bg.Overlay`, `Bg.Panel.Solid`,
+  `Border.Subtle`, `State.Hover`, `Editor.*`. Pick the token whose role matches (usually a `*.Tint`), or add one.
+* Tahoma is about 5 % wider than Segoe UI, so check tight, fixed-width text.
+
+**Control styles.** `Theme.xaml` is merged *after* the theme slot, and themetest T2 rejects a string key that Midnight
+lacks. So Classic.xaml adds only **implicit (type-keyed) styles**, for controls that `Theme.xaml` does not style
+implicitly: Button, ToggleButton, TextBox, ScrollBar, ListBoxItem, TabControl / TabItem, RadioButton and Hyperlink.
+
+* A control without a Style gets the XP look automatically, and the system look in Midnight, as before. Local values
+  such as `Background="Transparent"` and `BorderThickness="0"` are respected, so icon buttons stay flat.
+* Keyed styles (PrimaryButton, SecondaryButton, NavButton, ActivityBarButton, the caption buttons, Card) and Theme.xaml's
+  implicit ComboBox / CheckBox / Slider / ToolTip are restyled through tokens only. Their corner radii and shapes stay
+  as Theme.xaml draws them.
+* The caption-button hover tokens are VisualBrushes that draw a real XP caption button. The rest state cannot be drawn
+  that way, because the template paints a literal Transparent.
+* Changing a keyed template per theme would need a token hook in Theme.xaml, which is a foundation decision.
+
+**Legacy palette — deliberately left at Midnight's colours** (only `NeonUiFont`, `NeonMonoFont`, `MainFont` and `MonoFont`
+are Classic's).
+
+* The 7 local-override views read Catppuccin keys locally (light text) and `Metal*` at app level. Classic-light `Metal*`
+  values would put that light text on light fills.
+* The other views pair `Neon*` keys with about 400 hard-coded dark colours.
+
+So an unconverted view stays a readable Midnight island inside the Classic shell until its team converts it. After the
+A/B/C merge, grep for any remaining legacy `StaticResource` key: in Classic it still shows a Midnight colour.
+`ThemeInfo.IsReady` is `true` for all three themes since 2026-10-11 (every page rendered with `tests/themetest --all-pages`).
+
+## Theme: Neon Cyber LED (`NeonCyber.xaml`)
+
+Design: `NeonMain.dc.html` (+ the Neon card of `ThemePicker.dc.html`). Near-black HUD, a faint 32 px cyan grid,
+cyan LED strips on every edge, magenta for whatever is active, and glows instead of drop shadows.
+
+**Colour roles** — keep them when you add a token or convert a view, so a converted page looks intentional here too:
+
+| Role | Colour | Tokens |
+|---|---|---|
+| Structure, focus, links, borders, the grid | cyan `#00E5FF` | `Accent.1`, `Focus.Ring`, `Text.Link`, `Border.*` (cyan at 16 / 32 / 50 %), `Input.*`, `Card.Border` |
+| Action + "you are here" | magenta `#FF2BD6` | `Accent.2`, `State.Selected*`, `Button.Primary.*`, `Button.Secondary.Border`, `ActivityBar.Checked.*`, `Nav.Selected.*` |
+| Success, lit LEDs, checkboxes | lime `#A6FF00` (text `#C8FF6B`) | `Status.Success*`, `CheckBox.Checked.*`, `StatusBar.Brain.*`, buddy chip |
+| Warning, cost, execution line | amber `#FFB000` | `Status.Warning*`, `Editor.ExecutionLine*`, `Syntax.Number` |
+| Danger · info · third accent | `#FF5C7A` · `#3DA5FF` · violet `#B45CFF` | `Status.Danger*` · `Status.Info*` · `Accent.3` |
+| Brands | unchanged from Midnight | `Brand.Pro`, `Brand.Spark`, `Spark.Chip.*` |
+
+**Text ladder** on `#070812`: `Text.Primary #E6F1FF` › `Body #D5DEFA` › `Secondary #B9C4E8` › `Tertiary #9AA6D0` ›
+`Muted #8692C2` › `Faint #7682B2`. Every step stays ≥ 4.5:1 on the window, sidebar, card, input, title-bar and
+selected surfaces. The weakest pair is `Faint` on a selected row, at 4.81:1. `Syntax.Comment` = `Faint`. Only `Editor.LineNumber #63709C` (3.7–4.1:1) is
+below — line numbers are not body text. White on `Banner.Button.Background` is ≥ 5.2:1 (bright `#FF2BD6` under
+white would be 3.2:1, so the button uses deep magenta → violet).
+
+**Fonts**: `Chakra Petch, Bahnschrift, Leelawadee UI, Segoe UI` for UI, `JetBrains Mono, Cascadia Mono/Code` for
+mono. Chakra Petch (the mock's face) is used where installed; Bahnschrift (DIN-style, in every Windows 10+) is
+what renders otherwise. Leelawadee UI is named on purpose: Bahnschrift has no Thai. *TH Chakra Petch* (the Thai
+original) is NOT listed: its Latin cap height is 0.475 em vs ~0.70 for UI faces, so every label would shrink by a third.
+
+**Kinds that differ from Midnight** (all allowed — T2 accepts any `Brush` for a brush token):
+`Backdrop.Nebula` is a tiled `DrawingBrush` (the grid), `TitleBar.Border` / `StatusBar.Border` are horizontal
+`LinearGradientBrush`es (cyan → magenta, lime → cyan LED strips). `ThemeService.ColorOf` on them returns the
+first stop / the fallback — no C# reads them. **`Bg.*` stay solid on purpose** so converters can `ColorOf` them.
+
+**Shadows are glows**: `Shadow.Card` (cyan 22 %), `Shadow.Button` (magenta 40 %), `Shadow.Popup` / `Shadow.Palette`
+(cyan) all have `ShadowDepth 0`. `Glow.StatusBar.Pip` is white because the pip it sits under is red, amber or lime.
+
+**Legacy palette**: every legacy key holds the Neon Cyber value of the token it maps to (tables above), so an
+unconverted view already wears this theme when it is built and converting it changes nothing on screen. Mind the
+names: `NeonViolet` = `Accent.2` = magenta here, `NeonMagenta` = `Accent.3` = violet, `NeonMint` = lime. The
+Catppuccin keys follow their app-level role (`BaseBrush` = dialog background, `TextBrush` = body text, …).
+
+**Not expressible as tokens** (needs a style change in `Theme.xaml` or a per-theme style dictionary — a style keyed
+in the theme slot is shadowed because `Theme.xaml` merges after it): the mock's square corners (the shared styles
+hard-code `CornerRadius` 6-12), the 1 px cyan outline on idle dock icons, corner brackets on cards, and letter-spaced
+uppercase labels.

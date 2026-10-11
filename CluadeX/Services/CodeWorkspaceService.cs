@@ -109,9 +109,17 @@ public class CodeWorkspaceService
         }
     }
 
-    /// <summary>Largest file the editor (and the diff view) will load — beyond this it is almost
-    /// always a generated or binary file, and the text controls stop being usable.</summary>
+    /// <summary>Largest file the diff view compares — a side-by-side diff of anything bigger is unreadable anyway.</summary>
     public const long MaxEditableBytes = 2 * 1024 * 1024;
+
+    /// <summary>Largest file the editor opens, Notepad++ style: logs, dumps and data files open too. The editor
+    /// switches to its large-file mode (lazy sync, no auto-completion; no colours past ~24 MB) to stay smooth.
+    /// Binary files are still refused, at any size.</summary>
+    public const long MaxOpenBytes = 512L * 1024 * 1024;
+
+    /// <summary>Up to this size the disk stamp is a SHA-256 of the bytes; above it, length + last-write time — hashing
+    /// half a gigabyte on every save would freeze the editor.</summary>
+    private const long HashedStampBytes = 16L * 1024 * 1024;
 
     /// <summary>
     /// What the file on disk looked like when a tab last read or wrote it. Kept beside the tab (the
@@ -124,15 +132,19 @@ public class CodeWorkspaceService
         public bool Existed;
         public long Length;
         public byte[] Hash = Array.Empty<byte>();
+        /// <summary>Set instead of <see cref="Hash"/> for files above <see cref="HashedStampBytes"/>.</summary>
+        public DateTime LastWriteUtc;
     }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<OpenFileTab, DiskStamp> _stamps = new();
 
-    private static DiskStamp StampOf(byte[] bytes) => new()
+    private static DiskStamp StampOf(byte[] bytes, string fullPath)
     {
-        Existed = true,
-        Length = bytes.LongLength,
-        Hash = System.Security.Cryptography.SHA256.HashData(bytes),
-    };
+        if (bytes.LongLength <= HashedStampBytes)
+            return new DiskStamp { Existed = true, Length = bytes.LongLength, Hash = System.Security.Cryptography.SHA256.HashData(bytes) };
+        DateTime written;
+        try { written = File.GetLastWriteTimeUtc(fullPath); } catch { written = DateTime.MinValue; }
+        return new DiskStamp { Existed = true, Length = bytes.LongLength, LastWriteUtc = written };
+    }
 
     private void SetStamp(OpenFileTab tab, DiskStamp stamp)
     {
@@ -145,19 +157,24 @@ public class CodeWorkspaceService
     {
         if (!File.Exists(fullPath)) return null;
 
-        // Cap at 2 MB so opening accidental binaries doesn't freeze
         var fi = new FileInfo(fullPath);
-        if (fi.Length > MaxEditableBytes) return null;
+        if (fi.Length > MaxOpenBytes) return null;
 
         CluadeX.Helpers.TextFileCodec.TextFile decoded;
-        byte[] bytes;
+        DiskStamp stamp;
         try
         {
-            bytes = await File.ReadAllBytesAsync(fullPath, ct);
-            // Detect binary by checking for NUL bytes in the first 1 KB — refuse to open it as text.
-            for (int i = 0; i < Math.Min(1024, bytes.Length); i++)
-                if (bytes[i] == 0) return null;
-            decoded = CluadeX.Helpers.TextFileCodec.Decode(bytes);
+            // Read, sniff, decode and fingerprint off the UI thread: for a big file each step is a full pass.
+            var loaded = await Task.Run(async () =>
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(fullPath, ct).ConfigureAwait(false);
+                // Detect binary by checking for NUL bytes in the first 1 KB — refuse to open it as text.
+                for (int i = 0; i < Math.Min(1024, bytes.Length); i++)
+                    if (bytes[i] == 0) return ((CluadeX.Helpers.TextFileCodec.TextFile, DiskStamp)?)null;
+                return (CluadeX.Helpers.TextFileCodec.Decode(bytes), StampOf(bytes, fullPath));
+            }, ct);
+            if (loaded == null) return null;
+            (decoded, stamp) = loaded.Value;
         }
         catch
         {
@@ -166,7 +183,7 @@ public class CodeWorkspaceService
 
         var tab = new OpenFileTab { FullPath = fullPath, HasBom = decoded.HasBom, IsValidUtf8 = decoded.IsValidUtf8 };
         tab.MarkOpened(decoded.Text);
-        SetStamp(tab, StampOf(bytes));
+        SetStamp(tab, stamp);
         return tab;
     }
 
@@ -193,8 +210,9 @@ public class CodeWorkspaceService
             if (!File.Exists(tab.FullPath)) return stamp.Existed;
             var fi = new FileInfo(tab.FullPath);
             if (fi.Length != stamp.Length) return true;
-            // Same length is not proof: hash (bounded by the 2 MB open cap, so this is cheap).
-            if (fi.Length > MaxEditableBytes * 4) return true;
+            // A large file's stamp is its write time (see HashedStampBytes).
+            if (stamp.Hash.Length == 0) return fi.LastWriteTimeUtc != stamp.LastWriteUtc;
+            // Same length is not proof: hash (bounded by HashedStampBytes, so this stays quick).
             var hash = System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tab.FullPath));
             return !hash.AsSpan().SequenceEqual(stamp.Hash);
         }
@@ -209,9 +227,9 @@ public class CodeWorkspaceService
     {
         try
         {
-            if (!File.Exists(fullPath) || new FileInfo(fullPath).Length > MaxEditableBytes) return null;
-            var bytes = await File.ReadAllBytesAsync(fullPath);
-            return CluadeX.Helpers.TextFileCodec.Decode(bytes).Text;
+            if (!File.Exists(fullPath) || new FileInfo(fullPath).Length > MaxOpenBytes) return null;
+            return await Task.Run(async () =>
+                CluadeX.Helpers.TextFileCodec.Decode(await File.ReadAllBytesAsync(fullPath).ConfigureAwait(false)).Text);
         }
         catch { return null; }
     }
@@ -272,6 +290,7 @@ public class CodeWorkspaceService
         bytes = Array.Empty<byte>();
         if (tab == null || string.IsNullOrEmpty(tab.FullPath)) return new SaveResult(SaveOutcome.Failed, "no path");
         if (!tab.IsValidUtf8) return new SaveResult(SaveOutcome.NotUtf8, null);
+        tab.FlushPendingEdits();   // a large file's last keystrokes may still be only in the editor
 
         if (!overwriteExternalChanges && HasChangedOnDisk(tab))
             return new SaveResult(SaveOutcome.ChangedOnDisk, null) { DeletedOnDisk = !File.Exists(tab.FullPath) };
@@ -284,7 +303,7 @@ public class CodeWorkspaceService
 
     private SaveResult CompleteSave(OpenFileTab tab, string content, byte[] bytes)
     {
-        SetStamp(tab, StampOf(bytes));
+        SetStamp(tab, StampOf(bytes, tab.FullPath));
         // Only clear the dirty flag if nothing was typed during the write; otherwise the newer
         // keystrokes would show as saved when they are not.
         if (string.Equals(tab.Content, content, StringComparison.Ordinal)) tab.MarkSaved();
@@ -371,7 +390,7 @@ public class CodeWorkspaceService
             var st = await _git.StatusEntriesAsync();
             if (!st.Success) return;
 
-            var map = new Dictionary<string, (string badge, string color)>(StringComparer.OrdinalIgnoreCase);
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // full path → badge
             foreach (var e in st.Entries)
             {
                 if (string.IsNullOrEmpty(e.FullPath)) continue;
@@ -387,16 +406,7 @@ public class CodeWorkspaceService
                     "R" or "RR" => "R",
                     _ => code.Length > 0 ? code[0].ToString() : "?",
                 };
-                string color = badge switch
-                {
-                    "M" => "#FFD166",
-                    "A" => "#5CFFB0",
-                    "U" => "#5CFFB0",
-                    "D" => "#FF6E6E",
-                    "R" => "#A672FF",
-                    _ => "#8388BD",
-                };
-                map[full] = (badge, color);
+                map[full] = badge;   // FileTreeNode.GitBadgeColorHex derives the theme colour from it
             }
 
             foreach (var root in roots) WalkAndTag(root, map);
@@ -404,13 +414,10 @@ public class CodeWorkspaceService
         catch { /* git not installed / not a repo — silently skip */ }
     }
 
-    private static void WalkAndTag(FileTreeNode node, Dictionary<string, (string, string)> map)
+    private static void WalkAndTag(FileTreeNode node, Dictionary<string, string> map)
     {
-        if (!node.IsDirectory && map.TryGetValue(node.FullPath, out var hit))
-        {
-            node.GitBadge = hit.Item1;
-            node.GitBadgeColorHex = hit.Item2;
-        }
+        if (!node.IsDirectory && map.TryGetValue(node.FullPath, out var badge))
+            node.GitBadge = badge;
         foreach (var c in node.Children) WalkAndTag(c, map);
     }
 }

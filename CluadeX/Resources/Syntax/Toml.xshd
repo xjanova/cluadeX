@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TOML (Cargo.toml, pyproject.toml, ...).
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, PropertyName -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="TOML" extensions=".toml" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="# comment" />
+  <Color name="String" foreground="#CE9178" exampleText="&quot;demo&quot;" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="0xDEAD_beef" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="true" />
+  <Color name="SectionType" foreground="#4EC9B0" exampleText="[package]" />
+  <Color name="PropertyName" foreground="#9CDCFE" exampleText="edition =" />
+
+  <RuleSet>
+    <Span color="Comment" begin="#" />
+    <Span color="String" multiline="true">
+      <Begin>"""</Begin>
+      <End>"""</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <!-- literal strings: no escapes -->
+    <Span color="String" multiline="true">
+      <Begin>'''</Begin>
+      <End>'''</End>
+    </Span>
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>'</Begin>
+      <End>'</End>
+    </Span>
+
+    <!-- [table] / [[array.of.tables]] alone on its line (a multi-line array's [1, 2] row is not one) -->
+    <Rule color="SectionType">^\s*\[\[?\s*[\w\-. ]+\]\]?(?=\s*$)</Rule>
+    <Rule color="PropertyName">^\s*[\w\-.]+(?=\s*=)</Rule>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word>
+    </Keywords>
+    <!-- dates and times first: 1979-05-27T07:32:00Z must not stop at 1979 -->
+    <Rule color="Number">\b\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:\d{2})?\b|\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b</Rule>
+    <Rule color="Number">(?&lt;![\w.])[+-]?(?:0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?|inf|nan)(?![\w.])</Rule>
+  </RuleSet>
+</SyntaxDefinition>

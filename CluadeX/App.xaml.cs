@@ -78,6 +78,11 @@ public partial class App : Application
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
 
+        // Panel widths the user dragged (sidebar, explorer, chat pane, side panel) come back after a restart.
+        var panelSettings = _serviceProvider.GetRequiredService<SettingsService>();
+        CluadeX.Views.ResizeGrip.Load = key => panelSettings.Settings.PanelWidths.TryGetValue(key, out var w) ? w : null;
+        CluadeX.Views.ResizeGrip.Save = (key, w) => panelSettings.UpdateSettings(s => s.PanelWidths[key] = w);
+
         // Async commands catch their own exceptions so async-void can't kill the process — but that
         // made a throwing command look like a dead button with nothing in any log. Route those
         // failures to the same debug log + crash log the sync path already uses.
@@ -156,6 +161,9 @@ public partial class App : Application
                     });
 
                     await mcpManager.InitializeAsync();
+                    // Claude in Chrome switched on earlier but its entry is gone (a fresh mcp_servers.json): put it back.
+                    try { await _serviceProvider.GetRequiredService<Services.Chrome.ClaudeInChromeConnector>().EnsureAsync(); }
+                    catch (Exception ex) { dbg?.Warn("Chrome", "Claude in Chrome could not be restored", ex); }
                     dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
 
                     if (mcpManager.ConfigLoadFailed)
@@ -184,6 +192,10 @@ public partial class App : Application
             });
             try { _serviceProvider.GetRequiredService<McpServerManager>().TrackStartup(mcpStartup); }
             catch (Exception ex) { dbg?.Warn("MCP", "could not track the MCP startup", ex); }
+
+            // Batches submitted before the last exit are still running (and paid for): pick their polling back up.
+            try { _serviceProvider.GetRequiredService<Services.Batch.BatchService>().EnsurePolling(); }
+            catch (Exception ex) { dbg?.Warn("Batch", "could not resume batch polling", ex); }
 
             try
             {
@@ -306,6 +318,7 @@ public partial class App : Application
                 "cluadex.review"            => await HandleReviewAsync(invocation.Arguments, ct),
                 "cluadex.get_active_model"  => await HandleGetActiveModelAsync(ct),
                 "cluadex.set_model"         => await HandleSetModelAsync(invocation.Arguments, ct),
+                "cluadex.choose_model"      => await HandleChooseModelAsync(invocation.Arguments),
                 _ => ErrorResult($"Unknown tool '{invocation.ToolName}'"),
             };
             if (startupNote != null)
@@ -495,6 +508,26 @@ public partial class App : Application
         }
         catch { /* non-NVIDIA or nvidia-smi missing — leave nulls */ }
 
+        // What the owner can pick from another app (BrainX's cowork room): the chat page's own model box — API
+        // models that have a key — and its effort levels. Read on the UI thread, where the chat keeps them.
+        object[] options = Array.Empty<object>();
+        string effort = "";
+        IReadOnlyList<string> efforts = Array.Empty<string>();
+        try
+        {
+            var chat = _serviceProvider.GetService<ViewModels.ChatViewModel>();
+            if (chat != null)
+                Dispatcher.Invoke(() =>
+                {
+                    options = chat.ChatModelChoices
+                        .Select(c => (object)new { provider = c.Provider.ToString(), model = c.Model, label = c.ProviderLabel, price = c.PriceLabel })
+                        .ToArray();
+                    effort = chat.ReasoningEffort;
+                    efforts = chat.EffortOptions;
+                });
+        }
+        catch { /* the model report must not fail over the extras */ }
+
         var payload = new
         {
             provider = providerType.ToString(),
@@ -503,6 +536,9 @@ public partial class App : Application
             ready,
             vramUsedMB = vramUsedMb,
             vramTotalMB = vramTotalMb,
+            effort,
+            options,
+            efforts,
             // Hint the orchestrator can show to the user.
             note = ready
                 ? "OK"
@@ -685,6 +721,32 @@ public partial class App : Application
         return ToMcpResult(outcome);
     }
 
+    /// <summary>
+    /// BrainX's cowork room picked the chat's model and/or effort. Unlike set_model (Co-Pilot alignment, any provider
+    /// including a model on this PC) this goes through the chat page's model box and its rules — see
+    /// ChatViewModel.ChooseFromOutsideAsync. Returns { ok, model, effort, reason }.
+    /// </summary>
+    private async Task<McpToolResult> HandleChooseModelAsync(System.Text.Json.JsonElement args)
+    {
+        if (_serviceProvider == null) return ErrorResult("DI not initialised");
+        string? model = ReadString(args, "model");
+        string? effort = ReadString(args, "effort");
+        if (string.IsNullOrWhiteSpace(model) && string.IsNullOrWhiteSpace(effort))
+            return ErrorResult("'model' or 'effort' is required");
+
+        var chat = _serviceProvider.GetRequiredService<ViewModels.ChatViewModel>();
+        string? reason = await await Dispatcher.InvokeAsync(() => chat.ChooseFromOutsideAsync(model, effort));
+        string nowModel = "", nowEffort = "";
+        Dispatcher.Invoke(() => { nowModel = chat.SelectedChatModel?.Model ?? ""; nowEffort = chat.ReasoningEffort; });
+        return TextResult(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            ok = reason == null,
+            model = nowModel,
+            effort = nowEffort,
+            reason = reason ?? "",
+        }));
+    }
+
     // ─── Tool result helpers ─────────────────────────────────────────────
     private static McpToolResult TextResult(string text) => new()
     {
@@ -746,7 +808,7 @@ public partial class App : Application
         services.AddSingleton<PermissionService>();
         services.AddSingleton<TaskManagerService>();
         services.AddSingleton<WebFetchService>();
-        services.AddSingleton<BuddyService>();
+        services.AddSingleton<Services.Pet.PetService>();
         services.AddSingleton<LocalizationService>();
         // ThemeService — swaps Resources/Themes/<id>.xaml in Application.Resources at runtime (Settings › General).
         services.AddSingleton<ThemeService>();
@@ -760,6 +822,8 @@ public partial class App : Application
         services.AddSingleton<SkillService>();
         services.AddSingleton<CostTrackingService>();
         services.AddSingleton<MemoryService>();
+        // BatchService — half-price batch API jobs (Anthropic / OpenAI), kept in batches.json and polled until done.
+        services.AddSingleton<Services.Batch.BatchService>();
         services.AddSingleton<SessionMemoryService>();
         services.AddSingleton<RepoMapService>();
         services.AddSingleton<EmbeddingService>();
@@ -866,6 +930,8 @@ public partial class App : Application
 
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
             chatVm?.SaveNow();
+
+            _serviceProvider?.GetService<CostTrackingService>()?.FlushLedger();   // today's spend survives the restart
         }
         catch (Exception ex)
         {

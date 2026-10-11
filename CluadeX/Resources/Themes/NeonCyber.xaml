@@ -2,19 +2,35 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:sys="clr-namespace:System;assembly=mscorlib">
 
+    <!-- Slim, arrow-less scroll bars (Classic keeps its XP bars) -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="/CluadeX;component/Resources/Themes/ModernScrollBars.xaml"/>
+    </ResourceDictionary.MergedDictionaries>
+
     <!--
         ═══════════════════════════════════════════════════════════════════════════════════════════════
-        THEME: Neon Cyber LED — dark, LED-strip borders, cyan/magenta glow, scanline/grid accents.
+        THEME: Neon Cyber LED — near-black HUD, LED-strip borders, cyan / magenta / lime glow, a faint grid.
         Owner-approved design: E:\cluadex-bld\research\themes\NeonMain.dc.html
         (picker preview: ThemePicker.dc.html — #070812 grid, #00E5FF strips, #FF2BD6 / #A6FF00 glow).
 
-        STARTS AS A COPY OF Midnight.xaml (theme foundation) — the Neon Cyber theme team replaces the values.
+        Colour roles (keep them when adding a token):
+          • CYAN    #00E5FF  structure — LED strips, focus, links, inputs, borders, the grid
+          • MAGENTA #FF2BD6  action + "you are here" — primary buttons, selection, the active rail item
+          • LIME    #A6FF00  success, LEDs that are on, checkboxes
+          • AMBER   #FFB000  warning, cost, the execution line         · RED #FF5C7A danger
+          • VIOLET  #B45CFF  third accent (legacy "magenta" role)      · BLUE #3DA5FF info
+          Text ladder on #070812: E6F1FF › D5DEFA › B9C4E8 › 9AA6D0 › 8692C2 (≥ 5.9:1) › 7682B2 (≥ 4.8:1 on every surface) —
+          every step that can carry body text stays ≥ 4.5:1.
+
         Rules (tests/themetest enforces the first two):
           • Keep EXACTLY the keys Midnight.xaml has — no key only one theme defines, same kind of value.
           • Theme.Id stays "NeonCyber".
-          • Fill the SEMANTIC TOKENS first (they drive Theme.xaml's controls and every converted view);
-            the LEGACY PALETTE only matters for views not converted yet.
-          • Glows are this theme's identity — keep them as DropShadowEffect tokens, never inline.
+          • Glows are this theme's identity — keep them as DropShadowEffect tokens (ShadowDepth 0), never inline.
+          • Bg.* stay SOLID brushes: C# reads them with ThemeService.ColorOf, which cannot read a tiled brush.
+            The grid lives in Backdrop.Nebula only (one full-window rectangle in MainWindow).
+          • Style overrides cannot live here: Theme.xaml is merged AFTER the theme slot, so a style with the
+            same key in this file would be shadowed (and a new key would break the parity check). Corner
+            radii and border thicknesses therefore stay those of the shared styles.
         ═══════════════════════════════════════════════════════════════════════════════════════════════
     -->
 
@@ -22,562 +38,796 @@
 
     <!-- ═════════════════════════════════════ 2. SEMANTIC TOKENS ═════════════════════════════════════ -->
 
-    <!-- Fonts -->
-    <FontFamily x:Key="Font.Ui">Segoe UI, Arial</FontFamily>
-    <FontFamily x:Key="Font.Ui.Display">Space Grotesk, Segoe UI, Arial</FontFamily>
-    <FontFamily x:Key="Font.Mono">Cascadia Code, Consolas, Courier New</FontFamily>
-    <FontFamily x:Key="Font.Mono.Display">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
+    <!-- Fonts. The mock's Chakra Petch is used when installed; Bahnschrift (DIN-style, ships with Windows 10+)
+         is the HUD face everywhere else. Leelawadee UI is named explicitly for Thai (Bahnschrift has no Thai). -->
+    <FontFamily x:Key="Font.Ui">Chakra Petch, Bahnschrift, Leelawadee UI, Segoe UI, Arial</FontFamily>
+    <FontFamily x:Key="Font.Ui.Display">Chakra Petch, Bahnschrift, Leelawadee UI, Segoe UI, Arial</FontFamily>
+    <FontFamily x:Key="Font.Mono">JetBrains Mono, Cascadia Code, Consolas, Courier New</FontFamily>
+    <FontFamily x:Key="Font.Mono.Display">JetBrains Mono, Cascadia Mono, Cascadia Code, Consolas</FontFamily>
 
-    <!-- Backgrounds: window → panel → elevated -->
-    <SolidColorBrush x:Key="Bg.Window" Color="#06071A"/>
-    <SolidColorBrush x:Key="Bg.Panel" Color="#0A0C22"/>
-    <SolidColorBrush x:Key="Bg.Elevated" Color="#0F1230"/>
-    <SolidColorBrush x:Key="Bg.Panel.Solid" Color="#11152E"/>
-    <SolidColorBrush x:Key="Bg.Overlay" Color="#06071A" Opacity="0.85"/>
-    <SolidColorBrush x:Key="Bg.Scrim" Color="#B4000000"/>
+    <!-- Backgrounds: window → panel → elevated (solid on purpose — see the header) -->
+    <SolidColorBrush x:Key="Bg.Window" Color="#070812"/>
+    <SolidColorBrush x:Key="Bg.Panel" Color="#090C1C"/>
+    <SolidColorBrush x:Key="Bg.Elevated" Color="#0E1228"/>
+    <SolidColorBrush x:Key="Bg.Panel.Solid" Color="#0B0F22"/>
+    <SolidColorBrush x:Key="Bg.Overlay" Color="#04050C" Opacity="0.88"/>
+    <SolidColorBrush x:Key="Bg.Scrim" Color="#C8020308"/>
 
-    <!-- The app-wide backdrop behind every page (Midnight: a violet nebula + four blurred orbs) -->
-    <RadialGradientBrush x:Key="Backdrop.Nebula" Center="0.5,0" RadiusX="0.8" RadiusY="0.55">
-        <GradientStop Color="#22A672FF" Offset="0"/>
-        <GradientStop Color="#06071A" Offset="1"/>
-    </RadialGradientBrush>
+    <!-- The app-wide backdrop: a 32 px cyan grid over the window colour (the mock's HUD grid, 5-7 % alpha),
+         plus four very faint LED blooms (half strength — at full strength they read as smudges on the grid). -->
+    <DrawingBrush x:Key="Backdrop.Nebula" TileMode="Tile" Stretch="Fill"
+                  Viewport="0,0,32,32" ViewportUnits="Absolute"
+                  Viewbox="0,0,32,32" ViewboxUnits="Absolute">
+        <DrawingBrush.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="Transparent">
+                    <GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,32,32"/></GeometryDrawing.Geometry>
+                </GeometryDrawing>
+                <GeometryDrawing Brush="#1200E5FF">
+                    <GeometryDrawing.Geometry>
+                        <GeometryGroup>
+                            <RectangleGeometry Rect="0,0,32,1"/>
+                            <RectangleGeometry Rect="0,1,1,31"/>
+                        </GeometryGroup>
+                    </GeometryDrawing.Geometry>
+                </GeometryDrawing>
+            </DrawingGroup>
+        </DrawingBrush.Drawing>
+    </DrawingBrush>
     <RadialGradientBrush x:Key="Backdrop.Orb.1">
-        <GradientStop Color="#A672FF" Offset="0"/>
+        <GradientStop Color="#4D00E5FF" Offset="0"/>
         <GradientStop Color="Transparent" Offset="0.65"/>
     </RadialGradientBrush>
     <RadialGradientBrush x:Key="Backdrop.Orb.2">
-        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#4DFF2BD6" Offset="0"/>
         <GradientStop Color="Transparent" Offset="0.65"/>
     </RadialGradientBrush>
     <RadialGradientBrush x:Key="Backdrop.Orb.3">
-        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#4000E5FF" Offset="0"/>
         <GradientStop Color="Transparent" Offset="0.65"/>
     </RadialGradientBrush>
     <RadialGradientBrush x:Key="Backdrop.Orb.4">
-        <GradientStop Color="#5CFFB0" Offset="0"/>
+        <GradientStop Color="#40A6FF00" Offset="0"/>
         <GradientStop Color="Transparent" Offset="0.65"/>
     </RadialGradientBrush>
 
-    <!-- Surfaces: panels and cards on top of the backgrounds -->
+    <!-- Surfaces: panels and cards on top of the backgrounds (slightly translucent so the grid reads through) -->
     <LinearGradientBrush x:Key="Surface.Panel" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#C8141838" Offset="0"/>
-        <GradientStop Color="#BC0C0E26" Offset="1"/>
+        <GradientStop Color="#EB0E1228" Offset="0"/>
+        <GradientStop Color="#EB080A18" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Surface.Card" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#9E1C2044" Offset="0"/>
-        <GradientStop Color="#9E0E122C" Offset="1"/>
+        <GradientStop Color="#D90D1128" Offset="0"/>
+        <GradientStop Color="#D9080B1A" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Surface.Card.Flat" Color="#88141838"/>
-    <SolidColorBrush x:Key="Surface.Glass" Color="#7028326E"/>
-    <SolidColorBrush x:Key="Surface.Sunken" Color="#1A11152E"/>
-    <SolidColorBrush x:Key="Surface.Raised" Color="#2828326E"/>
-    <SolidColorBrush x:Key="Surface.Raised.Strong" Color="#3828326E"/>
-    <SolidColorBrush x:Key="Surface.Input" Color="#7011152E"/>
-    <SolidColorBrush x:Key="Surface.Chip" Color="#3311152E"/>
-    <SolidColorBrush x:Key="Surface.Popup" Color="#F00A0C22"/>
-    <SolidColorBrush x:Key="Surface.Badge" Color="#22FFFFFF"/>
+    <SolidColorBrush x:Key="Surface.Card.Flat" Color="#B30B0F22"/>
+    <SolidColorBrush x:Key="Surface.Glass" Color="#A60E1430"/>
+    <SolidColorBrush x:Key="Surface.Sunken" Color="#0A00E5FF"/>
+    <SolidColorBrush x:Key="Surface.Raised" Color="#1200E5FF"/>
+    <SolidColorBrush x:Key="Surface.Raised.Strong" Color="#1F00E5FF"/>
+    <SolidColorBrush x:Key="Surface.Input" Color="#F00A0E22"/>
+    <SolidColorBrush x:Key="Surface.Chip" Color="#590B0F22"/>
+    <SolidColorBrush x:Key="Surface.Popup" Color="#F70B0F22"/>
+    <SolidColorBrush x:Key="Surface.Badge" Color="#1F00E5FF"/>
 
     <!-- Text: brightest → faintest, plus text on dark-on-bright and bright-on-accent -->
-    <SolidColorBrush x:Key="Text.Primary" Color="#E8ECFF"/>
-    <SolidColorBrush x:Key="Text.Body" Color="#D8DCF5"/>
-    <SolidColorBrush x:Key="Text.Secondary" Color="#C0C6EE"/>
-    <SolidColorBrush x:Key="Text.Tertiary" Color="#A0A6CC"/>
-    <SolidColorBrush x:Key="Text.Muted" Color="#8388BD"/>
-    <SolidColorBrush x:Key="Text.Faint" Color="#555A8C"/>
-    <SolidColorBrush x:Key="Text.Inverse" Color="#1E1E2E"/>
+    <SolidColorBrush x:Key="Text.Primary" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Text.Body" Color="#D5DEFA"/>
+    <SolidColorBrush x:Key="Text.Secondary" Color="#B9C4E8"/>
+    <SolidColorBrush x:Key="Text.Tertiary" Color="#9AA6D0"/>
+    <SolidColorBrush x:Key="Text.Muted" Color="#8692C2"/>
+    <SolidColorBrush x:Key="Text.Faint" Color="#7682B2"/>
+    <SolidColorBrush x:Key="Text.Inverse" Color="#05060F"/>
     <SolidColorBrush x:Key="Text.OnAccent" Color="#FFFFFF"/>
-    <SolidColorBrush x:Key="Text.Link" Color="#4CDFFF"/>
+    <SolidColorBrush x:Key="Text.Link" Color="#00E5FF"/>
     <!-- The softer text ladder of the dialogs (License, BrainX, DGX Spark) and the shared controls -->
-    <SolidColorBrush x:Key="Text.Soft" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Text.Soft.Secondary" Color="#A6ADC8"/>
-    <SolidColorBrush x:Key="Text.Soft.Muted" Color="#6C7086"/>
+    <SolidColorBrush x:Key="Text.Soft" Color="#D5DEFA"/>
+    <SolidColorBrush x:Key="Text.Soft.Secondary" Color="#A9B4DC"/>
+    <SolidColorBrush x:Key="Text.Soft.Muted" Color="#8692C2"/>
 
-    <!-- Borders + focus ring -->
-    <SolidColorBrush x:Key="Border.Subtle" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="Border.Default" Color="#A0B4FF" Opacity="0.18"/>
-    <SolidColorBrush x:Key="Border.Strong" Color="#28FFFFFF"/>
-    <SolidColorBrush x:Key="Focus.Ring" Color="#4CDFFF"/>
+    <!-- Borders + focus ring: every border is a cyan LED strip at a different brightness -->
+    <SolidColorBrush x:Key="Border.Subtle" Color="#00E5FF" Opacity="0.16"/>
+    <SolidColorBrush x:Key="Border.Default" Color="#00E5FF" Opacity="0.32"/>
+    <SolidColorBrush x:Key="Border.Strong" Color="#8000E5FF"/>
+    <SolidColorBrush x:Key="Focus.Ring" Color="#00E5FF"/>
 
-    <!-- Accents 1-3 (cyan / violet / magenta) + soft pink, each with a tint (fill) and a border -->
-    <SolidColorBrush x:Key="Accent.1" Color="#4CDFFF"/>
-    <SolidColorBrush x:Key="Accent.1.Tint" Color="#224CDFFF"/>
-    <SolidColorBrush x:Key="Accent.1.Border" Color="#664CDFFF"/>
-    <SolidColorBrush x:Key="Accent.1.Tint.Strong" Color="#384CDFFF"/>
-    <SolidColorBrush x:Key="Accent.2" Color="#A672FF"/>
-    <SolidColorBrush x:Key="Accent.2.Tint" Color="#22A672FF"/>
-    <SolidColorBrush x:Key="Accent.2.Border" Color="#55A672FF"/>
-    <SolidColorBrush x:Key="Accent.2.Tint.Strong" Color="#38A672FF"/>
-    <SolidColorBrush x:Key="Accent.3" Color="#FF5EC4"/>
-    <SolidColorBrush x:Key="Accent.3.Tint" Color="#22FF5EC4"/>
-    <SolidColorBrush x:Key="Accent.3.Border" Color="#66FF5EC4"/>
-    <SolidColorBrush x:Key="Accent.4" Color="#FF8AA6"/>
+    <!-- Accents: 1 cyan (structure) · 2 MAGENTA (action / active — the mock's accent) · 3 violet · 4 soft magenta -->
+    <SolidColorBrush x:Key="Accent.1" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Accent.1.Tint" Color="#1A00E5FF"/>
+    <SolidColorBrush x:Key="Accent.1.Border" Color="#7300E5FF"/>
+    <SolidColorBrush x:Key="Accent.1.Tint.Strong" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="Accent.2" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Accent.2.Tint" Color="#1FFF2BD6"/>
+    <SolidColorBrush x:Key="Accent.2.Border" Color="#8CFF2BD6"/>
+    <SolidColorBrush x:Key="Accent.2.Tint.Strong" Color="#38FF2BD6"/>
+    <SolidColorBrush x:Key="Accent.3" Color="#B45CFF"/>
+    <SolidColorBrush x:Key="Accent.3.Tint" Color="#1FB45CFF"/>
+    <SolidColorBrush x:Key="Accent.3.Border" Color="#8CB45CFF"/>
+    <SolidColorBrush x:Key="Accent.4" Color="#FF8AE9"/>
     <!-- 60 % accent fills for glowing strokes and halos -->
-    <SolidColorBrush x:Key="Accent.1.Glow" Color="#4CDFFF" Opacity="0.6"/>
-    <SolidColorBrush x:Key="Accent.2.Glow" Color="#A672FF" Opacity="0.6"/>
-    <SolidColorBrush x:Key="Accent.3.Glow" Color="#FF5EC4" Opacity="0.6"/>
-    <SolidColorBrush x:Key="Status.Success.Glow" Color="#5CFFB0" Opacity="0.6"/>
+    <SolidColorBrush x:Key="Accent.1.Glow" Color="#00E5FF" Opacity="0.6"/>
+    <SolidColorBrush x:Key="Accent.2.Glow" Color="#FF2BD6" Opacity="0.6"/>
+    <SolidColorBrush x:Key="Accent.3.Glow" Color="#B45CFF" Opacity="0.6"/>
+    <SolidColorBrush x:Key="Status.Success.Glow" Color="#A6FF00" Opacity="0.6"/>
     <LinearGradientBrush x:Key="Accent.Gradient" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#FF5CA8" Offset="0"/>
-        <GradientStop Color="#A672FF" Offset="1"/>
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
     </LinearGradientBrush>
 
-    <!-- Brand colours that stay recognisable in every theme: CluadeX Pro (license) pink, NVIDIA DGX Spark green -->
+    <!-- Brand colours that stay recognisable in every theme: CluadeX Pro (license) pink, NVIDIA DGX Spark green.
+         Unchanged from Midnight on purpose. -->
     <SolidColorBrush x:Key="Brand.Pro" Color="#FF5CA8"/>
     <SolidColorBrush x:Key="Brand.Pro.Border" Color="#AAFF5CA8"/>
     <SolidColorBrush x:Key="Brand.Spark" Color="#76D16B"/>
     <SolidColorBrush x:Key="Brand.Spark.Border" Color="#AA76D16B"/>
 
     <!-- Status -->
-    <SolidColorBrush x:Key="Status.Success" Color="#5CFFB0"/>
-    <SolidColorBrush x:Key="Status.Success.Tint" Color="#225CFFB0"/>
-    <SolidColorBrush x:Key="Status.Success.Border" Color="#665CFFB0"/>
-    <SolidColorBrush x:Key="Status.Success.Tint.Strong" Color="#445CFFB0"/>
-    <SolidColorBrush x:Key="Status.Success.Soft" Color="#A6E3A1"/>
-    <SolidColorBrush x:Key="Status.Warning.Soft" Color="#F9E2AF"/>
-    <SolidColorBrush x:Key="Status.Caution.Soft" Color="#FAB387"/>
-    <SolidColorBrush x:Key="Status.Danger.Soft" Color="#F38BA8"/>
-    <SolidColorBrush x:Key="Accent.2.Soft" Color="#CBA6F7"/>
-    <SolidColorBrush x:Key="Status.Warning" Color="#FFD166"/>
-    <SolidColorBrush x:Key="Status.Warning.Tint" Color="#22FFD166"/>
-    <SolidColorBrush x:Key="Status.Warning.Border" Color="#66FFD166"/>
-    <SolidColorBrush x:Key="Status.Danger" Color="#FF6E6E"/>
-    <SolidColorBrush x:Key="Status.Danger.Tint" Color="#22FF6E6E"/>
-    <SolidColorBrush x:Key="Status.Danger.Border" Color="#66FF6E6E"/>
-    <SolidColorBrush x:Key="Status.Info" Color="#5A8DFF"/>
-    <SolidColorBrush x:Key="Status.Info.Tint" Color="#225A8DFF"/>
-    <SolidColorBrush x:Key="Status.Info.Border" Color="#665A8DFF"/>
+    <SolidColorBrush x:Key="Status.Success" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Status.Success.Tint" Color="#1FA6FF00"/>
+    <SolidColorBrush x:Key="Status.Success.Border" Color="#73A6FF00"/>
+    <SolidColorBrush x:Key="Status.Success.Tint.Strong" Color="#38A6FF00"/>
+    <SolidColorBrush x:Key="Status.Success.Soft" Color="#C8FF6B"/>
+    <SolidColorBrush x:Key="Status.Warning.Soft" Color="#FFD27A"/>
+    <SolidColorBrush x:Key="Status.Caution.Soft" Color="#FF9F5A"/>
+    <SolidColorBrush x:Key="Status.Danger.Soft" Color="#FF8A9E"/>
+    <SolidColorBrush x:Key="Accent.2.Soft" Color="#FF8AE9"/>
+    <SolidColorBrush x:Key="Status.Warning" Color="#FFB000"/>
+    <SolidColorBrush x:Key="Status.Warning.Tint" Color="#1FFFB000"/>
+    <SolidColorBrush x:Key="Status.Warning.Border" Color="#73FFB000"/>
+    <SolidColorBrush x:Key="Status.Danger" Color="#FF5C7A"/>
+    <SolidColorBrush x:Key="Status.Danger.Tint" Color="#1FFF5C7A"/>
+    <SolidColorBrush x:Key="Status.Danger.Border" Color="#73FF5C7A"/>
+    <SolidColorBrush x:Key="Status.Info" Color="#3DA5FF"/>
+    <SolidColorBrush x:Key="Status.Info.Tint" Color="#1F3DA5FF"/>
+    <SolidColorBrush x:Key="Status.Info.Border" Color="#733DA5FF"/>
 
-    <!-- Interaction states (overlays on whatever is underneath) -->
-    <SolidColorBrush x:Key="State.Hover" Color="#1AFFFFFF"/>
-    <SolidColorBrush x:Key="State.Hover.Subtle" Color="#15FFFFFF"/>
-    <SolidColorBrush x:Key="State.Hover.Strong" Color="#22FFFFFF"/>
-    <SolidColorBrush x:Key="State.Pressed" Color="#33FFFFFF"/>
-    <SolidColorBrush x:Key="State.Selected" Color="#3328326E"/>
-    <SolidColorBrush x:Key="State.Selected.Strong" Color="#B22E3870"/>
-    <SolidColorBrush x:Key="State.Fill.Faint" Color="#11FFFFFF"/>
-    <SolidColorBrush x:Key="Selection.Text" Color="#59A672FF"/>
+    <!-- Interaction states: hover lights the cyan strip up, selection is magenta -->
+    <SolidColorBrush x:Key="State.Hover" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="State.Hover.Subtle" Color="#0F00E5FF"/>
+    <SolidColorBrush x:Key="State.Hover.Strong" Color="#1F00E5FF"/>
+    <SolidColorBrush x:Key="State.Pressed" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="State.Selected" Color="#1FFF2BD6"/>
+    <SolidColorBrush x:Key="State.Selected.Strong" Color="#40FF2BD6"/>
+    <SolidColorBrush x:Key="State.Fill.Faint" Color="#0A00E5FF"/>
+    <SolidColorBrush x:Key="Selection.Text" Color="#4D00E5FF"/>
 
-    <!-- Title bar (42 px): background, the CluadeX caption, the min/max/close buttons, the Ctrl+K pill -->
+    <!-- Title bar (42 px) — the HUD top bar: dark gradient that blooms cyan into its LED strip -->
     <LinearGradientBrush x:Key="TitleBar.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#EB141838" Offset="0"/>
-        <GradientStop Color="#D90A0C22" Offset="1"/>
+        <GradientStop Color="#FA0E1228" Offset="0"/>
+        <GradientStop Color="#FA080A18" Offset="0.78"/>
+        <GradientStop Color="#FA0A1C30" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="TitleBar.Border" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="TitleBar.Foreground" Color="#C0C6EE"/>
-    <SolidColorBrush x:Key="TitleBar.Chip.Background" Color="#3311152E"/>
-    <SolidColorBrush x:Key="TitleBar.Button.Foreground" Color="#8388BD"/>
-    <SolidColorBrush x:Key="TitleBar.Button.Hover.Background" Color="#22FFFFFF"/>
-    <SolidColorBrush x:Key="TitleBar.Button.Hover.Foreground" Color="#E8ECFF"/>
-    <SolidColorBrush x:Key="TitleBar.Close.Hover.Background" Color="#FF6E6E"/>
+    <LinearGradientBrush x:Key="TitleBar.Border" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#CC00E5FF" Offset="0"/>
+        <GradientStop Color="#CC00E5FF" Offset="0.62"/>
+        <GradientStop Color="#CCFF2BD6" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="TitleBar.Foreground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="TitleBar.Chip.Background" Color="#33060814"/>
+    <SolidColorBrush x:Key="TitleBar.Button.Foreground" Color="#8692C2"/>
+    <SolidColorBrush x:Key="TitleBar.Button.Hover.Background" Color="#1F00E5FF"/>
+    <SolidColorBrush x:Key="TitleBar.Button.Hover.Foreground" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="TitleBar.Close.Hover.Background" Color="#FF2BD6"/>
     <SolidColorBrush x:Key="TitleBar.Close.Hover.Foreground" Color="White"/>
-    <SolidColorBrush x:Key="TitleBar.Search.Background" Color="#1AFFFFFF"/>
-    <SolidColorBrush x:Key="TitleBar.Search.Border" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="TitleBar.Search.Foreground" Color="#8388BD"/>
-    <SolidColorBrush x:Key="TitleBar.Search.Hover.Border" Color="#4CDFFF"/>
-    <SolidColorBrush x:Key="TitleBar.Search.Hover.Foreground" Color="#E8ECFF"/>
-    <SolidColorBrush x:Key="TitleBar.Search.Kbd.Background" Color="#22FFFFFF"/>
+    <SolidColorBrush x:Key="TitleBar.Search.Background" Color="#0F00E5FF"/>
+    <SolidColorBrush x:Key="TitleBar.Search.Border" Color="#00E5FF" Opacity="0.42"/>
+    <SolidColorBrush x:Key="TitleBar.Search.Foreground" Color="#8692C2"/>
+    <SolidColorBrush x:Key="TitleBar.Search.Hover.Border" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="TitleBar.Search.Hover.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="TitleBar.Search.Kbd.Background" Color="#2400E5FF"/>
 
-    <!-- Title-bar chips: DGX Spark (NVIDIA green), license, buddy -->
+    <!-- Title-bar chips: DGX Spark (NVIDIA green — brand, unchanged), license (magenta LED), buddy (lime LED) -->
     <SolidColorBrush x:Key="Spark.Chip.Background" Color="#1476D16B"/>
     <SolidColorBrush x:Key="Spark.Chip.Hover.Background" Color="#3376D16B"/>
     <SolidColorBrush x:Key="Spark.Chip.Border" Color="#9976D16B"/>
     <SolidColorBrush x:Key="Spark.Chip.Dot" Color="#5576D16B"/>
     <SolidColorBrush x:Key="Spark.Chip.Dot.Active" Color="#9BE26B"/>
     <SolidColorBrush x:Key="Spark.Chip.Foreground" Color="#9BE26B"/>
-    <DropShadowEffect x:Key="Glow.Spark.Active" Color="#76D16B" BlurRadius="12" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="Glow.Spark.Active" Color="#76D16B" BlurRadius="12" ShadowDepth="0" Opacity="0.8"/>
     <SolidColorBrush x:Key="License.Chip.Foreground" Color="White"/>
-    <SolidColorBrush x:Key="License.Chip.Border" Color="#99FFFFFF"/>
+    <SolidColorBrush x:Key="License.Chip.Border" Color="#FF2BD6"/>
     <LinearGradientBrush x:Key="License.Chip.Background" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#FF5CA8" Offset="0"/>
-        <GradientStop Color="#A672FF" Offset="1"/>
+        <GradientStop Color="#38FF2BD6" Offset="0"/>
+        <GradientStop Color="#1FFF2BD6" Offset="1"/>
     </LinearGradientBrush>
-    <DropShadowEffect x:Key="Glow.License.Chip" Color="#FF5CA8" BlurRadius="14" ShadowDepth="0" Opacity="0.75"/>
-    <SolidColorBrush x:Key="License.Chip.Trial.Foreground" Color="#1E1E2E"/>
+    <DropShadowEffect x:Key="Glow.License.Chip" Color="#FF2BD6" BlurRadius="14" ShadowDepth="0" Opacity="0.65"/>
+    <SolidColorBrush x:Key="License.Chip.Trial.Foreground" Color="#05060F"/>
     <LinearGradientBrush x:Key="License.Chip.Trial.Background" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#FFD166" Offset="0"/>
-        <GradientStop Color="#FFA94D" Offset="1"/>
+        <GradientStop Color="#FFB000" Offset="0"/>
+        <GradientStop Color="#FF8A00" Offset="1"/>
     </LinearGradientBrush>
-    <DropShadowEffect x:Key="Glow.License.Trial" Color="#FFD166" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
-    <SolidColorBrush x:Key="License.Chip.Active.Foreground" Color="#5CFFB0"/>
-    <SolidColorBrush x:Key="License.Chip.Active.Border" Color="#665CFFB0"/>
-    <SolidColorBrush x:Key="License.Chip.Active.Background" Color="#1F5CFFB0"/>
-    <SolidColorBrush x:Key="Buddy.Chip.Background" Color="#7028326E"/>
-    <SolidColorBrush x:Key="Buddy.Chip.Border" Color="#665CFFB0"/>
-    <DropShadowEffect x:Key="Glow.Buddy.Chip" Color="#5CFFB0" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
+    <DropShadowEffect x:Key="Glow.License.Trial" Color="#FFB000" BlurRadius="12" ShadowDepth="0" Opacity="0.6"/>
+    <SolidColorBrush x:Key="License.Chip.Active.Foreground" Color="#C8FF6B"/>
+    <SolidColorBrush x:Key="License.Chip.Active.Border" Color="#8CA6FF00"/>
+    <SolidColorBrush x:Key="License.Chip.Active.Background" Color="#1AA6FF00"/>
+    <SolidColorBrush x:Key="Buddy.Chip.Background" Color="#CC0B0F22"/>
+    <SolidColorBrush x:Key="Buddy.Chip.Border" Color="#8CA6FF00"/>
+    <DropShadowEffect x:Key="Glow.Buddy.Chip" Color="#A6FF00" BlurRadius="12" ShadowDepth="0" Opacity="0.45"/>
     <RadialGradientBrush x:Key="Buddy.Avatar" Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-        <GradientStop Color="#5CFFB0" Offset="0"/>
-        <GradientStop Color="#1F8C5C" Offset="1"/>
+        <GradientStop Color="#C8FF6B" Offset="0"/>
+        <GradientStop Color="#2E6600" Offset="1"/>
     </RadialGradientBrush>
 
-    <!-- Activity bar (60 px rail on the left) -->
-    <LinearGradientBrush x:Key="ActivityBar.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#D90C0E26" Offset="0"/>
-        <GradientStop Color="#D906071A" Offset="1"/>
+    <!-- Activity bar (60 px rail) — the mock's icon dock: cyan icons, the active one a magenta LED -->
+    <LinearGradientBrush x:Key="ActivityBar.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#EB060814" Offset="0"/>
+        <GradientStop Color="#EB060814" Offset="0.86"/>
+        <GradientStop Color="#EB08192A" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="ActivityBar.Border" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="ActivityBar.Divider" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="ActivityBar.Foreground" Color="#8388BD"/>
-    <SolidColorBrush x:Key="ActivityBar.Hover.Background" Color="#1AFFFFFF"/>
-    <SolidColorBrush x:Key="ActivityBar.Hover.Foreground" Color="#4CDFFF"/>
-    <RadialGradientBrush x:Key="ActivityBar.Checked.Background" Center="0.5,0" GradientOrigin="0.5,0" RadiusX="1.0" RadiusY="1.2">
-        <GradientStop Color="#52A672FF" Offset="0"/>
-        <GradientStop Color="#001E2056" Offset="0.8"/>
+    <SolidColorBrush x:Key="ActivityBar.Border" Color="#00E5FF" Opacity="0.42"/>
+    <SolidColorBrush x:Key="ActivityBar.Divider" Color="#00E5FF" Opacity="0.3"/>
+    <SolidColorBrush x:Key="ActivityBar.Foreground" Color="#22C8E0"/>
+    <SolidColorBrush x:Key="ActivityBar.Hover.Background" Color="#1A00E5FF"/>
+    <SolidColorBrush x:Key="ActivityBar.Hover.Foreground" Color="#7DF4FF"/>
+    <RadialGradientBrush x:Key="ActivityBar.Checked.Background" Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.75" RadiusY="0.75">
+        <GradientStop Color="#40FF2BD6" Offset="0"/>
+        <GradientStop Color="#1AFF2BD6" Offset="1"/>
     </RadialGradientBrush>
-    <SolidColorBrush x:Key="ActivityBar.Checked.Border" Color="#80A672FF"/>
-    <SolidColorBrush x:Key="ActivityBar.Checked.Foreground" Color="#FFFFFFFF"/>
-    <SolidColorBrush x:Key="ActivityBar.Indicator" Color="#4CDFFF"/>
-    <DropShadowEffect x:Key="Glow.ActivityBar.Indicator" Color="#4CDFFF" BlurRadius="14" ShadowDepth="0" Opacity="0.9"/>
-    <DropShadowEffect x:Key="Glow.ActivityBar.Checked" Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
-    <SolidColorBrush x:Key="ActivityBar.Logo.Background" Color="#0F1230"/>
+    <SolidColorBrush x:Key="ActivityBar.Checked.Border" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="ActivityBar.Checked.Foreground" Color="#FFC2F3"/>
+    <SolidColorBrush x:Key="ActivityBar.Indicator" Color="#FF2BD6"/>
+    <DropShadowEffect x:Key="Glow.ActivityBar.Indicator" Color="#FF2BD6" BlurRadius="10" ShadowDepth="0" Opacity="1"/>
+    <DropShadowEffect x:Key="Glow.ActivityBar.Checked" Color="#FF2BD6" BlurRadius="16" ShadowDepth="0" Opacity="0.6"/>
+    <SolidColorBrush x:Key="ActivityBar.Logo.Background" Color="#0B0F22"/>
     <RadialGradientBrush x:Key="ActivityBar.Logo.Halo">
-        <GradientStop Color="#A672FF" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="0"/>
         <GradientStop Color="Transparent" Offset="0.7"/>
     </RadialGradientBrush>
-    <SolidColorBrush x:Key="ActivityBar.Logo.Divider" Color="#A0B4FF" Opacity="0.18"/>
+    <SolidColorBrush x:Key="ActivityBar.Logo.Divider" Color="#00E5FF" Opacity="0.45"/>
 
     <!-- Sidebar (chat history panel next to the activity bar) -->
-    <SolidColorBrush x:Key="Sidebar.Background" Color="#A60A0C22"/>
-    <SolidColorBrush x:Key="Sidebar.Border" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="Sidebar.Toggle.Checked" Color="#FF5EC4"/>
+    <SolidColorBrush x:Key="Sidebar.Background" Color="#E0090C1C"/>
+    <SolidColorBrush x:Key="Sidebar.Border" Color="#00E5FF" Opacity="0.28"/>
+    <SolidColorBrush x:Key="Sidebar.Toggle.Checked" Color="#FF2BD6"/>
 
-    <!-- Status bar (34 px) + the LED context meter -->
+    <!-- Status bar (34 px) — the LED status strip: lime "ready" end, cyan run, LED meter -->
     <LinearGradientBrush x:Key="StatusBar.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#EB0C0E26" Offset="0"/>
-        <GradientStop Color="#F206071A" Offset="1"/>
+        <GradientStop Color="#FA0A1826" Offset="0"/>
+        <GradientStop Color="#FA05060F" Offset="0.22"/>
+        <GradientStop Color="#FA05060F" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="StatusBar.Border" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="StatusBar.Foreground" Color="#8388BD"/>
+    <LinearGradientBrush x:Key="StatusBar.Border" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#B3A6FF00" Offset="0"/>
+        <GradientStop Color="#9900E5FF" Offset="0.3"/>
+        <GradientStop Color="#9900E5FF" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="StatusBar.Foreground" Color="#8692C2"/>
     <LinearGradientBrush x:Key="StatusBar.Chip.Background" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#66FF5EC4" Offset="0"/>
-        <GradientStop Color="#66A672FF" Offset="1"/>
+        <GradientStop Color="#40FF2BD6" Offset="0"/>
+        <GradientStop Color="#26FF2BD6" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="StatusBar.Chip.Border" Color="#FF5EC4"/>
+    <SolidColorBrush x:Key="StatusBar.Chip.Border" Color="#FF2BD6"/>
     <SolidColorBrush x:Key="StatusBar.Chip.Foreground" Color="White"/>
-    <DropShadowEffect x:Key="Glow.StatusBar.Chip" Color="#FF5EC4" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
-    <SolidColorBrush x:Key="StatusBar.Brain.Background" Color="#1AA672FF"/>
-    <SolidColorBrush x:Key="StatusBar.Brain.Border" Color="#55A672FF"/>
-    <SolidColorBrush x:Key="StatusBar.Brain.Connected" Color="#A672FF"/>
-    <DropShadowEffect x:Key="Glow.StatusBar.Pip" Color="#5CFFB0" BlurRadius="10" ShadowDepth="0" Opacity="0.8"/>
-    <SolidColorBrush x:Key="Led.Off" Color="#15FFFFFF"/>
-    <DropShadowEffect x:Key="Glow.Led.Success" Color="#5CFFB0" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-    <DropShadowEffect x:Key="Glow.Led.Accent" Color="#4CDFFF" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-    <DropShadowEffect x:Key="Glow.Led.Warning" Color="#FFD166" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-    <DropShadowEffect x:Key="Glow.Led.Caution" Color="#FF8AA6" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-    <DropShadowEffect x:Key="Glow.Led.Danger" Color="#FF6E6E" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
+    <DropShadowEffect x:Key="Glow.StatusBar.Chip" Color="#FF2BD6" BlurRadius="16" ShadowDepth="0" Opacity="0.75"/>
+    <SolidColorBrush x:Key="StatusBar.Brain.Background" Color="#14A6FF00"/>
+    <SolidColorBrush x:Key="StatusBar.Brain.Border" Color="#73A6FF00"/>
+    <SolidColorBrush x:Key="StatusBar.Brain.Connected" Color="#A6FF00"/>
+    <!-- The connection pip is red / amber / lime by state: a white bloom suits every state -->
+    <DropShadowEffect x:Key="Glow.StatusBar.Pip" Color="#FFFFFF" BlurRadius="8" ShadowDepth="0" Opacity="0.55"/>
+    <SolidColorBrush x:Key="Led.Off" Color="#2400E5FF"/>
+    <DropShadowEffect x:Key="Glow.Led.Success" Color="#A6FF00" BlurRadius="8" ShadowDepth="0" Opacity="0.95"/>
+    <DropShadowEffect x:Key="Glow.Led.Accent" Color="#00E5FF" BlurRadius="8" ShadowDepth="0" Opacity="0.95"/>
+    <DropShadowEffect x:Key="Glow.Led.Warning" Color="#FFB000" BlurRadius="8" ShadowDepth="0" Opacity="0.95"/>
+    <DropShadowEffect x:Key="Glow.Led.Caution" Color="#FF8AE9" BlurRadius="8" ShadowDepth="0" Opacity="0.95"/>
+    <DropShadowEffect x:Key="Glow.Led.Danger" Color="#FF5C7A" BlurRadius="8" ShadowDepth="0" Opacity="0.95"/>
 
     <!-- Charts + sparklines (the status-bar GPU sparkline, usage meters) -->
-    <SolidColorBrush x:Key="Chart.Line" Color="#A672FF"/>
-    <SolidColorBrush x:Key="Chart.Background" Color="#221E2056"/>
-    <SolidColorBrush x:Key="Chart.Grid" Color="#8CA0F0" Opacity="0.08"/>
-    <DropShadowEffect x:Key="Glow.Chart.Line" Color="#A672FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
-    <SolidColorBrush x:Key="Chart.Series.1" Color="#4CDFFF"/>
-    <SolidColorBrush x:Key="Chart.Series.2" Color="#A672FF"/>
-    <SolidColorBrush x:Key="Chart.Series.3" Color="#FF5EC4"/>
-    <SolidColorBrush x:Key="Chart.Series.4" Color="#5CFFB0"/>
-    <SolidColorBrush x:Key="Chart.Series.5" Color="#FFD166"/>
+    <SolidColorBrush x:Key="Chart.Line" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Chart.Background" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="Chart.Grid" Color="#00E5FF" Opacity="0.16"/>
+    <DropShadowEffect x:Key="Glow.Chart.Line" Color="#00E5FF" BlurRadius="6" ShadowDepth="0" Opacity="0.85"/>
+    <SolidColorBrush x:Key="Chart.Series.1" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Chart.Series.2" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Chart.Series.3" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Chart.Series.4" Color="#FFB000"/>
+    <SolidColorBrush x:Key="Chart.Series.5" Color="#B45CFF"/>
 
     <!-- Update banner, model-loading overlay, command palette -->
     <LinearGradientBrush x:Key="Banner.Background" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#1A6366F1" Offset="0"/>
-        <GradientStop Color="#1A06B6D4" Offset="1"/>
+        <GradientStop Color="#1FFF2BD6" Offset="0"/>
+        <GradientStop Color="#1F00E5FF" Offset="1"/>
     </LinearGradientBrush>
+    <!-- Deep magenta → violet so white 11 px text keeps ≥ 5:1 (bright #FF2BD6 under white is only 3.2:1) -->
     <LinearGradientBrush x:Key="Banner.Button.Background" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#992C5A" Offset="0"/>
-        <GradientStop Color="#5A2A99" Offset="1"/>
+        <GradientStop Color="#C8129E" Offset="0"/>
+        <GradientStop Color="#7A1FD6" Offset="1"/>
     </LinearGradientBrush>
-    <DropShadowEffect x:Key="Glow.Loading.Card" Color="#A672FF" BlurRadius="40" ShadowDepth="0" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.Loading.Card" Color="#FF2BD6" BlurRadius="40" ShadowDepth="0" Opacity="0.5"/>
     <RadialGradientBrush x:Key="Loading.Orb">
-        <GradientStop Color="#A672FF" Offset="0"/>
-        <GradientStop Color="#4CDFFF" Offset="1"/>
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
     </RadialGradientBrush>
-    <SolidColorBrush x:Key="Palette.Background" Color="#F00A0C22"/>
-    <DropShadowEffect x:Key="Shadow.Palette" Color="Black" BlurRadius="34" ShadowDepth="0" Opacity="0.6"/>
+    <SolidColorBrush x:Key="Palette.Background" Color="#F70A0D1F"/>
+    <DropShadowEffect x:Key="Shadow.Palette" Color="#00E5FF" BlurRadius="34" ShadowDepth="0" Opacity="0.4"/>
 
-    <!-- Nav list buttons (NavButton style) -->
-    <SolidColorBrush x:Key="Nav.Foreground" Color="#A6ADC8"/>
-    <LinearGradientBrush x:Key="Nav.Indicator" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#89B4FA" Offset="0"/>
-        <GradientStop Color="#B4BEFE" Offset="0.5"/>
-        <GradientStop Color="#CBA6F7" Offset="1"/>
+    <!-- Nav list buttons (NavButton style): hover = cyan strip, selected = magenta LED -->
+    <SolidColorBrush x:Key="Nav.Foreground" Color="#9AA6D0"/>
+    <LinearGradientBrush x:Key="Nav.Indicator" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#FF2BD6" Offset="0.5"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Nav.IconBubble" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#89B4FA" Offset="0"/>
-        <GradientStop Color="#CBA6F7" Offset="1"/>
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Nav.Chevron" Color="#6C7086"/>
-    <LinearGradientBrush x:Key="Nav.Hover.Background" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#2A2A40" Offset="0"/>
-        <GradientStop Color="#30304A" Offset="0.5"/>
-        <GradientStop Color="#2F2E48" Offset="1"/>
+    <SolidColorBrush x:Key="Nav.Chevron" Color="#7682B2"/>
+    <LinearGradientBrush x:Key="Nav.Hover.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#1F00E5FF" Offset="0"/>
+        <GradientStop Color="#0D00E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Nav.Hover.Border" Color="#20FFFFFF"/>
-    <SolidColorBrush x:Key="Nav.Hover.Icon" Color="#89B4FA"/>
-    <SolidColorBrush x:Key="Nav.Hover.Foreground" Color="#CDD6F4"/>
-    <LinearGradientBrush x:Key="Nav.Selected.Background" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#2E3A5C" Offset="0"/>
-        <GradientStop Color="#33305A" Offset="0.5"/>
-        <GradientStop Color="#3C2A5A" Offset="1"/>
+    <SolidColorBrush x:Key="Nav.Hover.Border" Color="#5900E5FF"/>
+    <SolidColorBrush x:Key="Nav.Hover.Icon" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Nav.Hover.Foreground" Color="#E6F1FF"/>
+    <LinearGradientBrush x:Key="Nav.Selected.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#33FF2BD6" Offset="0"/>
+        <GradientStop Color="#14FF2BD6" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Nav.Selected.Border" Color="#3089B4FA"/>
-    <SolidColorBrush x:Key="Nav.Selected.Icon" Color="#E0CBA6F7"/>
-    <SolidColorBrush x:Key="Nav.Selected.Chevron" Color="#CBA6F7"/>
-    <SolidColorBrush x:Key="Nav.Selected.Foreground" Color="#F5E8FF"/>
-    <DropShadowEffect x:Key="Glow.Nav.Selected" Color="#89B4FA" BlurRadius="14" ShadowDepth="0" Opacity="0.35"/>
+    <SolidColorBrush x:Key="Nav.Selected.Border" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Nav.Selected.Icon" Color="#FF8AE9"/>
+    <SolidColorBrush x:Key="Nav.Selected.Chevron" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Nav.Selected.Foreground" Color="#FFFFFF"/>
+    <DropShadowEffect x:Key="Glow.Nav.Selected" Color="#FF2BD6" BlurRadius="14" ShadowDepth="0" Opacity="0.5"/>
 
-    <!-- Buttons (PrimaryButton / SecondaryButton / DangerButton / IconButton styles) -->
+    <!-- Buttons. Every action button is magenta (fill = primary, outline = secondary) so the shared
+         Shadow.Button glow is one colour that suits both. -->
     <LinearGradientBrush x:Key="Button.Primary.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#A3C5FF" Offset="0"/>
-        <GradientStop Color="#89B4FA" Offset="0.35"/>
-        <GradientStop Color="#6E9AE8" Offset="0.85"/>
-        <GradientStop Color="#5A87D8" Offset="1"/>
+        <GradientStop Color="#52FF2BD6" Offset="0"/>
+        <GradientStop Color="#38FF2BD6" Offset="0.5"/>
+        <GradientStop Color="#2EFF2BD6" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Button.Primary.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#C5D6FF" Offset="0"/>
-        <GradientStop Color="#B4BEFE" Offset="0.35"/>
-        <GradientStop Color="#89A8F0" Offset="0.85"/>
-        <GradientStop Color="#7A99E8" Offset="1"/>
+        <GradientStop Color="#80FF2BD6" Offset="0"/>
+        <GradientStop Color="#5CFF2BD6" Offset="0.5"/>
+        <GradientStop Color="#4DFF2BD6" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Button.Primary.Foreground" Color="#11111B"/>
-    <SolidColorBrush x:Key="Button.Primary.Border" Color="#55FFFFFF"/>
-    <SolidColorBrush x:Key="Button.Primary.Pressed.Border" Color="#33FFFFFF"/>
-    <SolidColorBrush x:Key="Button.Primary.Highlight" Color="#30FFFFFF"/>
+    <SolidColorBrush x:Key="Button.Primary.Foreground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Button.Primary.Border" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Button.Primary.Pressed.Border" Color="#FF8AE9"/>
+    <SolidColorBrush x:Key="Button.Primary.Highlight" Color="#80FF8AE9"/>
     <LinearGradientBrush x:Key="Button.Secondary.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#42425A" Offset="0"/>
-        <GradientStop Color="#353548" Offset="0.5"/>
-        <GradientStop Color="#2E2E40" Offset="1"/>
+        <GradientStop Color="#F0111633" Offset="0"/>
+        <GradientStop Color="#F00C1026" Offset="0.5"/>
+        <GradientStop Color="#F0090C1C" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Button.Secondary.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#545470" Offset="0"/>
-        <GradientStop Color="#454560" Offset="0.5"/>
-        <GradientStop Color="#3A3A50" Offset="1"/>
+        <GradientStop Color="#F0251A44" Offset="0"/>
+        <GradientStop Color="#F01A1436" Offset="0.5"/>
+        <GradientStop Color="#F013102A" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Button.Secondary.Foreground" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Button.Secondary.Border" Color="#18FFFFFF"/>
-    <SolidColorBrush x:Key="Button.Secondary.Highlight" Color="#15FFFFFF"/>
-    <SolidColorBrush x:Key="Button.Danger.Foreground" Color="#F38BA8"/>
-    <SolidColorBrush x:Key="Button.Icon.Foreground" Color="#A6ADC8"/>
+    <SolidColorBrush x:Key="Button.Secondary.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Button.Secondary.Border" Color="#80FF2BD6"/>
+    <SolidColorBrush x:Key="Button.Secondary.Highlight" Color="#33FF8AE9"/>
+    <SolidColorBrush x:Key="Button.Danger.Foreground" Color="#FF5C7A"/>
+    <SolidColorBrush x:Key="Button.Icon.Foreground" Color="#9AA6D0"/>
     <LinearGradientBrush x:Key="Button.Icon.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#3A3A50" Offset="0"/>
-        <GradientStop Color="#2D2D42" Offset="0.4"/>
-        <GradientStop Color="#282838" Offset="1"/>
+        <GradientStop Color="#2600E5FF" Offset="0"/>
+        <GradientStop Color="#1400E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Button.Icon.Hover.Border" Color="#15FFFFFF"/>
-    <SolidColorBrush x:Key="Button.Icon.Hover.Foreground" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Caption.Foreground" Color="#A6ADC8"/>
+    <SolidColorBrush x:Key="Button.Icon.Hover.Border" Color="#7300E5FF"/>
+    <SolidColorBrush x:Key="Button.Icon.Hover.Foreground" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Caption.Foreground" Color="#8692C2"/>
     <LinearGradientBrush x:Key="Caption.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#4E4E68" Offset="0"/>
-        <GradientStop Color="#3E3E55" Offset="0.5"/>
-        <GradientStop Color="#353548" Offset="1"/>
+        <GradientStop Color="#2600E5FF" Offset="0"/>
+        <GradientStop Color="#1400E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Caption.Hover.Foreground" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Caption.Pressed.Background" Color="#585B70"/>
-    <SolidColorBrush x:Key="Caption.Close.Hover.Background" Color="#F38BA8"/>
-    <SolidColorBrush x:Key="Caption.Close.Pressed.Background" Color="#CC3333"/>
+    <SolidColorBrush x:Key="Caption.Hover.Foreground" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Caption.Pressed.Background" Color="#4000E5FF"/>
+    <SolidColorBrush x:Key="Caption.Close.Hover.Background" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Caption.Close.Pressed.Background" Color="#C2189F"/>
 
-    <!-- Inputs (ModernTextBox / GlowTextBox), dropdowns, checkboxes, sliders, progress bars -->
-    <SolidColorBrush x:Key="Input.Background" Color="#313244"/>
-    <SolidColorBrush x:Key="Input.Foreground" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Input.Caret" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Input.Border" Color="#45475A"/>
-    <SolidColorBrush x:Key="Input.Focus.Border" Color="#89B4FA"/>
-    <SolidColorBrush x:Key="Input.InnerShadow" Color="#08000000"/>
+    <!-- Inputs: the mock's composer — near-black field, cyan LED edge, a cyan inner bloom on the top edge -->
+    <SolidColorBrush x:Key="Input.Background" Color="#0A0E22"/>
+    <SolidColorBrush x:Key="Input.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Input.Caret" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Input.Border" Color="#7300E5FF"/>
+    <SolidColorBrush x:Key="Input.Focus.Border" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Input.InnerShadow" Color="#4000E5FF"/>
     <LinearGradientBrush x:Key="Dropdown.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#42425A" Offset="0"/>
-        <GradientStop Color="#353548" Offset="0.5"/>
-        <GradientStop Color="#2E2E40" Offset="1"/>
+        <GradientStop Color="#0E1228" Offset="0"/>
+        <GradientStop Color="#0B0F22" Offset="0.5"/>
+        <GradientStop Color="#090C1C" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Dropdown.Foreground" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Dropdown.Border" Color="#18FFFFFF"/>
-    <SolidColorBrush x:Key="Dropdown.Hover.Border" Color="#28FFFFFF"/>
-    <SolidColorBrush x:Key="Dropdown.Open.Border" Color="#89B4FA"/>
-    <SolidColorBrush x:Key="Dropdown.Arrow" Color="#A6ADC8"/>
-    <SolidColorBrush x:Key="Dropdown.Highlight" Color="#12FFFFFF"/>
-    <SolidColorBrush x:Key="Dropdown.Item.Foreground" Color="#CDD6F4"/>
-    <LinearGradientBrush x:Key="Dropdown.Item.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#4E4E68" Offset="0"/>
-        <GradientStop Color="#3E3E55" Offset="0.5"/>
-        <GradientStop Color="#353548" Offset="1"/>
+    <SolidColorBrush x:Key="Dropdown.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Dropdown.Border" Color="#8C00E5FF"/>
+    <SolidColorBrush x:Key="Dropdown.Hover.Border" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Dropdown.Open.Border" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Dropdown.Arrow" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Dropdown.Highlight" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="Dropdown.Item.Foreground" Color="#D5DEFA"/>
+    <LinearGradientBrush x:Key="Dropdown.Item.Hover.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#2E00E5FF" Offset="0"/>
+        <GradientStop Color="#1200E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Dropdown.Item.Selected.Foreground" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="Dropdown.Item.Selected.Foreground" Color="#FF8AE9"/>
     <LinearGradientBrush x:Key="Popup.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#383850" Offset="0"/>
-        <GradientStop Color="#313244" Offset="0.15"/>
-        <GradientStop Color="#2C2C3E" Offset="0.95"/>
-        <GradientStop Color="#272738" Offset="1"/>
+        <GradientStop Color="#FA111633" Offset="0"/>
+        <GradientStop Color="#FA0B0F22" Offset="0.15"/>
+        <GradientStop Color="#FA090C1C" Offset="0.95"/>
+        <GradientStop Color="#FA070812" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Popup.Border" Color="#20FFFFFF"/>
-    <SolidColorBrush x:Key="CheckBox.Foreground" Color="#CDD6F4"/>
+    <SolidColorBrush x:Key="Popup.Border" Color="#8C00E5FF"/>
+    <SolidColorBrush x:Key="CheckBox.Foreground" Color="#D5DEFA"/>
     <LinearGradientBrush x:Key="CheckBox.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#42425A" Offset="0"/>
-        <GradientStop Color="#353548" Offset="0.5"/>
-        <GradientStop Color="#2E2E40" Offset="1"/>
+        <GradientStop Color="#0E1228" Offset="0"/>
+        <GradientStop Color="#0A0E22" Offset="0.5"/>
+        <GradientStop Color="#080A18" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="CheckBox.Border" Color="#18FFFFFF"/>
-    <SolidColorBrush x:Key="CheckBox.Hover.Border" Color="#30FFFFFF"/>
+    <SolidColorBrush x:Key="CheckBox.Border" Color="#8C00E5FF"/>
+    <SolidColorBrush x:Key="CheckBox.Hover.Border" Color="#00E5FF"/>
+    <!-- Checked = a lit lime LED with a dark tick (the mock's accent-color: #A6FF00) -->
     <LinearGradientBrush x:Key="CheckBox.Checked.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#A3C5FF" Offset="0"/>
-        <GradientStop Color="#89B4FA" Offset="0.35"/>
-        <GradientStop Color="#6E9AE8" Offset="0.85"/>
-        <GradientStop Color="#5A87D8" Offset="1"/>
+        <GradientStop Color="#D4FF80" Offset="0"/>
+        <GradientStop Color="#A6FF00" Offset="0.4"/>
+        <GradientStop Color="#8FE000" Offset="0.85"/>
+        <GradientStop Color="#76BD00" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="CheckBox.Checked.Border" Color="#44FFFFFF"/>
-    <SolidColorBrush x:Key="CheckBox.Mark" Color="#11111B"/>
-    <SolidColorBrush x:Key="Slider.Background" Color="#313244"/>
-    <SolidColorBrush x:Key="Slider.Foreground" Color="#89B4FA"/>
+    <SolidColorBrush x:Key="CheckBox.Checked.Border" Color="#C8FF6B"/>
+    <SolidColorBrush x:Key="CheckBox.Mark" Color="#05060F"/>
+    <SolidColorBrush x:Key="Slider.Background" Color="#0A0E22"/>
+    <SolidColorBrush x:Key="Slider.Foreground" Color="#00E5FF"/>
     <LinearGradientBrush x:Key="Slider.Track" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#42425A" Offset="0"/>
-        <GradientStop Color="#353548" Offset="0.5"/>
-        <GradientStop Color="#2E2E40" Offset="1"/>
+        <GradientStop Color="#2600E5FF" Offset="0"/>
+        <GradientStop Color="#1A00E5FF" Offset="0.5"/>
+        <GradientStop Color="#1400E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="Slider.Fill" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#A3C5FF" Offset="0"/>
-        <GradientStop Color="#89B4FA" Offset="0.35"/>
-        <GradientStop Color="#6E9AE8" Offset="0.85"/>
-        <GradientStop Color="#5A87D8" Offset="1"/>
+    <LinearGradientBrush x:Key="Slider.Fill" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#00E5FF" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="0.6"/>
+        <GradientStop Color="#FF2BD6" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Slider.Thumb" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#A3C5FF" Offset="0"/>
-        <GradientStop Color="#89B4FA" Offset="0.35"/>
-        <GradientStop Color="#6E9AE8" Offset="0.85"/>
-        <GradientStop Color="#5A87D8" Offset="1"/>
+        <GradientStop Color="#E6FCFF" Offset="0"/>
+        <GradientStop Color="#7DF4FF" Offset="0.35"/>
+        <GradientStop Color="#00E5FF" Offset="0.85"/>
+        <GradientStop Color="#00B8D4" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Slider.Thumb.Hover" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#C5D6FF" Offset="0"/>
-        <GradientStop Color="#B4BEFE" Offset="0.35"/>
-        <GradientStop Color="#89A8F0" Offset="0.85"/>
-        <GradientStop Color="#7A99E8" Offset="1"/>
+        <GradientStop Color="#FFFFFF" Offset="0"/>
+        <GradientStop Color="#B5FAFF" Offset="0.35"/>
+        <GradientStop Color="#4DEEFF" Offset="0.85"/>
+        <GradientStop Color="#00D4F0" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Slider.Thumb.Border" Color="#44FFFFFF"/>
+    <SolidColorBrush x:Key="Slider.Thumb.Border" Color="#CCFFFFFF"/>
     <RadialGradientBrush x:Key="Slider.Thumb.Gloss">
-        <GradientStop Color="#40FFFFFF" Offset="0"/>
+        <GradientStop Color="#66FFFFFF" Offset="0"/>
         <GradientStop Color="Transparent" Offset="1"/>
     </RadialGradientBrush>
     <LinearGradientBrush x:Key="Progress.Track" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#42425A" Offset="0"/>
-        <GradientStop Color="#353548" Offset="0.5"/>
-        <GradientStop Color="#2E2E40" Offset="1"/>
+        <GradientStop Color="#2600E5FF" Offset="0"/>
+        <GradientStop Color="#1A00E5FF" Offset="0.5"/>
+        <GradientStop Color="#1400E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="Progress.Fill" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#A3C5FF" Offset="0"/>
-        <GradientStop Color="#89B4FA" Offset="0.35"/>
-        <GradientStop Color="#6E9AE8" Offset="0.85"/>
-        <GradientStop Color="#5A87D8" Offset="1"/>
+    <LinearGradientBrush x:Key="Progress.Fill" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#00E5FF" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="0.55"/>
+        <GradientStop Color="#FF2BD6" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Progress.Border" Color="#10000000"/>
-    <SolidColorBrush x:Key="Progress.Context.Fill" Color="#94E2D5"/>
+    <SolidColorBrush x:Key="Progress.Border" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="Progress.Context.Fill" Color="#00E5FF"/>
 
     <!-- Cards, tooltips, scrollbars, expanders, list rows, badges, code blocks -->
     <LinearGradientBrush x:Key="Card.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#383850" Offset="0"/>
-        <GradientStop Color="#313244" Offset="0.15"/>
-        <GradientStop Color="#2C2C3E" Offset="0.95"/>
-        <GradientStop Color="#272738" Offset="1"/>
+        <GradientStop Color="#EB10152E" Offset="0"/>
+        <GradientStop Color="#EB0C1026" Offset="0.15"/>
+        <GradientStop Color="#EB090C1C" Offset="0.95"/>
+        <GradientStop Color="#EB080A18" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Card.Border" Color="#12FFFFFF"/>
+    <SolidColorBrush x:Key="Card.Border" Color="#5C00E5FF"/>
     <LinearGradientBrush x:Key="Tooltip.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#4E4E68" Offset="0"/>
-        <GradientStop Color="#3E3E55" Offset="0.5"/>
-        <GradientStop Color="#353548" Offset="1"/>
+        <GradientStop Color="#FA111633" Offset="0"/>
+        <GradientStop Color="#FA0B0F22" Offset="0.5"/>
+        <GradientStop Color="#FA090C1C" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Tooltip.Foreground" Color="#CDD6F4"/>
-    <SolidColorBrush x:Key="Tooltip.Border" Color="#20FFFFFF"/>
-    <SolidColorBrush x:Key="Scrollbar.Thumb" Color="#585B70"/>
-    <SolidColorBrush x:Key="Expander.Foreground" Color="#A6ADC8"/>
-    <SolidColorBrush x:Key="Expander.Arrow" Color="#6C7086"/>
-    <LinearGradientBrush x:Key="Expander.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#3A3A50" Offset="0"/>
-        <GradientStop Color="#2D2D42" Offset="0.4"/>
-        <GradientStop Color="#282838" Offset="1"/>
+    <SolidColorBrush x:Key="Tooltip.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Tooltip.Border" Color="#8C00E5FF"/>
+    <SolidColorBrush x:Key="Scrollbar.Thumb" Color="#2C8A9E"/>
+    <SolidColorBrush x:Key="Expander.Foreground" Color="#9AA6D0"/>
+    <SolidColorBrush x:Key="Expander.Arrow" Color="#00E5FF"/>
+    <LinearGradientBrush x:Key="Expander.Hover.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#1F00E5FF" Offset="0"/>
+        <GradientStop Color="#0A00E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="ListItem.Foreground" Color="#A6ADC8"/>
-    <LinearGradientBrush x:Key="ListItem.Hover.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#3A3A50" Offset="0"/>
-        <GradientStop Color="#2D2D42" Offset="0.4"/>
-        <GradientStop Color="#282838" Offset="1"/>
+    <SolidColorBrush x:Key="ListItem.Foreground" Color="#B9C4E8"/>
+    <LinearGradientBrush x:Key="ListItem.Hover.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#1F00E5FF" Offset="0"/>
+        <GradientStop Color="#0D00E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="ListItem.Hover.Border" Color="#10FFFFFF"/>
-    <SolidColorBrush x:Key="ListItem.Hover.Foreground" Color="#CDD6F4"/>
-    <LinearGradientBrush x:Key="ListItem.Pressed.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#4E4E68" Offset="0"/>
-        <GradientStop Color="#3E3E55" Offset="0.5"/>
-        <GradientStop Color="#353548" Offset="1"/>
+    <SolidColorBrush x:Key="ListItem.Hover.Border" Color="#5900E5FF"/>
+    <SolidColorBrush x:Key="ListItem.Hover.Foreground" Color="#E6F1FF"/>
+    <LinearGradientBrush x:Key="ListItem.Pressed.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#33FF2BD6" Offset="0"/>
+        <GradientStop Color="#1AFF2BD6" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="Badge.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#4E4E68" Offset="0"/>
-        <GradientStop Color="#3E3E55" Offset="0.5"/>
-        <GradientStop Color="#353548" Offset="1"/>
+        <GradientStop Color="#2900E5FF" Offset="0"/>
+        <GradientStop Color="#1A00E5FF" Offset="0.5"/>
+        <GradientStop Color="#1400E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="Badge.Border" Color="#10FFFFFF"/>
+    <SolidColorBrush x:Key="Badge.Border" Color="#5900E5FF"/>
     <LinearGradientBrush x:Key="CodeBlock.Background" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#151520" Offset="0"/>
-        <GradientStop Color="#11111B" Offset="0.3"/>
-        <GradientStop Color="#0E0E16" Offset="1"/>
+        <GradientStop Color="#07091A" Offset="0"/>
+        <GradientStop Color="#05060F" Offset="0.3"/>
+        <GradientStop Color="#04050C" Offset="1"/>
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="CodeBlock.Border" Color="#15FFFFFF"/>
+    <SolidColorBrush x:Key="CodeBlock.Border" Color="#5900E5FF"/>
 
-    <!-- Code editor (AvalonEdit + minimap + breakpoint gutter) and syntax colours -->
+    <!-- Code editor (AvalonEdit + minimap + breakpoint gutter) and syntax colours.
+         Syntax: keyword magenta · type cyan · string soft lime · number amber · preprocessor violet ·
+         comment = Text.Faint (≥ 4.8:1). -->
     <SolidColorBrush x:Key="Editor.Background" Color="Transparent"/>
-    <SolidColorBrush x:Key="Editor.Foreground" Color="#E8ECFF"/>
-    <SolidColorBrush x:Key="Editor.LineNumber" Color="#555A8C"/>
-    <SolidColorBrush x:Key="Editor.Caret" Color="#4CDFFF"/>
-    <SolidColorBrush x:Key="Editor.Selection" Color="#59A672FF"/>
-    <SolidColorBrush x:Key="Editor.Gutter" Color="#3011152E"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Background" Color="#7011152E"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Bar" Color="#829AA5E8"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Comment" Color="#407C85A0"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Viewport" Color="#1EFFFFFF"/>
-    <SolidColorBrush x:Key="Editor.Minimap.ViewportBorder" Color="#994CDFFF"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Hover" Color="#14FFFFFF"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Caret" Color="#CCFFD37E"/>
-    <SolidColorBrush x:Key="Editor.Minimap.Change" Color="#E05CFFB0"/>
-    <SolidColorBrush x:Key="Editor.Breakpoint" Color="#FF5370"/>
-    <SolidColorBrush x:Key="Editor.Breakpoint.Halo" Color="#55FF5370"/>
-    <SolidColorBrush x:Key="Editor.ExecutionLine" Color="#FFD37E"/>
-    <SolidColorBrush x:Key="Editor.ExecutionLine.Fill" Color="#38FFD37E"/>
-    <SolidColorBrush x:Key="Editor.ExecutionLine.Border" Color="#80FFD37E"/>
-    <SolidColorBrush x:Key="Editor.AgentGlow" Color="#A672FF"/>
-    <SolidColorBrush x:Key="Editor.Match" Color="#66FFC54C"/>
+    <SolidColorBrush x:Key="Editor.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Editor.LineNumber" Color="#63709C"/>
+    <SolidColorBrush x:Key="Editor.Caret" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Editor.Selection" Color="#4D00E5FF"/>
+    <SolidColorBrush x:Key="Editor.Gutter" Color="#40040510"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Background" Color="#B305060F"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Bar" Color="#8000E5FF"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Comment" Color="#508692C2"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Viewport" Color="#1A00E5FF"/>
+    <SolidColorBrush x:Key="Editor.Minimap.ViewportBorder" Color="#B300E5FF"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Hover" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Caret" Color="#CCFFB000"/>
+    <SolidColorBrush x:Key="Editor.Minimap.Change" Color="#E0A6FF00"/>
+    <SolidColorBrush x:Key="Editor.Breakpoint" Color="#FF3B6B"/>
+    <SolidColorBrush x:Key="Editor.Breakpoint.Halo" Color="#59FF3B6B"/>
+    <SolidColorBrush x:Key="Editor.ExecutionLine" Color="#FFB000"/>
+    <SolidColorBrush x:Key="Editor.ExecutionLine.Fill" Color="#2EFFB000"/>
+    <SolidColorBrush x:Key="Editor.ExecutionLine.Border" Color="#80FFB000"/>
+    <SolidColorBrush x:Key="Editor.AgentGlow" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Editor.Match" Color="#59FFB000"/>
     <SolidColorBrush x:Key="Editor.Match.Foreground" Color="#FFF4D6"/>
-    <SolidColorBrush x:Key="Syntax.Keyword" Color="#A672FF"/>
-    <SolidColorBrush x:Key="Syntax.Type" Color="#4CDFFF"/>
-    <SolidColorBrush x:Key="Syntax.String" Color="#5CFFB0"/>
-    <SolidColorBrush x:Key="Syntax.Number" Color="#FFC66D"/>
-    <SolidColorBrush x:Key="Syntax.Preprocessor" Color="#FF5EC4"/>
-    <SolidColorBrush x:Key="Syntax.Comment" Color="#7E8AA8"/>
+    <SolidColorBrush x:Key="Syntax.Keyword" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Syntax.Type" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Syntax.String" Color="#C8FF6B"/>
+    <SolidColorBrush x:Key="Syntax.Number" Color="#FFB000"/>
+    <SolidColorBrush x:Key="Syntax.Preprocessor" Color="#B45CFF"/>
+    <SolidColorBrush x:Key="Syntax.Comment" Color="#7682B2"/>
+    <SolidColorBrush x:Key="Syntax.Function" Color="#FFEE8A"/>
+    <SolidColorBrush x:Key="Syntax.Control" Color="#FFA8EC"/>
+    <SolidColorBrush x:Key="Syntax.Variable" Color="#8CC2FF"/>
 
-    <!-- Shadows and glows -->
-    <DropShadowEffect x:Key="Shadow.Card" BlurRadius="16" ShadowDepth="4" Direction="270" Color="#0A0A14" Opacity="0.6"/>
-    <DropShadowEffect x:Key="Shadow.Button" BlurRadius="8" ShadowDepth="2" Direction="270" Color="#0A0A14" Opacity="0.5"/>
-    <DropShadowEffect x:Key="Shadow.Popup" BlurRadius="24" ShadowDepth="8" Direction="270" Color="#08080F" Opacity="0.7"/>
-    <DropShadowEffect x:Key="Shadow.Panel" BlurRadius="40" ShadowDepth="0" Color="Black" Opacity="0.6"/>
-    <DropShadowEffect x:Key="Glow.Accent.1" Color="#4CDFFF" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="Glow.Accent.2" Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="Glow.Accent.3" Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="Glow.Success" Color="#5CFFB0" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+    <!-- Shadows become glows: cards are cyan LED panels, buttons and popups bloom, panels keep a dark depth -->
+    <DropShadowEffect x:Key="Shadow.Card" BlurRadius="14" ShadowDepth="0" Color="#00E5FF" Opacity="0.22"/>
+    <DropShadowEffect x:Key="Shadow.Button" BlurRadius="12" ShadowDepth="0" Color="#FF2BD6" Opacity="0.4"/>
+    <DropShadowEffect x:Key="Shadow.Popup" BlurRadius="22" ShadowDepth="0" Color="#00E5FF" Opacity="0.35"/>
+    <DropShadowEffect x:Key="Shadow.Panel" BlurRadius="40" ShadowDepth="0" Color="Black" Opacity="0.7"/>
+    <DropShadowEffect x:Key="Glow.Accent.1" Color="#00E5FF" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="Glow.Accent.2" Color="#FF2BD6" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="Glow.Accent.3" Color="#B45CFF" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="Glow.Success" Color="#A6FF00" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+
+    <!-- Chat + code editor (team A). Neon Cyber LED values from research/themes/NeonMain.dc.html: cyan #00E5FF,
+         lime #A6FF00, magenta #FF2BD6, amber #FFB000. Completion.Kind.* keep Midnight's values: the AvalonEdit
+         completion popup is unthemed (system white) in every theme. -->
+    <SolidColorBrush x:Key="Accent.1.Tint.Faint" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="Accent.1.Border.Soft" Color="#5900E5FF"/>
+    <SolidColorBrush x:Key="Accent.2.Hover" Color="#FF6BE3"/>
+    <SolidColorBrush x:Key="State.Hover.Danger" Color="#33FF2BD6"/>
+    <SolidColorBrush x:Key="Banner.Warning.Background" Color="#1AFFB000"/>
+    <SolidColorBrush x:Key="Banner.Danger.Background" Color="#2EFF2BD6"/>
+    <SolidColorBrush x:Key="Button.Flat.Background" Color="#2600E5FF"/>
+    <SolidColorBrush x:Key="Button.Flat.Hover.Background" Color="#4000E5FF"/>
+    <SolidColorBrush x:Key="Button.Flat.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Button.Success.Background" Color="#33A6FF00"/>
+    <SolidColorBrush x:Key="Button.Danger.Solid.Background" Color="#59FF2BD6"/>
+    <SolidColorBrush x:Key="Chat.Permission.Background" Color="#1FFFB000"/>
+    <SolidColorBrush x:Key="Chat.Badge.Warning.Background" Color="#33FFB000"/>
+    <SolidColorBrush x:Key="Chat.Badge.Danger.Background" Color="#33FF2BD6"/>
+    <SolidColorBrush x:Key="Chat.Diff.Added.Background" Color="#1AA6FF00"/>
+    <SolidColorBrush x:Key="Chat.Diff.Removed.Background" Color="#1AFF2BD6"/>
+    <SolidColorBrush x:Key="Chat.Diff.Hunk.Foreground" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Editor.Diff.Added.Background" Color="#33A6FF00"/>
+    <SolidColorBrush x:Key="Editor.Diff.Removed.Background" Color="#33FF2BD6"/>
+    <SolidColorBrush x:Key="Completion.Kind.Lsp" Color="#7EE0A3"/>
+    <SolidColorBrush x:Key="Completion.Kind.Type" Color="#8AB8FF"/>
+    <SolidColorBrush x:Key="Completion.Kind.Method" Color="#FFD37E"/>
+    <SolidColorBrush x:Key="Completion.Kind.Keyword" Color="#C79AFF"/>
+    <SolidColorBrush x:Key="Completion.Kind.Other" Color="#8A8FB0"/>
+    <SolidColorBrush x:Key="Syntax.DocComment" Color="#7C88B8"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Fill" Color="#0A0E20"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Stroke" Color="#7C88B8"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Expanded.Fill" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Expanded.Stroke" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Fill" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Stroke" Color="#7DF4FF"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Expanded.Fill" Color="#7DF4FF"/>
+    <SolidColorBrush x:Key="Tree.Glyph.Hover.Expanded.Stroke" Color="#7DF4FF"/>
+    <DropShadowEffect x:Key="Glow.Toast.Info" Color="#00E5FF" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+    <DropShadowEffect x:Key="Glow.Toast.Warning" Color="#FFB000" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.Toast.Danger" Color="#FF2BD6" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+
+    <!-- ── Settings and the manager pages (Plugins, Skills, Sub-agents, Hook library, Instincts, Security shield,
+         Model manager, Features). THESE ARE STILL MIDNIGHT'S VALUES — this theme's team paints them; Tokens.md names
+         the general token each one is closest to in meaning (a starting point). ── -->
+
+    <!-- Page chrome of the manager pages: header band, footer status strip, filter toolbar, the coloured wash behind
+         the page, the soft panel shadow, the glow on a hovered list card -->
+    <LinearGradientBrush x:Key="Page.Header.Background" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#7F141838" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Page.Footer.Background" Color="#88141838"/>
+    <SolidColorBrush x:Key="Page.Toolbar.Background" Color="#5511152E"/>
+    <!-- an opaque page background (MCP servers paints its own) -->
+    <SolidColorBrush x:Key="Page.Background" Color="#181825"/>
+    <RadialGradientBrush x:Key="Page.Wash.Accent.2" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22A672FF" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Wash.Accent.3" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22FF5EC4" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Wash.Success" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#225CFFB0" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Wash.Warning" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#22FFD166" Offset="0"/>
+        <GradientStop Color="#06071A" Offset="1"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Shadow.Panel.Soft" BlurRadius="30" ShadowDepth="0" Color="Black" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.Card.Hover" Color="#4CDFFF" BlurRadius="14" ShadowDepth="0" Opacity="0.35"/>
+
+    <!-- Icon tiles: the gradient squares with a glyph on the page headers, list cards and detail panes
+         (named by their accent pair, start-end), the glyph on them, and their glows -->
+    <LinearGradientBrush x:Key="IconTile.Accent.1-2" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.2-1" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#A672FF" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.4-2" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF8AA6" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.4-3" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF8AA6" Offset="0"/>
+        <GradientStop Color="#FF5EC4" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.1-Success" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#4CDFFF" Offset="0"/>
+        <GradientStop Color="#5CFFB0" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Success-Accent.1" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#5CFFB0" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Warning-Accent.3" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FFD166" Offset="0"/>
+        <GradientStop Color="#FF5EC4" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="IconTile.Accent.3-Danger" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#FF6E6E" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="IconTile.Foreground" Color="White"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Accent.1" Color="#4CDFFF" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Accent.2" Color="#A672FF" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Accent.3" Color="#FF5EC4" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Success" Color="#5CFFB0" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Warning" Color="#FFD166" BlurRadius="22" ShadowDepth="0" Opacity="0.55"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Small.Accent.1" Color="#4CDFFF" BlurRadius="16" ShadowDepth="0" Opacity="0.4"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Small.Accent.3" Color="#FF5EC4" BlurRadius="16" ShadowDepth="0" Opacity="0.4"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Medium.Accent.1" Color="#4CDFFF" BlurRadius="18" ShadowDepth="0" Opacity="0.5"/>
+    <DropShadowEffect x:Key="Glow.IconTile.Large.Success" Color="#5CFFB0" BlurRadius="26" ShadowDepth="0" Opacity="0.6"/>
+
+    <!-- Action buttons of the manager pages (the header / detail-pane buttons) and their three primary looks:
+         Primary (Plugins), Accent.3 (Security shield), Success (Instincts) -->
+    <SolidColorBrush x:Key="Button.Action.Background" Color="#7028326E"/>
+    <SolidColorBrush x:Key="Button.Action.Border" Color="#A0B4FF" Opacity="0.18"/>
+    <SolidColorBrush x:Key="Button.Action.Foreground" Color="#E8ECFF"/>
+    <SolidColorBrush x:Key="Button.Action.Hover.Background" Color="#B22E3870"/>
+    <SolidColorBrush x:Key="Button.Action.Hover.Border" Color="#4CDFFF"/>
+    <LinearGradientBrush x:Key="Button.Action.Primary.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#992C5A" Offset="0"/>
+        <GradientStop Color="#5A2A99" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Button.Action.Primary.Border" Color="#FF5EC4"/>
+    <SolidColorBrush x:Key="Button.Action.Primary.Foreground" Color="White"/>
+    <DropShadowEffect x:Key="Glow.Button.Action.Primary" Color="#FF5EC4" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+    <LinearGradientBrush x:Key="Button.Action.Accent.3.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5EC4" Offset="0"/>
+        <GradientStop Color="#A672FF" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.Button.Action.Accent.3" Color="#FF5EC4" BlurRadius="18" ShadowDepth="0" Opacity="0.5"/>
+    <LinearGradientBrush x:Key="Button.Action.Success.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#5CFFB0" Offset="0"/>
+        <GradientStop Color="#4CDFFF" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Button.Action.Success.Border" Color="#5CFFB0"/>
+    <SolidColorBrush x:Key="Button.Action.Success.Foreground" Color="#06071A"/>
+    <DropShadowEffect x:Key="Glow.Button.Action.Success" Color="#5CFFB0" BlurRadius="18" ShadowDepth="0" Opacity="0.45"/>
+
+    <!-- Settings: the category list on the left -->
+    <SolidColorBrush x:Key="SettingsNav.Foreground" Color="#C0C6EE"/>
+    <SolidColorBrush x:Key="SettingsNav.Hover.Background" Color="#1428326E"/>
+    <SolidColorBrush x:Key="SettingsNav.Selected.Background" Color="#2A4CDFFF"/>
+    <SolidColorBrush x:Key="SettingsNav.Selected.Foreground" Color="#E8ECFF"/>
+    <SolidColorBrush x:Key="SettingsNav.Indicator" Color="#4CDFFF"/>
+
+    <!-- Fills: a recessed well (filter box, switch track), fainter tints, a neutral (offline) chip, a caution tint -->
+    <SolidColorBrush x:Key="Surface.Inset" Color="#22000000"/>
+    <SolidColorBrush x:Key="Status.Success.Tint.Faint" Color="#1A5CFFB0"/>
+    <SolidColorBrush x:Key="Status.Neutral.Tint" Color="#1A8388BD"/>
+    <SolidColorBrush x:Key="Status.Neutral.Border" Color="#558388BD"/>
+    <SolidColorBrush x:Key="Status.Caution.Tint" Color="#44FAB387"/>
+
+    <!-- Features › activation: the tier badge of an activated key -->
+    <LinearGradientBrush x:Key="License.Tier.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#A6E3A1" Offset="0"/>
+        <GradientStop Color="#94E2D5" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="License.Tier.Foreground" Color="#1E1E2E"/>
+
+    <!-- Model manager: quantization / size / installed badges and the hardware-fit tiers of a catalogue card -->
+    <SolidColorBrush x:Key="Badge.Quant.Background" Color="#CBA6F7" Opacity="0.15"/>
+    <SolidColorBrush x:Key="Badge.Size.Background" Color="#94E2D5" Opacity="0.15"/>
+    <SolidColorBrush x:Key="Badge.Installed.Background" Color="#A6E3A1" Opacity="0.15"/>
+    <SolidColorBrush x:Key="Fit.Excellent.Tint" Color="#A6E3A1" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.Good.Tint" Color="#94E2D5" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.Partial.Tint" Color="#F9E2AF" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.Poor.Tint" Color="#FAB387" Opacity="0.2"/>
+    <SolidColorBrush x:Key="Fit.TooLarge.Tint" Color="#F38BA8" Opacity="0.2"/>
+
+    <!-- Dark text on a solid status-coloured pill: MCP server state (running / stopped …) and the permission rule
+         action (allow / deny / ask) -->
+    <SolidColorBrush x:Key="Badge.Status.Foreground" Color="#06071A"/>
+    <SolidColorBrush x:Key="Badge.Rule.Foreground" Color="#0F1230"/>
+    <!-- Model manager star rating. It never had a colour, so Midnight keeps the system black it always showed
+         (dark on navy — a candidate to fix once the owner accepts a new golden) -->
+    <SolidColorBrush x:Key="Rating.Star" Color="Black"/>
+
+    <!-- "Plain" controls: buttons, toggles, a text box and list rows that used to get the WINDOWS (Aero2) template,
+         which paints its own greys and blues whatever the theme says (Settings › Show key, Model manager list/grid
+         switch, the Copy buttons, Hook library filter, Settings › memories list). They now have their own templates
+         of the same shape; Midnight keeps exactly the Windows colours it always showed. -->
+    <SolidColorBrush x:Key="Button.Plain.Background" Color="#DDDDDD"/>
+    <SolidColorBrush x:Key="Button.Plain.Border" Color="#707070"/>
+    <SolidColorBrush x:Key="Button.Plain.Foreground" Color="Black"/>
+    <SolidColorBrush x:Key="Button.Plain.Hover.Background" Color="#BEE6FD"/>
+    <SolidColorBrush x:Key="Button.Plain.Hover.Border" Color="#3C7FB1"/>
+    <SolidColorBrush x:Key="Button.Plain.Pressed.Background" Color="#C4E5F6"/>
+    <SolidColorBrush x:Key="Button.Plain.Pressed.Border" Color="#2C628B"/>
+    <SolidColorBrush x:Key="Button.Plain.Checked.Background" Color="#BCDDEE"/>
+    <SolidColorBrush x:Key="Button.Plain.Checked.Border" Color="#245A83"/>
+    <SolidColorBrush x:Key="Input.Plain.Hover.Border" Color="#7EB4EA"/>
+    <SolidColorBrush x:Key="Input.Plain.Focus.Border" Color="#569DE5"/>
+    <SolidColorBrush x:Key="ListRow.Hover.Background" Color="#1F26A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Hover.Border" Color="#A826A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Background" Color="#3D26A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Border" Color="#26A0DA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Inactive.Background" Color="#3DDADADA"/>
+    <SolidColorBrush x:Key="ListRow.Selected.Inactive.Border" Color="#DADADA"/>
 
     <!-- ═════════════════════════════════════ 3. LEGACY PALETTE ═════════════════════════════════════ -->
-    <!-- Moved here verbatim from Resources/Theme.xaml. Views still use these with StaticResource; the
-         converter teams replace them with the tokens above (Tokens.md has the mapping). -->
+    <!-- The keys views not converted yet still use with StaticResource. Each one holds the Neon Cyber value of
+         the token it maps to in Tokens.md, so an unconverted page already looks like this theme when it is
+         built, and converting it later changes nothing on screen. -->
 
-    <!-- NEON RGB GLOW PALETTE (Time Machine / ClaudeX IDE) -->
-    <Color x:Key="NeonBg0">#06071A</Color>
-    <Color x:Key="NeonBg1">#0A0C22</Color>
-    <Color x:Key="NeonBg2">#0F1230</Color>
-    <Color x:Key="NeonPanelSolid">#11152E</Color>
+    <!-- NEON RGB GLOW PALETTE (Time Machine / ClaudeX IDE). Names are historical: NeonViolet = Accent.2
+         (magenta here), NeonMagenta = Accent.3 (violet here), NeonMint = Status.Success (lime here). -->
+    <Color x:Key="NeonBg0">#070812</Color>
+    <Color x:Key="NeonBg1">#090C1C</Color>
+    <Color x:Key="NeonBg2">#0E1228</Color>
+    <Color x:Key="NeonPanelSolid">#0B0F22</Color>
 
-    <Color x:Key="NeonInk0">#E8ECFF</Color>
-    <Color x:Key="NeonInk1">#C0C6EE</Color>
-    <Color x:Key="NeonInk2">#8388BD</Color>
-    <Color x:Key="NeonInk3">#555A8C</Color>
+    <Color x:Key="NeonInk0">#E6F1FF</Color>
+    <Color x:Key="NeonInk1">#B9C4E8</Color>
+    <Color x:Key="NeonInk2">#8692C2</Color>
+    <Color x:Key="NeonInk3">#7682B2</Color>
 
-    <Color x:Key="NeonCyan">#4CDFFF</Color>
-    <Color x:Key="NeonBlue">#5A8DFF</Color>
-    <Color x:Key="NeonViolet">#A672FF</Color>
-    <Color x:Key="NeonMagenta">#FF5EC4</Color>
-    <Color x:Key="NeonPink">#FF8AA6</Color>
-    <Color x:Key="NeonMint">#5CFFB0</Color>
-    <Color x:Key="NeonAmber">#FFD166</Color>
-    <Color x:Key="NeonRed">#FF6E6E</Color>
+    <Color x:Key="NeonCyan">#00E5FF</Color>
+    <Color x:Key="NeonBlue">#3DA5FF</Color>
+    <Color x:Key="NeonViolet">#FF2BD6</Color>
+    <Color x:Key="NeonMagenta">#B45CFF</Color>
+    <Color x:Key="NeonPink">#FF8AE9</Color>
+    <Color x:Key="NeonMint">#A6FF00</Color>
+    <Color x:Key="NeonAmber">#FFB000</Color>
+    <Color x:Key="NeonRed">#FF5C7A</Color>
 
     <SolidColorBrush x:Key="NeonBg0Brush" Color="{StaticResource NeonBg0}"/>
     <SolidColorBrush x:Key="NeonBg1Brush" Color="{StaticResource NeonBg1}"/>
@@ -602,28 +852,27 @@
     <SolidColorBrush x:Key="NeonMintGlowBrush" Color="{StaticResource NeonMint}" Opacity="0.6"/>
 
     <LinearGradientBrush x:Key="NeonPanelFill" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#C8141838" Offset="0"/>
-        <GradientStop Color="#BC0C0E26" Offset="1"/>
+        <GradientStop Color="#EB0E1228" Offset="0"/>
+        <GradientStop Color="#EB080A18" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="NeonCardFill" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#9E1C2044" Offset="0"/>
-        <GradientStop Color="#9E0E122C" Offset="1"/>
+        <GradientStop Color="#D90D1128" Offset="0"/>
+        <GradientStop Color="#D9080B1A" Offset="1"/>
     </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="NeonSpineGradient" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="{StaticResource NeonCyan}" Offset="0"/>
-        <GradientStop Color="{StaticResource NeonViolet}" Offset="0.4"/>
-        <GradientStop Color="{StaticResource NeonMagenta}" Offset="0.75"/>
-        <GradientStop Color="{StaticResource NeonMint}" Offset="1"/>
+        <GradientStop Color="{StaticResource NeonMint}" Offset="0"/>
+        <GradientStop Color="{StaticResource NeonCyan}" Offset="0.45"/>
+        <GradientStop Color="{StaticResource NeonViolet}" Offset="1"/>
     </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="NeonRewindGradient" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#992C5A" Offset="0"/>
-        <GradientStop Color="#5A2A99" Offset="1"/>
+        <GradientStop Color="#C8129E" Offset="0"/>
+        <GradientStop Color="#7A1FD6" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="NeonRewindHover" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#B7367A" Offset="0"/>
-        <GradientStop Color="#7036C2" Offset="1"/>
+        <GradientStop Color="#E21AB4" Offset="0"/>
+        <GradientStop Color="#912EF0" Offset="1"/>
     </LinearGradientBrush>
 
     <LinearGradientBrush x:Key="NeonAvatarAi" StartPoint="0,0" EndPoint="1,1">
@@ -635,44 +884,45 @@
         <GradientStop Color="{StaticResource NeonMint}" Offset="1"/>
     </LinearGradientBrush>
 
-    <SolidColorBrush x:Key="NeonLineBrush" Color="#8CA0F0" Opacity="0.08"/>
-    <SolidColorBrush x:Key="NeonLineHiBrush" Color="#A0B4FF" Opacity="0.18"/>
+    <SolidColorBrush x:Key="NeonLineBrush" Color="#00E5FF" Opacity="0.16"/>
+    <SolidColorBrush x:Key="NeonLineHiBrush" Color="#00E5FF" Opacity="0.32"/>
 
-    <DropShadowEffect x:Key="NeonGlowCyan" Color="{StaticResource NeonCyan}" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="NeonGlowViolet" Color="{StaticResource NeonViolet}" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="NeonGlowMagenta" Color="{StaticResource NeonMagenta}" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="NeonGlowMint" Color="{StaticResource NeonMint}" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
-    <DropShadowEffect x:Key="NeonPanelShadow" BlurRadius="40" ShadowDepth="0" Color="Black" Opacity="0.6"/>
+    <DropShadowEffect x:Key="NeonGlowCyan" Color="{StaticResource NeonCyan}" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="NeonGlowViolet" Color="{StaticResource NeonViolet}" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="NeonGlowMagenta" Color="{StaticResource NeonMagenta}" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="NeonGlowMint" Color="{StaticResource NeonMint}" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <DropShadowEffect x:Key="NeonPanelShadow" BlurRadius="40" ShadowDepth="0" Color="Black" Opacity="0.7"/>
 
-    <FontFamily x:Key="NeonUiFont">Space Grotesk, Segoe UI, Arial</FontFamily>
-    <FontFamily x:Key="NeonMonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
+    <FontFamily x:Key="NeonUiFont">Chakra Petch, Bahnschrift, Leelawadee UI, Segoe UI, Arial</FontFamily>
+    <FontFamily x:Key="NeonMonoFont">JetBrains Mono, Cascadia Mono, Cascadia Code, Consolas</FontFamily>
 
-    <!-- CATPPUCCIN MOCHA COLOR PALETTE -->
-    <Color x:Key="CrustColor">#11111B</Color>
-    <Color x:Key="MantleColor">#181825</Color>
-    <Color x:Key="BaseColor">#1E1E2E</Color>
-    <Color x:Key="Surface0Color">#313244</Color>
-    <Color x:Key="Surface1Color">#45475A</Color>
-    <Color x:Key="Surface2Color">#585B70</Color>
-    <Color x:Key="Overlay0Color">#6C7086</Color>
-    <Color x:Key="Overlay1Color">#7F849C</Color>
-    <Color x:Key="Subtext0Color">#A6ADC8</Color>
-    <Color x:Key="Subtext1Color">#BAC2DE</Color>
-    <Color x:Key="TextColor">#CDD6F4</Color>
-    <Color x:Key="BlueColor">#89B4FA</Color>
-    <Color x:Key="LavenderColor">#B4BEFE</Color>
-    <Color x:Key="SapphireColor">#74C7EC</Color>
-    <Color x:Key="SkyColor">#89DCFE</Color>
-    <Color x:Key="TealColor">#94E2D5</Color>
-    <Color x:Key="GreenColor">#A6E3A1</Color>
-    <Color x:Key="YellowColor">#F9E2AF</Color>
-    <Color x:Key="PeachColor">#FAB387</Color>
-    <Color x:Key="MaroonColor">#EBA0AC</Color>
-    <Color x:Key="RedColor">#F38BA8</Color>
-    <Color x:Key="MauveColor">#CBA6F7</Color>
-    <Color x:Key="PinkColor">#F5C2E7</Color>
-    <Color x:Key="RosewaterColor">#F5E0DC</Color>
-    <Color x:Key="FlamColor">#F2CDCD</Color>
+    <!-- CATPPUCCIN MOCHA COLOR PALETTE → Neon Cyber equivalents (the app-level roles in Tokens.md: dialogs
+         without a local override block read these — Base = dialog background, Text = body text, …) -->
+    <Color x:Key="CrustColor">#04050C</Color>
+    <Color x:Key="MantleColor">#070812</Color>
+    <Color x:Key="BaseColor">#0B0F22</Color>
+    <Color x:Key="Surface0Color">#111633</Color>
+    <Color x:Key="Surface1Color">#1E4A5C</Color>
+    <Color x:Key="Surface2Color">#2C8A9E</Color>
+    <Color x:Key="Overlay0Color">#8692C2</Color>
+    <Color x:Key="Overlay1Color">#9AA6D0</Color>
+    <Color x:Key="Subtext0Color">#A9B4DC</Color>
+    <Color x:Key="Subtext1Color">#C8D2F0</Color>
+    <Color x:Key="TextColor">#E6F1FF</Color>
+    <Color x:Key="BlueColor">#00E5FF</Color>
+    <Color x:Key="LavenderColor">#FF8AE9</Color>
+    <Color x:Key="SapphireColor">#3DA5FF</Color>
+    <Color x:Key="SkyColor">#7DF4FF</Color>
+    <Color x:Key="TealColor">#2EF2C8</Color>
+    <Color x:Key="GreenColor">#A6FF00</Color>
+    <Color x:Key="YellowColor">#FFD27A</Color>
+    <Color x:Key="PeachColor">#FF9F5A</Color>
+    <Color x:Key="MaroonColor">#FF7A9C</Color>
+    <Color x:Key="RedColor">#FF5C7A</Color>
+    <Color x:Key="MauveColor">#FF2BD6</Color>
+    <Color x:Key="PinkColor">#FF8AE9</Color>
+    <Color x:Key="RosewaterColor">#FFD6F5</Color>
+    <Color x:Key="FlamColor">#FFC2E6</Color>
 
     <SolidColorBrush x:Key="CrustBrush" Color="{StaticResource CrustColor}"/>
     <SolidColorBrush x:Key="MantleBrush" Color="{StaticResource MantleColor}"/>
@@ -700,73 +950,67 @@
     <SolidColorBrush x:Key="MaroonBrush" Color="{StaticResource MaroonColor}"/>
     <SolidColorBrush x:Key="FlamBrush" Color="{StaticResource FlamColor}"/>
 
-    <!-- 3D METALLIC GRADIENT BRUSHES -->
-    <LinearGradientBrush x:Key="MetalSurface0" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#3A3A50" Offset="0"/>
-        <GradientStop Color="#2D2D42" Offset="0.4"/>
-        <GradientStop Color="#282838" Offset="1"/>
+    <!-- 3D METALLIC GRADIENT BRUSHES → the Neon Cyber value of the token each one maps to (Tokens.md) -->
+    <LinearGradientBrush x:Key="MetalSurface0" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#2600E5FF" Offset="0"/>
+        <GradientStop Color="#1400E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="MetalSurface1" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#4E4E68" Offset="0"/>
-        <GradientStop Color="#3E3E55" Offset="0.5"/>
-        <GradientStop Color="#353548" Offset="1"/>
+    <LinearGradientBrush x:Key="MetalSurface1" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#2E00E5FF" Offset="0"/>
+        <GradientStop Color="#1200E5FF" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MetalBlueButton" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#A3C5FF" Offset="0"/>
-        <GradientStop Color="#89B4FA" Offset="0.35"/>
-        <GradientStop Color="#6E9AE8" Offset="0.85"/>
-        <GradientStop Color="#5A87D8" Offset="1"/>
+        <GradientStop Color="#52FF2BD6" Offset="0"/>
+        <GradientStop Color="#38FF2BD6" Offset="0.5"/>
+        <GradientStop Color="#2EFF2BD6" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MetalBlueHover" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#C5D6FF" Offset="0"/>
-        <GradientStop Color="#B4BEFE" Offset="0.35"/>
-        <GradientStop Color="#89A8F0" Offset="0.85"/>
-        <GradientStop Color="#7A99E8" Offset="1"/>
+        <GradientStop Color="#80FF2BD6" Offset="0"/>
+        <GradientStop Color="#5CFF2BD6" Offset="0.5"/>
+        <GradientStop Color="#4DFF2BD6" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MetalSecondary" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#42425A" Offset="0"/>
-        <GradientStop Color="#353548" Offset="0.5"/>
-        <GradientStop Color="#2E2E40" Offset="1"/>
+        <GradientStop Color="#F0111633" Offset="0"/>
+        <GradientStop Color="#F00C1026" Offset="0.5"/>
+        <GradientStop Color="#F0090C1C" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MetalSecondaryHover" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#545470" Offset="0"/>
-        <GradientStop Color="#454560" Offset="0.5"/>
-        <GradientStop Color="#3A3A50" Offset="1"/>
+        <GradientStop Color="#F0251A44" Offset="0"/>
+        <GradientStop Color="#F01A1436" Offset="0.5"/>
+        <GradientStop Color="#F013102A" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MetalCard" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#383850" Offset="0"/>
-        <GradientStop Color="#313244" Offset="0.15"/>
-        <GradientStop Color="#2C2C3E" Offset="0.95"/>
-        <GradientStop Color="#272738" Offset="1"/>
+        <GradientStop Color="#EB10152E" Offset="0"/>
+        <GradientStop Color="#EB0C1026" Offset="0.15"/>
+        <GradientStop Color="#EB090C1C" Offset="0.95"/>
+        <GradientStop Color="#EB080A18" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MetalSidebar" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#1E1E30" Offset="0"/>
-        <GradientStop Color="#181825" Offset="0.3"/>
-        <GradientStop Color="#151520" Offset="1"/>
+        <GradientStop Color="#0B0F22" Offset="0"/>
+        <GradientStop Color="#090C1C" Offset="0.3"/>
+        <GradientStop Color="#070812" Offset="1"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="NavAccentGlow" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#89B4FA" Offset="0"/>
-        <GradientStop Color="#B4BEFE" Offset="0.5"/>
-        <GradientStop Color="#CBA6F7" Offset="1"/>
+    <LinearGradientBrush x:Key="NavAccentGlow" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#FF2BD6" Offset="0.5"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="NavCheckedFill" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#2E3A5C" Offset="0"/>
-        <GradientStop Color="#33305A" Offset="0.5"/>
-        <GradientStop Color="#3C2A5A" Offset="1"/>
+    <LinearGradientBrush x:Key="NavCheckedFill" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#33FF2BD6" Offset="0"/>
+        <GradientStop Color="#14FF2BD6" Offset="1"/>
     </LinearGradientBrush>
-    <LinearGradientBrush x:Key="NavHoverFill" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#2A2A40" Offset="0"/>
-        <GradientStop Color="#30304A" Offset="0.5"/>
-        <GradientStop Color="#2F2E48" Offset="1"/>
+    <LinearGradientBrush x:Key="NavHoverFill" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#1F00E5FF" Offset="0"/>
+        <GradientStop Color="#0D00E5FF" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="NavIconBubble" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#89B4FA" Offset="0"/>
-        <GradientStop Color="#CBA6F7" Offset="1"/>
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="MenuHeaderFill" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#1E1E34" Offset="0"/>
-        <GradientStop Color="#26263E" Offset="0.5"/>
-        <GradientStop Color="#1E1E34" Offset="1"/>
+        <GradientStop Color="#0B0F22" Offset="0"/>
+        <GradientStop Color="#0E1A30" Offset="0.5"/>
+        <GradientStop Color="#0B0F22" Offset="1"/>
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="1,0">
         <GradientStop Color="{StaticResource BlueColor}" Offset="0"/>
@@ -781,14 +1025,250 @@
         <GradientStop Color="{StaticResource PinkColor}" Offset="1"/>
     </LinearGradientBrush>
 
-    <DropShadowEffect x:Key="CardShadow" BlurRadius="16" ShadowDepth="4"
-                      Direction="270" Color="#0A0A14" Opacity="0.6"/>
-    <DropShadowEffect x:Key="ButtonShadow" BlurRadius="8" ShadowDepth="2"
-                      Direction="270" Color="#0A0A14" Opacity="0.5"/>
-    <DropShadowEffect x:Key="PopupShadow" BlurRadius="24" ShadowDepth="8"
-                      Direction="270" Color="#08080F" Opacity="0.7"/>
+    <DropShadowEffect x:Key="CardShadow" BlurRadius="14" ShadowDepth="0"
+                      Color="#00E5FF" Opacity="0.22"/>
+    <DropShadowEffect x:Key="ButtonShadow" BlurRadius="12" ShadowDepth="0"
+                      Color="#FF2BD6" Opacity="0.4"/>
+    <DropShadowEffect x:Key="PopupShadow" BlurRadius="22" ShadowDepth="0"
+                      Color="#00E5FF" Opacity="0.35"/>
 
-    <FontFamily x:Key="MainFont">Segoe UI, Arial</FontFamily>
-    <FontFamily x:Key="MonoFont">Cascadia Code, Consolas, Courier New</FontFamily>
+    <FontFamily x:Key="MainFont">Chakra Petch, Bahnschrift, Leelawadee UI, Segoe UI, Arial</FontFamily>
+    <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas, Courier New</FontFamily>
+
+    <!-- ══════ GROUP C ADDITIONS (tool pages, dialogs, preview, chat roles + markdown, diffs) ══════ -->
+    <!-- Neon Cyber LED: cyan / lime / magenta LED values for the Group C tokens, from the approved NeonMain.dc.html. -->
+
+    <!-- Dialogs (License, BrainX invite, DGX Spark, the code-built input dialog) -->
+    <LinearGradientBrush x:Key="Dialog.Background" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#F70E1228" Offset="0"/>
+        <GradientStop Color="#F7070812" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Dialog.Background.Brainx" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#F7180E2C" Offset="0"/>
+        <GradientStop Color="#F7070812" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Dialog.Background.Spark" StartPoint="0,0" EndPoint="0.4,1">
+        <GradientStop Color="#F70C1A0A" Offset="0"/>
+        <GradientStop Color="#F7070812" Offset="0.55"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Dialog.Border" Color="#8000E5FF"/>
+    <SolidColorBrush x:Key="Dialog.Border.Spark" Color="#8CA6FF00"/>
+    <DropShadowEffect x:Key="Shadow.Dialog" Color="#00E5FF" BlurRadius="24" ShadowDepth="0" Opacity="0.35"/>
+    <SolidColorBrush x:Key="Dialog.Card.Background" Color="#0A00E5FF"/>
+    <SolidColorBrush x:Key="Dialog.Card.Border" Color="#4000E5FF"/>
+    <SolidColorBrush x:Key="Dialog.Input.Background" Color="#0A0E22"/>
+    <SolidColorBrush x:Key="Dialog.Input.Border" Color="#8C00E5FF"/>
+    <SolidColorBrush x:Key="Dialog.Input.Border.Spark" Color="#8CA6FF00"/>
+    <SolidColorBrush x:Key="Dialog.Simple.Background" Color="#0E1228"/>
+    <SolidColorBrush x:Key="Dialog.Simple.Field" Color="#0A0E22"/>
+    <SolidColorBrush x:Key="Dialog.Simple.Border" Color="#8000E5FF"/>
+    <DropShadowEffect x:Key="Shadow.Dialog.Simple" Color="#00E5FF" BlurRadius="20" ShadowDepth="0" Opacity="0.3"/>
+    <LinearGradientBrush x:Key="License.Avatar.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#8A2BE2" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.License.Avatar" Color="#FF2BD6" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <SolidColorBrush x:Key="License.Plan.Best.Background" Color="#1FFF2BD6"/>
+    <SolidColorBrush x:Key="Button.Caution.Background" Color="#33FFB000"/>
+    <DropShadowEffect x:Key="Glow.Brainx.Avatar" Color="#FF2BD6" BlurRadius="20" ShadowDepth="0" Opacity="0.6"/>
+    <LinearGradientBrush x:Key="Spark.Avatar.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#C8FF6B" Offset="0"/>
+        <GradientStop Color="#4F8A00" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Spark.Avatar.Foreground" Color="#071000"/>
+    <DropShadowEffect x:Key="Glow.Spark.Avatar" Color="#A6FF00" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <SolidColorBrush x:Key="Spark.Card.Active.Background" Color="#1AA6FF00"/>
+    <LinearGradientBrush x:Key="Spark.Campaign.Background" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#1FFFB000" Offset="0"/>
+        <GradientStop Color="#0FA6FF00" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="Spark.Campaign.Border" Color="#99FFB000"/>
+
+    <!-- Tool pages (Debug Log, Hex Editor, Time Machine): backdrop, header strip, toolbars, the page icon tile -->
+    <RadialGradientBrush x:Key="Page.Backdrop.DebugLog" Center="0.5,0" RadiusX="0.7" RadiusY="0.55">
+        <GradientStop Color="#1AFF5C7A" Offset="0"/>
+        <GradientStop Color="#070812" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Backdrop.HexEditor" Center="0.5,0" RadiusX="0.7" RadiusY="0.6">
+        <GradientStop Color="#1400E5FF" Offset="0"/>
+        <GradientStop Color="#070812" Offset="1"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="Page.Backdrop.TimeMachine" Center="0.5,0" RadiusX="0.8" RadiusY="0.6">
+        <GradientStop Color="#22FF2BD6" Offset="0"/>
+        <GradientStop Color="#070812" Offset="1"/>
+    </RadialGradientBrush>
+    <SolidColorBrush x:Key="Page.Strip.Background" Color="#800B0F22"/>
+    <SolidColorBrush x:Key="Page.StatusBar.Background" Color="#05060F"/>
+    <LinearGradientBrush x:Key="PageIcon.DebugLog.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF5C7A" Offset="0"/>
+        <GradientStop Color="#FF2BD6" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.PageIcon.DebugLog" Color="#FF5C7A" BlurRadius="20" ShadowDepth="0" Opacity="0.7"/>
+    <LinearGradientBrush x:Key="PageIcon.HexEditor.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#00E5FF" Offset="0"/>
+        <GradientStop Color="#0077FF" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.PageIcon.HexEditor" Color="#00E5FF" BlurRadius="18" ShadowDepth="0" Opacity="0.7"/>
+    <LinearGradientBrush x:Key="PageIcon.TimeMachine.Background" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#8A2BE2" Offset="1"/>
+    </LinearGradientBrush>
+    <RadialGradientBrush x:Key="PageIcon.TimeMachine.Halo">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#8A2BE2" Offset="0.5"/>
+        <GradientStop Color="Transparent" Offset="1"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Glow.PageIcon.TimeMachine" Color="#FF2BD6" BlurRadius="20" ShadowDepth="0" Opacity="0.7"/>
+
+    <!-- Buttons of the tool pages: glass (neutral), ghost (toolbar pill), accent (the magenta call to action) -->
+    <SolidColorBrush x:Key="Button.Glass.Background" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="Button.Glass.Hover.Background" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="Button.Glass.Border" Color="#6600E5FF"/>
+    <SolidColorBrush x:Key="Button.Glass.Hover.Border" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Button.Glass.Foreground" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Button.Ghost.Background" Color="#0D00E5FF"/>
+    <SolidColorBrush x:Key="Button.Ghost.Hover.Background" Color="#2600E5FF"/>
+    <SolidColorBrush x:Key="Button.Accent.Background" Color="#2EFF2BD6"/>
+    <SolidColorBrush x:Key="Button.Accent.Hover.Background" Color="#4DFF2BD6"/>
+    <SolidColorBrush x:Key="Button.Accent.Border" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Button.Accent.Foreground" Color="#FFFFFF"/>
+    <DropShadowEffect x:Key="Glow.Button.Accent" Color="#FF2BD6" BlurRadius="18" ShadowDepth="0" Opacity="0.6"/>
+
+    <!-- Lists, chips, scrims -->
+    <SolidColorBrush x:Key="List.Row.Background" Color="#0800E5FF"/>
+    <SolidColorBrush x:Key="List.Row.Selected.Background" Color="#3300E5FF"/>
+    <SolidColorBrush x:Key="List.Header.Divider" Color="#6600E5FF"/>
+    <SolidColorBrush x:Key="Surface.Badge.Subtle" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="Text.OnStatus" Color="#05060F"/>
+    <SolidColorBrush x:Key="Accent.2.Border.Strong" Color="#99FF2BD6"/>
+    <SolidColorBrush x:Key="Bg.Scrim.Dialog" Color="#CC05060F"/>
+    <SolidColorBrush x:Key="Bg.Scrim.Busy" Color="#E605060F"/>
+
+    <!-- Diffs (Time Machine diff lines), git status (source control list), commit avatars -->
+    <SolidColorBrush x:Key="Diff.Added" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Diff.Deleted" Color="#FF5C7A"/>
+    <SolidColorBrush x:Key="Diff.Hunk" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Diff.Context" Color="#B9C4E8"/>
+    <SolidColorBrush x:Key="Diff.Added.Background" Color="#1AA6FF00"/>
+    <SolidColorBrush x:Key="Diff.Deleted.Background" Color="#1AFF5C7A"/>
+    <SolidColorBrush x:Key="Diff.Hunk.Background" Color="#1400E5FF"/>
+    <SolidColorBrush x:Key="Git.Added" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Git.Deleted" Color="#FF5C7A"/>
+    <SolidColorBrush x:Key="Git.Renamed" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Git.Modified" Color="#FFB000"/>
+    <LinearGradientBrush x:Key="Avatar.Ai" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="Avatar.Human" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#00E5FF" Offset="0"/>
+        <GradientStop Color="#A6FF00" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Chat message roles (RoleToBrush / RoleToBackground converters) -->
+    <SolidColorBrush x:Key="Role.User" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Role.Assistant" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Role.Exec" Color="#FFB000"/>
+    <SolidColorBrush x:Key="Role.Tool" Color="#7DF4FF"/>
+    <SolidColorBrush x:Key="Role.System" Color="#FF8AE9"/>
+    <SolidColorBrush x:Key="Role.Status" Color="#7C88B8"/>
+    <SolidColorBrush x:Key="Role.Default" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Role.User.Background" Color="#1200E5FF"/>
+    <SolidColorBrush x:Key="Role.Assistant.Background" Color="#B30A0E20"/>
+    <SolidColorBrush x:Key="Role.Exec.Background" Color="#14FFB000"/>
+    <SolidColorBrush x:Key="Role.Tool.Background" Color="#0F7DF4FF"/>
+    <SolidColorBrush x:Key="Role.Status.Background" Color="#80070812"/>
+
+    <!-- Chat markdown (Helpers/MarkdownHelper): text, headings, quotes, tables, code blocks and their syntax colours -->
+    <SolidColorBrush x:Key="Markdown.Text" Color="#D5DEFA"/>
+    <SolidColorBrush x:Key="Markdown.Muted" Color="#7C88B8"/>
+    <SolidColorBrush x:Key="Markdown.Heading" Color="#FF8AE9"/>
+    <SolidColorBrush x:Key="Markdown.Heading.Minor" Color="#7DF4FF"/>
+    <SolidColorBrush x:Key="Markdown.Emphasis" Color="#E6F1FF"/>
+    <SolidColorBrush x:Key="Markdown.Link" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Markdown.Rule" Color="#4000E5FF"/>
+    <SolidColorBrush x:Key="Markdown.Quote.Background" Color="#B30A0E20"/>
+    <SolidColorBrush x:Key="Markdown.Quote.Border" Color="#8000E5FF"/>
+    <SolidColorBrush x:Key="Markdown.Code" Color="#7DF4FF"/>
+    <SolidColorBrush x:Key="Markdown.Code.Background" Color="#0B0F22"/>
+    <SolidColorBrush x:Key="Markdown.Border" Color="#4000E5FF"/>
+    <SolidColorBrush x:Key="Markdown.CodeBlock.Background" Color="#05060F"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Added" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Added.Background" Color="#1AA6FF00"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Deleted" Color="#FF5C7A"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Deleted.Background" Color="#1AFF5C7A"/>
+    <SolidColorBrush x:Key="Markdown.Diff.Hunk" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Text" Color="#D5DEFA"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Comment" Color="#5E6A94"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.String" Color="#A6FF00"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Number" Color="#FFB000"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Keyword" Color="#FF2BD6"/>
+    <SolidColorBrush x:Key="Markdown.Syntax.Type" Color="#00E5FF"/>
+
+    <!-- Time Machine: commit spheres, the timeline spine, the rewind beam and overlay -->
+    <RadialGradientBrush x:Key="TimeMachine.Halo.Ai">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="0.7"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="TimeMachine.Halo.Human">
+        <GradientStop Color="#00E5FF" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="0.7"/>
+    </RadialGradientBrush>
+    <RadialGradientBrush x:Key="TimeMachine.Sphere.Ai" Center="0.28,0.28" RadiusX="0.75" RadiusY="0.75">
+        <GradientStop Color="#FFFFFF" Offset="0"/>
+        <GradientStop Color="#FF2BD6" Offset="0.4"/>
+        <GradientStop Color="#6A0F5A" Offset="1"/>
+    </RadialGradientBrush>
+    <SolidColorBrush x:Key="TimeMachine.Sphere.Ai.Stroke" Color="#FF2BD6"/>
+    <RadialGradientBrush x:Key="TimeMachine.Sphere.Human" Center="0.28,0.28" RadiusX="0.75" RadiusY="0.75">
+        <GradientStop Color="#FFFFFF" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="0.4"/>
+        <GradientStop Color="#005F6E" Offset="1"/>
+    </RadialGradientBrush>
+    <SolidColorBrush x:Key="TimeMachine.Sphere.Human.Stroke" Color="#00E5FF"/>
+    <SolidColorBrush x:Key="TimeMachine.Highlight" Color="#80FFFFFF"/>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Head" Color="#A6FF00" BlurRadius="14" ShadowDepth="0" Opacity="0.9"/>
+    <LinearGradientBrush x:Key="TimeMachine.Spine" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#A6FF00" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="0.5"/>
+        <GradientStop Color="#FF2BD6" Offset="1"/>
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="TimeMachine.Beam" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="Transparent" Offset="0"/>
+        <GradientStop Color="#FF2BD6" Offset="0.4"/>
+        <GradientStop Color="#00E5FF" Offset="0.5"/>
+        <GradientStop Color="#FF2BD6" Offset="0.6"/>
+        <GradientStop Color="Transparent" Offset="1"/>
+    </LinearGradientBrush>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Beam" Color="#FF2BD6" BlurRadius="40" ShadowDepth="0" Opacity="0.9"/>
+    <RadialGradientBrush x:Key="TimeMachine.CornerGlow">
+        <GradientStop Color="#3CFF2BD6" Offset="0"/>
+        <GradientStop Color="Transparent" Offset="0.6"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Avatar" Color="#FF2BD6" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Rewind" Color="#FF2BD6" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+    <DropShadowEffect x:Key="Glow.Accent.3.Small" Color="#FF2BD6" BlurRadius="10" ShadowDepth="0" Opacity="0.9"/>
+    <RadialGradientBrush x:Key="TimeMachine.Rewind.Orb">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#8A2BE2" Offset="1"/>
+    </RadialGradientBrush>
+    <DropShadowEffect x:Key="Glow.TimeMachine.Rewind.Orb" Color="#FF2BD6" BlurRadius="44" ShadowDepth="0" Opacity="0.9"/>
+    <LinearGradientBrush x:Key="TimeMachine.Rewind.Title" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#FF2BD6" Offset="0"/>
+        <GradientStop Color="#00E5FF" Offset="1"/>
+    </LinearGradientBrush>
+
+    <!-- Preview pane (built-in browser): toolbar, origin badges, the web-page canvas -->
+    <SolidColorBrush x:Key="Preview.Toolbar.Background" Color="#F20B0F22"/>
+    <SolidColorBrush x:Key="Preview.Badge.Local.Background" Color="#33A6FF00"/>
+    <SolidColorBrush x:Key="Preview.Badge.External.Background" Color="#40FFB000"/>
+    <SolidColorBrush x:Key="Preview.Driving.Background" Color="#33FFB000"/>
+    <SolidColorBrush x:Key="Preview.Page.Button.Background" Color="#2600E5FF"/>
+    <SolidColorBrush x:Key="Preview.Page.Button.Hover.Background" Color="#4000E5FF"/>
+    <SolidColorBrush x:Key="Preview.Page.Background" Color="White"/>
+    <SolidColorBrush x:Key="Preview.Page.Foreground" Color="#30344A"/>
+    <SolidColorBrush x:Key="Preview.Page.Muted" Color="#60657A"/>
+    <SolidColorBrush x:Key="Preview.Page.Icon" Color="#9098B0"/>
+    <!-- ══════ END GROUP C ADDITIONS ══════ -->
 
 </ResourceDictionary>

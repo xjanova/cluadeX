@@ -11,5 +11,12 @@ namespace CluadeX.Services.Chrome;
 /// </summary>
 public static class ChromeRegistration
 {
-    public static IServiceCollection AddChromeConnector(this IServiceCollection services) => services;
+    public static IServiceCollection AddChromeConnector(this IServiceCollection services)
+    {
+        // The user's own Chrome through the Claude in Chrome extension (Claude Code's MCP server, started by CluadeX).
+        services.AddSingleton<ClaudeInChromeLauncher>();
+        services.AddSingleton<Mcp.IMcpLaunchResolver>(sp => sp.GetRequiredService<ClaudeInChromeLauncher>());
+        services.AddSingleton<ClaudeInChromeConnector>();
+        return services;
+    }
 }

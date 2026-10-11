@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Godot shading language (.gdshader / .gdshaderinc).
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, PropertyName -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="Godot Shader" extensions=".gdshader;.gdshaderinc" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="// comment" />
+  <Color name="String" foreground="#CE9178" exampleText="&quot;res://x.gdshaderinc&quot;" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="0.5" />
+  <Color name="Keyword" foreground="#569CD6" exampleText="uniform" />
+  <Color name="ControlKeyword" foreground="#C586C0" exampleText="discard" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="true" />
+  <Color name="Type" foreground="#4EC9B0" exampleText="vec3" />
+  <Color name="Function" foreground="#DCDCAA" exampleText="texture()" />
+  <Color name="Annotation" foreground="#D7BA7D" exampleText="source_color" />
+  <Color name="Preprocessor" foreground="#C586C0" exampleText="#include" />
+  <Color name="BuiltinVariable" foreground="#4FC1FF" exampleText="ALBEDO" />
+
+  <RuleSet>
+    <Span color="Comment" begin="//" />
+    <Span color="Comment" multiline="true" begin="/\*" end="\*/" />
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+
+    <Rule color="Preprocessor">\#\s*[A-Za-z_]\w*</Rule>
+    <Keywords color="ControlKeyword">
+      <Word>if</Word><Word>else</Word><Word>for</Word><Word>while</Word><Word>do</Word><Word>switch</Word>
+      <Word>case</Word><Word>default</Word><Word>break</Word><Word>continue</Word><Word>return</Word>
+      <Word>discard</Word>
+    </Keywords>
+    <Keywords color="Keyword">
+      <Word>shader_type</Word><Word>render_mode</Word><Word>uniform</Word><Word>varying</Word><Word>const</Word>
+      <Word>in</Word><Word>out</Word><Word>inout</Word><Word>struct</Word><Word>global</Word><Word>instance</Word>
+      <Word>group_uniforms</Word><Word>flat</Word><Word>smooth</Word><Word>lowp</Word><Word>mediump</Word>
+      <Word>highp</Word><Word>precision</Word>
+    </Keywords>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word>
+    </Keywords>
+    <Keywords color="Type">
+      <Word>void</Word><Word>bool</Word><Word>bvec2</Word><Word>bvec3</Word><Word>bvec4</Word><Word>int</Word>
+      <Word>ivec2</Word><Word>ivec3</Word><Word>ivec4</Word><Word>uint</Word><Word>uvec2</Word><Word>uvec3</Word>
+      <Word>uvec4</Word><Word>float</Word><Word>vec2</Word><Word>vec3</Word><Word>vec4</Word><Word>mat2</Word>
+      <Word>mat3</Word><Word>mat4</Word><Word>sampler2D</Word><Word>isampler2D</Word><Word>usampler2D</Word>
+      <Word>sampler2DArray</Word><Word>isampler2DArray</Word><Word>usampler2DArray</Word><Word>sampler3D</Word>
+      <Word>isampler3D</Word><Word>usampler3D</Word><Word>samplerCube</Word><Word>samplerCubeArray</Word>
+      <Word>samplerExternalOES</Word>
+    </Keywords>
+    <!-- shader types, render modes and uniform hints (hint_range(...) is a hint, not a call) -->
+    <Keywords color="Annotation">
+      <Word>spatial</Word><Word>canvas_item</Word><Word>particles</Word><Word>sky</Word><Word>fog</Word>
+      <Word>source_color</Word><Word>instance_index</Word><Word>repeat_enable</Word><Word>repeat_disable</Word>
+      <Word>blend_mix</Word><Word>blend_add</Word><Word>blend_sub</Word><Word>blend_mul</Word>
+      <Word>blend_premul_alpha</Word><Word>blend_disabled</Word><Word>depth_draw_opaque</Word>
+      <Word>depth_draw_always</Word><Word>depth_draw_never</Word><Word>depth_prepass_alpha</Word>
+      <Word>depth_test_disabled</Word><Word>sss_mode_skin</Word><Word>cull_back</Word><Word>cull_front</Word>
+      <Word>cull_disabled</Word><Word>unshaded</Word><Word>wireframe</Word><Word>diffuse_burley</Word>
+      <Word>diffuse_lambert</Word><Word>diffuse_lambert_wrap</Word><Word>diffuse_toon</Word>
+      <Word>specular_schlick_ggx</Word><Word>specular_toon</Word><Word>specular_disabled</Word>
+      <Word>skip_vertex_transform</Word><Word>world_vertex_coords</Word><Word>ensure_correct_normals</Word>
+      <Word>shadows_disabled</Word><Word>ambient_light_disabled</Word><Word>shadow_to_opacity</Word>
+      <Word>vertex_lighting</Word><Word>particle_trails</Word><Word>alpha_to_coverage</Word>
+      <Word>alpha_to_coverage_and_one</Word><Word>fog_disabled</Word><Word>light_only</Word><Word>keep_data</Word>
+      <Word>disable_force</Word><Word>disable_velocity</Word><Word>collision_use_scale</Word>
+      <Word>use_half_res_pass</Word><Word>use_quarter_res_pass</Word><Word>disable_fog</Word>
+    </Keywords>
+    <Rule color="Annotation">\b(?:hint|filter)_\w+</Rule>
+    <!-- VERTEX, UV, ALBEDO, TIME, MODEL_MATRIX ... and #define names -->
+    <Rule color="BuiltinVariable">\b[A-Z][A-Z0-9_]*\b</Rule>
+    <Rule color="Number">(?&lt;![\w.])(?:0[xX][0-9A-Fa-f]+[uU]?|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[fFuU]?)(?!\w)</Rule>
+    <Rule color="Function">\b[A-Za-z_]\w*(?=\s*\()</Rule>
+  </RuleSet>
+</SyntaxDefinition>

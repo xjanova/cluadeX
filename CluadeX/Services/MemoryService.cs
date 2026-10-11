@@ -85,9 +85,13 @@ public class MemoryService
     }
 
     /// <summary>Save a memory to a file and update the MEMORY.md index.</summary>
-    public void SaveMemory(string name, string type, string description, string content, bool isProjectScope = false)
+    /// <param name="projectRoot">The project a project-scope memory belongs to, when that is not necessarily the
+    /// one open now (a batch answer that arrives after the user switched projects).</param>
+    public void SaveMemory(string name, string type, string description, string content, bool isProjectScope = false,
+        string? projectRoot = null)
     {
-        string dir = isProjectScope && ProjectMemoryDir != null ? ProjectMemoryDir : GlobalMemoryDir;
+        string? projectDir = !string.IsNullOrWhiteSpace(projectRoot) ? Path.Combine(projectRoot, ".cluadex", "memory") : ProjectMemoryDir;
+        string dir = isProjectScope && projectDir != null ? projectDir : GlobalMemoryDir;
         Directory.CreateDirectory(dir);
 
         // Sanitize filename

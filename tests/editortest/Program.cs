@@ -18,6 +18,8 @@ namespace EditorTest;
 ///       PowerShell-code injection; over-long lines and an unwritable temp folder block a PreToolUse
 ///       call instead of skipping the hook; shell-safety hooks cover task_create / powershell
 ///   W*  editor save: changed-on-disk detection, atomic write, no false conflicts after a reload
+///   L*  large files (open past 2 MB, save, write-time stamp, lazy-sync flush), the typing reveal for a file
+///       that was not open, minimap sampling of a million lines, panel resize grips
 ///   G*  git status parsing (spaces, Thai names, renames, new repo, dotted branches) + HEAD blobs
 ///   R*  rename applies exactly the previewed occurrences
 ///   D*  side-by-side diff of a huge file without gigabytes of trace
@@ -60,6 +62,20 @@ internal static class Program
     {
         try { await body(); }
         catch (Exception ex) { Check(id, "threw", false, ex.ToString()); }
+    }
+
+    /// <summary>WPF elements need an STA thread; after the first await, Run() continues on the thread pool.</summary>
+    static Task OnSta(Action body)
+    {
+        var done = new TaskCompletionSource();
+        var t = new Thread(() =>
+        {
+            try { body(); done.SetResult(); }
+            catch (Exception ex) { done.SetException(ex); }
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        return done.Task;
     }
 
     static string Dir(params string[] parts)
@@ -1270,6 +1286,117 @@ internal static class Program
             File.SetAttributes(ro, FileAttributes.Normal);
             Check("W4", "a read-only file reports Failed (with a diagnostic) instead of pretending", r.Outcome == SaveOutcome.Failed && File.ReadAllText(ro) == "locked\n" && tab.IsDirty, $"{r.Outcome} {r.Error}");
         });
+
+        // ═══════════════════════ large files, typing reveal, panel grips ═══════════════════════
+        Console.WriteLine("\n── large files / typing reveal / resize grips ──");
+        string big = Path.Combine(saveDir, "big.log");
+        await Case("L1", async () =>
+        {
+            // ~30 MB of log lines: the editor used to refuse anything over 2 MB.
+            var sb = new StringBuilder();
+            for (int i = 0; sb.Length < 30_000_000; i++) sb.Append("2026-10-11 12:00:00.000 [INFO] line ").Append(i).Append(" payload payload payload\n");
+            File.WriteAllText(big, sb.ToString());
+            var sw = Stopwatch.StartNew();
+            var tab = await ws.OpenFileAsync(big);
+            sw.Stop();
+            Check("L1", "a 30 MB text file opens in the editor (Notepad++-style cap, was 2 MB)",
+                tab != null && tab.Content.Length == sb.Length, $"tab={(tab == null ? "null" : tab.Content.Length.ToString())} expected={sb.Length} in {sw.ElapsedMilliseconds} ms");
+            string bin = Path.Combine(saveDir, "blob.bin");
+            var bytes = new byte[3_000_000]; bytes[10] = 0; bytes[0] = (byte)'M';
+            File.WriteAllBytes(bin, bytes);
+            Check("L1b", "…a binary file is still refused at any size", await ws.OpenFileAsync(bin) == null);
+        });
+        await Case("L2", async () =>
+        {
+            var tab = await ws.OpenFileAsync(big);
+            Check("L2", "a large tab is not 'changed on disk' right after opening (stamp = length + write time)", !ws.HasChangedOnDisk(tab!));
+            tab!.Content = tab.Content.Replace("line 0 ", "LINE 0 ");
+            var r = await ws.SaveTabCheckedAsync(tab, false);
+            Check("L2b", "…saving it works and the next check is clean", r.Outcome == SaveOutcome.Saved && !ws.HasChangedOnDisk(tab), r.Outcome.ToString());
+            var text = File.ReadAllText(big);
+            File.WriteAllText(big, text.Replace("LINE 0 ", "line 0 "));   // same length, someone else's write
+            File.SetLastWriteTimeUtc(big, DateTime.UtcNow.AddMinutes(1));
+            Check("L2c", "…and another program's same-length rewrite is still caught", ws.HasChangedOnDisk(tab));
+        });
+        await Case("L3", async () =>
+        {
+            File.WriteAllText(f1, "before\n");
+            var tab = await ws.OpenFileAsync(f1);
+            tab!.IsDirty = true;                                          // large-file typing: dirty now, text later
+            tab.PendingEdits = () => tab.Content = "typed but not yet synced\n";
+            var r = await ws.SaveTabCheckedAsync(tab, false);
+            Check("L3", "Save copies the editor's pending keystrokes into the tab first (large-file lazy sync)",
+                r.Outcome == SaveOutcome.Saved && File.ReadAllText(f1) == "typed but not yet synced\n", $"{r.Outcome} disk='{File.ReadAllText(f1)}'");
+        });
+        await Case("L4", () =>
+        {
+            var diff = new EditDiffResult
+            {
+                Lines =
+                [
+                    new EditDiffLine { Kind = EditDiffKind.Context, Text = "b" },
+                    new EditDiffLine { Kind = EditDiffKind.Remove, Text = "old" },
+                    new EditDiffLine { Kind = EditDiffKind.Add, Text = "NEW1" },
+                    new EditDiffLine { Kind = EditDiffKind.Add, Text = "NEW2" },
+                    new EditDiffLine { Kind = EditDiffKind.Context, Text = "c" },
+                ],
+                FirstChangedLine = 3,
+            };
+            string before = CluadeX.ViewModels.CodeEditorViewModel.AddedBlockOf("a\nb\nNEW1\nNEW2\nc\n", diff, 3);
+            Check("L4", "typing reveal for a file that was not open: the diff's added lines are taken out to be typed back in",
+                before == "a\nb\nc\n", before ?? "null");
+            string crlf = CluadeX.ViewModels.CodeEditorViewModel.AddedBlockOf("a\r\nb\r\nNEW1\r\nNEW2\r\nc\r\n", diff, 3);
+            Check("L4b", "…CRLF files too", crlf == "a\r\nb\r\nc\r\n", crlf ?? "null");
+            Check("L4c", "…and no guess when the block is not in the file (instant refresh instead)",
+                CluadeX.ViewModels.CodeEditorViewModel.AddedBlockOf("a\nb\nc\n", diff, 3) == null);
+            return Task.CompletedTask;
+        });
+        await Case("L5", () => OnSta(() =>
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < 1_000_000; i++) sb.Append(i % 7 == 0 ? "    // comment\n" : "\tcode(line);\n");
+            var editor = new ICSharpCode.AvalonEdit.TextEditor { Text = sb.ToString() };
+            var minimap = new CluadeX.Views.Editor.MinimapControl();
+            var sw = Stopwatch.StartNew();
+            minimap.Attach(editor);                                       // builds the line metrics synchronously
+            sw.Stop();
+            var f = typeof(CluadeX.Views.Editor.MinimapControl).GetField("_lines", BindingFlags.NonPublic | BindingFlags.Instance);
+            int samples = (f?.GetValue(minimap) as System.Collections.ICollection)?.Count ?? -1;
+            Check("L5", "the minimap of a 1,000,000-line file samples ≤ 4000 lines instead of copying the text",
+                samples is > 0 and <= 4001 && sw.ElapsedMilliseconds < 500, $"samples={samples} in {sw.ElapsedMilliseconds} ms");
+        }));
+        await Case("L6", () => OnSta(() =>
+        {
+            var saved = new Dictionary<string, double>();
+            CluadeX.Views.ResizeGrip.Load = k => k == "t.left" ? 300 : null;
+            CluadeX.Views.ResizeGrip.Save = (k, w) => saved[k] = w;
+            try
+            {
+                var panel = new System.Windows.Controls.Border { Width = 240 };
+                var grip = new CluadeX.Views.ResizeGrip { Key = "t.left", MinSize = 160, MaxSize = 500, Target = panel };
+                Check("L6", "a panel comes back at the width it was dragged to", panel.Width == 300, panel.Width.ToString());
+                grip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(50, 0));
+                Check("L6b", "dragging the right edge widens it", panel.Width == 350, panel.Width.ToString());
+                grip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(1000, 0));
+                grip.RaiseEvent(new System.Windows.Controls.Primitives.DragCompletedEventArgs(0, 0, false));
+                Check("L6c", "…clamped to its maximum, and the width is remembered", panel.Width == 500 && saved.GetValueOrDefault("t.left") == 500, $"{panel.Width} saved={saved.GetValueOrDefault("t.left")}");
+                grip.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left)
+                { RoutedEvent = System.Windows.Controls.Control.MouseDoubleClickEvent });
+                Check("L6d", "double-click puts it back to its designed width", panel.Width == 240 && saved["t.left"] == 240, panel.Width.ToString());
+
+                var right = new System.Windows.Controls.Border { Width = 400 };
+                var rgrip = new CluadeX.Views.ResizeGrip { Key = "t.right", OnLeftEdge = true, MinSize = 280, MaxSize = 900, Target = right };
+                rgrip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(-60, 0));
+                Check("L6e", "a right-hand panel's left-edge grip widens it when dragged left", right.Width == 460, right.Width.ToString());
+                rgrip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(400, 0));
+                Check("L6f", "…and never below its minimum", right.Width == 280, right.Width.ToString());
+            }
+            finally
+            {
+                CluadeX.Views.ResizeGrip.Load = null;
+                CluadeX.Views.ResizeGrip.Save = null;
+            }
+        }));
 
         // ═══════════════════════ git status ═══════════════════════
         Console.WriteLine("\n── git status / blobs ──");

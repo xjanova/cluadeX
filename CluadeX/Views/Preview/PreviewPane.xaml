@@ -3,13 +3,13 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:preview="clr-namespace:CluadeX.Views.Preview"
-             Background="{StaticResource NeonBg0Brush}">
+             Background="{DynamicResource Bg.Window}">
     <UserControl.Resources>
         <Style x:Key="PreviewIconButton" TargetType="Button">
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Width" Value="26"/>
             <Setter Property="Height" Value="24"/>
-            <Setter Property="Foreground" Value="{StaticResource NeonInk1Brush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -18,7 +18,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.4"/>
@@ -31,17 +31,17 @@
         <Style x:Key="PreviewTextButton" TargetType="Button">
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Padding" Value="10,4"/>
-            <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bd" Background="#3328326E" CornerRadius="4" BorderThickness="1"
-                                BorderBrush="{StaticResource NeonLineHiBrush}" Padding="{TemplateBinding Padding}">
+                        <Border x:Name="bd" Background="{DynamicResource Preview.Page.Button.Background}" CornerRadius="4" BorderThickness="1"
+                                BorderBrush="{DynamicResource Border.Default}" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#5528326E"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Preview.Page.Button.Hover.Background}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -59,7 +59,7 @@
         </Grid.RowDefinitions>
 
         <!-- ═══ Toolbar: badge · address · go · reload · viewport · driving · pop-out ═══ -->
-        <Border Grid.Row="0" Padding="6,4" Background="#8C0A0C22" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
+        <Border Grid.Row="0" Padding="6,4" Background="{DynamicResource Preview.Toolbar.Background}" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -76,30 +76,30 @@
                         Visibility="{Binding Badge, Converter={StaticResource BoolVis}}">
                     <Border.Style>
                         <Style TargetType="Border">
-                            <Setter Property="Background" Value="#332ECC71"/>
+                            <Setter Property="Background" Value="{DynamicResource Preview.Badge.Local.Background}"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsExternal}" Value="True">
-                                    <Setter Property="Background" Value="#55FF8A3D"/>
+                                    <Setter Property="Background" Value="{DynamicResource Preview.Badge.External.Background}"/>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
-                    <TextBlock Text="{Binding Badge}" FontSize="9" FontWeight="Bold" Foreground="{StaticResource NeonInk0Brush}"/>
+                    <TextBlock Text="{Binding Badge}" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource Text.Primary}"/>
                 </Border>
 
-                <Border Grid.Column="1" Background="#3311132E" CornerRadius="4" BorderThickness="1"
-                        BorderBrush="{StaticResource NeonLineHiBrush}">
+                <Border Grid.Column="1" Background="{DynamicResource Surface.Input}" CornerRadius="4" BorderThickness="1"
+                        BorderBrush="{DynamicResource Border.Default}">
                     <TextBox x:Name="AddressBox" Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}"
                              Background="Transparent" BorderThickness="0" Padding="6,3"
-                             Foreground="{StaticResource NeonInk0Brush}" CaretBrush="{StaticResource NeonCyanBrush}"
-                             FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                             Foreground="{DynamicResource Text.Primary}" CaretBrush="{DynamicResource Focus.Ring}"
+                             FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                              ToolTip="{services:Loc preview.addressTip}"
                              KeyDown="OnAddressKeyDown" GotKeyboardFocus="OnAddressFocus" LostKeyboardFocus="OnAddressBlur"/>
                 </Border>
 
                 <Button Grid.Column="2" Style="{StaticResource PreviewIconButton}" Margin="4,0,0,0"
                         Command="{Binding NavigateCommand}" ToolTip="{services:Loc preview.go}">
-                    <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{StaticResource NeonCyanBrush}"/>
+                    <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Accent.1}"/>
                 </Button>
                 <Button Grid.Column="3" Style="{StaticResource PreviewIconButton}"
                         Command="{Binding ReloadCommand}" ToolTip="{services:Loc preview.reload}">
@@ -110,13 +110,13 @@
                         ToolTip="{services:Loc preview.viewportTip}">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="bd" Background="#2228326E" CornerRadius="10" Padding="8,2" BorderThickness="1"
-                                    BorderBrush="{StaticResource NeonLineHiBrush}">
+                            <Border x:Name="bd" Background="{DynamicResource Button.Ghost.Background}" CornerRadius="10" Padding="8,2" BorderThickness="1"
+                                    BorderBrush="{DynamicResource Border.Default}">
                                 <ContentPresenter/>
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="#4428326E"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource Button.Ghost.Hover.Background}"/>
                                 </Trigger>
                                 <Trigger Property="IsEnabled" Value="False">
                                     <Setter Property="Opacity" Value="0.4"/>
@@ -126,17 +126,17 @@
                     </Button.Template>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8EA;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,5,0"
-                                   Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding ViewportLabel}" FontSize="10" Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                                   Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ViewportLabel}" FontSize="10" Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
 
-                <Border Grid.Column="5" Margin="6,0,0,0" CornerRadius="10" Padding="7,2" Background="#33FFB020"
+                <Border Grid.Column="5" Margin="6,0,0,0" CornerRadius="10" Padding="7,2" Background="{DynamicResource Preview.Driving.Background}"
                         VerticalAlignment="Center" ToolTip="{services:Loc preview.drivingTip}"
                         Visibility="{Binding IsAgentDriving, Converter={StaticResource BoolVis}}">
                     <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="6" Height="6" Fill="{StaticResource NeonAmberBrush}" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="{services:Loc preview.driving}" FontSize="10" Foreground="{StaticResource NeonAmberBrush}"/>
+                        <Ellipse Width="6" Height="6" Fill="{DynamicResource Status.Warning}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{services:Loc preview.driving}" FontSize="10" Foreground="{DynamicResource Status.Warning}"/>
                     </StackPanel>
                 </Border>
 
@@ -156,11 +156,11 @@
 
         <!-- ═══ Status (errors from the address bar, crash note) ═══ -->
         <TextBlock Grid.Row="1" Text="{Binding Status}" FontSize="10" Margin="8,3" TextWrapping="Wrap"
-                   Foreground="{StaticResource NeonAmberBrush}"
+                   Foreground="{DynamicResource Status.Warning}"
                    Visibility="{Binding Status, Converter={StaticResource BoolVis}}"/>
 
         <!-- ═══ The page ═══ -->
-        <Grid Grid.Row="2" Background="White">
+        <Grid Grid.Row="2" Background="{DynamicResource Preview.Page.Background}">
             <!-- The page's window (a PreviewPaneHost, created while this pane is loaded and destroyed when it leaves the
                  tree). Shown only when the page exists and is here — an HwndHost paints over anything in its area. -->
             <Grid x:Name="HostSlot"/>
@@ -168,29 +168,29 @@
             <!-- A full-window overlay of the main window (command palette, model loading) is open: the page's native
                  window would paint over it, so the page steps aside (it keeps running off-screen). -->
             <StackPanel x:Name="CoveredState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" Visibility="Collapsed">
-                <TextBlock Text="&#xE890;" FontFamily="Segoe MDL2 Assets" FontSize="28" HorizontalAlignment="Center" Foreground="#9098B0"/>
+                <TextBlock Text="&#xE890;" FontFamily="Segoe MDL2 Assets" FontSize="28" HorizontalAlignment="Center" Foreground="{DynamicResource Preview.Page.Icon}"/>
                 <TextBlock Text="{services:Loc preview.covered}" FontSize="11" Margin="0,8,0,0" MaxWidth="320" TextWrapping="Wrap"
-                           TextAlignment="Center" HorizontalAlignment="Center" Foreground="#60657A"/>
+                           TextAlignment="Center" HorizontalAlignment="Center" Foreground="{DynamicResource Preview.Page.Muted}"/>
             </StackPanel>
 
             <!-- Empty state -->
             <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20"
                         Visibility="{Binding ShowEmpty, Converter={StaticResource BoolVis}}">
                 <TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets" FontSize="40" HorizontalAlignment="Center"
-                           Foreground="#9098B0"/>
+                           Foreground="{DynamicResource Preview.Page.Icon}"/>
                 <TextBlock Text="{services:Loc preview.empty.title}" FontSize="13" FontWeight="SemiBold" Margin="0,12,0,0"
-                           HorizontalAlignment="Center" Foreground="#30344A"/>
+                           HorizontalAlignment="Center" Foreground="{DynamicResource Preview.Page.Foreground}"/>
                 <TextBlock Text="{services:Loc preview.empty.hint}" FontSize="11" Margin="0,6,0,0" MaxWidth="320"
-                           TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" Foreground="#60657A"/>
+                           TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" Foreground="{DynamicResource Preview.Page.Muted}"/>
             </StackPanel>
 
             <!-- Engine missing: the command that fixes it, and a button that really copies it -->
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20"
                         Visibility="{Binding IsEngineMissing, Converter={StaticResource BoolVis}}">
                 <TextBlock Text="{services:Loc preview.engineMissing}" FontSize="12" TextWrapping="Wrap" MaxWidth="360"
-                           TextAlignment="Center" Foreground="#30344A"/>
+                           TextAlignment="Center" Foreground="{DynamicResource Preview.Page.Foreground}"/>
                 <TextBox Text="{Binding InstallCommand, Mode=OneWay}" IsReadOnly="True" Margin="0,10,0,0" Padding="6,4"
-                         FontFamily="{StaticResource NeonMonoFont}" FontSize="11" HorizontalAlignment="Center"/>
+                         FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11" HorizontalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
                     <Button Style="{StaticResource PreviewTextButton}" Command="{Binding CopyInstallCommand}">
                         <TextBlock Text="{Binding CopyLabel}"/>
@@ -205,14 +205,14 @@
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20"
                         Visibility="{Binding IsLocked, Converter={StaticResource BoolVis}}">
                 <TextBlock Text="{services:Loc preview.locked}" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"
-                           Foreground="#30344A"/>
+                           Foreground="{DynamicResource Preview.Page.Foreground}"/>
                 <TextBlock Text="{Binding LockedReason}" FontSize="11" Margin="0,6,0,0" MaxWidth="380" TextWrapping="Wrap"
-                           TextAlignment="Center" Foreground="#60657A"/>
+                           TextAlignment="Center" Foreground="{DynamicResource Preview.Page.Muted}"/>
             </StackPanel>
 
             <!-- The page is in the other preview window -->
             <StackPanel x:Name="ElsewhereState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20" Visibility="Collapsed">
-                <TextBlock Text="{services:Loc preview.elsewhere}" FontSize="12" Foreground="#30344A" HorizontalAlignment="Center"/>
+                <TextBlock Text="{services:Loc preview.elsewhere}" FontSize="12" Foreground="{DynamicResource Preview.Page.Foreground}" HorizontalAlignment="Center"/>
                 <Button Style="{StaticResource PreviewTextButton}" Margin="0,8,0,0" HorizontalAlignment="Center" Click="OnBringHere">
                     <TextBlock Text="{services:Loc preview.bringHere}"/>
                 </Button>
@@ -220,7 +220,7 @@
         </Grid>
 
         <!-- ═══ Console mini-panel ═══ -->
-        <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{StaticResource NeonLineBrush}" Background="#7011152E"
+        <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Input}"
                 Visibility="{Binding HasPage, Converter={StaticResource BoolVis}}">
             <StackPanel>
                 <Grid>
@@ -236,17 +236,17 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="bd" Property="Background" Value="#1AFFFFFF"/>
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover}"/>
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE756;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,6,0"
-                                       Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center"/>
-                            <TextBlock Text="{services:Loc preview.console}" FontSize="10" Foreground="{StaticResource NeonInk2Brush}"/>
-                            <TextBlock Text="·" Margin="6,0" FontSize="10" Foreground="{StaticResource NeonInk3Brush}"/>
-                            <TextBlock Text="{Binding ConsoleSummary}" FontSize="10" Foreground="{StaticResource NeonInk1Brush}"/>
+                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc preview.console}" FontSize="10" Foreground="{DynamicResource Text.Muted}"/>
+                            <TextBlock Text="·" Margin="6,0" FontSize="10" Foreground="{DynamicResource Text.Faint}"/>
+                            <TextBlock Text="{Binding ConsoleSummary}" FontSize="10" Foreground="{DynamicResource Text.Secondary}"/>
                         </StackPanel>
                     </Button>
                     <Button Grid.Column="1" Style="{StaticResource PreviewIconButton}" Command="{Binding ClearConsoleCommand}">
@@ -257,22 +257,22 @@
                               Visibility="{Binding IsConsoleOpen, Converter={StaticResource BoolVis}}">
                     <StackPanel>
                         <TextBlock Text="{services:Loc preview.consoleEmpty}" FontSize="10" Margin="10,2,10,6"
-                                   Foreground="{StaticResource NeonInk3Brush}"
+                                   Foreground="{DynamicResource Text.Faint}"
                                    Visibility="{Binding ConsoleLines.Count, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                         <ItemsControl ItemsSource="{Binding ConsoleLines}" Margin="8,0,8,6">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding Text}" FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                    <TextBlock Text="{Binding Text}" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
                                                TextWrapping="Wrap" Margin="0,1">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground" Value="{StaticResource NeonInk1Brush}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding IsWarning}" Value="True">
-                                                        <Setter Property="Foreground" Value="{StaticResource NeonAmberBrush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding IsError}" Value="True">
-                                                        <Setter Property="Foreground" Value="{StaticResource NeonRedBrush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>

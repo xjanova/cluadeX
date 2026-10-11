@@ -7,6 +7,6 @@
         Width="1040" Height="780" MinWidth="420" MinHeight="320"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="True"
-        Background="{StaticResource NeonBg0Brush}">
+        Background="{DynamicResource Bg.Window}">
     <preview:PreviewPane x:Name="Pane"/>
 </Window>

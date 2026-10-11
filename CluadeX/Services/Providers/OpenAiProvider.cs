@@ -8,7 +8,7 @@ using CluadeX.Models;
 
 namespace CluadeX.Services.Providers;
 
-public class OpenAiProvider : ApiProviderBase, IModelLister
+public partial class OpenAiProvider : ApiProviderBase, IModelLister
 {
     private readonly CostTrackingService? _costTracker;
 

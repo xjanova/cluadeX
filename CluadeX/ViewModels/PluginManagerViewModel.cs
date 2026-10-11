@@ -206,7 +206,9 @@ public class PluginManagerViewModel : ViewModelBase
         catch { installedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
 
         CatalogPlugins.Clear();
-        foreach (var cp in PluginService.CuratedCatalog)
+        // Only plugins that do something: an entry without hooks installed nothing that runs, and showing it as
+        // "coming soon" put a feature on screen that does not exist.
+        foreach (var cp in PluginService.CuratedCatalog.Where(PluginService.IsImplemented))
         {
             // Apply filter (both languages, so a Thai search finds a plugin too)
             if (!string.IsNullOrWhiteSpace(_catalogFilter))

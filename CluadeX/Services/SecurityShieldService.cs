@@ -238,6 +238,7 @@ public class SecurityShieldService
                 if (string.IsNullOrEmpty(name)) continue;
                 if (name.StartsWith(".") && name != ".cluadex" && name != ".claude") continue;
                 if (ExcludedDirs.Contains(name)) continue;
+                if (WorkspaceFiles.IsAgentWorktrees(Path.GetDirectoryName(d) ?? "", name)) continue;
                 // Junctions / symlinks: a link back up the tree (pnpm and some monorepo tools create
                 // them) made this walk loop until it ran out of memory; a link elsewhere scanned a
                 // folder outside the project and reported it as the project's.

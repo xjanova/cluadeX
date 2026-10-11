@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using CluadeX.Services;
 
 namespace CluadeX.Models;
 
@@ -51,6 +52,11 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
             }
         }
     }
+
+    /// <summary>Set by the editor while it may hold typing not yet copied into <see cref="Content"/> (large files
+    /// sync after a pause). Anything about to read Content for keeps — Save — calls <see cref="FlushPendingEdits"/>.</summary>
+    public Action? PendingEdits { get; set; }
+    public void FlushPendingEdits() => PendingEdits?.Invoke();
 
     private string _originalContent = "";
     public void MarkOpened(string content)
@@ -113,17 +119,17 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
         {
             return Extension switch
             {
-                "tsx" or "ts" or "js" or "jsx" => "#4CDFFF",
-                "cs" => "#A672FF",
-                "json" => "#FFD166",
-                "md" => "#5CFFB0",
-                "css" or "scss" => "#FF5EC4",
-                "html" or "xml" or "xaml" => "#FF8AA6",
-                "py" => "#5A8DFF",
-                "rs" => "#FF6E6E",
-                "go" => "#4CDFFF",
-                "yaml" or "yml" => "#FFD166",
-                _ => "#8388BD",
+                "tsx" or "ts" or "js" or "jsx" => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+                "cs" => ThemeColors.Hex("Accent.2", "#A672FF"),
+                "json" => ThemeColors.Hex("Status.Warning", "#FFD166"),
+                "md" => ThemeColors.Hex("Status.Success", "#5CFFB0"),
+                "css" or "scss" => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+                "html" or "xml" or "xaml" => ThemeColors.Hex("Accent.4", "#FF8AA6"),
+                "py" => ThemeColors.Hex("Status.Info", "#5A8DFF"),
+                "rs" => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+                "go" => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+                "yaml" or "yml" => ThemeColors.Hex("Status.Warning", "#FFD166"),
+                _ => ThemeColors.Hex("Text.Muted", "#8388BD"),
             };
         }
     }
@@ -146,8 +152,16 @@ public class FileTreeNode : System.ComponentModel.INotifyPropertyChanged
     /// <summary>"M" / "U" / "A" / "?" — set by external git scan.</summary>
     public string GitBadge { get; set; } = "";
 
-    /// <summary>Color for the badge.</summary>
-    public string GitBadgeColorHex { get; set; } = "#8388BD";
+    /// <summary>Colour of the badge — a theme token picked from <see cref="GitBadge"/> (modified = warning, added /
+    /// untracked = success, deleted = danger, renamed = accent 2), read in the theme on screen.</summary>
+    public string GitBadgeColorHex => GitBadge switch
+    {
+        "M" => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        "A" or "U" => ThemeColors.Hex("Status.Success", "#5CFFB0"),
+        "D" => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+        "R" => ThemeColors.Hex("Accent.2", "#A672FF"),
+        _ => ThemeColors.Hex("Text.Muted", "#8388BD"),
+    };
 
     public ObservableCollection<FileTreeNode> Children { get; } = new();
 
@@ -166,17 +180,17 @@ public class FileTreeNode : System.ComponentModel.INotifyPropertyChanged
         {
             return Extension switch
             {
-                "tsx" or "ts" or "js" or "jsx" => "#4CDFFF",
-                "cs" => "#A672FF",
-                "json" => "#FFD166",
-                "md" => "#5CFFB0",
-                "css" or "scss" => "#FF5EC4",
-                "html" or "xml" or "xaml" => "#FF8AA6",
-                "py" => "#5A8DFF",
-                "rs" => "#FF6E6E",
-                "go" => "#4CDFFF",
-                "yaml" or "yml" => "#FFD166",
-                _ => "#8388BD",
+                "tsx" or "ts" or "js" or "jsx" => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+                "cs" => ThemeColors.Hex("Accent.2", "#A672FF"),
+                "json" => ThemeColors.Hex("Status.Warning", "#FFD166"),
+                "md" => ThemeColors.Hex("Status.Success", "#5CFFB0"),
+                "css" or "scss" => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+                "html" or "xml" or "xaml" => ThemeColors.Hex("Accent.4", "#FF8AA6"),
+                "py" => ThemeColors.Hex("Status.Info", "#5A8DFF"),
+                "rs" => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+                "go" => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+                "yaml" or "yml" => ThemeColors.Hex("Status.Warning", "#FFD166"),
+                _ => ThemeColors.Hex("Text.Muted", "#8388BD"),
             };
         }
     }
