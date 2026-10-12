@@ -618,10 +618,13 @@ internal static partial class Program
         });
         await Case("X3", async () =>
         {
+            // Was "refuses to save": the editor read TIS-620 as broken UTF-8. Since 2026-10-12 it reads the file as
+            // Windows-874 and writes it back in Windows-874 — the promise is unchanged: not one byte is corrupted.
             var before = Bytes("App/Legacy.cs");
             var tab = await ws.OpenFileAsync(P("App", "Legacy.cs"));
             bool ok = tab != null && await ws.SaveTabAsync(tab);
-            Check("X3", "editor Save refuses a TIS-620 file instead of corrupting it", !ok && Bytes("App/Legacy.cs").SequenceEqual(before), $"opened={tab != null} saved={ok}");
+            Check("X3", "editor Save keeps a TIS-620 file in TIS-620: saving it unchanged writes the very same bytes",
+                ok && tab!.CodePage == 874 && Bytes("App/Legacy.cs").SequenceEqual(before), $"opened={tab != null} cp={tab?.CodePage} saved={ok}");
         });
         await Case("X4", async () =>
         {

@@ -255,7 +255,7 @@ internal static class EditorKeys
         ["ide.notSavedCompare"] = new() { ["en"] = "Not saved — comparing the disk version of {0} (left) with yours (right)", ["th"] = "ยังไม่ได้บันทึก — กำลังเทียบ {0} บนดิสก์ (ซ้าย) กับของคุณ (ขวา)" },
         ["ide.diffDiskVsEditor"] = new() { ["en"] = "disk (left) vs editor (right) · +{0} −{1}", ["th"] = "บนดิสก์ (ซ้าย) เทียบกับในอีดิเตอร์ (ขวา) · +{0} −{1}" },
         ["ide.saved"] = new() { ["en"] = "Saved {0}", ["th"] = "บันทึก {0} แล้ว" },
-        ["ide.notUtf8"] = new() { ["en"] = "Not saved: {0} isn't UTF-8 (legacy encoding) — saving would corrupt its non-ASCII characters.", ["th"] = "ไม่ได้บันทึก: {0} ไม่ใช่ UTF-8 (การเข้ารหัสแบบเก่า) — ถ้าบันทึกตัวอักษรที่ไม่ใช่ ASCII จะเสียหาย" },
+        ["ide.notUtf8"] = new() { ["en"] = "Not saved: no encoding reads {0} back byte for byte — saving would corrupt its characters.", ["th"] = "ไม่ได้บันทึก: อ่าน {0} ด้วยการเข้ารหัสใดก็ไม่ตรงทุกไบต์ — ถ้าบันทึก ตัวอักษรจะเสียหาย" },
         ["ide.saveFailed"] = new() { ["en"] = "Save failed for {0} — the file may be read-only or locked (details in the Debug Log).", ["th"] = "บันทึก {0} ไม่สำเร็จ — ไฟล์อาจเป็นแบบอ่านอย่างเดียวหรือถูกล็อกอยู่ (ดูรายละเอียดในบันทึกดีบัก)" },
         ["ide.nothingToSave"] = new() { ["en"] = "Nothing to save", ["th"] = "ไม่มีอะไรต้องบันทึก" },
         ["ide.savedCount"] = new() { ["en"] = "Saved {0} file(s)", ["th"] = "บันทึกแล้ว {0} ไฟล์" },

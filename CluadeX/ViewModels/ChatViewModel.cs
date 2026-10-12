@@ -88,7 +88,11 @@ public partial class ChatViewModel : ViewModelBase
     public ObservableCollection<SearchResult> SearchResults { get; } = new();
     public ObservableCollection<ModelInfo> LocalModels { get; } = new();
 
-    public string UserInput { get => _userInput; set => SetProperty(ref _userInput, value); }
+    public string UserInput
+    {
+        get => _userInput;
+        set { if (SetProperty(ref _userInput, value) && string.IsNullOrEmpty(value)) OnInputCleared(); }
+    }
 
     /// <summary>Run code blocks the AI writes, on this PC, without asking. Security-relevant: off by default and
     /// confirmed every time it is switched on. (It shared the label "Auto" with the autonomous fix loop, so a
@@ -851,6 +855,7 @@ public partial class ChatViewModel : ViewModelBase
         _memoryTimer.Start();
         InitControls(activation);
         InitSidePanel();
+        HookPendingImages();
 
         // Auto-save every 10 seconds if dirty
         _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
@@ -2314,6 +2319,16 @@ public partial class ChatViewModel : ViewModelBase
             var m = all[i];
             switch (m.Role)
             {
+                case MessageRole.User when m.HasAttachedImages:
+                    // An earlier message's pictures are not resent (each costs tokens on every request): the model
+                    // is told they were there and where, and can open one with read_file.
+                    result.Add(new ChatMessage
+                    {
+                        Role = MessageRole.User, Timestamp = m.Timestamp,
+                        Content = (m.Content.Length > 0 ? m.Content + "\n" : "")
+                                  + string.Join("\n", m.AttachedImages.Select(p => $"[the user attached an image: {p}]")),
+                    });
+                    break;
                 case MessageRole.User:
                     result.Add(m);
                     break;
@@ -2423,10 +2438,15 @@ public partial class ChatViewModel : ViewModelBase
     private async Task SendMessage()
     {
         string input = UserInput?.Trim() ?? "";
-        if (string.IsNullOrEmpty(input)) return;
+        if (string.IsNullOrEmpty(input) && PendingImages.Count == 0) return;
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
-        // to do nothing at all (the box was even disabled) until the run ended.
-        if (IsGenerating) { SendIntoRunningReply(input); return; }
+        // to do nothing at all (the box was even disabled) until the run ended. Attached images wait for the next turn.
+        if (IsGenerating)
+        {
+            if (input.Length > 0) SendIntoRunningReply(input);
+            if (PendingImages.Count > 0) StatusText = Loc("chat.attach.waitForReply");
+            return;
+        }
 
         // ─── Built-in slash commands ───
         // Handled BEFORE the provider check: they act on the chat itself and need no model. Behind the check,
@@ -2504,10 +2524,13 @@ public partial class ChatViewModel : ViewModelBase
 
         _pet?.NoteMessage(input);
         _pet?.NoteTurnStarted();
-        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input };
+        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input, AttachedImages = PendingImages.ToList() };
+        PendingImages.Clear();
         Messages.Add(userMsg);
         UserInput = string.Empty;
-        await RunTurnAsync(userMsg, input, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride));
+        // Only pictures: the model still needs a line of text with them.
+        string modelInput = input.Length > 0 ? input : "Look at the attached image(s).";
+        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride));
     }
 
     /// <summary>
@@ -2597,6 +2620,8 @@ public partial class ChatViewModel : ViewModelBase
     private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill)
     {
         var turn = BeginTurn();
+        if (userMsg.HasAttachedImages && AgentRunScope.Current is { } imageScope)
+            imageScope.UserImages = await LoadAttachedImagesAsync(userMsg.AttachedImages);
         var session = CurrentSession;
 
         // ─── Session resume: persist transcript BEFORE API call ───
@@ -2618,13 +2643,19 @@ public partial class ChatViewModel : ViewModelBase
         // flip in this case: AgenticMode is auto-enabled by opening a project,
         // so with no project it is always false.
         bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
+        // Attached images reach a model only through the native tool loop (the plain chat path is text-only); a
+        // provider without it gets their file paths in words.
+        bool nativeProvider = _providerManager.ActiveProvider.SupportsNativeToolUse;
+        bool imagesNeedLoop = userMsg.HasAttachedImages && nativeProvider;
+        if (userMsg.HasAttachedImages && !nativeProvider)
+            input += "\n\n" + CodeAgentService.AttachedImagesNote(userMsg.AttachedImages);
         Func<List<ChatMessage>, CancellationToken, Task> run;
         bool withTools = true;
         if (isSkill && HasProject)                                            // skills always run in agentic mode
             run = (h, c) => RunAgentic(input, h, c);
         else if (AutonomousMode && HasProject && _autonomousService != null)
             run = (h, c) => RunAutonomous(input, h, c);
-        else if ((AgenticMode && HasProject) || mcpOnlyTools)
+        else if ((AgenticMode && HasProject) || mcpOnlyTools || imagesNeedLoop)
             run = (h, c) => RunAgentic(input, h, c);
         else if (AutoExecute)
         { run = (h, c) => RunWithAutoExecution(input, h, c); withTools = false; }

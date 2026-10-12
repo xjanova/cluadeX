@@ -91,6 +91,10 @@ public sealed class AgentRunScope
     /// <see cref="CostUsd"/> reaches the setting plus this — so a budget changed mid-run applies at once.</summary>
     public decimal BudgetGrantedUsd { get; set; }
 
+    /// <summary>The images the user attached to the message this run answers, decoded for a model
+    /// (ChatViewModel → native tool loop, which puts them on the user message).</summary>
+    public List<ToolImage>? UserImages { get; set; }
+
     // ─── What the user typed while the run was working ───
 
     private readonly System.Collections.Concurrent.ConcurrentQueue<(string Text, object? Tag)> _userNotes = new();

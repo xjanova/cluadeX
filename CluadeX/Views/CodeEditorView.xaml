@@ -17,6 +17,116 @@
              Loaded="OnLoaded"
              KeyDown="OnPageKeyDown">
     <UserControl.Resources>
+        <!-- ═══ Editor toolbar / find bar / status bar controls ═══
+             Not focusable: a click must leave the keyboard in the editor, so Undo / Cut / Paste act on it. -->
+        <Style x:Key="EdToolBtn" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinWidth" Value="28"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="EdToolToggle" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinWidth" Value="28"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"
+                                BorderThickness="1" BorderBrush="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Accent.1.Tint.Strong}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- A text button in the find bar ("Replace", "Replace all", "Go") -->
+        <Style x:Key="EdTextBtn" TargetType="Button" BasedOn="{StaticResource EdToolBtn}">
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="Margin" Value="4,0,0,0"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
+        </Style>
+        <!-- Status bar item: flat, small; a click opens its menu -->
+        <Style x:Key="EdStatusBtn" TargetType="Button" BasedOn="{StaticResource EdToolBtn}">
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+        </Style>
+        <Style x:Key="EdToolSep" TargetType="Rectangle">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Margin" Value="5,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="{DynamicResource Border.Subtle}"/>
+        </Style>
+        <Style x:Key="EdStatusText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="10,0,0,0"/>
+        </Style>
+        <Style x:Key="EdFindInput" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource Accent.1}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Mono.Display}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
         <!-- File tree row template (recursive via HierarchicalDataTemplate) -->
         <HierarchicalDataTemplate x:Key="TreeNodeTemplate" DataType="{x:Type m:FileTreeNode}"
                                   ItemsSource="{Binding Children}">
@@ -1520,8 +1630,11 @@
         <Grid Grid.Column="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>   <!-- Tab strip -->
+                <RowDefinition Height="Auto"/>   <!-- Toolbar -->
                 <RowDefinition Height="Auto"/>   <!-- Merge-conflict banner -->
+                <RowDefinition Height="Auto"/>   <!-- Find / replace / go-to bar -->
                 <RowDefinition Height="*"/>      <!-- Code area + minimap (or the diff editor) -->
+                <RowDefinition Height="Auto"/>   <!-- Status bar -->
                 <RowDefinition Height="Auto"/>   <!-- Terminal drawer -->
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
@@ -1532,7 +1645,7 @@
             <!-- ══════════ PREVIEW split — the built-in browser the agent drives (Dev Preview) ══════════
                  Its own column over all rows, so no WPF overlay (diff editor, banner) ever sits on top of the
                  page's native window. The page itself belongs to BrowserService and survives page switches. -->
-            <preview:PreviewDock Grid.Column="1" Grid.Row="0" Grid.RowSpan="4"
+            <preview:PreviewDock Grid.Column="1" Grid.Row="0" Grid.RowSpan="7"
                                  Visibility="{Binding IsChecked, ElementName=PreviewToggle, Converter={StaticResource BoolVis}}"/>
 
             <!-- Tab strip -->
@@ -1615,10 +1728,96 @@
                 </Grid>
             </Border>
 
+            <!-- ══════════ EDITOR TOOLBAR — the standard tools (owner 2026-10-12: "เซฟตรงไหน ไม่มีเลย") ══════════
+                 File · Undo/Redo · Clipboard · Find/Replace/Go to · Comment + the tools menu · view toggles. Every
+                 button also has its Notepad++ / VS Code shortcut (tooltips). -->
+            <Border x:Name="EditorToolbar" Grid.Row="1" Background="{DynamicResource Bg.Panel}" BorderThickness="0,0,0,1"
+                    BorderBrush="{DynamicResource Border.Subtle}" Padding="6,3">
+                <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="TbNew" Style="{StaticResource EdToolBtn}" Content="&#xE8A5;" Click="OnNewFile" ToolTip="{services:Loc edt.new}"/>
+                    <Button x:Name="TbOpen" Style="{StaticResource EdToolBtn}" Content="&#xE8E5;" Click="OnOpenFile" ToolTip="{services:Loc edt.open}"/>
+                    <Button x:Name="TbSave" Style="{StaticResource EdToolBtn}" Command="{Binding SaveActiveCommand}" ToolTip="{services:Loc edt.save}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc editor.save}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="TbSaveAs" Style="{StaticResource EdToolBtn}" Content="&#xE792;" Click="OnSaveAs"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.saveAs}"/>
+                    <Button x:Name="TbSaveAll" Style="{StaticResource EdToolBtn}" Content="&#xE78C;" Command="{Binding SaveAllCommand}"
+                            ToolTip="{services:Loc edt.saveAll}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbUndo" Style="{StaticResource EdToolBtn}" Content="&#xE7A7;" Click="OnUndo" ToolTip="{services:Loc edt.undo}"/>
+                    <Button x:Name="TbRedo" Style="{StaticResource EdToolBtn}" Content="&#xE7A6;" Click="OnRedo" ToolTip="{services:Loc edt.redo}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbCut" Style="{StaticResource EdToolBtn}" Content="&#xE8C6;" Click="OnCut"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.cut}"/>
+                    <Button x:Name="TbCopy" Style="{StaticResource EdToolBtn}" Content="&#xE8C8;" Click="OnCopy"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.copy}"/>
+                    <Button x:Name="TbPaste" Style="{StaticResource EdToolBtn}" Content="&#xE77F;" Click="OnPaste"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.paste}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbFind" Style="{StaticResource EdToolBtn}" Content="&#xE721;" Click="OnFind"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.find}"/>
+                    <Button x:Name="TbReplace" Style="{StaticResource EdToolBtn}" Content="&#xE8AB;" Click="OnReplace"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.replace}"/>
+                    <Button x:Name="TbGoTo" Style="{StaticResource EdToolBtn}" Content="&#xE8AD;" Click="OnGoTo"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.goTo}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbComment" Style="{StaticResource EdToolBtn}" Content="&#xE90A;" Click="OnToggleComment"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.comment}"/>
+                    <Button x:Name="TbTools" Style="{StaticResource EdToolBtn}" Click="OnToolsMenu"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.toolsTip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc edt.tools}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,4,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="ToolsMenu">
+                                <MenuItem Header="{services:Loc edt.dupLine}" InputGestureText="Ctrl+D" Click="OnDuplicateLines"/>
+                                <MenuItem Header="{services:Loc edt.delLine}" InputGestureText="Ctrl+Shift+L" Click="OnDeleteLines"/>
+                                <MenuItem Header="{services:Loc edt.moveUp}" InputGestureText="Alt+↑" Click="OnMoveLinesUp"/>
+                                <MenuItem Header="{services:Loc edt.moveDown}" InputGestureText="Alt+↓" Click="OnMoveLinesDown"/>
+                                <MenuItem Header="{services:Loc edt.joinLines}" InputGestureText="Ctrl+J" Click="OnJoinLines"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.upper}" InputGestureText="Ctrl+Shift+U" Click="OnUpperCase"/>
+                                <MenuItem Header="{services:Loc edt.lower}" InputGestureText="Ctrl+U" Click="OnLowerCase"/>
+                                <MenuItem Header="{services:Loc edt.title}" Click="OnTitleCase"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.sortAsc}" Click="OnSortAsc"/>
+                                <MenuItem Header="{services:Loc edt.sortDesc}" Click="OnSortDesc"/>
+                                <MenuItem Header="{services:Loc edt.dedupe}" Click="OnRemoveDuplicates"/>
+                                <MenuItem Header="{services:Loc edt.removeEmpty}" Click="OnRemoveEmpty"/>
+                                <MenuItem Header="{services:Loc edt.trimTrailing}" Click="OnTrimTrailing"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.tabsToSpaces}" Click="OnTabsToSpaces"/>
+                                <MenuItem Header="{services:Loc edt.spacesToTabs}" Click="OnSpacesToTabs"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.foldAll}" Click="OnFoldAll"/>
+                                <MenuItem Header="{services:Loc edt.unfoldAll}" Click="OnUnfoldAll"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.selectAll}" InputGestureText="Ctrl+A" Click="OnSelectAll"/>
+                                <MenuItem Header="{services:Loc edt.columnTip}" IsEnabled="False"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <ToggleButton x:Name="TbWrap" Style="{StaticResource EdToolToggle}" Content="&#xE751;" Click="OnToggleWrap"
+                                  ToolTip="{services:Loc edt.wrap}"/>
+                    <ToggleButton x:Name="TbWhitespace" Style="{StaticResource EdToolToggle}" Content="¶" FontFamily="Segoe UI" FontSize="14"
+                                  Click="OnToggleWhitespace" ToolTip="{services:Loc edt.whitespace}"/>
+                    <Button x:Name="TbZoomOut" Style="{StaticResource EdToolBtn}" Content="&#xE71F;" Click="OnZoomOut" ToolTip="{services:Loc edt.zoomOut}"/>
+                    <Button x:Name="TbZoomIn" Style="{StaticResource EdToolBtn}" Content="&#xE8A3;" Click="OnZoomIn" ToolTip="{services:Loc edt.zoomIn}"/>
+                </WrapPanel>
+            </Border>
+
             <!-- ══════════ MERGE-CONFLICT banner ══════════
                  Appears whenever the open buffer still has git's markers in it. Resolutions edit the
                  TAB (undoable, saved deliberately) — never the file behind the user's back. -->
-            <Border Grid.Row="1" Padding="12,8" BorderThickness="0,0,0,1"
+            <Border Grid.Row="2" Padding="12,8" BorderThickness="0,0,0,1"
                     Background="{DynamicResource Banner.Danger.Background}" BorderBrush="{DynamicResource Accent.3}"
                     Visibility="{Binding HasConflicts, Converter={StaticResource BoolVis}}">
                 <StackPanel>
@@ -1771,8 +1970,90 @@
                 </StackPanel>
             </Border>
 
+            <!-- ══════════ FIND / REPLACE / GO TO LINE bar (Ctrl+F · Ctrl+H · Ctrl+G) ══════════
+                 Every match on screen is highlighted; "3 of 17" counts them. Regex mode follows Notepad++:
+                 '.' never eats a CR, '$' works on CRLF lines, \n \t and $1 work in the replacement. -->
+            <Border x:Name="FindBar" Grid.Row="3" Visibility="Collapsed" Background="{DynamicResource Surface.Sunken}"
+                    BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}" Padding="8,5">
+                <StackPanel>
+                    <StackPanel x:Name="FindRow" Orientation="Horizontal">
+                        <Border Width="300" CornerRadius="4" BorderThickness="1" Background="{DynamicResource Input.Background}"
+                                BorderBrush="{DynamicResource Input.Border}" x:Name="FindBoxFrame">
+                            <Grid>
+                                <TextBox x:Name="FindBox" Style="{StaticResource EdFindInput}" TextChanged="OnFindTextChanged"
+                                         PreviewKeyDown="OnFindBoxKeyDown"/>
+                                <TextBlock Text="{services:Loc edt.findHint}" IsHitTestVisible="False" Margin="8,0" FontSize="12"
+                                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=FindBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <ToggleButton x:Name="FindCase" Style="{StaticResource EdToolToggle}" Content="Aa" FontFamily="Segoe UI" FontSize="12"
+                                      Margin="6,0,0,0" Click="OnFindOptionChanged" ToolTip="{services:Loc edt.matchCase}"/>
+                        <ToggleButton x:Name="FindWord" Style="{StaticResource EdToolToggle}" FontFamily="Segoe UI" FontSize="12"
+                                      Click="OnFindOptionChanged" ToolTip="{services:Loc edt.wholeWord}">
+                            <TextBlock Text="ab" TextDecorations="Underline"/>
+                        </ToggleButton>
+                        <ToggleButton x:Name="FindRegex" Style="{StaticResource EdToolToggle}" Content=".*" FontFamily="Consolas" FontSize="12"
+                                      Click="OnFindOptionChanged" ToolTip="{services:Loc edt.regex}"/>
+                        <TextBlock x:Name="FindCount" MinWidth="96" Margin="8,0" FontSize="11" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Text.Muted}"/>
+                        <Button x:Name="FindPrevBtn" Style="{StaticResource EdToolBtn}" Content="&#xE74A;" Click="OnFindPrev" ToolTip="{services:Loc edt.findPrev}"/>
+                        <Button x:Name="FindNextBtn" Style="{StaticResource EdToolBtn}" Content="&#xE74B;" Click="OnFindNext" ToolTip="{services:Loc edt.findNext}"/>
+                        <Button x:Name="FindReplaceToggle" Style="{StaticResource EdToolBtn}" Content="&#xE8AB;" Click="OnReplace" ToolTip="{services:Loc edt.replace}"/>
+                        <Button Style="{StaticResource EdToolBtn}" Content="&#xE711;" FontSize="10" Click="OnCloseFindBar" ToolTip="{services:Loc edt.closeBar}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="ReplaceRow" Orientation="Horizontal" Margin="0,5,0,0" Visibility="Collapsed">
+                        <Border Width="300" CornerRadius="4" BorderThickness="1" Background="{DynamicResource Input.Background}"
+                                BorderBrush="{DynamicResource Input.Border}">
+                            <Grid>
+                                <TextBox x:Name="ReplaceBox" Style="{StaticResource EdFindInput}" PreviewKeyDown="OnReplaceBoxKeyDown"/>
+                                <TextBlock Text="{services:Loc edt.replaceHint}" IsHitTestVisible="False" Margin="8,0" FontSize="12"
+                                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=ReplaceBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <Button x:Name="ReplaceOneBtn" Style="{StaticResource EdTextBtn}" Content="{services:Loc edt.replaceOne}" Click="OnReplaceOne"
+                                ToolTip="{services:Loc edt.replaceOneTip}"/>
+                        <Button x:Name="ReplaceAllBtn" Style="{StaticResource EdTextBtn}" Content="{services:Loc edt.replaceAll}" Click="OnReplaceAll"
+                                ToolTip="{services:Loc edt.replaceAllTip}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="GoToRow" Orientation="Horizontal" Visibility="Collapsed">
+                        <TextBlock Text="{services:Loc edt.goToLabel}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="{DynamicResource Text.Secondary}"/>
+                        <Border Width="120" CornerRadius="4" BorderThickness="1" Background="{DynamicResource Input.Background}"
+                                BorderBrush="{DynamicResource Input.Border}">
+                            <TextBox x:Name="GoToBox" Style="{StaticResource EdFindInput}" PreviewKeyDown="OnGoToBoxKeyDown"/>
+                        </Border>
+                        <TextBlock x:Name="GoToHint" Margin="8,0" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                        <Button x:Name="GoToBtn" Style="{StaticResource EdTextBtn}" Content="{services:Loc edt.go}" Click="OnGoToApply"/>
+                        <Button Style="{StaticResource EdToolBtn}" Content="&#xE711;" FontSize="10" Margin="6,0,0,0" Click="OnCloseFindBar"
+                                ToolTip="{services:Loc edt.closeBar}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <!-- Code area + minimap -->
-            <Grid Grid.Row="2">
+            <Grid Grid.Row="4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="80"/>
@@ -1824,7 +2105,7 @@
                  two synced editors: alignment is then structural and cannot drift apart on scroll. -->
             <!-- Bg.Window makes the overlay opaque over the editor; Editor.Background on top gives it the same
                  code surface as the editor (transparent in Midnight, a light page in Classic). -->
-            <Border Grid.Row="2" Background="{DynamicResource Bg.Window}"
+            <Border Grid.Row="4" Background="{DynamicResource Bg.Window}"
                     Visibility="{Binding IsDiffViewActive, Converter={StaticResource BoolVis}}">
                 <Grid Background="{DynamicResource Editor.Background}">
                     <Grid.RowDefinitions>
@@ -1965,7 +2246,29 @@
             </Border>
 
             <!-- Terminal drawer — a REAL persistent PowerShell in the project folder -->
-            <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Border.Subtle}"
+            <!-- ══════════ EDITOR STATUS BAR — where you are, what the file is ══════════
+                 Line ending and encoding are menus: CRLF ↔ LF, UTF-8 / UTF-8 BOM / UTF-16 / TIS-620 (Thai). -->
+            <Border x:Name="EditorStatusBar" Grid.Row="5" Background="{DynamicResource Bg.Panel}" BorderThickness="0,1,0,0"
+                    BorderBrush="{DynamicResource Border.Subtle}" Height="24"
+                    Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
+                <DockPanel LastChildFill="False">
+                    <TextBlock x:Name="StPosition" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"
+                               Foreground="{DynamicResource Text.Secondary}"/>
+                    <TextBlock x:Name="StSelection" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"/>
+                    <TextBlock x:Name="StLines" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"/>
+                    <Button x:Name="StZoom" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnZoomReset"
+                            ToolTip="{services:Loc edt.zoomReset}" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="StOverwrite" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"
+                               ToolTip="{services:Loc edt.insTip}"/>
+                    <TextBlock x:Name="StLanguage" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"/>
+                    <Button x:Name="StEncoding" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnEncodingMenu"
+                            Content="{Binding ActiveTab.EncodingLabel}" ToolTip="{services:Loc edt.encodingTip}"/>
+                    <Button x:Name="StEol" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnEolMenu"
+                            ToolTip="{services:Loc edt.eolTip}"/>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="6" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Border.Subtle}"
                     Background="{DynamicResource Bg.Panel}">
                 <StackPanel>
                     <!-- Header row (click to expand/collapse) -->

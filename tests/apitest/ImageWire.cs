@@ -335,6 +335,19 @@ internal static class ImageWire
                 && withImg[0].GetProperty("type").GetString() == "text" && withImg[1].GetProperty("type").GetString() == "image";
             var src = shape ? withImg[1].GetProperty("source") : default;
             Check("wire", "Anthropic: tool_result content = [text, image]", shape, results[0].GetRawText()[..Math.Min(300, results[0].GetRawText().Length)]);
+
+            // Images the user attached to a message (Ctrl+V / drop / "+"): image blocks in front of its text.
+            var asked = new List<NativeMessage> { new() { Role = "user", Content = { new ContentBlock { Type = "text", Text = "what is this?", Images = [img] } } } };
+            int beforeAsk = am.Count;
+            await ap.ChatWithToolsAsync(asked, "sys", ImageWireGolden.Tools());
+            using (var askDoc = JsonDocument.Parse(am.BodyAt(beforeAsk)))
+            {
+                var uc = askDoc.RootElement.GetProperty("messages")[0].GetProperty("content");
+                bool userShape = uc.GetArrayLength() == 2 && uc[0].GetProperty("type").GetString() == "image"
+                    && uc[0].GetProperty("source").GetProperty("type").GetString() == "base64"
+                    && uc[1].GetProperty("type").GetString() == "text" && uc[1].GetProperty("text").GetString() == "what is this?";
+                Check("wire", "Anthropic: a user message's attached image = [image, text]", userShape, uc.GetRawText()[..Math.Min(240, uc.GetRawText().Length)]);
+            }
             Check("wire", "Anthropic: source base64 + media_type image/jpeg, data decodes to the same bytes",
                 shape && src.GetProperty("type").GetString() == "base64" && src.GetProperty("media_type").GetString() == "image/jpeg"
                 && Convert.FromBase64String(src.GetProperty("data").GetString()).SequenceEqual(jpeg), "");
@@ -389,6 +402,22 @@ internal static class ImageWire
         s.ExtendedThinkingEnabled = false;
         s.ProviderConfigs["OpenAI"] = new ProviderConfig { ApiKey = "sk-imagewire", BaseUrl = mock.Root + "/v1", SelectedModel = "gpt-5.5" };
         var oa = new OpenAiProvider(svc);
+        {
+            var asked = new List<NativeMessage> { new() { Role = "user", Content = { new ContentBlock { Type = "text", Text = "what is this?", Images = [img] } } } };
+            var body = Json(JsonSerializer.Serialize(oa.BuildResponsesRequest(asked, "sys", ImageWireGolden.Tools(), null)));
+            var first = body.GetProperty("input")[0];
+            var userParts = first.GetProperty("content");
+            Check("wire", "OpenAI Responses: a user message's attached image = user [input_image, input_text]",
+                Str(first, "role") == "user" && userParts.ValueKind == JsonValueKind.Array && userParts.GetArrayLength() == 2
+                && Str(userParts[0], "type") == "input_image" && Str(userParts[0], "image_url") == "data:image/jpeg;base64," + b64
+                && Str(userParts[1], "type") == "input_text", Trunc(first.GetRawText(), 260));
+            var gem = Json(JsonSerializer.Serialize(GeminiProvider.BuildToolContents(asked)));
+            var gparts = gem[0].GetProperty("parts");
+            Check("wire", "Gemini: a user message's attached image = user parts [inlineData, text]",
+                Str(gem[0], "role") == "user" && gparts.GetArrayLength() == 2
+                && gparts[0].TryGetProperty("inlineData", out var userInline) && Str(userInline, "data") == b64 && Str(gparts[1], "text") == "what is this?",
+                Trunc(gem[0].GetRawText(), 260));
+        }
         Check("wire", "OpenAI vision ids: gpt-4o / gpt-4.1 / gpt-5.5 / o3 / o4-mini yes; o3-mini, audio and gpt-3.5 no",
             oa.SupportsToolResultImages("gpt-4o") && oa.SupportsToolResultImages("gpt-4.1-mini") && oa.SupportsToolResultImages("gpt-5.5")
             && oa.SupportsToolResultImages("o3") && oa.SupportsToolResultImages("o4-mini")

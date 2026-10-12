@@ -186,9 +186,14 @@ public sealed class DatabaseService : IDisposable
                 cmd.Parameters.AddWithValue("$role", (int)msg.Role);
                 cmd.Parameters.AddWithValue("$content", msg.Content ?? "");
                 cmd.Parameters.AddWithValue("$ts", msg.Timestamp.ToString("o"));
-                cmd.Parameters.AddWithValue("$tn", (object?)msg.ToolName ?? DBNull.Value);
+                // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
+                // a file that has been damaged before.
+                bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0;
+                cmd.Parameters.AddWithValue("$tn", userImages ? AttachedImagesTag : (object?)msg.ToolName ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tsm", (object?)msg.ToolSummary ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$to", (object?)msg.ToolOutput ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$to", userImages
+                    ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
+                    : (object?)msg.ToolOutput ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tsuc", msg.ToolSuccess ? 1 : 0);
                 cmd.Parameters.AddWithValue("$err", msg.HasError ? 1 : 0);
                 cmd.Parameters.AddWithValue("$order", i);
@@ -274,7 +279,7 @@ public sealed class DatabaseService : IDisposable
                 // so they stay out of the model's history and the next save drops them.
                 if (role == MessageRole.Assistant && ChatMessage.IsLegacyStatusLine(content))
                     role = MessageRole.AgentStatus;
-                session.Messages.Add(new ChatMessage
+                var loaded = new ChatMessage
                 {
                     Id = reader.GetString(0),
                     Role = role,
@@ -285,12 +290,23 @@ public sealed class DatabaseService : IDisposable
                     ToolOutput = reader.IsDBNull(6) ? null : reader.GetString(6),
                     ToolSuccess = reader.GetInt32(7) == 1,
                     HasError = reader.GetInt32(8) == 1,
-                });
+                };
+                if (role == MessageRole.User && loaded.ToolName == AttachedImagesTag)
+                {
+                    try { loaded.AttachedImages = System.Text.Json.JsonSerializer.Deserialize<List<string>>(loaded.ToolOutput ?? "[]") ?? new(); }
+                    catch { /* unreadable list: the message without its pictures */ }
+                    loaded.ToolName = null;
+                    loaded.ToolOutput = null;
+                }
+                session.Messages.Add(loaded);
             }
         }
 
         return session;
     }
+
+    /// <summary>tool_name of a user message whose tool_output holds its attached images (a JSON list of paths).</summary>
+    private const string AttachedImagesTag = "@images";
 
     private bool? _healthy;
 

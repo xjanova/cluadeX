@@ -211,7 +211,9 @@ internal static partial class Program
             seen++;
             var hit = root.InputHitTest(c) as DependencyObject;
             if (hit != null && IsWithin(hit, b)) continue;
-            covered.Add($"{Describe(b)} covered by {Describe(hit)}");
+            // Where, and inside what (a ComboBox's own toggle has no name of its own), so a failure can be found.
+            string owner = b.TemplatedParent is FrameworkElement tp ? $" in {Describe(tp)}" : "";
+            covered.Add($"{Describe(b)}{owner} @{c.X:0},{c.Y:0} covered by {Describe(hit)}");
         }
         Check($"{set}/{page}: every visible button is reachable by a click ({seen} checked)", covered.Count == 0,
               string.Join("; ", covered.Take(6)));
@@ -222,6 +224,166 @@ internal static partial class Program
     /// added to the tree on screen from a worker thread, which WPF refuses (the exception went to the debug log).
     /// Needs the real, bound TreeView — a view model alone accepts the cross-thread add.
     /// </summary>
+    static bool EditorToolsDone;
+
+    /// <summary>A real click on a button (its automation peer: Click handlers AND its Command run, as for a mouse).
+    /// Toggle buttons get their Click event, which is what the editor's toggles listen to.</summary>
+    static void Press(ButtonBase b)
+    {
+        if (b is ToggleButton) { b.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); return; }
+        var peer = new System.Windows.Automation.Peers.ButtonAutomationPeer((Button)b);
+        ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+    }
+
+    /// <summary>
+    /// The Code Editor's standard tools, driven on the real page (owner 2026-10-12: "เซฟตรงไหน ไม่มีเลย"): the
+    /// toolbar's Save writes the file, Find counts and steps through matches, Replace All is one undo, Go to line,
+    /// comment toggling, the line tools menu, folding, zoom, word wrap, and what the status bar says. Once, in the
+    /// startup theme; everything is put back so later renders still match.
+    /// </summary>
+    static async Task EditorToolsCheck(string set)
+    {
+        if (EditorToolsDone) return;
+        EditorToolsDone = true;
+        var vm = MainVm.CodeEditorVM;
+        string file = Path.Combine(FixtureProject, "src", "Greeter.cs");
+        await vm.OpenPathAsync(file);
+        await Idle(200);
+        var view = Find<CluadeX.Views.CodeEditorView>((DependencyObject)RootVisual(MainWin)).FirstOrDefault();
+        if (view == null) { Check($"{set}/editor tools: the code page is on screen", false); return; }
+        T El<T>(string name) where T : class => view.FindName(name) as T;
+        var editor = El<ICSharpCode.AvalonEdit.TextEditor>("Editor")!;
+        var doc = editor.Document;
+        string original = File.ReadAllText(file);
+        int Count(string word) { int n = 0, i = 0; string t = doc.Text; while ((i = t.IndexOf(word, i, StringComparison.Ordinal)) >= 0) { n++; i += word.Length; } return n; }
+        try
+        {
+            var save = El<Button>("TbSave")!;
+            Check($"{set}/editor tools: a toolbar with Save on it is on screen", El<FrameworkElement>("EditorToolbar") is { IsVisible: true } && save.IsVisible);
+            CommandManager.InvalidateRequerySuggested();
+            await Idle(100);
+            Check($"{set}/editor tools: Save is greyed out while there is nothing to save", !save.IsEnabled);
+            doc.Insert(doc.TextLength, "// edited by the harness\n");
+            CommandManager.InvalidateRequerySuggested();
+            await Idle(150);
+            Check($"{set}/editor tools: an edit lights Save up", save.IsEnabled);
+            Press(save);
+            await WaitUntil(() => vm.ActiveTab is { IsDirty: false }, 4000);
+            Check($"{set}/editor tools: clicking Save writes the file to disk",
+                File.ReadAllText(file).EndsWith("// edited by the harness\n") && vm.ActiveTab is { IsDirty: false });
+
+            // ── find ──
+            Press(El<Button>("TbFind")!);
+            await Idle(100);
+            var findBox = El<TextBox>("FindBox")!;
+            Check($"{set}/editor tools: the Find button opens the find bar", El<FrameworkElement>("FindBar") is { IsVisible: true } && El<FrameworkElement>("ReplaceRow") is { IsVisible: false });
+            findBox.Text = "count";
+            await Idle(150);
+            var countLabel = El<TextBlock>("FindCount")!;
+            int firstHit = editor.SelectionStart;
+            Check($"{set}/editor tools: typing in Find jumps to the first match and counts them all",
+                editor.SelectedText == "count" && countLabel.Text.Contains('3'), $"sel='{editor.SelectedText}' label='{countLabel.Text}'");
+            Press(El<Button>("FindNextBtn")!);
+            await Idle(100);
+            Check($"{set}/editor tools: Next moves to the next match", editor.SelectedText == "count" && editor.SelectionStart > firstHit,
+                $"{firstHit} → {editor.SelectionStart} label='{countLabel.Text}'");
+
+            // ── replace all = one undo ──
+            Press(El<Button>("TbReplace")!);
+            await Idle(100);
+            El<TextBox>("ReplaceBox")!.Text = "total";
+            Press(El<Button>("ReplaceAllBtn")!);
+            await Idle(150);
+            Check($"{set}/editor tools: Replace all replaces every match", Count("count") == 0 && Count("total") == 3, $"count={Count("count")} total={Count("total")}");
+            Press(El<Button>("TbUndo")!);
+            await Idle(100);
+            Check($"{set}/editor tools: one Undo takes the whole Replace all back", Count("count") == 3 && Count("total") == 0, $"count={Count("count")}");
+
+            // ── go to line ──
+            Press(El<Button>("TbGoTo")!);
+            await Idle(100);
+            El<TextBox>("GoToBox")!.Text = "6";
+            Press(El<Button>("GoToBtn")!);
+            await Idle(100);
+            Check($"{set}/editor tools: Go to line 6 puts the caret there and closes the bar",
+                editor.TextArea.Caret.Line == 6 && El<FrameworkElement>("FindBar") is { IsVisible: false }, $"line {editor.TextArea.Caret.Line}");
+
+            // ── comment toggle ──
+            string LineText(int n) => doc.GetText(doc.GetLineByNumber(n));
+            string line6 = LineText(6);
+            Press(El<Button>("TbComment")!);
+            await Idle(80);
+            string commented = LineText(6);
+            Press(El<Button>("TbComment")!);
+            await Idle(80);
+            Check($"{set}/editor tools: Comment puts // on the line, and a second click takes it off",
+                commented == "// " + line6 && LineText(6) == line6, $"'{commented}' → '{LineText(6)}'");
+
+            // ── status bar ──
+            Check($"{set}/editor tools: the status bar shows line, encoding, line ending and language",
+                (El<TextBlock>("StPosition")?.Text ?? "").Contains('6') && El<Button>("StEncoding")?.Content as string == "UTF-8"
+                && El<Button>("StEol")?.Content as string == "LF" && (El<TextBlock>("StLanguage")?.Text ?? "") == "C#",
+                $"'{El<TextBlock>("StPosition")?.Text}' '{El<Button>("StEncoding")?.Content}' '{El<Button>("StEol")?.Content}' '{El<TextBlock>("StLanguage")?.Text}'");
+
+            // ── line tools menu ──
+            var menu = El<ContextMenu>("ToolsMenu")!;
+            MenuItem Item(string key) => menu.Items.OfType<MenuItem>().First(m => (m.Header as string) == CluadeX.Services.LocalizedResources.Instance[key]);
+            Check($"{set}/editor tools: Comment with nothing selected leaves nothing selected (the next key must not replace the line)",
+                editor.SelectionLength == 0 && editor.TextArea.Caret.Line == 6, $"selection {editor.SelectionLength}, line {editor.TextArea.Caret.Line}");
+            editor.Select(doc.GetLineByNumber(3).Offset, 0);   // a click on line 3
+            string line3 = LineText(3);
+            int lines = doc.LineCount;
+            Item("edt.dupLine").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            await Idle(60);
+            Check($"{set}/editor tools: Tools ▸ Duplicate line", doc.LineCount == lines + 1 && LineText(4) == line3, $"'{LineText(4)}'");
+            Press(El<Button>("TbUndo")!);
+            await Idle(60);
+
+            // ── folding ──
+            await Idle(900);
+            var folding = editor.TextArea.TextView.GetService(typeof(ICSharpCode.AvalonEdit.Folding.FoldingManager)) as ICSharpCode.AvalonEdit.Folding.FoldingManager;
+            int folds = folding?.AllFoldings.Count() ?? 0;
+            Item("edt.foldAll").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            bool allFolded = folding != null && folds > 0 && folding.AllFoldings.All(f => f.IsFolded);
+            Item("edt.unfoldAll").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Check($"{set}/editor tools: C# code folds (class, method) and Fold all / Unfold all work",
+                folds >= 2 && allFolded && folding!.AllFoldings.All(f => !f.IsFolded), $"{folds} foldings");
+
+            // ── view toggles ──
+            Press(El<Button>("TbZoomIn")!);
+            await Idle(60);
+            bool bigger = editor.FontSize > 13 && (El<Button>("StZoom")?.Content as string) == "110%";
+            Press(El<Button>("StZoom")!);
+            await Idle(60);
+            Check($"{set}/editor tools: zoom in, and the status bar's % puts it back", bigger && Math.Abs(editor.FontSize - 13) < 0.01, $"{editor.FontSize}");
+            Press(El<ToggleButton>("TbWrap")!);
+            bool wrapped = editor.WordWrap && El<ToggleButton>("TbWrap")!.IsChecked == true;
+            Press(El<ToggleButton>("TbWrap")!);
+            Check($"{set}/editor tools: word wrap toggles (and the button shows it)", wrapped && !editor.WordWrap);
+
+            // A picture for the eye: the find + replace bar open on a match.
+            Press(El<Button>("TbReplace")!);
+            findBox.Text = "count";
+            await Idle(200);
+            SavePng(Snapshot((Visual)RootVisual(MainWin), W, H), Path.Combine(OutRoot, "editor-tools.png"));
+            Log($"      picture: {Path.Combine(OutRoot, "editor-tools.png")}");
+            ClickableButtons(set, "code-editor (toolbar + find/replace open)");
+        }
+        finally
+        {
+            // Back to the startup state: file as written, bar closed, caret at the top.
+            try { view.CloseFindBar(); } catch { }
+            doc.Text = original;
+            await Idle(50);
+            if (vm.SaveActiveCommand.CanExecute(null)) vm.SaveActiveCommand.Execute(null);
+            await WaitUntil(() => vm.ActiveTab is { IsDirty: false }, 4000);
+            editor.TextArea.Caret.Offset = 0;
+            editor.Select(0, 0);
+            editor.ScrollToHome();
+            await Idle(100);
+        }
+    }
+
     static async Task ExpandFolderCheck(string set)
     {
         var vm = MainVm.CodeEditorVM;
@@ -664,6 +826,7 @@ internal static partial class Program
                 Invoke(MainVm.ChatVM, "ApplyWorkingDirectory", FixtureProject, false, false);
                 await Idle(200);
                 await ExpandFolderCheck(set);
+                await EditorToolsCheck(set);
             }
         }
         settingsVm.SelectedCategory = "provider";

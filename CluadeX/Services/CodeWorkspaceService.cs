@@ -163,7 +163,7 @@ public class CodeWorkspaceService
         var fi = new FileInfo(fullPath);
         if (fi.Length > MaxOpenBytes) return null;
 
-        CluadeX.Helpers.TextFileCodec.TextFile decoded;
+        CluadeX.Helpers.TextFileCodec.EditorText decoded;
         DiskStamp stamp;
         try
         {
@@ -171,10 +171,13 @@ public class CodeWorkspaceService
             var loaded = await Task.Run(async () =>
             {
                 byte[] bytes = await File.ReadAllBytesAsync(fullPath, ct).ConfigureAwait(false);
-                // Detect binary by checking for NUL bytes in the first 1 KB — refuse to open it as text.
-                for (int i = 0; i < Math.Min(1024, bytes.Length); i++)
-                    if (bytes[i] == 0) return ((CluadeX.Helpers.TextFileCodec.TextFile, DiskStamp)?)null;
-                return (CluadeX.Helpers.TextFileCodec.Decode(bytes), StampOf(bytes, fullPath));
+                // Detect binary by checking for NUL bytes in the first 1 KB — refuse to open it as text. A UTF-16
+                // file (BOM FF FE / FE FF) is full of NULs and is text.
+                bool utf16 = bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF));
+                if (!utf16)
+                    for (int i = 0; i < Math.Min(1024, bytes.Length); i++)
+                        if (bytes[i] == 0) return ((CluadeX.Helpers.TextFileCodec.EditorText, DiskStamp)?)null;
+                return (CluadeX.Helpers.TextFileCodec.DecodeForEditor(bytes), StampOf(bytes, fullPath));
             }, ct);
             if (loaded == null) return null;
             (decoded, stamp) = loaded.Value;
@@ -184,7 +187,10 @@ public class CodeWorkspaceService
             return null;
         }
 
-        var tab = new OpenFileTab { FullPath = fullPath, HasBom = decoded.HasBom, IsValidUtf8 = decoded.IsValidUtf8 };
+        var tab = new OpenFileTab
+        {
+            FullPath = fullPath, HasBom = decoded.HasBom, CodePage = decoded.CodePage, DecodedFaithfully = decoded.Faithful,
+        };
         tab.MarkOpened(decoded.Text);
         SetStamp(tab, stamp);
         return tab;
@@ -200,7 +206,8 @@ public class CodeWorkspaceService
     {
         if (_stamps.TryGetValue(freshlyLoaded, out var stamp)) SetStamp(target, stamp);
         target.HasBom = freshlyLoaded.HasBom;
-        target.IsValidUtf8 = freshlyLoaded.IsValidUtf8;
+        target.CodePage = freshlyLoaded.CodePage;
+        target.DecodedFaithfully = freshlyLoaded.DecodedFaithfully;
     }
 
     /// <summary>True when the file on disk is no longer what this tab last read or wrote (edited by
@@ -232,7 +239,7 @@ public class CodeWorkspaceService
         {
             if (!File.Exists(fullPath) || new FileInfo(fullPath).Length > MaxOpenBytes) return null;
             return await Task.Run(async () =>
-                CluadeX.Helpers.TextFileCodec.Decode(await File.ReadAllBytesAsync(fullPath).ConfigureAwait(false)).Text);
+                CluadeX.Helpers.TextFileCodec.DecodeForEditor(await File.ReadAllBytesAsync(fullPath).ConfigureAwait(false)).Text);
         }
         catch { return null; }
     }
@@ -269,6 +276,36 @@ public class CodeWorkspaceService
         return CompleteSave(tab, content, bytes);
     }
 
+    /// <summary>
+    /// Save As: write the tab's text, in its encoding, to <paramref name="newPath"/> (atomically — an existing file
+    /// there is replaced only once the new bytes are complete). The tab itself is untouched; the caller opens the
+    /// new file in its place. The old file on disk keeps what it had, as in Notepad++.
+    /// </summary>
+    public async Task<SaveResult> SaveCopyAsAsync(OpenFileTab tab, string newPath, CancellationToken ct = default)
+    {
+        if (!tab.DecodedFaithfully) return new SaveResult(SaveOutcome.NotUtf8, null);
+        tab.FlushPendingEdits();
+        byte[] bytes;
+        try { bytes = CluadeX.Helpers.TextFileCodec.EncodeForEditor(tab.Content, tab.CodePage, tab.HasBom); }
+        catch (EncoderFallbackException) { return new SaveResult(SaveOutcome.CannotEncode, null); }
+        try { await WriteAtomicAsync(newPath, bytes, ct); }
+        catch (Exception ex) { return new SaveResult(SaveOutcome.Failed, ex.GetType().Name + ": " + ex.Message); }
+        return new SaveResult(SaveOutcome.Saved, null);
+    }
+
+    /// <summary>A new empty file (never over an existing one: false when the name is taken or cannot be made).</summary>
+    public static bool TryCreateEmptyFile(string path, out string? error)
+    {
+        error = null;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using (new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+            return true;
+        }
+        catch (Exception ex) { error = ex.Message; return false; }
+    }
+
     /// <summary>Synchronous save, for the one caller that cannot await: the window's Closing handler
     /// (awaiting there would let the window close before the bytes are written).</summary>
     public SaveResult SaveTabChecked(OpenFileTab tab, bool overwriteExternalChanges)
@@ -292,15 +329,15 @@ public class CodeWorkspaceService
         content = "";
         bytes = Array.Empty<byte>();
         if (tab == null || string.IsNullOrEmpty(tab.FullPath)) return new SaveResult(SaveOutcome.Failed, "no path");
-        if (!tab.IsValidUtf8) return new SaveResult(SaveOutcome.NotUtf8, null);
+        if (!tab.DecodedFaithfully) return new SaveResult(SaveOutcome.NotUtf8, null);
         tab.FlushPendingEdits();   // a large file's last keystrokes may still be only in the editor
 
         if (!overwriteExternalChanges && HasChangedOnDisk(tab))
             return new SaveResult(SaveOutcome.ChangedOnDisk, null) { DeletedOnDisk = !File.Exists(tab.FullPath) };
 
         content = tab.Content;   // snapshot: the user keeps typing while the write runs
-        byte[] body = Encoding.UTF8.GetBytes(content);
-        bytes = tab.HasBom ? Encoding.UTF8.GetPreamble().Concat(body).ToArray() : body;
+        try { bytes = CluadeX.Helpers.TextFileCodec.EncodeForEditor(content, tab.CodePage, tab.HasBom); }
+        catch (EncoderFallbackException) { return new SaveResult(SaveOutcome.CannotEncode, null); }
         return null;
     }
 
@@ -428,8 +465,11 @@ public class CodeWorkspaceService
 public enum SaveOutcome
 {
     Saved,
-    /// <summary>The tab came from a non-UTF-8 file; saving would destroy its characters.</summary>
+    /// <summary>The tab's text is a lossy reading of the file (no encoding reproduced its bytes); saving would
+    /// destroy its characters.</summary>
     NotUtf8,
+    /// <summary>The file's legacy encoding (e.g. TIS-620) cannot hold a character in the tab — nothing was written.</summary>
+    CannotEncode,
     /// <summary>The file on disk changed (or vanished) since the tab read it — nothing was written.</summary>
     ChangedOnDisk,
     Failed,

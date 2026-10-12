@@ -1114,6 +1114,13 @@ public partial class CodeAgentService
     }
 
     /// <summary>Can <paramref name="p"/>'s model see tool images right now (from what is already known)?</summary>
+    /// <summary>What a model that cannot see is told about the images the user attached.</summary>
+    public static string AttachedImagesNote(IEnumerable<string> paths)
+    {
+        var list = paths.ToList();
+        return $"[The user attached {list.Count} image(s), but this model cannot see images. Files: {string.Join(", ", list)}]";
+    }
+
     private bool ProviderSeesImages(Services.Providers.IAiProvider? p)
     {
         try { return p != null && p.SupportsToolResultImages(ModelIdFor(p)); }
@@ -2699,10 +2706,11 @@ public partial class CodeAgentService
         }
 
         // Add current user message
+        var currentUserBlock = new Services.Providers.ContentBlock { Type = "text", Text = userMessage };
         nativeMessages.Add(new Services.Providers.NativeMessage
         {
             Role = "user",
-            Content = { new Services.Providers.ContentBlock { Type = "text", Text = userMessage } },
+            Content = { currentUserBlock },
         });
 
         // Ensure alternating roles
@@ -2711,6 +2719,13 @@ public partial class CodeAgentService
         // Tool images: sent only to a model that sees them; a blind one is told in text, naming the text tools
         // it has instead. Only the newest few stay in the conversation (each one resends on every request).
         bool loopSeesImages = ProviderSeesImages(loopProvider);
+        // Images the user attached to this message: pixels for a model that sees them, their files in words for one
+        // that doesn't.
+        if (AgentRunScope.Current?.UserImages is { Count: > 0 } userImages)
+        {
+            if (loopSeesImages) currentUserBlock.Images = userImages;
+            else currentUserBlock.Text += "\n\n" + AttachedImagesNote(userImages.Select(i => i.FilePath ?? "(pasted image)"));
+        }
         string? blindHint = Vision.ToolImageWire.BlindHint(toolSchemas.Select(t => t.Name));
         // At least 1: with 0 a vision model whose prompt says it can see would never get a single image. The newest
         // step's images always go out whatever this is (KeepNewestImages) — it only bounds the older ones.

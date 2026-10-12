@@ -246,6 +246,8 @@ internal static class Program
         await TestBackgroundRuns();           // R (was L2: switching mid-turn stopped the turn)
         await TestTypeWhileWorking();         // W: typing while a reply runs reaches it
         await TestChatOpensItsProject();      // F: an old chat brings its project back
+        await TestAttachedImages();           // X: images pasted / dropped / picked into a message
+        await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6
@@ -767,6 +769,275 @@ internal static class Program
             Vm.HasProject && string.Equals(Vm.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
         await WaitUntil(() => !Vm.IsGenerating, 10000);
         Vm.SetWorkingDirectory("");
+    }
+
+    static byte[] TinyImage(System.Windows.Media.Imaging.BitmapEncoder enc)
+    {
+        var px = Enumerable.Range(0, 32 * 32 * 4).Select(i => (byte)(i % 4 == 3 ? 255 : 90 + i % 120)).ToArray();
+        var bmp = System.Windows.Media.Imaging.BitmapSource.Create(32, 32, 96, 96, System.Windows.Media.PixelFormats.Bgr32, null, px, 32 * 4);
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+        using var ms = new MemoryStream();
+        enc.Save(ms);
+        return ms.ToArray();
+    }
+
+    /// <summary>X — images attached to a message: pasted (Ctrl+V), dropped or picked, shown before sending and in the
+    /// bubble, stored with the chat, and sent with it (a provider that can't see is told the file instead).</summary>
+    static async Task TestAttachedImages()
+    {
+        Log("\n## X — images attached to a message: pasted, shown, stored with the chat, sent with it");
+        await FreshChat();
+        byte[] png = TinyImage(new System.Windows.Media.Imaging.PngBitmapEncoder());
+        Check("X1 a pasted picture is attached — a copy under the data folder",
+            Vm.AttachImageBytes(png) && Vm.PendingImages.Count == 1 && File.Exists(Vm.PendingImages[0]) && Vm.HasPendingImages, Vm.StatusText);
+        Check("X1 bytes that are not a picture are refused, nothing attached",
+            !Vm.AttachImageBytes(System.Text.Encoding.UTF8.GetBytes("not a picture at all")) && Vm.PendingImages.Count == 1, Vm.StatusText);
+        string bmpPath = Path.Combine(PipeRoot, "dropped-" + Guid.NewGuid().ToString("N")[..6] + ".bmp");
+        Directory.CreateDirectory(PipeRoot);
+        File.WriteAllBytes(bmpPath, TinyImage(new System.Windows.Media.Imaging.BmpBitmapEncoder()));
+        Check("X1 a dropped BMP is attached as a PNG", Vm.AttachImageFiles([bmpPath]) == 1 && Vm.PendingImages.Count == 2 && Vm.PendingImages[1].EndsWith(".png"),
+            string.Join(", ", Vm.PendingImages));
+        await Render();
+        var strip = FindVisual<ItemsControl>(View, ic => ReferenceEquals(ic.ItemsSource, Vm.PendingImages));
+        Check("X2 the strip above the input shows both thumbnails", strip is { IsVisible: true } && strip.Items.Count == 2);
+        Vm.RemovePendingImageCommand.Execute(Vm.PendingImages[1]);
+        Check("X2 × takes one off", Vm.PendingImages.Count == 1);
+
+        string attached = Vm.PendingImages[0];
+        Fake.ScriptFor["[X3]"] = new Queue<FakeStep>([FakeStep.Reply("I see it.")]);
+        await Send("[X3] what is in this picture?");
+        await WaitUntil(() => !Vm.IsGenerating, 10000);
+        var userMsg = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.User);
+        Check("X3 sent: the message carries the picture and the strip is empty",
+            userMsg != null && userMsg.AttachedImages.SequenceEqual([attached]) && !Vm.HasPendingImages);
+        string sentInput = Fake.Calls.LastOrDefault()?.Input ?? "";
+        Check("X3 a provider that cannot see (the offline fake) is told the file instead",
+            sentInput.Contains("[The user attached 1 image(s)") && sentInput.Contains(attached), sentInput);
+        await Render();
+        SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-attached-image.png"));
+        var bubbleImage = FindVisual<Image>(View, im => im.Source != null && im.ActualHeight > 0 && im.ActualHeight <= 180);
+        Check("X3 the bubble shows the picture", bubbleImage != null);
+
+        var stored = Persist.LoadSession(Vm.CurrentSession!.Id)?.Messages.FirstOrDefault(m => m.Role == MessageRole.User && m.Content.StartsWith("[X3]"));
+        Check("X4 stored with the chat: reloaded, the message still has its picture (and no tool columns)",
+            stored != null && stored.AttachedImages.SequenceEqual([attached]) && stored.ToolName == null && stored.ToolOutput == null,
+            stored == null ? "not stored" : string.Join(", ", stored.AttachedImages));
+
+        Vm.AttachImageBytes(png);
+        Fake.ScriptFor["Look at the attached"] = new Queue<FakeStep>([FakeStep.Reply("A grey square.")]);
+        Vm.UserInput = "";
+        Vm.SendMessageCommand.Execute(null);
+        await WaitUntil(() => Vm.Messages.Any(m => m.Content.Contains("A grey square.")), 10000);
+        var onlyPicture = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.User);
+        Check("X5 a picture with no text sends: the bubble has only the picture, the model gets a line with it",
+            onlyPicture is { Content: "" } && onlyPicture.HasAttachedImages && (Fake.Calls.LastOrDefault()?.Input ?? "").StartsWith("Look at the attached image"),
+            Fake.Calls.LastOrDefault()?.Input ?? "");
+    }
+
+    /// <summary>V — speaking instead of typing. The mic button opens Chrome's speech page (here a fake launcher: a
+    /// test never opens a browser or a microphone); the page is driven over the real loopback bridge exactly as the
+    /// browser would — words stream into the box, the guess is replaced as it firms up, nothing is sent until Send,
+    /// and nothing but the page itself can type into the box or press Send.</summary>
+    static async Task TestDictation()
+    {
+        Log("\n## V — speaking: the mic bridge, words into the box, never sent by itself");
+        await FreshChat();
+        string? url = null;
+        Vm.DictationLauncher = u => { url = u; return true; };
+        var connectWas = CluadeX.Services.Voice.ChromeDictationService.ConnectTimeout;
+        var silenceWas = CluadeX.Services.Voice.ChromeDictationService.SilenceTimeout;
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        try
+        {
+            Vm.UserInput = "";
+            Vm.ToggleDictationCommand.Execute(null);
+            Check("V1 the mic button opens the mic page on 127.0.0.1 with a token", Vm.IsDictating && url != null
+                && url.StartsWith("http://127.0.0.1:478") && url.Contains("t=") && url.Contains("lang="), url ?? "(no url)");
+            if (url == null) return;
+            var u = new Uri(url);
+            var q = System.Web.HttpUtility.ParseQueryString(u.Query);
+            string origin = $"{u.Scheme}://{u.Authority}", t = q["t"]!;
+            int s = int.Parse(q["s"]!);
+            await Render();
+            var micOn = FindVisual<Button>(View, b => b.Name == "MicOnButton");
+            var micOff = FindVisual<Button>(View, b => b.Name == "MicButton");
+            Check("V1 the composer's mic shows it is listening", micOn is { IsVisible: true } && micOff is { IsVisible: false });
+            SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-mic-listening.png"));
+
+            var page = await http.GetAsync(url);
+            string html = await page.Content.ReadAsStringAsync();
+            Check("V1 the page is served and runs the browser's speech recognition (Thai by default here)",
+                page.IsSuccessStatusCode && html.Contains("webkitSpeechRecognition") && html.Contains("<title>CluadeX Mic</title>")
+                && page.Content.Headers.ContentType?.MediaType == "text/html", ((int)page.StatusCode).ToString());
+
+            async Task<HttpStatusCode> Post(string path, object body, string? from)
+            {
+                var req = new HttpRequestMessage(HttpMethod.Post, origin + path)
+                {
+                    Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
+                };
+                if (from != null) req.Headers.Add("Origin", from);
+                return (await http.SendAsync(req)).StatusCode;
+            }
+
+            int usersBefore = Vm.Messages.Count(m => m.Role == MessageRole.User);
+            var st = await Post("/text", new { t, s, final = "", interim = "เปิดไฟล์" }, origin);
+            await WaitUntil(() => Vm.UserInput == "เปิดไฟล์", 3000);
+            Check("V2 a guess shows in the box while it is heard", st == HttpStatusCode.NoContent && Vm.UserInput == "เปิดไฟล์", Vm.UserInput);
+            await Post("/text", new { t, s, final = "เปิดไฟล์ main", interim = "" }, origin);
+            await Post("/text", new { t, s, final = "", interim = "แล้วแก้บั๊ก" }, origin);
+            await WaitUntil(() => Vm.UserInput == "เปิดไฟล์ main แล้วแก้บั๊ก", 3000);
+            Check("V2 the guess is replaced by the final words and the next guess follows them",
+                Vm.UserInput == "เปิดไฟล์ main แล้วแก้บั๊ก", Vm.UserInput);
+            Check("V2 nothing is sent by speaking alone", Vm.Messages.Count(m => m.Role == MessageRole.User) == usersBefore && !Vm.IsGenerating);
+
+            string boxBefore = Vm.UserInput;
+            var wrongToken = await Post("/text", new { t = "0000", s, final = "rm -rf /", interim = "" }, origin);
+            var foreign = await Post("/text", new { t, s, final = "rm -rf /", interim = "" }, "https://evil.example");
+            var noOrigin = await Post("/text", new { t, s, final = "rm -rf /", interim = "" }, null);
+            var foreignSend = await Post("/send", new { t, s }, "https://evil.example");
+            var rebind = new HttpRequestMessage(HttpMethod.Get, url);
+            rebind.Headers.Host = "evil.example";
+            var rebound = (await http.SendAsync(rebind)).StatusCode;
+            var stateNoToken = (await http.GetAsync($"{origin}/state?t=nope&s={s}&since=-1")).StatusCode;
+            await Task.Delay(300);
+            Check("V3 another web page cannot type or press Send: wrong token, foreign or missing origin → 403",
+                wrongToken == HttpStatusCode.Forbidden && foreign == HttpStatusCode.Forbidden && noOrigin == HttpStatusCode.Forbidden
+                && foreignSend == HttpStatusCode.Forbidden && Vm.UserInput == boxBefore && !Vm.IsGenerating,
+                $"{wrongToken}/{foreign}/{noOrigin}/{foreignSend}");
+            Check("V3 a DNS-rebinding Host and a poll without the token are refused",
+                rebound == HttpStatusCode.Forbidden && stateNoToken == HttpStatusCode.Forbidden, $"{rebound}/{stateNoToken}");
+
+            Fake.ScriptFor["แก้บั๊ก"] = new Queue<FakeStep>([FakeStep.Reply("ok, fixing it")]);
+            var sent = await Post("/send", new { t, s }, origin);
+            await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.User && m.Content == "เปิดไฟล์ main แล้วแก้บั๊ก"), 5000);
+            Check("V4 the mic window's Send sends the box, as Enter would",
+                sent == HttpStatusCode.NoContent && Vm.Messages.Any(m => m.Role == MessageRole.User && m.Content == "เปิดไฟล์ main แล้วแก้บั๊ก")
+                && Vm.UserInput == "", Vm.UserInput);
+            string state = await http.GetStringAsync($"{origin}/state?t={t}&s={s}&since=-1");
+            using (var doc = System.Text.Json.JsonDocument.Parse(state))
+                Check("V4 the page is told the box was sent (it clears its words) and keeps listening",
+                    doc.RootElement.GetProperty("active").GetBoolean() && doc.RootElement.GetProperty("sent").GetInt32() >= 1, state);
+            await WaitUntil(() => !Vm.IsGenerating, 10000);
+
+            await Post("/text", new { t, s, final = "อีกอย่าง", interim = "" }, origin);
+            await WaitUntil(() => Vm.UserInput == "อีกอย่าง", 3000);
+            Check("V5 after a send, the next words start a fresh box", Vm.UserInput == "อีกอย่าง", Vm.UserInput);
+            Vm.UserInput = "พิมพ์เอง ";
+            await Post("/text", new { t, s, final = "", interim = "แล้วพูดต่อ" }, origin);
+            await WaitUntil(() => Vm.UserInput == "พิมพ์เอง แล้วพูดต่อ", 3000);
+            Check("V5 typed text and spoken words mix: speech goes on after what was typed", Vm.UserInput == "พิมพ์เอง แล้วพูดต่อ", Vm.UserInput);
+
+            long v;
+            using (var doc = System.Text.Json.JsonDocument.Parse(await http.GetStringAsync($"{origin}/state?t={t}&s={s}&since=-1")))
+                v = doc.RootElement.GetProperty("v").GetInt64();
+            var held = http.GetStringAsync($"{origin}/state?t={t}&s={s}&since={v}");
+            await Task.Delay(400);
+            bool wasHeld = !held.IsCompleted;
+            Vm.ToggleDictationCommand.Execute(null);
+            bool released = await Task.WhenAny(held, Task.Delay(3000)) == held;
+            Check("V6 the page's poll is held open, and the mic button releases it at once with active:false (the window closes itself)",
+                wasHeld && released && held.Result.Contains("\"active\":false") && !Vm.IsDictating, released ? held.Result : "still held");
+            Check("V6 the unfinished guess stays in the box as typed text", Vm.UserInput == "พิมพ์เอง แล้วพูดต่อ", Vm.UserInput);
+            var late = await Post("/text", new { t, s, final = "late", interim = "" }, origin);
+            await Task.Delay(200);
+            Check("V6 words after the stop are refused (410) and never reach the box",
+                late == HttpStatusCode.Gone && Vm.UserInput == "พิมพ์เอง แล้วพูดต่อ", $"{late} / {Vm.UserInput}");
+
+            Vm.ToggleDictationCommand.Execute(null);
+            int s2 = int.Parse(System.Web.HttpUtility.ParseQueryString(new Uri(url).Query)["s"]!);
+            string oldWindow = await http.GetStringAsync($"{origin}/state?t={t}&s={s}&since=-1");
+            Check("V7 a new session: a window left from the last one is told to close", s2 > s && oldWindow.Contains("\"active\":false"), oldWindow);
+            var bye = await Post("/bye", new { t, s = s2 }, null);   // sendBeacon from the closing window
+            await WaitUntil(() => !Vm.IsDictating, 3000);
+            Check("V7 closing the mic window turns the mic off in the chat",
+                bye == HttpStatusCode.NoContent && !Vm.IsDictating && Vm.StatusText == L("chat.mic.closed"), Vm.StatusText);
+
+            CluadeX.Services.Voice.ChromeDictationService.ConnectTimeout = TimeSpan.FromSeconds(1.5);
+            Vm.ToggleDictationCommand.Execute(null);
+            await WaitUntil(() => !Vm.IsDictating, 6000);
+            Check("V8 a window that never opens: the mic turns itself off and says so",
+                !Vm.IsDictating && Vm.StatusText == L("chat.mic.noConnect"), Vm.StatusText);
+
+            CluadeX.Services.Voice.ChromeDictationService.SilenceTimeout = TimeSpan.FromSeconds(1);
+            Vm.ToggleDictationCommand.Execute(null);
+            int s3 = int.Parse(System.Web.HttpUtility.ParseQueryString(new Uri(url).Query)["s"]!);
+            await http.GetStringAsync($"{origin}/state?t={t}&s={s3}&since=-1");
+            await WaitUntil(() => !Vm.IsDictating, 6000);
+            Check("V9 a window that dies without a goodbye (crash, killed): the mic turns itself off",
+                !Vm.IsDictating && Vm.StatusText == L("chat.mic.closed"), Vm.StatusText);
+
+            Vm.DictationLauncher = _ => false;
+            Vm.ToggleDictationCommand.Execute(null);
+            Check("V10 the browser does not start: no listening state left behind, a message instead",
+                !Vm.IsDictating && Vm.StatusText.StartsWith(L("chat.mic.failed").Split('{')[0]), Vm.StatusText);
+
+            CluadeX.Services.Voice.ChromeDictationService.ConnectTimeout = connectWas;
+            CluadeX.Services.Voice.ChromeDictationService.SilenceTimeout = silenceWas;
+            await TestMicPageInRealChrome();
+        }
+        finally
+        {
+            CluadeX.Services.Voice.ChromeDictationService.ConnectTimeout = connectWas;
+            CluadeX.Services.Voice.ChromeDictationService.SilenceTimeout = silenceWas;
+            if (Vm.IsDictating) Vm.ToggleDictationCommand.Execute(null);
+            Vm.DictationLauncher = null;
+            Vm.UserInput = "";
+        }
+    }
+
+    /// <summary>V11 — the mic page's own script, run by the real Google Chrome: headless, a throwaway profile on E:,
+    /// a fake microphone and an auto-answered permission prompt (test-only flags) — the user's Chrome, profile and
+    /// microphone are never touched. Proves the page loads, polls the bridge and starts recognition (or reports why
+    /// it cannot), and closes itself when the chat turns the mic off.</summary>
+    static async Task TestMicPageInRealChrome()
+    {
+        var browser = CluadeX.Services.Voice.ChromeDictationService.FindBrowser();
+        if (browser is not { Engine: "google" }) { Log("SKIP  V11 Google Chrome is not installed"); return; }
+        string profile = Path.Combine(AppContext.BaseDirectory, "chrome-mic-profile-" + Guid.NewGuid().ToString("N")[..6]);
+        System.Diagnostics.Process? chrome = null;
+        var events = new List<string>();
+        Vm.PropertyChanged += Track;
+        void Track(object? _, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(ChatViewModel.StatusText)) events.Add(Vm.StatusText);
+        }
+        try
+        {
+            Vm.DictationLauncher = url =>
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(browser.Path) { UseShellExecute = false };
+                foreach (var a in new[] { "--headless=new", "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check",
+                                          "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", url })
+                    psi.ArgumentList.Add(a);
+                chrome = System.Diagnostics.Process.Start(psi);
+                return chrome != null;
+            };
+            Vm.UserInput = "";
+            Vm.ToggleDictationCommand.Execute(null);
+            string listening = L("chat.mic.listening").Split('(')[0];
+            string[] pageSaid = [listening, L("chat.mic.denied"), L("chat.mic.noMic"), L("chat.mic.network"), L("chat.mic.error").Split('{')[0]];
+            bool spoke = await WaitUntil(() => events.Any(ev => pageSaid.Any(p => ev.StartsWith(p))), 20000);
+            Check("V11 real Chrome runs the mic page: it loads, reaches the bridge and starts recognition (or says why not)",
+                spoke && Vm.IsDictating, string.Join(" | ", events));
+            Log("      page said: " + (events.LastOrDefault(ev => pageSaid.Any(p => ev.StartsWith(p))) ?? "(nothing)"));
+            Vm.ToggleDictationCommand.Execute(null);
+            bool closed = chrome != null && await Task.Run(() => chrome.WaitForExit(8000));
+            Check("V11 the mic off in the chat ends the page's session", !Vm.IsDictating);
+            Log("      headless Chrome exited by itself after the page closed: " + (closed ? "yes" : "no (killed by the test)"));
+        }
+        finally
+        {
+            Vm.PropertyChanged -= Track;
+            if (Vm.IsDictating) Vm.ToggleDictationCommand.Execute(null);
+            Vm.DictationLauncher = null;
+            try { if (chrome is { HasExited: false }) chrome.Kill(entireProcessTree: true); } catch { }
+            chrome?.Dispose();
+            for (int i = 0; i < 10 && Directory.Exists(profile); i++)
+            {
+                try { Directory.Delete(profile, true); } catch { await Task.Delay(500); }
+            }
+        }
     }
 
     static async Task TestBackgroundRuns()

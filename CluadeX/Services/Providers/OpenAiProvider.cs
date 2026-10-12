@@ -314,7 +314,15 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                     });
                 }
                 string text = string.Join("\n\n", msg.Content.Where(b => b.Type == "text" && !string.IsNullOrEmpty(b.Text)).Select(b => b.Text));
-                if (followImages.Count > 0)
+                // Images the user attached to this message: input_image parts in front of its text.
+                var userImages = msg.Content.Where(b => b.Type == "text" && b.Images is { Count: > 0 }).SelectMany(b => b.Images!).ToList();
+                if (followImages.Count == 0 && userImages.Count > 0)
+                {
+                    var parts = new List<object>(userImages.Select(InputImage));
+                    if (text.Length > 0) parts.Add(new Dictionary<string, object> { ["type"] = "input_text", ["text"] = text });
+                    input.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = parts });
+                }
+                else if (followImages.Count > 0)
                 {
                     // One user message: what the images are, the images, then the loop's own text.
                     var parts = new List<object>
@@ -328,6 +336,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                         },
                     };
                     parts.AddRange(followImages.Select(InputImage));
+                    parts.AddRange(userImages.Select(InputImage));
                     if (text.Length > 0) parts.Add(new Dictionary<string, object> { ["type"] = "input_text", ["text"] = text });
                     input.Add(new Dictionary<string, object> { ["role"] = "user", ["content"] = parts });
                 }

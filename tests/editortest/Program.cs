@@ -1398,6 +1398,198 @@ internal static class Program
             }
         }));
 
+        // ═══════════════════════ editor tools (toolbar, find/replace, line tools, encodings) ═══════════════════════
+        Console.WriteLine("\n── editor tools: line tools / find + replace / folding / encodings ──");
+        await Case("ET1", () =>
+        {
+            string[] cs = { "    int a = 1;", "", "    int b = 2;" };
+            var on = CluadeX.Helpers.EditorOps.ToggleLineComment(cs, "//");
+            var off = CluadeX.Helpers.EditorOps.ToggleLineComment(on, "//");
+            Check("ET1", "Ctrl+/ comments lines at their indent (blank lines untouched) and a second press takes it back exactly",
+                on[0] == "    // int a = 1;" && on[1] == "" && on[2] == "    // int b = 2;" && off.SequenceEqual(cs), string.Join(" | ", on) + " → " + string.Join(" | ", off));
+            var mixed = CluadeX.Helpers.EditorOps.ToggleLineComment(new[] { "# done", "todo" }, "#");
+            Check("ET1b", "…a half-commented block is commented, not uncommented", mixed[0] == "# # done" && mixed[1] == "# todo", string.Join(" | ", mixed));
+            Check("ET1c", "comment syntax follows the file: C# //, Python #, SQL --, Dockerfile #, plain text none",
+                CluadeX.Helpers.EditorOps.CommentSyntaxFor("a.cs").Line == "//" && CluadeX.Helpers.EditorOps.CommentSyntaxFor("x.py").Line == "#"
+                && CluadeX.Helpers.EditorOps.CommentSyntaxFor("q.SQL").Line == "--" && CluadeX.Helpers.EditorOps.CommentSyntaxFor(@"C:\p\Dockerfile").Line == "#"
+                && CluadeX.Helpers.EditorOps.CommentSyntaxFor("notes.txt").IsNone);
+            string html = "  <div>hi</div>";
+            string wrapped = CluadeX.Helpers.EditorOps.ToggleBlockComment(html, "<!--", "-->");
+            Check("ET1d", "HTML/XML/CSS: the block is wrapped in <!-- --> inside its indent, and unwrapped again",
+                wrapped == "  <!-- <div>hi</div> -->" && CluadeX.Helpers.EditorOps.ToggleBlockComment(wrapped, "<!--", "-->") == html, wrapped);
+            return Task.CompletedTask;
+        });
+        await Case("ET2", () =>
+        {
+            string[] lines = { "banana", "Apple", "cherry", "apple", "banana", "", "  " };
+            var sorted = CluadeX.Helpers.EditorOps.SortLines(new[] { "banana", "Apple", "cherry" }, false, true);
+            Check("ET2", "sort A→Z ignores case; Z→A reverses", sorted.SequenceEqual(new[] { "Apple", "banana", "cherry" })
+                && CluadeX.Helpers.EditorOps.SortLines(new[] { "b", "a", "c" }, true, true).SequenceEqual(new[] { "c", "b", "a" }), string.Join(",", sorted));
+            var thai = CluadeX.Helpers.EditorOps.SortLines(new[] { "ไก่", "ขวด", "เกม" }, false, false);
+            Check("ET2b", "Thai sorts like a dictionary in a Thai locale (เกม before ขวด: a leading vowel sorts by its consonant)",
+                System.Globalization.CultureInfo.CurrentCulture.Name != "th-TH" || thai.SequenceEqual(new[] { "เกม", "ขวด", "ไก่" }) || thai.SequenceEqual(new[] { "เกม", "ไก่", "ขวด" }),
+                System.Globalization.CultureInfo.CurrentCulture.Name + ": " + string.Join(",", thai));
+            Check("ET2c", "remove duplicates keeps the first of each; remove empty drops blank and whitespace-only lines",
+                CluadeX.Helpers.EditorOps.RemoveDuplicateLines(lines).SequenceEqual(new[] { "banana", "Apple", "cherry", "apple", "", "  " })
+                && CluadeX.Helpers.EditorOps.RemoveEmptyLines(lines).Length == 5);
+            Check("ET2d", "trim trailing, join lines, tabs ↔ spaces (to the tab stop)",
+                CluadeX.Helpers.EditorOps.TrimTrailing(new[] { "a  \t", "b" }).SequenceEqual(new[] { "a", "b" })
+                && CluadeX.Helpers.EditorOps.JoinLines(new[] { "  call(a,", "      b,", "", "      c)" }) == "  call(a, b, c)"
+                && CluadeX.Helpers.EditorOps.TabsToSpaces(new[] { "a\tb", "\tx" }, 4).SequenceEqual(new[] { "a   b", "    x" })
+                && CluadeX.Helpers.EditorOps.LeadingSpacesToTabs(new[] { "      x", "y" }, 4).SequenceEqual(new[] { "\t  x", "y" }));
+            Check("ET2e", "case: UPPER / lower / Title / and Thai is left alone",
+                CluadeX.Helpers.EditorOps.ChangeCase("hello World ไทย", CluadeX.Helpers.EditorOps.CaseKind.Upper) == "HELLO WORLD ไทย"
+                && CluadeX.Helpers.EditorOps.ChangeCase("HeLLo", CluadeX.Helpers.EditorOps.CaseKind.Lower) == "hello"
+                && CluadeX.Helpers.EditorOps.ChangeCase("hello wORLD", CluadeX.Helpers.EditorOps.CaseKind.Title) == "Hello World");
+            Check("ET2f", "line endings: detected (CRLF / LF / Mixed) and converted",
+                CluadeX.Helpers.EditorOps.DetectEol("a\r\nb\r\n") == CluadeX.Helpers.EditorOps.Eol.CrLf
+                && CluadeX.Helpers.EditorOps.DetectEol("a\nb") == CluadeX.Helpers.EditorOps.Eol.Lf
+                && CluadeX.Helpers.EditorOps.DetectEol("a\r\nb\n") == CluadeX.Helpers.EditorOps.Eol.Mixed
+                && CluadeX.Helpers.EditorOps.ConvertEol("a\r\nb\nc\rd", CluadeX.Helpers.EditorOps.Eol.Lf) == "a\nb\nc\nd"
+                && CluadeX.Helpers.EditorOps.ConvertEol("a\nb", CluadeX.Helpers.EditorOps.Eol.CrLf) == "a\r\nb");
+            int l, c;
+            Check("ET2g", "go to line: \"120\" and \"120:8\" parse, junk does not",
+                CluadeX.Helpers.EditorOps.TryParseGoTo("120", out l, out c) && l == 120 && c == 1
+                && CluadeX.Helpers.EditorOps.TryParseGoTo(" 120:8 ", out l, out c) && l == 120 && c == 8
+                && !CluadeX.Helpers.EditorOps.TryParseGoTo("abc", out _, out _) && !CluadeX.Helpers.EditorOps.TryParseGoTo("0", out _, out _));
+            return Task.CompletedTask;
+        });
+        await Case("ET3", () =>
+        {
+            var opts = new CluadeX.Helpers.EditorOps.FindOptions(false, false, false);
+            string text = "Foo foo food\r\nfoo.bar $5\r\n";
+            var rx = CluadeX.Helpers.EditorOps.BuildFindRegex("foo", opts, out _)!;
+            Check("ET3", "plain find ignores case by default; match case narrows it; whole word skips 'food'",
+                CluadeX.Helpers.EditorOps.CountMatches(text, rx) == 4
+                && CluadeX.Helpers.EditorOps.CountMatches(text, CluadeX.Helpers.EditorOps.BuildFindRegex("foo", opts with { MatchCase = true }, out _)!) == 3
+                && CluadeX.Helpers.EditorOps.CountMatches(text, CluadeX.Helpers.EditorOps.BuildFindRegex("foo", opts with { WholeWord = true }, out _)!) == 3);
+            var dollar = CluadeX.Helpers.EditorOps.BuildFindRegex("$5", opts, out _)!;
+            var dot = CluadeX.Helpers.EditorOps.BuildFindRegex("foo.bar", opts, out _)!;
+            Check("ET3b", "plain text is literal: '$5' and 'foo.bar' are not regex", CluadeX.Helpers.EditorOps.CountMatches(text, dollar) == 1
+                && CluadeX.Helpers.EditorOps.CountMatches("fooXbar", dot) == 0);
+            var next = CluadeX.Helpers.EditorOps.FindNext(text, rx, 5, false);
+            var prev = CluadeX.Helpers.EditorOps.FindNext(text, rx, 4, true);
+            var wrapped = CluadeX.Helpers.EditorOps.FindNext(text, rx, 20, false);
+            var back = CluadeX.Helpers.EditorOps.FindNext(text, rx, 0, true);
+            Check("ET3c", "next / previous from the caret, wrapping both ways",
+                next == (8, 3) && prev == (0, 3) && wrapped == (0, 3) && back == (14, 3), $"{next} {prev} {wrapped} {back}");
+            var re = opts with { UseRegex = true };
+            var line = CluadeX.Helpers.EditorOps.BuildFindRegex("^foo.*$", re with { MatchCase = true }, out _)!;
+            var all = CluadeX.Helpers.EditorOps.Replacements(text, line, "[$0]", true);
+            Check("ET3d", "regex on CRLF lines: '.' never eats the \\r and '$' matches before it (Notepad++ behaviour)",
+                all.Count == 1 && all[0].Text == "[foo.bar $5]" && !all[0].Text.Contains('\r'), string.Join(" | ", all.Select(a => a.Text)));
+            var (swapped, n) = CluadeX.Helpers.EditorOps.ReplaceAll("key=value\nk2=v2", CluadeX.Helpers.EditorOps.BuildFindRegex(@"(\w+)=(\w+)", re, out _)!, @"$2\t$1", true);
+            Check("ET3e", "regex replace: $1 groups and \\t escapes", n == 2 && swapped == "value\tkey\nv2\tk2", swapped);
+            var (lit, n2) = CluadeX.Helpers.EditorOps.ReplaceAll("a b a", CluadeX.Helpers.EditorOps.BuildFindRegex("a", opts, out _)!, "$1\\n", false);
+            Check("ET3f", "plain replace is literal: '$1\\n' goes in as typed", n2 == 2 && lit == "$1\\n b $1\\n", lit);
+            var bad = CluadeX.Helpers.EditorOps.BuildFindRegex("(unclosed", re, out string? err);
+            Check("ET3g", "an invalid regex is reported, not thrown", bad == null && !string.IsNullOrEmpty(err), err ?? "");
+            var evil = CluadeX.Helpers.EditorOps.BuildFindRegex("(a+)+$", re, out _)!;
+            var sw = Stopwatch.StartNew();
+            int count = CluadeX.Helpers.EditorOps.CountMatches(new string('a', 40) + "!", evil);
+            sw.Stop();
+            Check("ET3h", "a catastrophic-backtracking pattern gives up (-1) instead of freezing the editor",
+                count == -1 || sw.ElapsedMilliseconds < 5000, $"{count} in {sw.ElapsedMilliseconds} ms");
+            var thaiWord = CluadeX.Helpers.EditorOps.BuildFindRegex("สวัสดี", opts, out _)!;
+            Check("ET3i", "Thai text is found", CluadeX.Helpers.EditorOps.CountMatches("กล่าวสวัสดีครับ สวัสดี", thaiWord) == 2);
+            return Task.CompletedTask;
+        });
+        await Case("ET4", () =>
+        {
+            string code = "class A\n{\n    void F() { }\n    void G()\n    {\n        var s = \"}\"; // }\n    }\n    #region Helpers\n    int x;\n    #endregion\n    /* long\n       comment */\n}\n";
+            var folds = CluadeX.Views.Editor.EditorFolding.Braces(code);
+            string Of(ICSharpCode.AvalonEdit.Folding.NewFolding f) => code.Substring(f.StartOffset, f.EndOffset - f.StartOffset).Split('\n')[0];
+            Check("ET4", "brace folding: the class, the multi-line method, #region and the /* */ comment — not the one-line method, not braces in strings/comments",
+                folds.Count == 4 && folds.Any(f => f.StartOffset == code.IndexOf('{') && f.EndOffset == code.LastIndexOf('}') + 1)
+                && folds.Any(f => f.Name == "#region Helpers") && folds.Any(f => f.Name == "/* … */")
+                && !folds.Any(f => code.Substring(f.StartOffset, f.EndOffset - f.StartOffset) == "{ }"),
+                string.Join(" | ", folds.Select(f => $"{f.StartOffset}-{f.EndOffset} {f.Name ?? Of(f)}")));
+            string py = "def f():\n    a = 1\n\n    if a:\n        b = 2\nx = 3\n";
+            var ind = CluadeX.Views.Editor.EditorFolding.Indentation(py);
+            Check("ET4b", "indent folding (Python/YAML): the def keeps its header line visible, the nested if folds too",
+                ind.Count == 2 && py.Substring(ind[0].StartOffset, ind[0].EndOffset - ind[0].StartOffset) == "\n    a = 1\n\n    if a:\n        b = 2"
+                && py.Substring(ind[1].StartOffset, ind[1].EndOffset - ind[1].StartOffset) == "\n        b = 2",
+                string.Join(" | ", ind.Select(f => py.Substring(f.StartOffset, f.EndOffset - f.StartOffset).Replace("\n", "⏎"))));
+            Check("ET4c", "fold kind follows the file", CluadeX.Views.Editor.EditorFolding.For("a.xaml") == CluadeX.Views.Editor.EditorFolding.Kind.Xml
+                && CluadeX.Views.Editor.EditorFolding.For("a.py") == CluadeX.Views.Editor.EditorFolding.Kind.Indent
+                && CluadeX.Views.Editor.EditorFolding.For("a.ts") == CluadeX.Views.Editor.EditorFolding.Kind.Brace
+                && CluadeX.Views.Editor.EditorFolding.For("a.txt") == CluadeX.Views.Editor.EditorFolding.Kind.None);
+            return Task.CompletedTask;
+        });
+        await Case("ET5", async () =>
+        {
+            // A Thai web page saved in TIS-620 — still common in Thailand. It used to open as "�����" and refuse to save.
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            var tis = System.Text.Encoding.GetEncoding(874);
+            string thai = "<p>สวัสดีครับ ภาษาไทย</p>\r\n";
+            string path = Path.Combine(saveDir, "tis620.html");
+            File.WriteAllBytes(path, tis.GetBytes(thai));
+            var tab = await ws.OpenFileAsync(path);
+            Check("ET5", "a TIS-620 (Windows-874) file opens as readable Thai and says so",
+                tab != null && tab.Content == thai && tab.CodePage == 874 && tab.DecodedFaithfully && tab.EncodingLabel.Contains("874"),
+                tab == null ? "null" : $"{tab.CodePage} '{tab.Content}' {tab.EncodingLabel}");
+            tab!.Content = tab.Content.Replace("ครับ", "ค่ะ");
+            var r = await ws.SaveTabCheckedAsync(tab, false);
+            byte[] saved = File.ReadAllBytes(path);
+            Check("ET5b", "…edited and saved, it is still TIS-620 — every other byte unchanged",
+                r.Outcome == SaveOutcome.Saved && saved.SequenceEqual(tis.GetBytes(thai.Replace("ครับ", "ค่ะ"))), r.Outcome.ToString());
+            tab.Content += "🙂";
+            r = await ws.SaveTabCheckedAsync(tab, false);
+            Check("ET5c", "an emoji TIS-620 cannot hold: not written (CannotEncode), the file on disk untouched",
+                r.Outcome == SaveOutcome.CannotEncode && File.ReadAllBytes(path).SequenceEqual(saved), r.Outcome.ToString());
+            tab.SetEncoding(0, false);
+            r = await ws.SaveTabCheckedAsync(tab, false);
+            Check("ET5d", "…converted to UTF-8 (the dialog's choice) it saves, as UTF-8 without a BOM",
+                r.Outcome == SaveOutcome.Saved && File.ReadAllText(path, new System.Text.UTF8Encoding(false)) == tab.Content
+                && File.ReadAllBytes(path)[0] != 0xEF, r.Outcome.ToString());
+
+            string u16 = Path.Combine(saveDir, "unicode16.txt");
+            File.WriteAllText(u16, "ไทย and English\r\n", new System.Text.UnicodeEncoding(false, true));
+            var t16 = await ws.OpenFileAsync(u16);
+            Check("ET5e", "a UTF-16 file (BOM, full of NUL bytes) opens as text, not refused as binary",
+                t16 != null && t16.Content == "ไทย and English\r\n" && t16.CodePage == 1200, t16 == null ? "null" : t16.CodePage.ToString());
+            t16!.Content += "x";
+            r = await ws.SaveTabCheckedAsync(t16, false);
+            byte[] b16 = File.ReadAllBytes(u16);
+            Check("ET5f", "…and saves back as UTF-16 LE with its BOM", r.Outcome == SaveOutcome.Saved && b16[0] == 0xFF && b16[1] == 0xFE
+                && System.Text.Encoding.Unicode.GetString(b16, 2, b16.Length - 2) == "ไทย and English\r\nx", r.Outcome.ToString());
+
+            string western = Path.Combine(saveDir, "latin.txt");
+            byte[] w = System.Text.Encoding.GetEncoding(1252).GetBytes("Café naïve résumé\n");
+            File.WriteAllBytes(western, w);
+            var tw = await ws.OpenFileAsync(western);
+            Check("ET5g", "Western text (Windows-1252) is not mistaken for Thai", tw != null && tw.CodePage != 874 && tw.DecodedFaithfully
+                && (tw.CodePage != 1252 || tw.Content == "Café naïve résumé\n"), tw == null ? "null" : $"{tw.CodePage} {tw.Content}");
+
+            string bad = Path.Combine(saveDir, "brokenutf8.txt");
+            File.WriteAllBytes(bad, new byte[] { 0xEF, 0xBB, 0xBF, (byte)'a', 0xC3, (byte)'b' });
+            var tb = await ws.OpenFileAsync(bad);
+            r = await ws.SaveTabCheckedAsync(tb!, false);
+            Check("ET5h", "a damaged UTF-8 file (BOM, then a broken byte) is still never saved over",
+                tb != null && !tb.DecodedFaithfully && r.Outcome == SaveOutcome.NotUtf8, tb == null ? "null" : r.Outcome.ToString());
+        });
+        await Case("ET6", async () =>
+        {
+            string path = Path.Combine(saveDir, "plain-utf8.txt");
+            File.WriteAllText(path, "hello\n", new System.Text.UTF8Encoding(false));
+            var tab = await ws.OpenFileAsync(path);
+            tab!.SetEncoding(0, true);
+            Check("ET6", "choosing UTF-8 BOM marks the tab unsaved (the bytes on disk no longer match)", tab.IsDirty && tab.HasBom && tab.EncodingLabel == "UTF-8 BOM");
+            var r = await ws.SaveTabCheckedAsync(tab, false);
+            var bytes = File.ReadAllBytes(path);
+            Check("ET6b", "…and saving writes the BOM", r.Outcome == SaveOutcome.Saved && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
+            string copy = Path.Combine(saveDir, "sub", "copy-of-plain.txt");
+            if (File.Exists(copy)) File.Delete(copy);
+            r = await ws.SaveCopyAsAsync(tab, copy);
+            Check("ET6c", "Save As writes the text in the same encoding to the new path (folder created)",
+                r.Outcome == SaveOutcome.Saved && File.ReadAllBytes(copy).SequenceEqual(bytes), r.Outcome.ToString());
+            string fresh = Path.Combine(saveDir, "brand-new.txt");
+            if (File.Exists(fresh)) File.Delete(fresh);
+            Check("ET6d", "New file: created empty — and an existing name is never emptied",
+                CodeWorkspaceService.TryCreateEmptyFile(fresh, out _) && new FileInfo(fresh).Length == 0
+                && !CodeWorkspaceService.TryCreateEmptyFile(path, out _) && File.ReadAllBytes(path).SequenceEqual(bytes));
+        });
+
         // ═══════════════════════ git status ═══════════════════════
         Console.WriteLine("\n── git status / blobs ──");
         await Case("G1", () =>

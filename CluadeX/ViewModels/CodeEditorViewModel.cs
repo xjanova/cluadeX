@@ -19,7 +19,7 @@ namespace CluadeX.ViewModels;
 /// Disposable: the DI container disposes it on exit, which kills the embedded terminal's process
 /// tree (a dev server started there used to outlive the app and keep its port).
 /// </summary>
-public class CodeEditorViewModel : ViewModelBase, IDisposable
+public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 {
     private readonly CodeWorkspaceService _workspace;
     private readonly FileSystemService _fs;
@@ -1346,6 +1346,10 @@ public class CodeEditorViewModel : ViewModelBase, IDisposable
             case SaveOutcome.NotUtf8:
                 StatusMessage = T("ide.notUtf8", tab.FileName);
                 return false;
+            case SaveOutcome.CannotEncode:
+                // A character the file's legacy encoding cannot hold (an emoji in a TIS-620 file): offer UTF-8.
+                if (!AskConvertToUtf8(tab)) { StatusMessage = T("ide.notSaved", tab.FileName); return false; }
+                return await SaveTabInteractiveAsync(tab);
             default:
                 _log?.Warn("Editor", $"Save failed: {tab.FullPath} — {result.Error}");
                 StatusMessage = T("ide.saveFailed", tab.FileName);

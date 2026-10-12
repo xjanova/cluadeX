@@ -146,6 +146,12 @@ public class ChatMessage : INotifyPropertyChanged
     /// (the screenshots folder is pruned, so a reloaded chat shows the row's text without the picture).</summary>
     public string? ThumbnailPath { get; set; }
 
+    /// <summary>Images the user attached to this message (pasted with Ctrl+V, dropped, or picked from "+") — copies
+    /// under the data folder's attachments\. Shown in the bubble; sent to a vision model with the message; a model that
+    /// cannot see gets their paths in words. Stored with the chat (DatabaseService), so a reloaded chat shows them.</summary>
+    public List<string> AttachedImages { get; set; } = new();
+    public bool HasAttachedImages => AttachedImages.Count > 0;
+
     /// <summary>How many images the tool returned (the row shows the first).</summary>
     public int ImageCount { get; set; }
 

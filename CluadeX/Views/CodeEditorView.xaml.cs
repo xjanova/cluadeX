@@ -99,6 +99,7 @@ public partial class CodeEditorView : UserControl
         _themes = ThemeService.Current;
         if (_themes != null) _themes.ThemeChanged += OnThemeChanged;
         BindActiveTab(vm.ActiveTab);
+        ApplyViewPrefs();
         // A theme picked while this view was not loaded: catch up on what the resource system cannot reach.
         ApplyTheme();
 
@@ -136,6 +137,7 @@ public partial class CodeEditorView : UserControl
         _glowTimer?.Stop();
         _glowTimer = null;
         _completionWindow?.Close();
+        StopToolTimers();
     }
 
     private bool _editorInitialized;
@@ -178,6 +180,7 @@ public partial class CodeEditorView : UserControl
         Editor.Options.EnableEmailHyperlinks = false;
         Editor.TextChanged += OnEditorTextChanged;
         Minimap.Attach(Editor);
+        InitializeTools();
     }
 
     private void OnSearchFocusRequested() => FocusBox(SearchBox, selectAll: true);
@@ -208,6 +211,7 @@ public partial class CodeEditorView : UserControl
             Editor.SyntaxHighlighting = null;
             Editor.SyntaxHighlighting = definition;
         }
+        ApplyToolTheme();
         Editor.TextArea.TextView.Redraw();
         _breakpointMargin.InvalidateVisual();
         Minimap.InvalidateVisual();
@@ -233,6 +237,7 @@ public partial class CodeEditorView : UserControl
     /// <summary>Ctrl+S saves the active tab, Ctrl+Shift+S saves every tab — anywhere on the page.</summary>
     private void OnPagePreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (HandlePageToolKeys(e)) { e.Handled = true; return; }
         if (_vm == null || e.Key != Key.S) return;
         var mods = Keyboard.Modifiers;
         if ((mods & ModifierKeys.Control) == 0 || (mods & ModifierKeys.Alt) != 0) return;
@@ -285,7 +290,11 @@ public partial class CodeEditorView : UserControl
             Editor.SyntaxHighlighting = HighlightingFor(tab);
             Editor.ScrollToHome();
         }
-        finally { _suppressSync = false; }
+        finally
+        {
+            _suppressSync = false;
+            OnToolsTabBound();
+        }
     }
 
     // ── VM → editor ──
@@ -594,6 +603,9 @@ public partial class CodeEditorView : UserControl
         if (e.Key is Key.Back or Key.Delete or Key.Enter or Key.Tab
             || (ctrl && e.Key is Key.V or Key.X or Key.Z or Key.Y))
             SettleAgentTyping();
+
+        // Line tools, comment, case, zoom (CodeEditorView.Tools.cs).
+        if (HandleEditorToolKeys(e)) { e.Handled = true; return; }
 
         try
         {

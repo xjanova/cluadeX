@@ -686,7 +686,27 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
 
     private static List<object> WireContent(NativeMessage m, bool search) =>
         m.Content.Where(b => b.Type != "provider_item" || (search && b.Provider == "anthropic"))
-            .Select(SerializeBlock).ToList();
+            .SelectMany(WithAttachedImages).ToList();
+
+    /// <summary>A user message's attached images go in front of its text, as image blocks — what the Messages API
+    /// documents for "look at this". Every other block is serialized as it always was.</summary>
+    private static IEnumerable<object> WithAttachedImages(ContentBlock b)
+    {
+        if (b.Type == "text" && b.Images is { Count: > 0 } images)
+            foreach (var img in images) yield return ImageBlock(img);
+        yield return SerializeBlock(b);
+    }
+
+    private static Dictionary<string, object> ImageBlock(ToolImage img) => new()
+    {
+        ["type"] = "image",
+        ["source"] = new Dictionary<string, object>
+        {
+            ["type"] = "base64",
+            ["media_type"] = img.MediaType,
+            ["data"] = img.Base64,
+        },
+    };
 
     /// <summary>tool_result content with images: the text first (never an empty text block — the API rejects
     /// those), then one base64 image block per image, in order.</summary>

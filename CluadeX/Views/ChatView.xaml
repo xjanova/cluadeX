@@ -916,8 +916,32 @@
                                             </ScrollViewer>
                                         </Border>
 
-                                        <!-- Row 2: Message Content with Markdown -->
-                                        <StackPanel Grid.Row="2" Margin="0,2,0,0"
+                                        <!-- Row 2: the images the user attached, then the message content (Markdown) -->
+                                        <StackPanel Grid.Row="2">
+                                        <ItemsControl ItemsSource="{Binding AttachedImages}" Margin="0,2,0,4"
+                                                      Visibility="{Binding HasAttachedImages, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Tag="{Binding}" Click="ToolThumbnail_Click" Cursor="Hand" Margin="0,0,8,6"
+                                                            ToolTip="{Binding}">
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border CornerRadius="8" BorderThickness="1" ClipToBounds="True"
+                                                                        BorderBrush="{DynamicResource Border.Default}">
+                                                                    <Image Source="{Binding Converter={StaticResource ThumbSource}}"
+                                                                           MaxHeight="180" MaxWidth="260" Stretch="Uniform"
+                                                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                                </Border>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <StackPanel Margin="0,2,0,0"
                                                     helpers:MarkdownHelper.Markdown="{Binding Content}">
                                             <StackPanel.Style>
                                                 <Style TargetType="StackPanel">
@@ -928,6 +952,7 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </StackPanel.Style>
+                                        </StackPanel>
                                         </StackPanel>
 
                                         <!-- Row 3: Typing Indicator -->
@@ -1475,7 +1500,8 @@
                 </Grid.RowDefinitions>
 
                 <!-- The card -->
-                <Border Grid.Row="1" CornerRadius="12" BorderThickness="1" Padding="14,10,10,8">
+                <Border x:Name="ComposerCard" Grid.Row="1" CornerRadius="12" BorderThickness="1" Padding="14,10,10,8"
+                        AllowDrop="True" PreviewDragOver="Composer_PreviewDragOver" PreviewDrop="Composer_PreviewDrop">
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Background" Value="{DynamicResource Surface.Input}"/>
@@ -1491,9 +1517,43 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <Grid>
+                        <!-- Images attached to the next message (Ctrl+V, drop, "+"), each with its × -->
+                        <ItemsControl Grid.Row="0" ItemsSource="{Binding PendingImages}" Margin="0,0,0,8"
+                                      Visibility="{Binding HasPendingImages, Converter={StaticResource BoolVis}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,6,10,0">
+                                        <Border CornerRadius="8" BorderThickness="1" BorderBrush="{DynamicResource Border.Default}"
+                                                Background="{DynamicResource Surface.Sunken}" ClipToBounds="True">
+                                            <Image Source="{Binding Converter={StaticResource ThumbSource}}" Height="60" MaxWidth="110"
+                                                   Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                        </Border>
+                                        <Button HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-6,0" Cursor="Hand"
+                                                Command="{Binding DataContext.RemovePendingImageCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}" ToolTip="{services:Loc chat.attach.remove}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource Bg.Elevated}"
+                                                            BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
+                                                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                                                   Foreground="{DynamicResource Text.Primary}"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Grid Grid.Row="1">
                             <!-- Borderless: the card is the box. -->
                             <TextBox x:Name="InputBox" Style="{x:Null}"
                                      Text="{Binding UserInput, UpdateSourceTrigger=PropertyChanged}"
@@ -1522,7 +1582,7 @@
                             </TextBlock>
                         </Grid>
 
-                        <Grid Grid.Row="1" Margin="0,8,0,0">
+                        <Grid Grid.Row="2" Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
@@ -1536,6 +1596,13 @@
                                     <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Text.Secondary}"/>
                                     <Button.ContextMenu>
                                         <ContextMenu>
+                                            <MenuItem Header="{services:Loc chat.attach.image}" Click="AttachImage_Click"
+                                                      ToolTip="{services:Loc chat.attach.dropHint}">
+                                                <MenuItem.Icon>
+                                                    <TextBlock Text="&#xEB9F;" FontFamily="Segoe MDL2 Assets" FontSize="13"/>
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <Separator/>
                                             <MenuItem Header="{services:Loc chat.agentLabel}" IsCheckable="True" IsChecked="{Binding AgenticMode}" ToolTip="{services:Loc chat.agentTip}"/>
                                             <MenuItem Header="{services:Loc chat.autonomousLabel}" IsCheckable="True" IsChecked="{Binding AutonomousMode}" ToolTip="{services:Loc chat.autoTip}"/>
                                             <MenuItem Header="{services:Loc chat.showThinkingLabel}" IsCheckable="True" IsChecked="{Binding ShowThinking}" ToolTip="{services:Loc chat.thinkingTip}"/>
@@ -1575,11 +1642,19 @@
 
                                 <!-- A model on this PC (GGUF): only while one answers the chat — shown for every provider, it
                                      let a Claude chat load a GGUF and switch itself to Local without a word. -->
-                                <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
+                                <!-- A DockPanel, not a StackPanel: in a narrow composer (the chat docked in the Edit page) the
+                                     picker gives up width instead of pushing its refresh button out of sight. -->
+                                <DockPanel Margin="0,2,8,2" VerticalAlignment="Center" LastChildFill="True"
                                             Visibility="{Binding ShowLocalModelPicker, Converter={StaticResource BoolVis}}">
+                                    <TextBlock DockPanel.Dock="Right" Text="{services:Loc chat.loading}" Foreground="{DynamicResource Status.Warning}"
+                                               FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0,0,0"
+                                               Visibility="{Binding IsLoadingModel, Converter={StaticResource BoolVis}}"/>
+                                    <Button DockPanel.Dock="Right" Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Style="{StaticResource IconButton}"
+                                            Command="{Binding RefreshModelsCommand}" ToolTip="{services:Loc chat.refreshModelsTip}"
+                                            Width="26" Height="26" FontSize="11" Margin="2,0,0,0"/>
                                     <ComboBox ItemsSource="{Binding LocalModels}" SelectedItem="{Binding SelectedLocalModel}"
-                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" Width="240"
-                                              ToolTip="{services:Loc chat.selectModelTip}">
+                                              Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="120" MaxWidth="240"
+                                              HorizontalAlignment="Left" ToolTip="{services:Loc chat.selectModelTip}">
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal">
@@ -1592,13 +1667,7 @@
                                             </DataTemplate>
                                         </ComboBox.ItemTemplate>
                                     </ComboBox>
-                                    <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets" Style="{StaticResource IconButton}"
-                                            Command="{Binding RefreshModelsCommand}" ToolTip="{services:Loc chat.refreshModelsTip}"
-                                            Width="26" Height="26" FontSize="11" Margin="2,0,0,0"/>
-                                    <TextBlock Text="{services:Loc chat.loading}" Foreground="{DynamicResource Status.Warning}"
-                                               FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0,0,0"
-                                               Visibility="{Binding IsLoadingModel, Converter={StaticResource BoolVis}}"/>
-                                </StackPanel>
+                                </DockPanel>
 
                                 <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}" Foreground="{DynamicResource Accent.2}"
                                           VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc chat.extendedThinkingTip}">
@@ -1659,6 +1728,37 @@
                             </WrapPanel>
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                <!-- Speak instead of typing: Chrome's free speech-to-text; the words land in the box, unsent -->
+                                <Button x:Name="MicButton" Content="&#xE720;" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding ToggleDictationCommand}" Margin="0,0,6,0"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="12,8"
+                                        ToolTip="{services:Loc chat.mic.tip}"
+                                        Visibility="{Binding IsDictating, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                <Button x:Name="MicOnButton" Content="&#xE720;" Command="{Binding ToggleDictationCommand}" Margin="0,0,6,0"
+                                        Background="{DynamicResource Status.Danger}" Foreground="White"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="12,8"
+                                        ToolTip="{services:Loc chat.mic.stopTip}"
+                                        Visibility="{Binding IsDictating, Converter={StaticResource BoolVis}}">
+                                    <Button.Style>
+                                        <!-- Pulses only while listening: a forever-animation on a collapsed button would keep WPF rendering frames. -->
+                                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDictating}" Value="True">
+                                                    <DataTrigger.EnterActions>
+                                                        <BeginStoryboard x:Name="MicPulse">
+                                                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.55" Duration="0:0:0.7"/>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </DataTrigger.EnterActions>
+                                                    <DataTrigger.ExitActions>
+                                                        <StopStoryboard BeginStoryboardName="MicPulse"/>
+                                                    </DataTrigger.ExitActions>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
                                 <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
                                         Command="{Binding SendMessageCommand}"
                                         FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"

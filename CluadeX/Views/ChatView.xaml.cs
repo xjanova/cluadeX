@@ -24,6 +24,13 @@ public partial class ChatView : UserControl
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
+            // Ctrl+V with a picture on the clipboard attaches it; text still pastes as text.
+            if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && DataContext is ChatViewModel pasteVm
+                && TryPasteImages(pasteVm))
+            {
+                e.Handled = true;
+                return;
+            }
             if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
             {
                 if (DataContext is ChatViewModel vm && vm.SendMessageCommand.CanExecute(null))
@@ -111,7 +118,16 @@ public partial class ChatView : UserControl
             WatchMessages(vm);
             vm.PropertyChanged -= OnVmPropertyChanged;
             vm.PropertyChanged += OnVmPropertyChanged;
+            vm.DictationApplied -= OnDictationApplied;
+            vm.DictationApplied += OnDictationApplied;
         }
+    }
+
+    /// <summary>Spoken words just landed in the box: keep the caret (and the view) at the end, where they arrive.</summary>
+    private void OnDictationApplied()
+    {
+        InputBox.CaretIndex = InputBox.Text.Length;
+        InputBox.ScrollToEnd();
     }
 
     private System.Collections.ObjectModel.ObservableCollection<ChatMessage>? _watched;
@@ -333,6 +349,78 @@ public partial class ChatView : UserControl
     {
         if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
             msg.ResolvePermission(PermissionOutcome.Denied);
+    }
+
+    // ─── Attaching images: Ctrl+V, drop, "+" ───
+
+    /// <summary>
+    /// A picture on the clipboard — a screenshot, an image copied in a browser, image files copied in Explorer — is
+    /// attached to the next message. The "PNG" format comes first (browsers and the Snipping Tool put one there with
+    /// its alpha intact); the bitmap form is flattened onto opaque, since many apps hand WPF a 32-bit DIB whose alpha
+    /// channel is garbage and the picture would arrive invisible. False when there is no picture: paste as usual.
+    /// </summary>
+    private static bool TryPasteImages(ChatViewModel vm)
+    {
+        try
+        {
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList().Cast<string>().Where(ChatViewModel.LooksLikeImageFile).ToList();
+                if (files.Count > 0) { vm.AttachImageFiles(files); return true; }
+            }
+            if (Clipboard.ContainsData("PNG") && Clipboard.GetData("PNG") is System.IO.MemoryStream png)
+            {
+                vm.AttachImageBytes(png.ToArray());
+                return true;
+            }
+            if (Clipboard.ContainsImage() && Clipboard.GetImage() is System.Windows.Media.Imaging.BitmapSource bmp)
+            {
+                var opaque = new System.Windows.Media.Imaging.FormatConvertedBitmap(bmp, PixelFormats.Bgr32, null, 0);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(opaque));
+                using var ms = new System.IO.MemoryStream();
+                enc.Save(ms);
+                vm.AttachImageBytes(ms.ToArray());
+                return true;
+            }
+        }
+        catch { /* the clipboard is held by another app right now — paste normally */ }
+        return false;
+    }
+
+    private static string[] DroppedImageFiles(DragEventArgs e) =>
+        e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] files
+            ? files.Where(ChatViewModel.LooksLikeImageFile).ToArray()
+            : Array.Empty<string>();
+
+    /// <summary>Image files dragged over the composer (Preview: the text box would refuse a file drop).</summary>
+    private void Composer_PreviewDragOver(object sender, DragEventArgs e)
+    {
+        if (DroppedImageFiles(e).Length == 0) return;
+        e.Effects = DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private void Composer_PreviewDrop(object sender, DragEventArgs e)
+    {
+        var files = DroppedImageFiles(e);
+        if (files.Length == 0 || DataContext is not ChatViewModel vm) return;
+        vm.AttachImageFiles(files);
+        e.Handled = true;
+        InputBox.Focus();
+    }
+
+    /// <summary>"+" › Attach image…: pick one or more pictures.</summary>
+    private void AttachImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ChatViewModel vm) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Multiselect = true,
+            Filter = "Images|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff",
+        };
+        if (dlg.ShowDialog(Window.GetWindow(this)) == true) vm.AttachImageFiles(dlg.FileNames);
+        InputBox.Focus();
     }
 
     // ─── Tool-row thumbnail → the full image ───

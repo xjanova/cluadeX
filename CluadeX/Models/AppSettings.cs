@@ -111,6 +111,10 @@ public class AppSettings
     /// <summary>Animate agent edits in the Code Editor as live typing (typewriter reveal of the changed
     /// region + flash highlight when done). Falls back to an instant refresh for very large changes.</summary>
     public bool LiveCodingAnimationEnabled { get; set; } = true;
+    /// <summary>Code Editor view toggles (toolbar): long lines wrap, spaces/tabs/line ends shown, text zoom.</summary>
+    public bool EditorWordWrap { get; set; }
+    public bool EditorShowWhitespace { get; set; }
+    public double EditorZoom { get; set; } = 1.0;
     public string PreferredLanguage { get; set; } = "C#";
 
     /// <summary>

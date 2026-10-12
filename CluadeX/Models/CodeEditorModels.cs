@@ -13,12 +13,37 @@ public class OpenFileTab : System.ComponentModel.INotifyPropertyChanged
 
     public string FullPath { get; set; } = "";
 
-    /// <summary>The file had a UTF-8 BOM when opened — Save writes one back, and only then.</summary>
-    public bool HasBom { get; set; }
+    private bool _hasBom;
+    /// <summary>UTF-8 only: the file had a BOM when opened — Save writes one back, and only then.</summary>
+    public bool HasBom
+    {
+        get => _hasBom;
+        set { if (_hasBom != value) { _hasBom = value; Raise(nameof(HasBom)); Raise(nameof(EncodingLabel)); } }
+    }
 
-    /// <summary>False when the bytes on disk were not UTF-8 (a legacy encoding). The tab then shows
-    /// replacement characters, and saving it would write them over the real text — so Save refuses.</summary>
-    public bool IsValidUtf8 { get; set; } = true;
+    private int _codePage;
+    /// <summary>The encoding the file is kept in: 0 = UTF-8, 1200/1201 = UTF-16, else a legacy code page
+    /// (874 = Thai TIS-620). Save writes the same encoding back (TextFileCodec.EncodeForEditor).</summary>
+    public int CodePage
+    {
+        get => _codePage;
+        set { if (_codePage != value) { _codePage = value; Raise(nameof(CodePage)); Raise(nameof(EncodingLabel)); } }
+    }
+
+    public string EncodingLabel => CluadeX.Helpers.TextFileCodec.EncodingLabel(_codePage, _hasBom);
+
+    /// <summary>False when no encoding reproduced the bytes on disk exactly. The tab then shows a lossy guess
+    /// (replacement characters), and saving it would write that over the real text — so Save refuses.</summary>
+    public bool DecodedFaithfully { get; set; } = true;
+
+    /// <summary>The user chose another encoding for the file (status bar): the bytes on disk no longer match.</summary>
+    public void SetEncoding(int codePage, bool utf8Bom)
+    {
+        if (codePage == _codePage && utf8Bom == _hasBom) return;
+        CodePage = codePage;
+        HasBom = codePage == 0 && utf8Bom;
+        IsDirty = true;
+    }
 
     public string FileName => Path.GetFileName(FullPath);
     public string Extension => Path.GetExtension(FullPath).TrimStart('.').ToLowerInvariant();

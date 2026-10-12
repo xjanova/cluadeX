@@ -474,7 +474,16 @@ public class GeminiProvider : ApiProviderBase, IModelLister
                             });
                 }
                 foreach (var b in msg.Content.Where(b => b.Type == "text" && !string.IsNullOrEmpty(b.Text)))
+                {
+                    // Images the user attached to this message: inlineData parts in front of its text.
+                    if (b.Images is { Count: > 0 } userImages)
+                        foreach (var img in userImages)
+                            parts.Add(new Dictionary<string, object>
+                            {
+                                ["inlineData"] = new Dictionary<string, object> { ["mimeType"] = img.MediaType, ["data"] = img.Base64 },
+                            });
                     parts.Add(new Dictionary<string, object> { ["text"] = b.Text! });
+                }
                 Add("user", parts);
             }
         }
