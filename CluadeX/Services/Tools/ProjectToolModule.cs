@@ -137,6 +137,10 @@ public sealed class ProjectToolModule : IAgentToolModule
     public IReadOnlyCollection<string> LocalCoreToolNames { get; } = new[] { ToolName };
 
     /// <summary>The projects opened before, so a named one opens without a search (offered only with no folder open).</summary>
-    public string? GetPromptSection(PromptSectionContext context) =>
-        AgentRunScope.Current?.WorkingDirectory == null ? (_registry ?? ProjectRegistryService.Current)?.PromptList() : null;
+    public string? GetPromptSection(PromptSectionContext context)
+    {
+        // A run's scope says where its tools work; with no scope (a prompt built outside a run) the UI's folder does.
+        bool hasProject = AgentRunScope.Current is { } scope ? scope.WorkingDirectory != null : context.HasProject;
+        return hasProject ? null : (_registry ?? ProjectRegistryService.Current)?.PromptList();
+    }
 }
