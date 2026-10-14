@@ -208,9 +208,23 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
     /// the install command) when no engine can run. <paramref name="forNavigation"/>: the caller is about to load a
     /// new document (browser_open), so a GPU-rendering engine is swapped for a software one if a local model has
     /// started holding the GPU since the engine was created — the page is being replaced anyway.</summary>
+    /// <summary>The chat whose agent run last used the page (AgentRunScope.SessionKey); null = the user / no run.
+    /// Closing, clearing or deleting that chat closes the page.</summary>
+    public string? OwnerSessionKey { get; private set; }
+
+    /// <summary>Close the page when chat <paramref name="sessionKey"/>'s agent was the last to use it. True when closed.</summary>
+    public async Task<bool> CloseIfOwnedByAsync(string sessionKey, TimeSpan waitForExit)
+    {
+        if (string.IsNullOrEmpty(sessionKey) || OwnerSessionKey != sessionKey || Session == null) return false;
+        await CloseSessionAsync(waitForExit);
+        OwnerSessionKey = null;
+        return true;
+    }
+
     public async Task<BrowserSession> GetSessionAsync(CancellationToken ct, bool forNavigation = false)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(BrowserService));
+        if (AgentRunScope.Current?.SessionKey is { Length: > 0 } owner) OwnerSessionKey = owner;
         if (Session is { } live && _channel is { IsAlive: true } && !(forNavigation && NeedsSoftwareSwap())) return live;
 
         await _createLock.WaitAsync(ct);

@@ -1481,7 +1481,7 @@ public partial class CodeAgentService
                 // advertising them unconditionally offered tools IsToolAllowed denies.
                 bool gitInSet = builtInNames.Contains("git_commit", StringComparer.OrdinalIgnoreCase);
 
-                builtInToolsAvailable = builtInNames.Count > 0;
+                builtInToolsAvailable = _fileSystemService.HasWorkingDirectory && builtInNames.Count > 0;
 
                 if (!builtInToolsAvailable)
                 {
@@ -1492,7 +1492,11 @@ public partial class CodeAgentService
                     // tools and should therefore just talk.
                     sb.AppendLine("NOTE: No project folder is open, so the file/build tools are unavailable this turn. "
                         + "This does NOT leave you without tools — see the next line, and use them. "
-                        + "If the user asks for something that needs files, ask them to open a project folder first.");
+                        + "If the user names a project or asks for work that needs files, open it YOURSELF with open_project: "
+                        + "take its path from the list of projects opened before (when one is given) or find it (brain_search — notes record where each project lives) and call open_project; the file, "
+                        + "search, shell and build tools arrive on your next step. Never tell the user you have no file tools, never ask "
+                        + "them to open the folder, and never hand the task to another agent for that reason. Only if no path can be "
+                        + "found, ask the user where the project is.");
                 }
                 else if (contextTokens >= 16000)
                 {
@@ -2575,6 +2579,7 @@ public partial class CodeAgentService
         int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
         int brainFirstGuards = 0;                // times we've refused a finish that never consulted the brain (cap 1)
         bool anyBrainToolCalled = false;         // a brain MCP tool actually ran this turn
+        string? answerBeforeBrainGuard = null;   // the answer the brain-first guard sent back (kept if the next is a remark)
         // Auto-recall already searched and pasted the hits in front of the model, so the
         // brain-first guard must not demand a second search — the prompt itself tells the
         // model that a <brainx_recall> block means the search has run.
@@ -2598,6 +2603,15 @@ public partial class CodeAgentService
         Services.Providers.IAiProvider? escalationProvider = loopIsLocal ? ResolveEscalationProvider(loopProvider) : null;
         string? lastErrorSig = null;
         int repeatErrorCount = 0;
+
+        // ─── Smart effort (effort "auto", API models) ───
+        // One effort for every step was either waste (high on a file read) or too little (medium on the third red
+        // build). "Auto" starts from the kind of task and climbs when the run shows it is hard; it never drops within
+        // a turn — each change re-writes the conversation's cache once.
+        bool smartEffortOn = !loopIsLocal && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto;
+        bool taskNonTrivial = LooksNonTrivialTask(userMessage ?? "");
+        string? stepEffort = smartEffortOn ? SmartEffort(taskNonTrivial, 0, 0, 0, 0, null) : null;
+        int failedStepsInARow = 0;               // consecutive steps with a failed tool call (smart effort)
 
         // ─── Smart context enrichment (respects SmartEditing toggle) ───
         if (_fileSystemService.HasWorkingDirectory && _settingsService.Settings.Features.SmartEditing)
@@ -2857,6 +2871,26 @@ public partial class CodeAgentService
                 // the turn concludes instead of exploring until the iteration budget dies.
                 else if (wrapUpForced && iterToolChoice == null) iterToolChoice = "none";
                 if (budgetLastStep && iterToolChoice is null or "required") iterToolChoice = "none";
+                // Smart effort: climb when the run shows it is hard; the provider reads it off the run's scope.
+                if (smartEffortOn)
+                {
+                    string next = SmartEffort(taskNonTrivial, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEditAttempts, stepEffort);
+                    if (next != stepEffort)
+                    {
+                        _debugLog?.Info("Agent", $"step {iteration + 1}: effort auto {stepEffort} → {next} (red-build guards {redBuildGuards}, "
+                            + $"failed steps in a row {failedStepsInARow}, failed edits {failedEditAttempts}, false finishes {falseFinishGuards})");
+                        OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {next}" : $"This one is hard — raising effort to {next}");
+                        stepEffort = next;
+                    }
+                    if (AgentRunScope.Current is { } effortScope) effortScope.StepEffort = stepEffort;
+                }
+                // For the spend panel's "without savings": what microcompact kept out of this request (this flow only —
+                // a sub-agent beside it sets its own).
+                CostTrackingService.NextRequest = new CostTrackingService.RequestSavingsHint
+                {
+                    CompactionAvoidedTokens = compactBoundary > 0
+                        ? Math.Max(0, EstimateNativeTokens(nativeMessages) - EstimateNativeTokens(outboundMessages)) : 0,
+                };
                 try
                 {
                     response = await loopProvider.ChatWithToolsAsync(
@@ -3107,10 +3141,14 @@ public partial class CodeAgentService
                 // put a <brainx_recall> block in front of the model, and the ask is not
                 // trivial. On the second refusal the answer stands — burning the whole
                 // budget arguing with the model is worse than a memoryless answer.
+                // Only for an answer given from the model's own head — no tool used this turn. After real work
+                // (Reverse X phase 3, 2026-10-13: 60+ steps, files written, tests run) the guard fired anyway, the model
+                // searched and replied "the summary above stands", and that remark replaced the summary the caller got.
                 if (brainFirstGuards < 1
                     && _brainSync?.IsBrainAvailable == true
                     && !anyBrainToolCalled
                     && !recallAlreadyInjected
+                    && !result.Steps.Any(s => s.ToolCalls.Count > 0)
                     && LooksNonTrivialTask(userMessage)
                     && iteration < iterationBudget - 1)
                 {
@@ -3120,6 +3158,7 @@ public partial class CodeAgentService
                     if (recallTool != null)
                     {
                         brainFirstGuards++;
+                        answerBeforeBrainGuard = response.TextContent;
                         _debugLog?.Warn("Agent", $"brain-first guard at step {iteration + 1}: finished with "
                             + $"toolCalls=0 and no brain recall — forcing {recallTool.Name}");
                         OnAgentStatus?.Invoke(isThai ? "ยังไม่ได้ค้นสมอง — กำลังค้น..." : "Brain not consulted — searching...");
@@ -3375,7 +3414,7 @@ public partial class CodeAgentService
                 }
 
                 result.Steps.Add(step);
-                result.FinalResponse = textContent;
+                result.FinalResponse = KeepAnswerOverRemark(answerBeforeBrainGuard, textContent);
                 result.Success = true;
                 result.StopReason = response.StopReason;
                 break;
@@ -3559,6 +3598,30 @@ public partial class CodeAgentService
             foreach (var toolCall in writeCalls)
                 await ExecuteNativeToolCall(toolCall);
 
+            // ─── open_project: the run now has a folder ───
+            // The schemas and prompt were built for the folder (or none) the run started with — with no project
+            // that meant no file tools at all. Rebuild both so the very next step can read and write in it.
+            if (toolResults.Any(r => r.Success && r.Type == ToolType.OpenProject))
+            {
+                InvalidateSystemPromptCache();
+                systemPrompt = await GetSystemPromptAsync();
+                if (hasEscalated) systemPrompt = WithVisionLine(systemPrompt, loopSeesImages && loopProvider.SupportsNativeToolUse);
+                toolSchemas = _agentToolService.BuildNativeToolSchemas();
+                if (isLocal)
+                {
+                    reservedTokens = CluadeX.Helpers.TokenBudget.EstimateTokens(systemPrompt)
+                        + CluadeX.Helpers.TokenBudget.EstimateTokens(userMessage)
+                        + relevantHistory.Sum(m => CluadeX.Helpers.TokenBudget.EstimateTokens(m.Content))
+                        + Math.Max(512, Math.Min(_settingsService.Settings.MaxTokens, localCtxTokens / 6));
+                    toolSchemas = FitLocalToolSchemas(toolSchemas, localCtxTokens, reservedTokens, out mcpKept, out mcpDropped,
+                        ModuleCoreToolNames());
+                }
+                else if (loopProvider.ProviderId is "OpenAI" or "Gemini" && toolSchemas.Count > MaxApiToolSchemas)
+                    toolSchemas = CapToolSchemas(toolSchemas, MaxApiToolSchemas, out _, ManagedMcpServers());
+                blindHint = Vision.ToolImageWire.BlindHint(toolSchemas.Select(t => t.Name));
+                _debugLog?.Info("Agent", $"project opened mid-run · {_fileSystemService.WorkingDirectory} · schemas={toolSchemas.Count}");
+            }
+
             // ─── Auto-verify after edits (in-loop reflexion) ───
             // A weak model edits, claims done, and never runs the build. If this turn changed files (and the
             // model didn't already verify), run the detected build and feed failures back so it's FORCED to
@@ -3731,6 +3794,9 @@ public partial class CodeAgentService
                          + "before editing it, then run_build / run_tests to verify before you say you're done.",
                 });
             }
+
+            // Smart effort: a step with a failed tool call is one more sign the run is hard.
+            if (toolResults.Any(r => !r.Success)) failedStepsInARow++; else failedStepsInARow = 0;
 
             // ─── Escalation trigger (local model stuck → hand off to a stronger API model) ───
             if (escalationProvider != null && !hasEscalated)
@@ -4081,6 +4147,40 @@ public partial class CodeAgentService
             if (ReferenceEquals(messages[i], mark)) return i;
         return 0;
     }
+
+    /// <summary>Effort "auto" for the next request: low for a chat-sized ask, medium for real work; one level up once
+    /// the run shows it is hard (a red-build or false-finish guard fired, two failing steps in a row, two failed
+    /// edits), two levels up when it keeps going wrong (a second red-build guard, four failing steps, four failed
+    /// edits). Never below <paramref name="current"/>: a turn only climbs. Public for the contract harness.</summary>
+    public static string SmartEffort(bool nonTrivial, int redBuildGuards, int falseFinishGuards, int failedStepsInARow,
+        int failedEdits, string? current)
+    {
+        string[] ladder = ["low", "medium", "high", "xhigh"];
+        int level = nonTrivial ? 1 : 0;
+        if (redBuildGuards >= 2 || failedStepsInARow >= 4 || failedEdits >= 4) level += 2;
+        else if (redBuildGuards >= 1 || falseFinishGuards >= 1 || failedStepsInARow >= 2 || failedEdits >= 2) level += 1;
+        level = Math.Min(level, ladder.Length - 1);
+        int was = current == null ? -1 : Array.IndexOf(ladder, current);
+        return ladder[Math.Max(level, was)];
+    }
+
+    /// <summary>The final answer after the brain-first guard sent one back: the model is told to answer again in full,
+    /// but may reply with a remark ("searched — the answer above stands"). A reply under half the earlier answer's length
+    /// keeps the earlier answer, with the remark under it. Public for the contract harness.</summary>
+    public static string? KeepAnswerOverRemark(string? answerBeforeGuard, string? finalAnswer)
+    {
+        if (string.IsNullOrWhiteSpace(answerBeforeGuard)) return finalAnswer;
+        if (string.IsNullOrWhiteSpace(finalAnswer)) return answerBeforeGuard;
+        return finalAnswer.Trim().Length * 2 < answerBeforeGuard.Trim().Length
+            ? answerBeforeGuard.TrimEnd() + "\n\n" + finalAnswer.Trim()
+            : finalAnswer;
+    }
+
+    /// <summary>Estimated tokens of what these messages carry as text: text and thinking, tool results, tool inputs.</summary>
+    public static int EstimateNativeTokens(IEnumerable<Services.Providers.NativeMessage> messages) =>
+        messages.Sum(m => m.Content.Sum(c => CluadeX.Helpers.TokenBudget.EstimateTokens(c.Text)
+            + CluadeX.Helpers.TokenBudget.EstimateTokens(c.Content)
+            + (c.Input is { } input ? CluadeX.Helpers.TokenBudget.EstimateTokens(input.GetRawText()) : 0)));
 
     /// <summary>A copy of <paramref name="messages"/> with every message before <paramref name="boundary"/> shortened
     /// (old tool results capped, images and long timestamps stripped). Deterministic: the same boundary gives the

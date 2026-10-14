@@ -24,6 +24,8 @@ public partial class ChatViewModel
         public CancellationTokenSource? Cts;
         public ChatMessage? ActiveStatus;
         public ChatMessage? TodoMsg;
+        /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
+        public ChatMessage? AgentMapMsg;
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
@@ -187,6 +189,68 @@ public partial class ChatViewModel
         RaiseRunStateChanged();
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
+    }
+
+    private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)
+    {
+        var list = run?.Messages ?? Messages;
+        var map = run?.AgentMapMsg;
+        if (map == null || !list.Contains(map))
+        {
+            if (e.Phase != "start") return;
+            map = new ChatMessage { Role = MessageRole.System, AgentNodes = new() };
+            if (run != null) run.AgentMapMsg = map;
+            list.Add(map);
+        }
+        var nodes = map.AgentNodes!;
+        var node = nodes.FirstOrDefault(x => x.Id == e.Id);
+        if (node == null)
+        {
+            node = new AgentNode { Id = e.Id, Label = e.Label, Kind = e.Kind, Task = e.Task };
+            nodes.Add(node);
+        }
+        var took = DateTime.Now - node.StartedAt;
+        node.Elapsed = took.TotalMinutes >= 1 ? $"{(int)took.TotalMinutes}m {took.Seconds}s" : $"{Math.Max(0, took.Seconds)}s";
+        if (e.Steps > 0) node.Steps = e.Steps;
+        switch (e.Phase)
+        {
+            case "start": node.Action = Loc("agentmap.starting"); break;
+            case "tool": node.ToolCalls++; node.Action = e.Detail; break;
+            case "done": node.State = "done"; node.Action = e.Detail; break;
+            case "failed": node.State = "failed"; node.Action = e.Detail; break;
+            case "stopped": node.State = "stopped"; node.Action = Loc("agentmap.stopped"); break;
+        }
+        int running = nodes.Count(x => x.IsRunning), done = nodes.Count(x => x.IsDone);
+        map.AgentMapHeader = running > 0
+            ? LocF("agentmap.headerRunning", nodes.Count, running, done)
+            : LocF("agentmap.headerDone", nodes.Count, done);
+        // Plain text for the saved chat (a reloaded chat shows this instead of the card).
+        map.Content = "🧭 " + map.AgentMapHeader + "\n" + string.Join("\n", nodes.Select(x =>
+            $"{(x.IsDone ? "✅" : x.IsFailed ? "⛔" : "🔄")} {x.Label} — {x.Task}"));
+    }
+
+    /// <summary>A run opened a project folder with open_project. Its tools already work there (the run's scope moved);
+    /// this makes the app agree: the chat records the folder as its project, and when that chat is the one on screen
+    /// the app opens the folder too (announced in the chat, the editor stays where it is — the run is watched here).</summary>
+    private void OnAgentOpenedProject(AgentRunScope? scope, string path)
+    {
+        try
+        {
+            var run = scope?.Owner as ChatRun;
+            var session = run?.Session ?? CurrentSession;
+            if (session != null) session.ProjectPath = path;
+            if (run == null || ReferenceEquals(run.Session, CurrentSession))
+            {
+                if (!PathEquals(_fileSystemService.AppWorkingDirectory, path))
+                    ApplyWorkingDirectory(path, announce: true, showEditor: false);
+            }
+            RebuildVisibleSessions();
+            _debugLog?.Info("Chat", $"agent opened project {path}");
+        }
+        catch (Exception ex)
+        {
+            _debugLog?.Warn("Chat", "applying a project the agent opened failed", ex);
+        }
     }
 
     /// <summary>Store a run's chat from its live list (it may not be the one on screen).</summary>

@@ -676,6 +676,14 @@
                                     <TextBlock Text="{services:Loc settings.compactionToast}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"/>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding EnableStrategicCompactionToast}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.autoCompact}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.autoCompactDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding AutoCompactWhenSuggested}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
                                 <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>

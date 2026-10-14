@@ -112,3 +112,32 @@ public sealed record PlanItemView(int Number, string Text, string State)
     public bool IsActive => State == "active";
     public bool IsPending => State == "pending";
 }
+
+/// <summary>One sub-agent on the agent map card: what it was given, what it is doing, how it ended. Updated in place
+/// while it runs (UI thread).</summary>
+public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
+{
+    public int Id { get; init; }
+    public string Label { get; init; } = "";
+    /// <summary>"explore", "general" or a specialist's name.</summary>
+    public string Kind { get; init; } = "";
+    public string Task { get; init; } = "";
+    public DateTime StartedAt { get; init; } = DateTime.Now;
+
+    private string _state = "running", _action = "", _elapsed = "";
+    private int _steps, _tools;
+    /// <summary>"running", "done", "failed" or "stopped".</summary>
+    public string State { get => _state; set { _state = value; Raise(nameof(State)); Raise(nameof(IsRunning)); Raise(nameof(IsDone)); Raise(nameof(IsFailed)); } }
+    /// <summary>What it is doing now ("อ่าน main.ts"), or how it ended.</summary>
+    public string Action { get => _action; set { _action = value; Raise(nameof(Action)); } }
+    public int Steps { get => _steps; set { _steps = value; Raise(nameof(Steps)); Raise(nameof(StatsText)); } }
+    public int ToolCalls { get => _tools; set { _tools = value; Raise(nameof(ToolCalls)); Raise(nameof(StatsText)); } }
+    public string Elapsed { get => _elapsed; set { _elapsed = value; Raise(nameof(Elapsed)); Raise(nameof(StatsText)); } }
+    public string StatsText => $"{_tools} tools · {_elapsed}";
+    public bool IsRunning => _state == "running";
+    public bool IsDone => _state == "done";
+    public bool IsFailed => _state is "failed" or "stopped";
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Raise(string p) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(p));
+}

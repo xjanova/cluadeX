@@ -39,7 +39,7 @@ public partial class OpenAiProvider : IBatchProvider
         if (MaxEffort(model) != null)
         {
             body["max_completion_tokens"] = Math.Max(settings.MaxTokens, ReasoningMaxTokensFloor);
-            if (EffortFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } effort)
+            if (EffortFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled) is { } effort)
                 body["reasoning_effort"] = effort;
         }
         else

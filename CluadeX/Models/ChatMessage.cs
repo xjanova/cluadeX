@@ -194,6 +194,14 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The diff as before/after columns (built once, on first display).</summary>
     public List<DiffPairRow>? DiffPairs => DiffLines is { Count: > 0 } lines ? _diffPairs ??= Models.DiffPairs.SideBySide(lines) : null;
 
+    // ─── The agent map: the sub-agents one command started, as a tree card (open by default, folds away) ───
+    public System.Collections.ObjectModel.ObservableCollection<AgentNode>? AgentNodes { get; set; }
+    public bool IsAgentMap => AgentNodes != null;
+    private string _agentMapHeader = "";
+    public string AgentMapHeader { get => _agentMapHeader; set { _agentMapHeader = value; OnPropertyChanged(); } }
+    private bool _agentMapOpen = true;
+    public bool IsAgentMapOpen { get => _agentMapOpen; set { _agentMapOpen = value; OnPropertyChanged(); } }
+
     // ─── The agent's plan (todo_write), shown as a checklist card ───
     private List<PlanItemView>? _planItems;
     private string _planHeader = "";
@@ -260,6 +268,22 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>A prompt that always asks (the user's own Ask rule, code run in their browser): switching the chat to
     /// "allow everything" leaves it for the user to answer.</summary>
     public bool PermissionAlwaysAsk { get; set; }
+
+    /// <summary>The prompt offers "Allow in this chat" (an MCP tool no policy judged, and not one that always asks).</summary>
+    public bool PermissionCanAllowForChat { get; set; }
+
+    /// <summary>It was answered with "Allow in this chat" (the outcome label says so).</summary>
+    public bool PermissionAllowedForChat { get; private set; }
+
+    /// <summary>Answer "Allow in this chat": allowed, and the asking tool remembers it for the rest of the chat.
+    /// False when the prompt does not offer it or was already answered.</summary>
+    public bool AllowPermissionForChat()
+    {
+        if (!PermissionCanAllowForChat || PermissionAnswered) return false;
+        PermissionAllowedForChat = true;
+        OnPropertyChanged(nameof(PermissionAllowedForChat));
+        return ResolvePermission(PermissionOutcome.Allowed);
+    }
 
     private PermissionOutcome _permissionOutcome;
     /// <summary>How the prompt was answered. Notifies, so the Allow/Deny buttons collapse and the outcome label

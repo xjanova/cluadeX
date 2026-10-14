@@ -189,10 +189,13 @@ public sealed class DatabaseService : IDisposable
                 // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
                 // a file that has been damaged before.
                 bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0;
-                cmd.Parameters.AddWithValue("$tn", userImages ? AttachedImagesTag : (object?)msg.ToolName ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tsm", (object?)msg.ToolSummary ?? DBNull.Value);
+                // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
+                bool agentMap = msg.AgentNodes != null;
+                cmd.Parameters.AddWithValue("$tn", userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$tsm", agentMap ? msg.AgentMapHeader : (object?)msg.ToolSummary ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$to", userImages
                     ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
+                    : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
                     : (object?)msg.ToolOutput ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tsuc", msg.ToolSuccess ? 1 : 0);
                 cmd.Parameters.AddWithValue("$err", msg.HasError ? 1 : 0);
@@ -298,6 +301,19 @@ public sealed class DatabaseService : IDisposable
                     loaded.ToolName = null;
                     loaded.ToolOutput = null;
                 }
+                if (loaded.ToolName == AgentMapTag)
+                {
+                    try
+                    {
+                        var rows = System.Text.Json.JsonSerializer.Deserialize<List<AgentNodeRow>>(loaded.ToolOutput ?? "[]") ?? new();
+                        loaded.AgentNodes = new(rows.Select(r => r.ToNode()));
+                        loaded.AgentMapHeader = loaded.ToolSummary ?? "";
+                    }
+                    catch { /* unreadable: the card's text summary stays */ }
+                    loaded.ToolName = null;
+                    loaded.ToolSummary = null;
+                    loaded.ToolOutput = null;
+                }
                 session.Messages.Add(loaded);
             }
         }
@@ -307,6 +323,25 @@ public sealed class DatabaseService : IDisposable
 
     /// <summary>tool_name of a user message whose tool_output holds its attached images (a JSON list of paths).</summary>
     private const string AttachedImagesTag = "@images";
+
+    /// <summary>tool_name of an agent map card whose tool_output holds its nodes (JSON) and tool_summary its header.</summary>
+    private const string AgentMapTag = "@agentmap";
+
+    /// <summary>An agent map node as saved. A node saved while it was still running (the app closed mid-run) comes
+    /// back as stopped — nothing is running it any more.</summary>
+    private sealed record AgentNodeRow(int Id, string Label, string Kind, string Task, string State, string Action,
+        int Steps, int ToolCalls, string Elapsed)
+    {
+        public static AgentNodeRow From(AgentNode n) =>
+            new(n.Id, n.Label, n.Kind, n.Task, n.State, n.Action, n.Steps, n.ToolCalls, n.Elapsed);
+
+        public AgentNode ToNode() => new()
+        {
+            Id = Id, Label = Label ?? "", Kind = Kind ?? "", Task = Task ?? "",
+            State = State == "running" ? "stopped" : State ?? "done",
+            Action = Action ?? "", Steps = Steps, ToolCalls = ToolCalls, Elapsed = Elapsed ?? "",
+        };
+    }
 
     private bool? _healthy;
 

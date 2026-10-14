@@ -20,6 +20,14 @@ public partial class ChatView : UserControl
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        // The chat page is kept and only hidden when another page is shown (Views/PageHost): coming back is not a
+        // Loaded any more, so give the input box its focus back here — on the chat page, not the one docked in the
+        // editor (the editor keeps the caret).
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true && !_hostedInEditor)
+                Dispatcher.InvokeAsync(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        };
         SizeChanged += (_, _) => UpdateSidePanelRoom();
 
         InputBox.PreviewKeyDown += (_, e) =>
@@ -343,6 +351,39 @@ public partial class ChatView : UserControl
     {
         if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
             msg.ResolvePermission(PermissionOutcome.Allowed);
+    }
+
+    /// <summary>Under this width the composer's buttons get a row of their own.</summary>
+    internal const double NarrowComposerWidth = 640;
+
+    private void ComposerStrip_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) ApplyComposerLayout(e.NewSize.Width);
+    }
+
+    /// <summary>A narrow composer (the chat docked beside the editor — owner's screenshot, 2026-10-13): the mic / send /
+    /// stop column kept its width, the options were left ~270 px and each took a line of its own. Under
+    /// <see cref="NarrowComposerWidth"/> the buttons move to their own row on the right, the options get the full width,
+    /// and the "effort" / "budget" words give way to the boxes' tooltips. Internal for the harness.</summary>
+    internal void ApplyComposerLayout(double width)
+    {
+        bool narrow = width > 0 && width < NarrowComposerWidth;
+        Grid.SetColumnSpan(ComposerOptions, narrow ? 2 : 1);
+        Grid.SetRow(ComposerButtons, narrow ? 1 : 0);
+        Grid.SetColumn(ComposerButtons, narrow ? 0 : 1);
+        Grid.SetColumnSpan(ComposerButtons, narrow ? 2 : 1);
+        ComposerButtons.HorizontalAlignment = narrow ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
+        ComposerButtons.Margin = narrow ? new Thickness(0, 4, 0, 0) : new Thickness(0);
+        EffortLabel.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        BudgetLabel.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        ChatModelBox.MinWidth = narrow ? 150 : 180;
+        ApprovalBox.MinWidth = narrow ? 120 : 150;
+    }
+
+    private void PermissionAllowChat_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AllowPermissionForChat();
     }
 
     private void PermissionDeny_Click(object sender, RoutedEventArgs e)

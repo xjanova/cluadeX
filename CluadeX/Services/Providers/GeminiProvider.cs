@@ -138,7 +138,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             generationConfig["temperature"] = (double)settings.Temperature;
             generationConfig["topP"] = (double)settings.TopP;
         }
-        if (ThinkingConfigFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } tc)
+        if (ThinkingConfigFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled) is { } tc)
             generationConfig["thinkingConfig"] = tc;
         return generationConfig;
     }

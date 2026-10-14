@@ -237,6 +237,42 @@ internal static partial class Program
         foreach (var s in schemas)
             Report.AppendLine($"## schema {s.Name}\n```\n{System.Text.Json.JsonSerializer.Serialize(s.InputSchema)}\n```");
 
+        Console.WriteLine("── open_project (a chat with no folder open) ──");
+        await Case("OP", async () =>
+        {
+            string root = Path.GetFullPath(Root).TrimEnd('\\', '/');
+            Fs.WorkingDirectory = "";
+            var scope = new AgentRunScope("tooltest-open", null);
+            AgentRunScope.Enter(scope);
+            try
+            {
+                var names = Svc.BuildNativeToolSchemas().Select(s => s.Name).ToList();
+                Check("OP1", "no folder open: open_project is offered, write_file is not", names.Contains("open_project") && !names.Contains("write_file"), string.Join(", ", names));
+                var r = await T("open_project", ("path", root));
+                Check("OP2", "open_project opens an existing folder for the run", r.Success && scope.WorkingDirectory == root && Fs.HasWorkingDirectory, Seen(r));
+                names = Svc.BuildNativeToolSchemas().Select(s => s.Name).ToList();
+                Check("OP3", "…and read_file / write_file are offered from then on", names.Contains("read_file") && names.Contains("write_file"), string.Join(", ", names));
+                var w = await T("write_file", ("path", "opened-by-agent.txt"), ("content", "hi"));
+                Check("OP4", "…and write_file writes inside that folder", w.Success && File.Exists(Path.Combine(root, "opened-by-agent.txt")), Seen(w));
+                try { File.Delete(Path.Combine(root, "opened-by-agent.txt")); } catch { }
+                var bad = await T("open_project", ("path", Path.Combine(root, "no-such-folder")));
+                Check("OP5", "a folder that does not exist is refused, the run keeps its folder", !bad.Success && Seen(bad).Contains("No folder") && scope.WorkingDirectory == root, Seen(bad));
+                var drive = await T("open_project", ("path", Path.GetPathRoot(root)!));
+                Check("OP6", "a drive root is refused (the user opens those, not the agent)", !drive.Success && scope.WorkingDirectory == root, Seen(drive));
+                var rel = await T("open_project", ("path", "Atmos"));
+                Check("OP7", "a relative path is refused with a hint to give the full path", !rel.Success && Seen(rel).Contains("absolute"), Seen(rel));
+                var alias = await T("open_folder", ("path", root));
+                Check("OP8", "the name models also write (open_folder) works", alias.Success, Seen(alias));
+                var reg = ProjectRegistryService.Current;
+                Check("OP9", "an opened project joins the project list the no-folder prompt offers",
+                    reg != null && reg.Recent().Any(e => string.Equals(e.Path, root, StringComparison.OrdinalIgnoreCase))
+                    && reg.PromptList().Contains(root), reg?.PromptList() ?? "no registry");
+                Check("OP10", "a project's memory lives outside the project (~/.cluadex/projects/<slug>/memory)",
+                    MemoryService.ProjectSlug(@"D:\Code\Atmos") == "D--Code-Atmos", MemoryService.ProjectSlug(@"D:\Code\Atmos"));
+            }
+            finally { AgentRunScope.Enter(null); Fs.WorkingDirectory = Root; }
+        });
+
         Console.WriteLine("── read_file ──");
         await Case("R1", async () => { var r = await T("read_file", ("path", "App/Program.cs")); Check("R1", "reads a file", r.Success && Seen(r).Contains("calc.Add(2, 3)"), Seen(r)); });
         await Case("R1b", async () =>
@@ -377,6 +413,33 @@ internal static partial class Program
         Console.WriteLine("\n── write_file ──");
         await Case("W1", async () => { var r = await T("write_file", ("path", "App/Deep/Nested/New.cs"), ("content", "namespace App.Deep.Nested;\n\npublic static class New { }\n")); Check("W1", "creates a file and its missing parent folders", r.Success && File.Exists(P("App", "Deep", "Nested", "New.cs")), Seen(r)); });
         await Case("W2", async () => { var r = await T("write_file", ("path", "../cluadex-evil.txt"), ("content", "x")); Check("W2", "write outside the project is refused", !r.Success && !File.Exists(Path.Combine(Path.GetDirectoryName(Root)!, "cluadex-evil.txt")), Seen(r)); });
+        await Case("W1b", async () =>
+        {
+            // Reverse X phase 4 (2026-10-13): a call that named the text "file_text" wrote four EMPTY files reported "Created".
+            var none = await T("write_file", ("path", "App/NoContent.cs"), ("file_name", "x"));
+            Check("W1b", "no 'content' at all: refused, names what was sent, writes nothing",
+                !none.Success && Seen(none).Contains("content") && Seen(none).Contains("file_name") && !File.Exists(P("App", "NoContent.cs")), Seen(none));
+            var alias = await T("write_file", ("path", "App/FileText.cs"), ("file_text", "namespace App;\n\npublic class FileText { }\n"));
+            Check("W1c", "'file_text' (the name Anthropic's editor tool uses) is taken as the content",
+                alias.Success && File.Exists(P("App", "FileText.cs")) && File.ReadAllText(P("App", "FileText.cs")).Contains("class FileText"), Seen(alias));
+            var empty = await T("write_file", ("path", "App/Empty.txt"), ("content", ""));
+            Check("W1d", "control: an explicitly empty 'content' still writes an empty file", empty.Success && File.Exists(P("App", "Empty.txt")) && new FileInfo(P("App", "Empty.txt")).Length == 0, Seen(empty));
+        });
+        await Case("W1e", () =>
+        {
+            // The bracket check after a write: strings that hold brackets or end in an escaped backslash are not code.
+            var se = new SmartEditingService(null!);
+            bool Ok(string code) => se.ValidateCode(code, "csharp").IsValid;
+            Check("W1e", "C# that is balanced is reported balanced: \"\\\\\" strings, @\"C:\\dir\\\" verbatim, \"\"\" raw, '{' chars, $\"{x}\"",
+                Ok("class A { string a = \"C:\\\\\"; void F() { } }")
+                && Ok("class A { string p = @\"C:\\dir\\\"; void F() { } }")
+                && Ok("class A { string r = \"\"\"\n { not code \"\n\"\"\"; void F() { } }")
+                && Ok("class A { char c = '{'; char d = '\\''; void F() { } }")
+                && Ok("class A { string s = $\"{x} and {{literal}}\"; }"),
+                "");
+            Check("W1f", "negative control: a missing closing brace is still caught", !Ok("class A { void F() { }"), "");
+            return Task.CompletedTask;
+        });
         await Case("W3", async () =>
         {
             WriteCrlf("App/Precious.cs", "namespace App;\n\n// 400 lines of the user's work would be here\npublic static class Precious { }\n");

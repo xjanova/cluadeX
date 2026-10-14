@@ -278,6 +278,19 @@ public class AppSettings
     // it too chatty.
     public bool EnableStrategicCompactionToast { get; set; } = true;
 
+    /// <summary>Compact by itself where the toast would ask (owner, 2026-10-13: "ที่มันคอยถามว่าจะบีบอัดไหม ให้มีติ๊ก
+    /// เพื่อให้บีบอัดออโต้ได้"). Ticked on the toast or in Settings. A turn in progress is never cut: the compact waits
+    /// for it to end. Off by default — compacting changes what the model is sent, so it is the user's choice.</summary>
+    public bool AutoCompactWhenSuggested { get; set; } = false;
+
+    /// <summary>The credit balance the user read off the provider's billing page (USD; null = not set). No provider
+    /// offers an API for the prepaid balance (Anthropic, OpenAI, Google — checked 2026-10-13), so the spend panel shows
+    /// this minus what CluadeX has spent since <see cref="CreditBalanceSetAt"/> — an estimate, labelled as one.</summary>
+    public decimal? CreditBalanceUsd { get; set; }
+    public DateTime? CreditBalanceSetAt { get; set; }
+    /// <summary>Today's spend at the moment the balance was entered (what that day spent before it is not subtracted).</summary>
+    public decimal CreditBalanceSpentThatDay { get; set; }
+
     // Model Catalog view preference — list (default) vs grid (2-column tiles).
     public bool ModelCatalogGridView { get; set; } = false;
 

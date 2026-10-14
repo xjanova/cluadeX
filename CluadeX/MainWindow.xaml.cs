@@ -149,6 +149,10 @@ public partial class MainWindow : Window
     {
         var chat = _viewModel.ChatVM;
         var menu = new System.Windows.Controls.ContextMenu { PlacementTarget = (UIElement)sender, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
+        var usage = new System.Windows.Controls.MenuItem { Header = Services.LocalizedResources.Instance["usage.menu"], FontWeight = FontWeights.SemiBold };
+        usage.Click += (_, _) => chat.OpenUsageWindow();
+        menu.Items.Add(usage);
+        menu.Items.Add(new System.Windows.Controls.Separator());
         menu.Items.Add(new System.Windows.Controls.MenuItem
         {
             Header = Services.LocalizedResources.Instance["chat.daily.menu"], IsEnabled = false, FontWeight = FontWeights.SemiBold,

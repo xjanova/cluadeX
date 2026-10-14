@@ -16,7 +16,8 @@ namespace CluadeX.Services;
 ///
 /// Storage:
 ///   - Global: ~/.cluadex/memory/
-///   - Project: {project}/.cluadex/memory/
+///   - Project: ~/.cluadex/projects/{path-slug}/memory/ — outside the repo, like Claude Code's ~/.claude/projects/;
+///     the old {project}/.cluadex/memory/ is copied there once (never deleted)
 /// </summary>
 public class MemoryService
 {
@@ -42,9 +43,49 @@ public class MemoryService
 
     /// <summary>Get the project memory directory path (or null if no project open).</summary>
     public string? ProjectMemoryDir =>
-        _fileSystemService.HasWorkingDirectory
-            ? Path.Combine(_fileSystemService.WorkingDirectory, ".cluadex", "memory")
-            : null;
+        _fileSystemService.HasWorkingDirectory ? ProjectMemoryDirFor(_fileSystemService.WorkingDirectory) : null;
+
+    /// <summary>"D:\Code\Atmos" → "D--Code-Atmos": the folder name a project's memory lives under.</summary>
+    public static string ProjectSlug(string projectRoot)
+    {
+        string full;
+        try { full = Path.GetFullPath(projectRoot).TrimEnd('\\', '/'); } catch { full = projectRoot.Trim(); }
+        var sb = new StringBuilder(full.Length);
+        foreach (char c in full) sb.Append(char.IsLetterOrDigit(c) || c is '_' or '.' ? c : '-');
+        return sb.ToString();
+    }
+
+    /// <summary>The memory folder of <paramref name="projectRoot"/>: ~/.cluadex/projects/&lt;slug&gt;/memory. Kept out of the
+    /// project, so it is never committed and survives a fresh clone. A project that still has memories in its old
+    /// &lt;project&gt;\.cluadex\memory gets them copied over the first time (the originals stay).</summary>
+    public string ProjectMemoryDirFor(string projectRoot)
+    {
+        string root = Path.GetDirectoryName(GlobalMemoryDir)!;
+        string dir = Path.Combine(root, "projects", ProjectSlug(projectRoot), "memory");
+        MigrateOldProjectMemory(Path.Combine(projectRoot, ".cluadex", "memory"), dir);
+        return dir;
+    }
+
+    private static readonly HashSet<string> Migrated = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void MigrateOldProjectMemory(string oldDir, string newDir)
+    {
+        lock (Migrated)
+        {
+            if (!Migrated.Add(newDir)) return;
+            try
+            {
+                if (!Directory.Exists(oldDir) || !Directory.EnumerateFiles(oldDir, "*.md").Any()) return;
+                Directory.CreateDirectory(newDir);
+                foreach (var f in Directory.GetFiles(oldDir, "*.md"))
+                {
+                    string target = Path.Combine(newDir, Path.GetFileName(f));
+                    if (!File.Exists(target)) File.Copy(f, target);   // never overwrite what the new home already has
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[memory] copying {oldDir} → {newDir} failed: {ex.Message}"); }
+        }
+    }
 
     /// <summary>Load the MEMORY.md index file content.</summary>
     public string LoadMemoryIndex()
@@ -90,7 +131,7 @@ public class MemoryService
     public void SaveMemory(string name, string type, string description, string content, bool isProjectScope = false,
         string? projectRoot = null)
     {
-        string? projectDir = !string.IsNullOrWhiteSpace(projectRoot) ? Path.Combine(projectRoot, ".cluadex", "memory") : ProjectMemoryDir;
+        string? projectDir = !string.IsNullOrWhiteSpace(projectRoot) ? ProjectMemoryDirFor(projectRoot) : ProjectMemoryDir;
         string dir = isProjectScope && projectDir != null ? projectDir : GlobalMemoryDir;
         Directory.CreateDirectory(dir);
 

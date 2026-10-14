@@ -13,6 +13,15 @@ public static class EffortLevels
     /// <summary>Lowest to highest, "auto" first.</summary>
     public static readonly string[] All = [Auto, "low", "medium", "high", "xhigh", "max"];
 
+    /// <summary>The effort a request goes out with: the setting, except "auto" inside an agent run, where the loop's
+    /// pick for this step (<see cref="Services.CodeAgentService.SmartEffort"/>, on the run's scope) stands in. Outside
+    /// a run, or before the loop picked, "auto" stays "auto" (each provider's own default).</summary>
+    public static string Effective(string? setting)
+    {
+        string s = Normalize(setting);
+        return s == Auto && Services.AgentRunScope.Current?.StepEffort is { } step ? Normalize(step) : s;
+    }
+
     /// <summary>A stored or bound value as one of <see cref="All"/>; anything unknown is "auto".</summary>
     public static string Normalize(string? value)
     {

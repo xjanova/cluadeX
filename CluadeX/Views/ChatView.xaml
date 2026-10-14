@@ -371,6 +371,13 @@
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
                                                     Click="PermissionAllow_Click"/>
+                                            <!-- An MCP tool no policy judged: allow it for the rest of this chat (one ChatGPT session asked 18×) -->
+                                            <Button Content="{services:Loc chat.perm.allowChat}" Padding="14,3" Margin="0,0,8,0"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    FontSize="12"
+                                                    ToolTip="{services:Loc chat.perm.allowChat.tip}"
+                                                    Visibility="{Binding PermissionCanAllowForChat, Converter={StaticResource BoolVis}}"
+                                                    Click="PermissionAllowChat_Click"/>
                                             <Button Content="{services:Loc chat.deny}" Padding="14,3"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
@@ -387,10 +394,16 @@
                                                             <DataTrigger Binding="{Binding PermissionOutcome}" Value="{x:Static models:PermissionOutcome.Allowed}">
                                                                 <Setter Property="Visibility" Value="Visible"/>
                                                             </DataTrigger>
+                                                            <DataTrigger Binding="{Binding PermissionAllowedForChat}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
+                                            <TextBlock Text="{services:Loc chat.perm.allowedChat}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Status.Success}"
+                                                       Visibility="{Binding PermissionAllowedForChat, Converter={StaticResource BoolVis}}"/>
                                             <TextBlock Text="{services:Loc chat.perm.denied}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Danger}">
                                                 <TextBlock.Style>
@@ -594,6 +607,123 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- ═══ Agent map: the sub-agents this command started, as a live tree (open by default, folds) ═══ -->
+                                <Border Grid.Row="1" Margin="20,6,0,4" Padding="14,10" CornerRadius="10" BorderThickness="1"
+                                        Background="{DynamicResource Surface.Card.Flat}" BorderBrush="{DynamicResource Accent.1.Border.Soft}"
+                                        Visibility="{Binding IsAgentMap, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Accent.1}"
+                                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                <TextBlock Text="{Binding AgentMapHeader}" FontSize="13" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <ToggleButton Grid.Column="1" IsChecked="{Binding IsAgentMapOpen, Mode=TwoWay}" Cursor="Hand"
+                                                          ToolTip="{services:Loc agentmap.hide}">
+                                                <ToggleButton.Template>
+                                                    <ControlTemplate TargetType="ToggleButton">
+                                                        <Border x:Name="bd" Background="Transparent" CornerRadius="6" Padding="6,3">
+                                                            <TextBlock x:Name="chev" Text="&#xE70E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsChecked" Value="False">
+                                                                <Setter TargetName="chev" Property="Text" Value="&#xE70D;"/>
+                                                            </Trigger>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </ToggleButton.Template>
+                                            </ToggleButton>
+                                        </Grid>
+
+                                        <StackPanel Margin="0,12,0,2" Visibility="{Binding IsAgentMapOpen, Converter={StaticResource BoolVis}}">
+                                            <!-- root: the main agent -->
+                                            <Border HorizontalAlignment="Center" CornerRadius="14" Padding="14,6" BorderThickness="1.5"
+                                                    Background="{DynamicResource Accent.1.Tint.Faint}" BorderBrush="{DynamicResource Accent.1}">
+                                                <Border.Effect>
+                                                    <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.5" Color="#4CDFFF"/>
+                                                </Border.Effect>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                               VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                                    <TextBlock Text="{services:Loc agentmap.main}" FontSize="12" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Width="2" Height="14" HorizontalAlignment="Center" Background="{DynamicResource Accent.1.Border.Soft}"/>
+
+                                            <!-- children: a bus line across the top of each, a stub down, the node -->
+                                            <ItemsControl ItemsSource="{Binding AgentNodes}">
+                                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel MinWidth="150" MaxWidth="260">
+                                                            <Border Height="2" Background="{DynamicResource Accent.1.Border.Soft}"/>
+                                                            <Border Width="2" Height="12" HorizontalAlignment="Center" Background="{DynamicResource Accent.1.Border.Soft}"/>
+                                                            <Border Margin="5,0" CornerRadius="9" Padding="10,8" BorderThickness="1.5"
+                                                                    Background="{DynamicResource Surface.Card.Flat}" ToolTip="{Binding Task}">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Success}"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger.Soft}"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <StackPanel>
+                                                                    <Grid>
+                                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                                        <Grid Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,7,0">
+                                                                            <Ellipse Fill="{DynamicResource Accent.1}" Visibility="{Binding IsRunning, Converter={StaticResource BoolVis}}">
+                                                                                <Ellipse.Triggers>
+                                                                                    <EventTrigger RoutedEvent="Loaded">
+                                                                                        <BeginStoryboard>
+                                                                                            <Storyboard RepeatBehavior="Forever">
+                                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.6" AutoReverse="True"/>
+                                                                                            </Storyboard>
+                                                                                        </BeginStoryboard>
+                                                                                    </EventTrigger>
+                                                                                </Ellipse.Triggers>
+                                                                            </Ellipse>
+                                                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Status.Success}"
+                                                                                       Visibility="{Binding IsDone, Converter={StaticResource BoolVis}}"/>
+                                                                            <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Status.Danger.Soft}"
+                                                                                       Visibility="{Binding IsFailed, Converter={StaticResource BoolVis}}"/>
+                                                                        </Grid>
+                                                                        <TextBlock Grid.Column="1" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                                                        <Border Grid.Column="2" CornerRadius="6" Padding="5,0" Margin="6,0,0,0"
+                                                                                Background="{DynamicResource Surface.Raised}">
+                                                                            <TextBlock Text="{Binding Kind}" FontSize="9.5" FontFamily="{DynamicResource Font.Mono}"
+                                                                                       Foreground="{DynamicResource Text.Muted}"/>
+                                                                        </Border>
+                                                                    </Grid>
+                                                                    <TextBlock Text="{Binding Task}" FontSize="11" Margin="0,5,0,0" TextWrapping="Wrap" MaxHeight="30"
+                                                                               TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Text.Secondary}"/>
+                                                                    <TextBlock Text="{Binding Action}" FontSize="10.5" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"
+                                                                               FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.1}"/>
+                                                                    <TextBlock Text="{Binding StatsText}" FontSize="9.5" Margin="0,3,0,0"
+                                                                               FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- ═══ Normal chat bubble ═══ -->
                                 <!-- Hidden for every role that has its own body above. -->
                                 <Grid Grid.Row="1">
@@ -617,6 +747,9 @@
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsPlan}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsAgentMap}" Value="True">
                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -1299,11 +1432,12 @@
                 </Style>
             </Border.Style>
             <Grid>
+                <!-- Glyph · text with the actions under it · dismiss. The actions used to be columns of their own: in a
+                     narrow chat (docked beside the editor) the text was squeezed to a sliver and "Compact now" stretched
+                     into a tall block (owner's screenshot, 2026-10-13). Under the text they fit any width. -->
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
@@ -1334,64 +1468,72 @@
                     <TextBlock Text="{Binding CompactionToastReason}" FontSize="11"
                                Foreground="{DynamicResource Text.Secondary}"
                                Margin="0,2,0,0" TextWrapping="Wrap"/>
+                    <WrapPanel>
+                    <!-- Compact now (primary action) -->
+                    <Button Padding="12,6" Margin="0,8,6,0" Cursor="Hand" VerticalAlignment="Center"
+                            Command="{Binding AcceptCompactionToastCommand}"
+                            Background="{DynamicResource Accent.2}" BorderThickness="0" Foreground="{DynamicResource Text.OnAccent}"
+                            ToolTip="{services:Loc chat.compactNowTip}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                        CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource Accent.2.Hover}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc chat.compactNow}" FontSize="11" FontWeight="SemiBold"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Snooze 10 turns -->
+                    <Button Padding="10,6" Margin="0,8,10,0" Cursor="Hand" VerticalAlignment="Center"
+                            Command="{Binding SnoozeCompactionToastCommand}"
+                            Background="Transparent"
+                            BorderBrush="{DynamicResource Surface.Raised.Strong}" BorderThickness="1"
+                            Foreground="{DynamicResource Text.Secondary}"
+                            ToolTip="{services:Loc chat.snoozeTip}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Fill.Faint}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xEC92;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc chat.snooze}" FontSize="11"/>
+                        </StackPanel>
+                    </Button>
+
+                        <!-- Stop asking: compact by itself from now on (also in Settings) -->
+                        <CheckBox IsChecked="{Binding AutoCompactWhenSuggested}" Margin="0,8,0,0" VerticalAlignment="Center"
+                                  ToolTip="{services:Loc chat.toast.autoCompactTip}">
+                            <TextBlock Text="{services:Loc chat.toast.autoCompact}" FontSize="11"
+                                       Foreground="{DynamicResource Text.Secondary}"/>
+                        </CheckBox>
+                    </WrapPanel>
                 </StackPanel>
 
-                <!-- Compact now (primary action) -->
-                <Button Grid.Column="2" Padding="12,6" Margin="0,0,6,0" Cursor="Hand"
-                        Command="{Binding AcceptCompactionToastCommand}"
-                        Background="{DynamicResource Accent.2}" BorderThickness="0" Foreground="{DynamicResource Text.OnAccent}"
-                        ToolTip="{services:Loc chat.compactNowTip}">
-                    <Button.Template>
-                        <ControlTemplate TargetType="Button">
-                            <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource Accent.2.Hover}"/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Button.Template>
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="{services:Loc chat.compactNow}" FontSize="11" FontWeight="SemiBold"/>
-                    </StackPanel>
-                </Button>
-
-                <!-- Snooze 10 turns -->
-                <Button Grid.Column="3" Padding="10,6" Margin="0,0,6,0" Cursor="Hand"
-                        Command="{Binding SnoozeCompactionToastCommand}"
-                        Background="Transparent"
-                        BorderBrush="{DynamicResource Surface.Raised.Strong}" BorderThickness="1"
-                        Foreground="{DynamicResource Text.Secondary}"
-                        ToolTip="{services:Loc chat.snoozeTip}">
-                    <Button.Template>
-                        <ControlTemplate TargetType="Button">
-                            <Border x:Name="bd" Background="{TemplateBinding Background}"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="{TemplateBinding BorderThickness}"
-                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Fill.Faint}"/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </Button.Template>
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xEC92;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                   Margin="0,0,6,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="{services:Loc chat.snooze}" FontSize="11"/>
-                    </StackPanel>
-                </Button>
-
                 <!-- Dismiss (x) -->
-                <Button Grid.Column="4" Width="28" Height="28" Cursor="Hand"
+                <Button Grid.Column="2" Width="28" Height="28" Cursor="Hand" VerticalAlignment="Top"
                         Command="{Binding DismissCompactionToastCommand}"
                         Background="Transparent" BorderThickness="0"
                         ToolTip="{services:Loc chat.dismissTip}">
@@ -1582,13 +1724,19 @@
                             </TextBlock>
                         </Grid>
 
-                        <Grid Grid.Row="2" Margin="0,8,0,0">
+                        <!-- Options, then the mic / send / stop buttons. A narrow composer (the chat docked beside the editor)
+                             moves the buttons to a row of their own: see ChatView.ApplyComposerLayout. -->
+                        <Grid x:Name="ComposerStrip" Grid.Row="2" Margin="0,8,0,0" SizeChanged="ComposerStrip_SizeChanged">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                            <WrapPanel Orientation="Horizontal" VerticalAlignment="Center"
+                            <WrapPanel x:Name="ComposerOptions" Orientation="Horizontal" VerticalAlignment="Center" ItemHeight="34"
                                        TextElement.FontSize="12" TextElement.FontFamily="{DynamicResource Font.Ui}">
                                 <!-- "+": the switches and actions that don't need a pill of their own -->
                                 <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Width="30" Height="30" Margin="0,2,8,2"
@@ -1678,7 +1826,7 @@
                                 </CheckBox>
 
                                 <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center">
-                                    <TextBlock Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
+                                    <TextBlock x:Name="EffortLabel" Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
                                                Margin="0,0,5,0" ToolTip="{services:Loc chat.effortTip}"/>
                                     <ComboBox x:Name="EffortBox" ItemsSource="{Binding EffortOptions}" SelectedItem="{Binding ReasoningEffort}"
                                               Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="92"
@@ -1698,7 +1846,7 @@
                                 <!-- Spend: a paid run stops and asks once it has spent this much -->
                                 <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
                                             Visibility="{Binding HasBillingPage, Converter={StaticResource BoolVis}}">
-                                    <TextBlock Text="{services:Loc chat.budget.label}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
+                                    <TextBlock x:Name="BudgetLabel" Text="{services:Loc chat.budget.label}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
                                                Margin="0,0,5,0" ToolTip="{services:Loc chat.budget.tip}"/>
                                     <ComboBox x:Name="BudgetBox" ItemsSource="{Binding BudgetChoices}"
                                               SelectedValuePath="Usd" SelectedValue="{Binding RunBudgetUsd}"
@@ -1727,7 +1875,7 @@
                                            Visibility="{Binding BatchPendingText, Converter={StaticResource BoolVis}}"/>
                             </WrapPanel>
 
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                            <StackPanel x:Name="ComposerButtons" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
                                 <!-- Speak instead of typing: Chrome's free speech-to-text; the words land in the box, unsent -->
                                 <Button x:Name="MicButton" Content="&#xE720;" Style="{StaticResource SecondaryButton}"
                                         Command="{Binding ToggleDictationCommand}" Margin="0,0,6,0"

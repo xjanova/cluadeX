@@ -80,9 +80,39 @@ public partial class CodeAgentService
         return all.Where(t => !SubAgentExcludedTools.Contains(t.Name) && resolve(t.Name) is { } type && allowedTypes.Contains(type)).ToList();
     }
 
+    /// <summary>What a sub-agent is doing, for the agent map: Phase "start" | "tool" | "done" | "failed" | "stopped".
+    /// Raised in the run's own flow (AgentRunScope.Current is the run that spawned it).</summary>
+    public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps);
+
+    public event Action<SubAgentEvent>? OnSubAgentEvent;
+
+    private void RaiseSubAgent(SubAgentEvent e)
+    {
+        try { OnSubAgentEvent?.Invoke(e); } catch (Exception ex) { _debugLog?.Warn("SubAgent", "agent map update failed", ex); }
+    }
+
     /// <summary>Run one sub-agent to the end and return its report; null when the active model cannot run one (no
     /// native tool use — the [ACTION:] protocol), so the caller falls back to handing the task to the main agent.</summary>
     private async Task<string?> RunSubAgentAsync(SubAgentRequest request, CancellationToken ct)
+    {
+        _subAgentLast.Value = null;
+        try { return await RunSubAgentCoreAsync(request, ct); }
+        catch (OperationCanceledException)
+        {
+            if (_subAgentLast.Value is { } e) RaiseSubAgent(e with { Phase = "stopped", Detail = "" });
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (_subAgentLast.Value is { } e) RaiseSubAgent(e with { Phase = "failed", Detail = Shorten(ex.Message, 120) });
+            throw;
+        }
+    }
+
+    // The sub-agent this flow is running (for the failed / stopped event).
+    private readonly AsyncLocal<SubAgentEvent?> _subAgentLast = new();
+
+    private async Task<string?> RunSubAgentCoreAsync(SubAgentRequest request, CancellationToken ct)
     {
         var provider = _providerManager.ActiveProvider;
         if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady)
@@ -108,6 +138,9 @@ public partial class CodeAgentService
         var messages = new List<NativeMessage> { new() { Role = "user", Content = { new ContentBlock { Type = "text", Text = first.ToString() } } } };
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
+        var ev = new SubAgentEvent(n, label, type, Shorten(task, 160), "start", "", 0);
+        _subAgentLast.Value = ev;
+        RaiseSubAgent(ev);
         _debugLog?.Info("SubAgent", $"{label} ({type}) start: {Shorten(task, 120)} · {tools.Count} tools");
 
         int timeoutSec = _settingsService.Settings.InteractiveRequestTimeoutSeconds;
@@ -133,6 +166,10 @@ public partial class CodeAgentService
                 string report = (response.TextContent ?? "").Trim();
                 _debugLog?.Info("SubAgent", $"{label} done in {step} step(s), {report.Length} chars");
                 OnAgentStatus?.Invoke($"{label}: {(thai ? "เสร็จ" : "done")} ({step} {(thai ? "ขั้น" : "steps")})");
+                // The node shows the report's opening words — as text, not markdown (**, `, #, list bullets).
+                string gist = System.Text.RegularExpressions.Regex.Replace(report, @"[*`#>_]+|^\s*[-•]\s*", "",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+                RaiseSubAgent(ev with { Phase = "done", Detail = Shorten(gist, 140), Steps = step });
                 return report.Length > 0 ? report : (thai ? "(เอเจนต์ย่อยไม่ได้เขียนรายงาน)" : "(the sub-agent wrote no report)");
             }
 
@@ -148,7 +185,9 @@ public partial class CodeAgentService
                         return new ContentBlock { Type = "tool_result", ToolUseId = c.tc.Id, IsError = true,
                             Content = $"Tool '{c.tc.Name}' is not available to a sub-agent." };
                     var call = new ToolCall { ToolName = c.tc.Name, Type = c.type.Value, Arguments = ParseJsonInputToArgs(c.tc.Input) };
-                    OnAgentStatus?.Invoke($"{label}: {GetToolStatusMessage(c.tc.Name, call.Arguments)}");
+                    string doing = GetToolStatusMessage(c.tc.Name, call.Arguments);
+                    OnAgentStatus?.Invoke($"{label}: {doing}");
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step });
                     var r = await _agentToolService.ExecuteToolAsync(call, ct);
                     string text = r.Success ? (r.Output ?? "") : $"Error: {r.Error ?? r.Output}";
                     if (text.Length > SubAgentMaxResultChars)
@@ -172,6 +211,7 @@ public partial class CodeAgentService
             messages.Add(assistant);
             messages.Add(results);
         }
+        RaiseSubAgent(ev with { Phase = "done", Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = SubAgentMaxSteps });
         return thai ? "(เอเจนต์ย่อยใช้ขั้นตอนครบโดยไม่ได้สรุป)" : "(the sub-agent used its step budget without a report)";
     }
 

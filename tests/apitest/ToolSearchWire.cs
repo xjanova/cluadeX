@@ -192,15 +192,16 @@ internal static class ToolSearchWire
             rf.TextContent == "done" && before == 2 && calls == 3 && !(mock.BodyAt(mock.Count - 1) ?? "").Contains("defer_loading"),
             $"text={rf.TextContent} calls={calls}");
 
-        // 5. The chat strip's cost estimate — the arithmetic, by hand (Sonnet 5.5: $2 in, $10 out, $0.20 read, $2.50 write).
+        // 5. The chat strip's cost estimate — the arithmetic, by hand (Sonnet 5.5: $2 in, $10 out, $0.10 read, $2.50 write;
+        //    the read price was $0.20 here until the 2026-10-13 pricing check — PricingWire).
         section("offline · cost estimate (the chat strip's ≈ $/step)");
         var e = CostEstimate.Estimate("claude-sonnet-5-5", prefixTokens: 25_000, historyTokens: 2_000, outputPerStep: 1_200, growthPerStep: 3_000);
         // step 1: 25k × $4 (1-hour write = 2x input) + 2k × $2.50 + 1.2k × $10 = 0.100 + 0.005 + 0.012
         check("estimate", "step 1 = prefix written for an hour (2x input) + history at the 5-minute price + the answer", e.FirstStep == 0.117m, e.FirstStep.ToString());
-        // step k: (27k + k × 4.2k) × $0.20 + 4.2k × $2.50 + 1.2k × $10
+        // step k: (27k + k × 4.2k) × $0.10 + 4.2k × $2.50 + 1.2k × $10
         check("estimate", "a later step = everything before read back + the step's new content written + the answer",
-            e.LaterLow == (27_000m + 4_200m) * 0.2m / 1_000_000m + 4_200m * 2.5m / 1_000_000m + 0.012m
-            && e.LaterHigh == (27_000m + 40 * 4_200m) * 0.2m / 1_000_000m + 4_200m * 2.5m / 1_000_000m + 0.012m, $"{e.LaterLow} … {e.LaterHigh}");
+            e.LaterLow == (27_000m + 4_200m) * 0.1m / 1_000_000m + 4_200m * 2.5m / 1_000_000m + 0.012m
+            && e.LaterHigh == (27_000m + 40 * 4_200m) * 0.1m / 1_000_000m + 4_200m * 2.5m / 1_000_000m + 0.012m, $"{e.LaterLow} … {e.LaterHigh}");
         var (fewest, most) = e.StepsFor(10m);
         check("estimate", "a $10 budget buys between (10 − step 1) / long-run step and (10 − step 1) / early step, plus step 1",
             fewest == 1 + (int)((10m - e.FirstStep) / e.LaterHigh) && most == 1 + (int)((10m - e.FirstStep) / e.LaterLow) && fewest < most, $"{fewest}–{most}");

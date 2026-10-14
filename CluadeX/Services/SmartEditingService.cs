@@ -74,26 +74,67 @@ public class SmartEditingService
         var result = new CodeValidationResult { IsValid = true };
 
         int braces = 0, parens = 0, brackets = 0;
-        bool inString = false, inChar = false;
+        bool inString = false, inChar = false, verbatim = false;
         bool inLineComment = false, inBlockComment = false;
         char prev = '\0';
 
+        // Strings are skipped whole. The old reading ended a string at a quote not preceded by '\', so "C:\\" (an
+        // escaped backslash), @"C:\dir\" (verbatim: '\' is no escape) and """raw""" literals swallowed the code after
+        // them and every C# file with such a string was reported "Unbalanced" (Reverse X phase 3/4, 2026-10-13).
         for (int i = 0; i < code.Length; i++)
         {
             char c = code[i];
 
             if (inLineComment) { if (c == '\n') inLineComment = false; prev = c; continue; }
             if (inBlockComment) { if (prev == '*' && c == '/') inBlockComment = false; prev = c; continue; }
-            if (inString) { if (c == '"' && prev != '\\') inString = false; prev = c; continue; }
-            if (inChar) { if (c == '\'' && prev != '\\') inChar = false; prev = c; continue; }
+            if (inString)
+            {
+                if (verbatim)
+                {
+                    if (c == '"')
+                    {
+                        if (i + 1 < code.Length && code[i + 1] == '"') i++;   // "" is a quote inside @"…"
+                        else inString = false;
+                    }
+                }
+                else if (c == '\\') i++;                                         // whatever follows is escaped
+                else if (c == '"' || c == '\n') inString = false;               // a newline ends a broken one-line string
+                prev = c;
+                continue;
+            }
+            if (inChar)
+            {
+                if (c == '\\') i++;
+                else if (c == '\'' || c == '\n') inChar = false;
+                prev = c;
+                continue;
+            }
 
             if (c == '/' && i + 1 < code.Length)
             {
                 if (code[i + 1] == '/') { inLineComment = true; prev = c; continue; }
                 if (code[i + 1] == '*') { inBlockComment = true; prev = c; continue; }
             }
-            if (c == '"') { inString = true; prev = c; continue; }
-            if (c == '\'') { inChar = true; prev = c; continue; }
+            if (c == '"')
+            {
+                // A raw literal: three or more quotes open it, the same number closes it.
+                int q = 0;
+                while (i + q < code.Length && code[i + q] == '"') q++;
+                if (q >= 3)
+                {
+                    int close = code.IndexOf(new string('"', q), i + q, StringComparison.Ordinal);
+                    i = close < 0 ? code.Length : close + q - 1;
+                    prev = '"';
+                    continue;
+                }
+                inString = true;
+                verbatim = prev == '@' || (prev == '$' && i >= 2 && code[i - 2] == '@');
+                prev = c;
+                continue;
+            }
+            // An apostrophe opens a char literal only in languages that have them — and not mid-word (Python's
+            // 'don't', a Rust lifetime 'a: those ended up swallowing the rest of the line before).
+            if (c == '\'' && !char.IsLetterOrDigit(prev)) { inChar = true; prev = c; continue; }
 
             switch (c)
             {

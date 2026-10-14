@@ -63,12 +63,21 @@ public sealed class AgentRunScope
     public long CacheWriteTokens { get { lock (_costLock) return _cacheWriteTok; } }
     public long InputTokens { get { lock (_costLock) return _inTok; } }
 
+    /// <summary>Effort "auto": the agent loop's pick for its next request (low / medium / high / xhigh), read by the
+    /// providers through <see cref="Models.EffortLevels.Effective"/>. Null = none picked (the provider's default).</summary>
+    public string? StepEffort { get; set; }
+
+    private decimal _baselineUsd;
+    /// <summary>What this run would have cost with no saving: no prompt cache, no tool search, no microcompact, no batch.</summary>
+    public decimal BaselineUsd { get { lock (_costLock) return _baselineUsd; } }
+
     /// <summary>One usage record of a request made inside the run (a request reports input at its start, output at its end).</summary>
-    public void AddUsage(decimal usd, int input, int output, int cacheRead, int cacheWrite, bool newRequest)
+    public void AddUsage(decimal usd, int input, int output, int cacheRead, int cacheWrite, bool newRequest, decimal baselineUsd = 0m)
     {
         lock (_costLock)
         {
             _costUsd += usd;
+            _baselineUsd += baselineUsd;
             _inTok += input; _outTok += output; _cacheReadTok += cacheRead; _cacheWriteTok += cacheWrite;
             if (newRequest) _requests++;
         }

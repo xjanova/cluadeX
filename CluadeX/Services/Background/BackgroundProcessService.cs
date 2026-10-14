@@ -337,6 +337,7 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
             };
             // Registered under the same lock as the cap check, so two starts at once can't both take the last slot.
             _entries.Add(entry);
+            NoteOwner(entry.Id);
         }
         entry.OpenLog(_logDir, _runStamp);
         AddItem(entry);
@@ -523,6 +524,7 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
                 Name = L("bg.static.name", Path.GetFileName(full) is { Length: > 0 } leaf ? leaf : full),
             };
             _entries.Add(entry);   // holds its slot while the listener binds
+            NoteOwner(entry.Id);
         }
 
         var (server, error, detail) = StaticFileServer.TryStart(full, port, spa, line => entry.AppendLine(line, isError: false));
@@ -868,6 +870,28 @@ public sealed class BackgroundProcessService : IDisposable, IAppShutdownHook
             while (sw.Elapsed < wait && ReadinessProbe.ListenersOn(port).Count > 0)
                 await Task.Delay(100).ConfigureAwait(false);
         return e.Snapshot();
+    }
+
+    // The chat whose agent run started each process (AgentRunScope.SessionKey). Starts from the Task Manager page
+    // or the user have no owner and are never stopped by a chat's cleanup. Written under _lock.
+    private readonly Dictionary<int, string> _owners = new();
+
+    private void NoteOwner(int id)
+    {
+        if (AgentRunScope.Current?.SessionKey is { Length: > 0 } key) _owners[id] = key;
+    }
+
+    /// <summary>Stop every running process an agent run of chat <paramref name="sessionKey"/> started (the chat was
+    /// closed, cleared or deleted). Returns how many were running.</summary>
+    public async Task<int> StopForSessionAsync(string sessionKey, TimeSpan wait)
+    {
+        if (string.IsNullOrEmpty(sessionKey)) return 0;
+        List<int> ids;
+        lock (_lock)
+            ids = _entries.Where(e => e.IsRunning && _owners.TryGetValue(e.Id, out var k) && k == sessionKey)
+                .Select(e => e.Id).ToList();
+        await Task.WhenAll(ids.Select(id => StopAsync(id, wait))).ConfigureAwait(false);
+        return ids.Count;
     }
 
     /// <summary>Stop every running process (in parallel). Returns how many were running.</summary>

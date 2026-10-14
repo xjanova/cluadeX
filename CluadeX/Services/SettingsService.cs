@@ -125,16 +125,28 @@ public class SettingsService
 
     public event Action? SettingsChanged;
 
+    /// <summary>The data home this build uses: &lt;exe&gt;\Data next to a "portable" / "portable.txt" marker, else
+    /// ~/.cluadex. One rule for services created before this one — the debug log had its own and always wrote
+    /// ~/.cluadex/logs, so a portable copy and every test harness wrote into the user's real log (2026-10-13: 90 lines
+    /// of mcptest's stub servers in the log a pipe run was being watched through).</summary>
+    public static string ResolveDataRoot(out bool portable)
+    {
+        string exeDir = AppDomain.CurrentDomain.BaseDirectory;
+        portable = File.Exists(Path.Combine(exeDir, "portable")) || File.Exists(Path.Combine(exeDir, "portable.txt"));
+        return portable
+            ? Path.Combine(exeDir, "Data")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
+    }
+
     public SettingsService()
     {
         // Detect portable mode: if "portable" or "portable.txt" exists next to the exe
-        string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        IsPortable = File.Exists(Path.Combine(exeDir, "portable"))
-                  || File.Exists(Path.Combine(exeDir, "portable.txt"));
+        string root = ResolveDataRoot(out bool portable);
+        IsPortable = portable;
 
         if (IsPortable)
         {
-            _dataRoot = Path.Combine(exeDir, "Data");
+            _dataRoot = root;
             _settingsPath = Path.Combine(_dataRoot, "settings.json");
         }
         else

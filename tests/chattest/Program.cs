@@ -260,6 +260,9 @@ internal static class Program
         await TestThumbnail();                // T5: tool-row image thumbnail
         await TestAskUserAndPinnedFolder();   // Q + S
         await TestControlStrip();             // U7: model / approvals / budget / spend under the input box
+        await TestUsageWindow();              // U8: the spend window — paid vs without savings, credit left
+        TestAutoCompact();                    // U9: the compaction toast's "compact by itself" tick
+        await TestNarrowComposer();           // U10: the composer docked beside the editor
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
         Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
@@ -520,6 +523,25 @@ internal static class Program
         var hist = ChatViewModel.BuildModelHistory(reread.Messages);
         Check("L4 legacy status rows are not sent to the model", hist.Count == 2 && hist[1].Content == "Done — I fixed it.",
             string.Join(" | ", hist.Select(h => h.Content)));
+
+        // An agent map card survives a reopen as a card (its nodes), not only as its text summary.
+        var mapChat = new ChatSession { Title = "agent map" };
+        var map = new ChatMessage { Role = MessageRole.System, Content = "🧭 map", AgentMapHeader = "Agent map · 2 sub-agents · 1 done",
+            AgentNodes = new()
+            {
+                new AgentNode { Id = 1, Label = "Sub-agent #1", Kind = "explore", Task = "read auth", State = "done", Action = "found it", ToolCalls = 3, Elapsed = "7s" },
+                new AgentNode { Id = 2, Label = "Sub-agent #2", Kind = "explore", Task = "read api", Action = "Reading api.dart", ToolCalls = 1, Elapsed = "2s" },
+            } };
+        mapChat.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "split it" });
+        mapChat.Messages.Add(map);
+        Db.SaveSession(mapChat);
+        var mapBack = Db.LoadSession(mapChat.Id)!.Messages.FirstOrDefault(m => m.IsAgentMap);
+        Check("L4 an agent map card comes back as a card with its nodes and header after a reopen",
+            mapBack != null && mapBack.AgentNodes!.Count == 2 && mapBack.AgentMapHeader == map.AgentMapHeader
+            && mapBack.AgentNodes[0].IsDone && mapBack.AgentNodes[0].ToolCalls == 3 && mapBack.ToolName == null,
+            mapBack == null ? "no card" : $"{mapBack.AgentNodes?.Count} nodes · '{mapBack.AgentMapHeader}'");
+        Check("L4 a node saved mid-run comes back stopped, not spinning forever", mapBack?.AgentNodes![1].IsFailed == true && mapBack.AgentNodes[1].State == "stopped");
+        Check("L4 the agent map card is not sent to the model", ChatViewModel.BuildModelHistory(mapChat.Messages).All(m => !m.IsAgentMap));
 
         var hist2 = ChatViewModel.BuildModelHistory(Vm.Messages);
         Check("L4 the model history has no status line, error bubble or UI notice",
@@ -1873,6 +1895,176 @@ internal static class Program
         // The credit link moved to the window's title bar (the "today" chip's menu): MainWindow, not this view.
         Check("U7 text: the composer's \"+\" menu carries the agent switches and the chat actions",
             ((Button)View.FindName("MoreButton")).ContextMenu.Items.OfType<MenuItem>().Count() >= 9);
+    }
+
+    // ═══════════════════════════════════════════ U8 ═══════════════════════════════════════════
+    static async Task TestUsageWindow()
+    {
+        Log("\n## U8 — the spend window: paid vs without savings, 14 days of bars, where the savings came from, credit left");
+        // 14 seeded days in the harness's portable data root (never ~/.cluadex), read by a fresh tracker.
+        string ledger = Path.Combine(Settings.DataRoot, "usage-daily.json");
+        string? ledgerBefore = File.Exists(ledger) ? File.ReadAllText(ledger) : null;
+        var s0 = Settings.Settings;
+        (decimal? bal, DateTime? at, decimal spentThatDay) balanceBefore = (s0.CreditBalanceUsd, s0.CreditBalanceSetAt, s0.CreditBalanceSpentThatDay);
+        UsageWindow? win = null;
+        try
+        {
+            var days = new Dictionary<string, DailyUsage>();
+            var rnd = new Random(7);
+            for (int i = 13; i >= 0; i--)
+            {
+                decimal paid = i % 5 == 3 ? 0 : Math.Round(0.5m + (decimal)rnd.NextDouble() * 6m, 2);
+                decimal cache = paid * 2.4m, ts = paid * 0.6m, comp = paid * 0.3m, batch = i % 4 == 0 ? paid * 0.2m : 0;
+                days[DateTime.Today.AddDays(-i).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)] = new DailyUsage
+                {
+                    Usd = paid, Requests = paid == 0 ? 0 : 20 + i * 3, BaselineUsd = paid + cache + ts + comp + batch,
+                    SavedCacheUsd = cache, SavedToolSearchUsd = ts, SavedCompactionUsd = comp, SavedBatchUsd = batch,
+                };
+            }
+            File.WriteAllText(ledger, System.Text.Json.JsonSerializer.Serialize(days));
+            var tracker = new CostTrackingService(Settings);
+            var anchor = DateTime.Today.AddDays(-6).AddHours(9);
+            Settings.UpdateSettings(s => { s.CreditBalanceUsd = 50m; s.CreditBalanceSetAt = anchor; s.CreditBalanceSpentThatDay = 0.25m; });
+
+            var vm = new UsageViewModel(tracker, Settings, () => { });
+            Check("U8 numbers: three periods, 14 bars, four saving rows", vm.Periods.Count == 3 && vm.Bars.Count == 14 && vm.Savings.Count == 4,
+                $"{vm.Periods.Count}/{vm.Bars.Count}/{vm.Savings.Count}");
+            double tallest = vm.Bars.Max(b => b.PaidHeight + b.SavedHeight);
+            Check("U8 bars: the tallest bar (paid + saved = without savings) fills the chart; a day with no use is empty",
+                Math.Abs(tallest - UsageViewModel.ChartHeight) < 0.01 && vm.Bars.Any(b => b.PaidHeight == 0 && b.SavedHeight == 0), $"tallest {tallest:F2}");
+            var inv = System.Globalization.CultureInfo.InvariantCulture;   // ledger keys are Gregorian (a Thai UI culture is Buddhist-era)
+            decimal spent = days.Where(kv => DateTime.ParseExact(kv.Key, "yyyy-MM-dd", inv) > anchor.Date).Sum(kv => kv.Value.Usd)
+                            + Math.Max(0, days[anchor.Date.ToString("yyyy-MM-dd", inv)].Usd - 0.25m);
+            Check("U8 credit: entered $50 six days ago, minus what was spent after it (that morning's $0.25 not counted)",
+                vm.HasBalance && vm.BalanceText.Contains(UsageViewModel.Usd(50m - spent)), $"{vm.BalanceText} expected {UsageViewModel.Usd(50m - spent)}");
+            Check("U8 credit input: '$12.50', '12,50' and '25' parse; 'abc' and '-3' don't",
+                UsageViewModel.TryParseUsd("$12.50", out var a1) && a1 == 12.5m && UsageViewModel.TryParseUsd("12,50", out var a2) && a2 == 12.5m
+                && UsageViewModel.TryParseUsd("25", out var a3) && a3 == 25m && !UsageViewModel.TryParseUsd("abc", out _) && !UsageViewModel.TryParseUsd("-3", out _));
+
+            win = new UsageWindow(vm) { ShowActivated = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -12000, Top = 0 };
+            win.Show();
+            var themes = Sp.GetRequiredService<ThemeService>();
+            LocSvc.SetLanguage("th");
+            vm.Refresh();
+            foreach (var id in new[] { ThemeIds.Classic, ThemeIds.Midnight, ThemeIds.NeonCyber })
+            {
+                themes.Apply(id, persist: false);
+                await Task.Delay(200);
+                win.UpdateLayout();
+                var el = (FrameworkElement)win.Content;
+                var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap((int)el.ActualWidth, (int)el.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+                bmp.Render(el);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+                using (var fs = File.Create(Path.Combine(AppContext.BaseDirectory, $"usage-{id.ToLowerInvariant()}-th.png"))) enc.Save(fs);
+            }
+            themes.Apply(ThemeIds.Midnight, persist: false);
+            Check("U8 look: the window renders in all three themes (usage-*-th.png)", win.ActualHeight > 400, $"{win.ActualWidth:F0}x{win.ActualHeight:F0}");
+
+            vm.BalanceInput = "abc";
+            vm.SetBalanceCommand.Execute(null);
+            bool refused = vm.BalanceError.Length > 0 && Settings.Settings.CreditBalanceUsd == 50m;
+            vm.BalanceInput = "20";
+            vm.SetBalanceCommand.Execute(null);
+            Check("U8 credit: a bad entry is refused with a message; '20' sets the balance now and counts from here",
+                refused && Settings.Settings.CreditBalanceUsd == 20m && vm.BalanceError.Length == 0 && vm.BalanceText.Contains("$20.00"), vm.BalanceText);
+            LocSvc.SetLanguage("en");
+        }
+        finally
+        {
+            win?.Close();
+            if (ledgerBefore != null) File.WriteAllText(ledger, ledgerBefore); else File.Delete(ledger);
+            Settings.UpdateSettings(s => { s.CreditBalanceUsd = balanceBefore.bal; s.CreditBalanceSetAt = balanceBefore.at; s.CreditBalanceSpentThatDay = balanceBefore.spentThatDay; });
+        }
+    }
+
+    // ═══════════════════════════════════════════ U9 ═══════════════════════════════════════════
+    static void TestAutoCompact()
+    {
+        Log("\n## U9 — the compaction toast's tick: compact by itself instead of asking");
+        bool autoBefore = Settings.Settings.AutoCompactWhenSuggested;
+        try
+        {
+            Settings.UpdateSettings(s => s.AutoCompactWhenSuggested = false);
+            Vm.Messages.Clear();
+            for (int i = 0; i < 16; i++)
+            {
+                Vm.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "question " + i });
+                Vm.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "answer " + i });
+            }
+            var show = typeof(ChatViewModel).GetMethod("ShowToast", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            show.Invoke(Vm, ["warn", "t", "r"]);
+            Check("U9 tick off: the toast asks (shown, nothing compacted)",
+                Vm.ShowCompactionToast && !Vm.Messages.Any(m => m.Role == MessageRole.ContextSummary));
+            Vm.AutoCompactWhenSuggested = true;
+            Check("U9 ticking it on the open toast answers it: the toast closes, the conversation is compacted, the setting is saved",
+                !Vm.ShowCompactionToast && Vm.Messages.Any(m => m.Role == MessageRole.ContextSummary) && Settings.Settings.AutoCompactWhenSuggested,
+                $"toast={Vm.ShowCompactionToast} markers={Vm.Messages.Count(m => m.Role == MessageRole.ContextSummary)}");
+            for (int i = 0; i < 12; i++)
+            {
+                Vm.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "more " + i });
+                Vm.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "reply " + i });
+            }
+            show.Invoke(Vm, ["warn", "t", "r"]);
+            Check("U9 tick on: where the toast would ask, it compacts instead — no toast, a second summary marker",
+                !Vm.ShowCompactionToast && Vm.Messages.Count(m => m.Role == MessageRole.ContextSummary) == 2,
+                $"markers={Vm.Messages.Count(m => m.Role == MessageRole.ContextSummary)}");
+        }
+        finally
+        {
+            Vm.AutoCompactWhenSuggested = autoBefore;
+            Settings.UpdateSettings(s => s.AutoCompactWhenSuggested = autoBefore);
+            Vm.ShowCompactionToast = false;
+            Vm.Messages.Clear();
+        }
+    }
+
+    // ═══════════════════════════════════════════ U10 ══════════════════════════════════════════
+    static async Task TestNarrowComposer()
+    {
+        Log("\n## U10 — a narrow composer (the chat docked beside the editor) keeps its options in tidy rows");
+        double widthBefore = Win.Width;
+        var buttons = (FrameworkElement)View.FindName("ComposerButtons");
+        var options = (FrameworkElement)View.FindName("ComposerOptions");
+        var effortLabel = (FrameworkElement)View.FindName("EffortLabel");
+        try
+        {
+            LocSvc.SetLanguage("th");
+            Win.Width = 440;
+            await Task.Delay(150); await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, "composer-narrow-th.png"));
+            Check("U10 narrow: the mic / send / stop buttons move to a row of their own and the options span the width",
+                Grid.GetRow(buttons) == 1 && Grid.GetColumnSpan(options) == 2 && effortLabel.Visibility == Visibility.Collapsed,
+                $"row={Grid.GetRow(buttons)} span={Grid.GetColumnSpan(options)} composer={((FrameworkElement)View.FindName("ComposerStrip")).ActualWidth:F0}");
+            // Every option row is one height, so a wrapped strip reads as rows, not a staircase.
+            var tops = new List<double>();
+            foreach (FrameworkElement c in ((Panel)options).Children)
+                if (c.IsVisible) tops.Add(Math.Round(c.TranslatePoint(new Point(0, 0), options).Y));
+            int rows = tops.Distinct().Count();
+            Check("U10 narrow: the options take at most four rows at 440 px (it was one per option)", rows is > 0 and <= 4, $"rows={rows} of {tops.Count} options");
+            // The compaction toast in the same narrow chat (owner's screenshot): its actions sit under the text now.
+            Vm.CompactionToastTitle = L("chat.toast.toolsTitle");
+            Vm.CompactionToastReason = string.Format(L("chat.toast.toolsReason"), 50);
+            Vm.CompactionToastSeverity = "info";
+            Vm.ShowCompactionToast = true;
+            await Task.Delay(150); await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, "toast-narrow-th.png"));
+            var compactBtn = FindVisual<Button>(View, b => b.Command == Vm.AcceptCompactionToastCommand);
+            var reasonText = FindVisual<TextBlock>(View, t => t.Text == Vm.CompactionToastReason);
+            Check("U10 narrow toast: the reason gets the toast's width and \"Compact now\" stays a button, not a tall block",
+                compactBtn.ActualHeight < 40 && reasonText.ActualWidth > 250, $"button {compactBtn.ActualHeight:F0}px high, reason {reasonText.ActualWidth:F0}px wide");
+            Vm.ShowCompactionToast = false;
+            Win.Width = 1100;
+            await Task.Delay(150); await Render();
+            Check("U10 wide: the buttons go back beside the options and the words come back",
+                Grid.GetRow(buttons) == 0 && Grid.GetColumn(buttons) == 1 && effortLabel.Visibility == Visibility.Visible);
+        }
+        finally
+        {
+            Win.Width = widthBefore;
+            LocSvc.SetLanguage("en");
+            await Render();
+        }
     }
 
     static void SaveShot(string path)

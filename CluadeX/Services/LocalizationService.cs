@@ -19,7 +19,7 @@ public class LocalizationService
         foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys,
                                       Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
                                       Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys,
-                                      Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys })
+                                      Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }
@@ -213,6 +213,8 @@ public class LocalizationService
         ["settings.autoOpenEditor"] = new() { ["en"] = "Open the editor when the agent edits a file", ["th"] = "เปิดตัวแก้ไขอัตโนมัติเมื่อเอเจนต์แก้ไฟล์" },
         ["settings.liveCodingAnimation"] = new() { ["en"] = "Live typing animation for agent edits", ["th"] = "แสดงแอนิเมชันการพิมพ์ขณะเอเจนต์แก้โค้ด" },
         ["settings.compactionToast"] = new() { ["en"] = "Suggest compacting when the chat gets long", ["th"] = "แนะนำให้บีบอัดเมื่อแชทยาวมาก" },
+        ["settings.autoCompact"] = new() { ["en"] = "Compact by itself instead of asking", ["th"] = "บีบอัดอัตโนมัติแทนการถาม" },
+        ["settings.autoCompactDesc"] = new() { ["en"] = "Where the suggestion would appear, compact right away — after the reply in progress ends. Nothing is deleted.", ["th"] = "ตรงที่จะขึ้นคำแนะนำ ให้บีบอัดเลย — หลังคำตอบที่กำลังทำจบก่อน ไม่มีข้อความใดถูกลบ" },
         ["settings.dataFolder"] = new() { ["en"] = "Data folder", ["th"] = "โฟลเดอร์ข้อมูล" },
         ["settings.dataFolderDesc"] = new() { ["en"] = "Settings, chat history, logs and memories are stored here.", ["th"] = "เก็บการตั้งค่า ประวัติแชท log และความจำไว้ที่นี่" },
         ["settings.open"] = new() { ["en"] = "Open", ["th"] = "เปิด" },

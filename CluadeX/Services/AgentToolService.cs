@@ -440,13 +440,18 @@ public class AgentToolService : IDisposable
         bool ask = named == PermAction.Ask || (named != PermAction.Allow && risk == McpRisk.Risky);
         if (!ask) return null;
 
-        bool allowed = OnPermissionRequired != null
-            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
-            {
-                ToolName = call.ToolName,
-                Detail = McpToolClassifier.DescribeCall(call, leaf),
-                AlwaysAsk = named == PermAction.Ask,
-            });
+        // "Allow in this chat" for this tool, unless the user's own Ask rule names it (that one asks every time).
+        string? chatKey = named == PermAction.Ask ? null : $"chat-tool|{key?.ServerName ?? "?"}|{leaf}";
+        if (IsOnceApproved(chatKey)) return null;
+        var info = new PermissionRequestInfo
+        {
+            ToolName = call.ToolName,
+            Detail = McpToolClassifier.DescribeCall(call, leaf),
+            AlwaysAsk = named == PermAction.Ask,
+            ChatScopeKey = chatKey,
+        };
+        bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
+        if (allowed && info.AllowedForChat) RememberOnceApproval(chatKey);
         return allowed ? null : Fail(call, $"User denied permission for {call.ToolName}");
     }
 
@@ -2203,9 +2208,19 @@ public class AgentToolService : IDisposable
     private ToolResult ExecuteWriteFile(ToolCall call)
     {
         string path = call.GetArg("path");
-        string content = call.GetArg("content");
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
+        // The whole file. "file_text" is what Anthropic's own editor tool calls it, and models reach for it: a missing
+        // "content" used to read as "" — the file was written EMPTY and reported "Created" (Reverse X phase 4,
+        // 2026-10-13: four 0-byte source files). An intentionally empty file still passes "content": "".
+        string? content = call.Arguments.TryGetValue("content", out var c0) ? c0
+            : call.Arguments.TryGetValue("file_text", out var c1) ? c1
+            : call.Arguments.TryGetValue("text", out var c2) ? c2
+            : null;
+        if (content == null)
+            return Fail(call, $"write_file needs 'content' — the complete text of the file. This call sent: "
+                + (call.Arguments.Count == 0 ? "no arguments" : string.Join(", ", call.Arguments.Keys))
+                + ". Nothing was written.");
 
         // Captured BEFORE CheckReadBeforeEdit, which auto-snapshots a never-read file.
         bool seenBefore = _fileSystem.HasSeen(path);
@@ -5109,7 +5124,7 @@ public class AgentToolService : IDisposable
     private string? CheckDangerousCommand(string command, DangerousCommandCheck.Dialect dialect)
     {
         if (!_settingsService.Settings.Features.DangerousCommandBlocking) return null;
-        return DangerousCommandCheck.FindBlocked(command, dialect) != null ? $"Command blocked for safety: {command}" : null;
+        return DangerousCommandCheck.FindBlocked(command, dialect) is { } line ? DangerousCommandCheck.BlockedMessage(line) : null;
     }
 
     private async Task<ToolResult> ExecutePowerShellAsync(ToolCall call, CancellationToken ct)

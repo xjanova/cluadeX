@@ -57,6 +57,8 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
 {
     /// <summary>Default per-user pipe name. Local-only by definition.</summary>
     public const string DefaultPipeName = "cluadex-mcp";
+    /// <summary>The pipe of a portable copy (a "portable"/"portable.txt" marker next to the exe).</summary>
+    public const string PortablePipeName = "cluadex-mcp-portable";
 
     /// <summary>Requests waiting behind the running one on a single connection.</summary>
     public const int MaxQueuedRequests = 8;
@@ -129,7 +131,12 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
     /// <param name="pipeName">A private pipe name (harnesses); null = <see cref="DefaultPipeName"/>.</param>
     public McpHostService(SettingsService? settings = null, string? pipeName = null)
     {
-        _pipeName = string.IsNullOrWhiteSpace(pipeName) ? DefaultPipeName : pipeName;
+        // A portable copy (the DEV build, which is not sold — owner, 2026-10-13) keeps its own pipe as it keeps its own
+        // data: with both open, a caller of "cluadex-mcp" (BrainX's room, a pipe run) reaches the installed CluadeX,
+        // never whichever of the two happened to start first.
+        _pipeName = !string.IsNullOrWhiteSpace(pipeName) ? pipeName
+            : settings?.IsPortable == true ? PortablePipeName
+            : DefaultPipeName;
 
         DataDirectory = !string.IsNullOrWhiteSpace(settings?.DataRoot)
             ? settings!.DataRoot

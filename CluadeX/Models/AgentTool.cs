@@ -135,6 +135,9 @@ public enum ToolType
     BrowserEval,       // Run JavaScript in the page
     BrowserResize,     // Emulate a viewport (mobile / tablet / desktop)
     BrowserClose,      // Close the browser session
+
+    // Project (Services/Tools/ProjectToolModule)
+    OpenProject,       // Open a project folder for the run (works with no project open)
 }
 
 /// <summary>
@@ -237,6 +240,13 @@ public class PermissionRequestInfo
     /// <summary>Asked every time on purpose — the user's own "Ask" rule, or code run in their browser. A chat set to
     /// "allow everything" still asks this one.</summary>
     public bool AlwaysAsk { get; set; }
+    /// <summary>Set when the prompt may be answered "Allow in this chat": the tool's identity (server + tool). One
+    /// ChatGPT session through a third-party MCP server asked 18 times for the same javascript_tool (Reverse X run,
+    /// 2026-10-13), and the only way out was the chat's "allow everything", which lets every shell command through
+    /// too. Null = not offered: a prompt that always asks, a call a policy judged, or not an MCP tool.</summary>
+    public string? ChatScopeKey { get; set; }
+    /// <summary>The user answered "Allow in this chat": the same tool runs without asking again in this chat.</summary>
+    public bool AllowedForChat { get; set; }
 }
 
 /// <summary>

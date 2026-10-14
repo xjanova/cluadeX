@@ -95,6 +95,12 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         return defs;
     }
 
+    /// <summary>Estimated tokens of the full definitions tool search sends as names only (the forced tool stays loaded).</summary>
+    public static int DeferredDefinitionTokens(IEnumerable<ToolSchema> tools, string? forcedTool = null) =>
+        tools.Where(t => t.DeferLoading && t.Name != forcedTool)
+            .Sum(t => CluadeX.Helpers.TokenBudget.EstimateTokens(t.Name + " " + t.Description + " "
+                + (t.InputSchema.ValueKind == JsonValueKind.Undefined ? "" : t.InputSchema.GetRawText())));
+
     /// <summary>What the model is told about the tools it has to search for: their names, by server. Names only —
     /// a few tokens each, against the full definitions they replace. Public for the harness.</summary>
     public static string DeferredToolsNote(IEnumerable<ToolSchema> tools)
@@ -131,7 +137,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         bool Sampling,           // accepts temperature
         bool OmitsThinkingText,  // display defaults to "omitted" — ask for "summarized" to see the reasoning
         bool ForcedToolChoice,   // accepts tool_choice any / tool
-        int EffortSupport);      // output_config.effort: 0 none, 1 low–high (Opus 4.5), 2 + max (4.6), 3 + xhigh
+        int EffortSupport,       // output_config.effort: 0 none, 1 low–high (Opus 4.5), 2 + max (4.6), 3 + xhigh
+        bool BetweenToolsOff = false); // thinking can't be disabled, but {type:"between_tools"} turns it off (Sonnet 5.5+)
 
     public static ModelTraits Traits(string? model)
     {
@@ -152,7 +159,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         int effort = modern ? 3 : v == 46 ? 2 : (family == "opus" && v == 45) ? 1 : 0;
         return new(Adaptive: fableTier || v >= 46, AlwaysThinks: alwaysThinks,
                    ExplicitDisable: modern && !alwaysThinks, Sampling: !modern,
-                   OmitsThinkingText: modern, ForcedToolChoice: forced, EffortSupport: effort);
+                   OmitsThinkingText: modern, ForcedToolChoice: forced, EffortSupport: effort,
+                   BetweenToolsOff: family == "sonnet" && v >= 55);
     }
 
     /// <summary>The user's effort pick as this model accepts it, or null to leave the field out ("auto",
@@ -175,10 +183,22 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     /// <summary>Set thinking, effort and sampling for the target model (see <see cref="Traits"/>).
     /// Returns true when the request thinks: forced tool_choice is a 400 alongside thinking, and the
     /// adaptive shape needs the block-binding beta header.</summary>
-    private static bool ApplyThinkingAndSampling(Dictionary<string, object> requestObj, string model, AppSettings settings)
+    public static bool ApplyThinkingAndSampling(Dictionary<string, object> requestObj, string model, AppSettings settings)
     {
         var t = Traits(model);
         bool wantThinking = settings.ExtendedThinkingEnabled;
+        // "auto" inside an agent run = the loop's pick for this step (CodeAgentService.SmartEffort).
+        string effortPick = EffortLevels.Effective(settings.ReasoningEffort);
+
+        // Think off on Claude Sonnet 5.5: {type:"disabled"} is a 400 and omitting the field still thinks; between_tools
+        // is its off switch. No other field may go with it (display, block_binding) and it is refused above high.
+        if (!wantThinking && t.BetweenToolsOff)
+        {
+            requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "between_tools" };
+            SetEffort(requestObj, EffortFor(t, effortPick, capAtHigh: true));
+            requestObj["max_tokens"] = Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor);
+            return false;
+        }
 
         if (t.Adaptive && (wantThinking || t.AlwaysThinks))
         {
@@ -192,9 +212,10 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
             };
             if (wantThinking && t.OmitsThinkingText) thinking["display"] = "summarized";
             requestObj["thinking"] = thinking;
-            // Depth is effort, not a token budget. "auto": high when the user asked for thinking, else the
-            // model's own default (an always-thinking model with the toggle off).
-            SetEffort(requestObj, EffortFor(t, settings.ReasoningEffort) ?? (wantThinking ? "high" : null));
+            // Depth is effort, not a token budget. "auto" outside a run = the model's own default: adaptive thinking
+            // already decides how much each request needs. It used to mean "high" whenever Think was on — on
+            // Claude Opus 5.5 (default medium) that doubled the thinking of every chat for nothing.
+            SetEffort(requestObj, EffortFor(t, effortPick));
             requestObj["max_tokens"] = Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor);
             return true;
         }
@@ -210,13 +231,13 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                 ["type"] = "enabled",
                 ["budget_tokens"] = budgetTokens,
             };
-            SetEffort(requestObj, EffortFor(t, settings.ReasoningEffort));
+            SetEffort(requestObj, EffortFor(t, effortPick));
             return true;
         }
 
         if (t.ExplicitDisable)
             requestObj["thinking"] = new Dictionary<string, object> { ["type"] = "disabled" };
-        SetEffort(requestObj, EffortFor(t, settings.ReasoningEffort, capAtHigh: t.ExplicitDisable));
+        SetEffort(requestObj, EffortFor(t, effortPick, capAtHigh: t.ExplicitDisable));
         // temperature only: Opus 4.1+ / Sonnet 4.5+ / Haiku 4.5 reject temperature and top_p together.
         if (t.Sampling)   // the API's range is 0–1; the shared slider goes to 2 for other providers
             requestObj["temperature"] = Math.Min((double)settings.Temperature, 1.0);
@@ -519,6 +540,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         // Anthropic sends output_tokens in message_delta as a CUMULATIVE running total and may emit
         // multiple message_delta frames — track the last recorded value so we bill only the increment.
         int recordedOutputTokens = 0;
+        int promptTokens = 0;   // input + cache reads + cache writes (message_start): prices the output records (Haiku 5.5 tiers)
         bool anyText = false;
 
         while (!reader.EndOfStream)
@@ -572,7 +594,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                             int outDelta = cumulative - recordedOutputTokens;
                             if (_costTracker != null && outDelta > 0)
                             {
-                                _costTracker.RecordUsage(model, 0, outDelta, isNewRequest: false);
+                                _costTracker.RecordUsage(model, 0, outDelta, isNewRequest: false, promptTokens: promptTokens);
                                 recordedOutputTokens = cumulative;
                             }
                         }
@@ -585,8 +607,13 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                             int inTokens = startUsage.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var itv) ? itv : 0;
                             int cacheRead = startUsage.TryGetProperty("cache_read_input_tokens", out var cr) && cr.TryGetInt32(out var crv) ? crv : 0;
                             int cacheCreate = startUsage.TryGetProperty("cache_creation_input_tokens", out var cc) && cc.TryGetInt32(out var ccv) ? ccv : 0;
+                            // 1-hour writes bill at 2x input, not the 5-minute price (this path used to record them all at 5 minutes)
+                            int cache1h = startUsage.TryGetProperty("cache_creation", out var cbd)
+                                && cbd.ValueKind == JsonValueKind.Object
+                                && cbd.TryGetProperty("ephemeral_1h_input_tokens", out var c1) && c1.TryGetInt32(out var c1v) ? c1v : 0;
+                            promptTokens = inTokens + cacheRead + cacheCreate;
                             if (_costTracker != null && (inTokens > 0 || cacheRead > 0 || cacheCreate > 0))
-                                _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate);
+                                _costTracker.RecordUsage(model, inTokens, 0, cacheRead, cacheCreate, cacheWrite1hTokens: cache1h);
                         }
                     }
                     else if (type == "message_stop")
@@ -757,6 +784,15 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         bool search = !_toolSearchRefused && UseToolSearch(model, config.BaseUrl, settings.ToolSearchEnabled, tools);
         string? forcedTool = toolChoice is { Length: > 0 } tc && tc is not ("auto" or "none" or "required" or "any") ? tc : null;
         var toolDefs = BuildToolDefs(tools, search, forcedTool);
+        // For the spend panel's "without savings": the definitions tool search kept out of this request, net of the
+        // names note that replaces them. A retry without search (refused) zeroes it on the same hint.
+        var savingsHint = CostTrackingService.NextRequest;
+        if (search && (savingsHint is null || savingsHint.Used))
+            CostTrackingService.NextRequest = savingsHint = new CostTrackingService.RequestSavingsHint();
+        if (savingsHint is { Used: false })
+            savingsHint.ToolSearchAvoidedTokens = search
+                ? Math.Max(0, DeferredDefinitionTokens(tools, forcedTool) - CluadeX.Helpers.TokenBudget.EstimateTokens(DeferredToolsNote(tools)))
+                : 0;
         string requestSystem = search
             ? (string.IsNullOrWhiteSpace(systemPrompt) ? DeferredToolsNote(tools) : systemPrompt + "\n\n" + DeferredToolsNote(tools))
             : systemPrompt;
@@ -1043,7 +1079,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         result.ThinkingContent = thinkingParts.Count > 0 ? string.Concat(thinkingParts) : null;
         result.OutputTokens = finalOutputTokens;
         if (_costTracker != null && finalOutputTokens > 0)
-            _costTracker.RecordUsage(model, 0, finalOutputTokens, isNewRequest: false);
+            _costTracker.RecordUsage(model, 0, finalOutputTokens, isNewRequest: false,
+                promptTokens: result.InputTokens + result.CacheReadTokens + result.CacheWriteTokens);
 
         if (string.IsNullOrEmpty(result.StopReason))
             result.StopReason = result.ToolCalls.Count > 0 ? "tool_use" : "end_turn";

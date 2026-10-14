@@ -72,6 +72,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(SessionMemoryEnabled)] = (vm, s) => s.SessionMemoryEnabled = vm.SessionMemoryEnabled,
         [nameof(BatchBackgroundWork)] = (vm, s) => s.BatchBackgroundWork = vm.BatchBackgroundWork,
         [nameof(EnableStrategicCompactionToast)] = (vm, s) => s.EnableStrategicCompactionToast = vm.EnableStrategicCompactionToast,
+        [nameof(AutoCompactWhenSuggested)] = (vm, s) => s.AutoCompactWhenSuggested = vm.AutoCompactWhenSuggested,
         // Local models
         [nameof(GpuBackend)] = (vm, s) => s.GpuBackend = vm.GpuBackend,
         [nameof(GpuLayerCount)] = (vm, s) => s.GpuLayerCount = Math.Clamp(vm.GpuLayerCount, -1, 1000),
@@ -159,6 +160,9 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _batchBackgroundWork = true;
     public bool BatchBackgroundWork { get => _batchBackgroundWork; set => SetProperty(ref _batchBackgroundWork, value); }
     public bool EnableStrategicCompactionToast { get => _compactionToast; set => SetProperty(ref _compactionToast, value); }
+    private bool _autoCompact;
+    /// <summary>Compact by itself where the compaction toast would ask (also ticked on the toast).</summary>
+    public bool AutoCompactWhenSuggested { get => _autoCompact; set => SetProperty(ref _autoCompact, value); }
 
     // ── Local models ──
     private string _gpuBackend = "Auto", _customLlamaCppBackendPath = "", _modelDirectory = "", _huggingFaceToken = "";
@@ -553,6 +557,7 @@ public partial class SettingsViewModel : ViewModelBase
         SessionMemoryEnabled = src.SessionMemoryEnabled;
         BatchBackgroundWork = src.BatchBackgroundWork;
         EnableStrategicCompactionToast = src.EnableStrategicCompactionToast;
+        AutoCompactWhenSuggested = src.AutoCompactWhenSuggested;
 
         GpuBackend = src.GpuBackend;
         GpuLayerCount = src.GpuLayerCount;

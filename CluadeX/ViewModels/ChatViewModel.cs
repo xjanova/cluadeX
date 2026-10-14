@@ -511,6 +511,25 @@ public partial class ChatViewModel : ViewModelBase
     /// <summary>"info" → cyan, "warn" → amber, "critical" → red. Used by XAML data triggers.</summary>
     public string CompactionToastSeverity { get => _compactionToastSeverity; set => SetProperty(ref _compactionToastSeverity, value); }
 
+    /// <summary>The toast's "compact by itself from now on" tick (Settings ▸ AutoCompactWhenSuggested). Ticking it on an
+    /// open toast answers that toast too: it closes, and the compact runs now — or when the turn in progress ends.</summary>
+    public bool AutoCompactWhenSuggested
+    {
+        get => _settingsService.Settings.AutoCompactWhenSuggested;
+        set
+        {
+            if (value == AutoCompactWhenSuggested) return;
+            _settingsService.UpdateSettings(s => s.AutoCompactWhenSuggested = value);
+            OnPropertyChanged();
+            if (value && _showCompactionToast)
+            {
+                ShowCompactionToast = false;
+                if (!IsGenerating) CompactConversation();
+                else _lastFiredTrigger = "";   // mid-reply: the check after the turn ends fires again and compacts then
+            }
+        }
+    }
+
     public ICommand AcceptCompactionToastCommand { get; private set; } = null!;
     public ICommand SnoozeCompactionToastCommand { get; private set; } = null!;
     public ICommand DismissCompactionToastCommand { get; private set; } = null!;
@@ -586,8 +605,10 @@ public partial class ChatViewModel : ViewModelBase
         PermissionService? permissionService = null,
         Services.Batch.BatchService? batchService = null,
         Services.Pet.PetService? pet = null,
-        ActivationService? activation = null)
+        ActivationService? activation = null,
+        SessionCleanupService? cleanup = null)
     {
+        _cleanup = cleanup;
         _debugLog = debugLog;
         _pet = pet;
         _permissionService = permissionService;
@@ -597,6 +618,9 @@ public partial class ChatViewModel : ViewModelBase
             // The switch shows the truth for the folder that is open now, whoever changed it.
             fileSystemService.OnWorkingDirectoryChanged += () => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
         }
+        // The agent opened a project itself (open_project): show it and remember it on that chat.
+        Services.Tools.ProjectToolModule.ProjectOpened += (scope, path) =>
+            App.Current?.Dispatcher.BeginInvoke(() => OnAgentOpenedProject(scope, path));
         _providerManager = providerManager;
         _agentService = agentService;
         _codeExecutionService = codeExecutionService;
@@ -713,6 +737,13 @@ public partial class ChatViewModel : ViewModelBase
             });
         };
 
+        // Agent map: every sub-agent this command started, live, as one tree card per command.
+        _agentService.OnSubAgentEvent += e =>
+        {
+            var mapRun = Cur;   // the spawning run, read in its flow
+            App.Current?.Dispatcher.BeginInvoke(() => OnSubAgentEvent(mapRun, e));
+        };
+
         // Live plan checklist (Claude Code-style TodoWrite pills). TodoChanged had ZERO subscribers —
         // the agent maintained a real plan in memory that no one could see. Render it as a single
         // checklist bubble that updates in place as items are added/completed.
@@ -809,7 +840,13 @@ public partial class ChatViewModel : ViewModelBase
                 DiffLines = info.Diff?.Lines,
                 DiffStat = info.Diff?.Stat,
                 PermissionAlwaysAsk = info.AlwaysAsk,
-                PermissionCallback = allow => { tcs.TrySetResult(allow); reg.Dispose(); },
+                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk,
+            };
+            prompt.PermissionCallback = allow =>
+            {
+                if (allow && prompt.PermissionAllowedForChat) info.AllowedForChat = true;   // read by the asking tool
+                tcs.TrySetResult(allow);
+                reg.Dispose();
             };
 
             // If the user hits Stop (cancels the turn) while this prompt is still open, resolve it as DENIED so
@@ -926,6 +963,9 @@ public partial class ChatViewModel : ViewModelBase
                 // Sessions
                 foreach (var session in savedSessions)
                     Sessions.Add(session);
+                // Projects the saved chats worked in join the project list (the agent opens them by name).
+                foreach (var session in savedSessions)
+                    ProjectRegistryService.Current?.Seed(session.ProjectPath, session.UpdatedAt);
 
                 if (lastSession != null && lastSession.Messages.Count > 0)
                 {
@@ -1219,6 +1259,19 @@ public partial class ChatViewModel : ViewModelBase
         StatusText = LocF("chat.status.projectFollowed", Path.GetFileName(path.TrimEnd('\\', '/')));
     }
 
+    private readonly SessionCleanupService? _cleanup;
+
+    /// <summary>Clean up what chat <paramref name="sessionId"/>'s agent left open (dev servers, the preview, and with
+    /// <paramref name="deleteImages"/> its screenshots) and say what was closed in the status bar.</summary>
+    private async Task CleanUpSessionAsync(string? sessionId, bool deleteImages)
+    {
+        if (_cleanup == null || string.IsNullOrEmpty(sessionId)) return;
+        var r = await _cleanup.CleanAsync(sessionId, deleteImages);
+        if (!r.Any) return;
+        _debugLog?.Info("Chat", $"session cleanup {sessionId} · processes={r.ProcessesStopped} preview={r.PreviewClosed} images={r.ImagesDeleted}");
+        StatusText = LocF("chat.cleanup.done", r.ProcessesStopped, r.PreviewClosed ? Loc("chat.cleanup.previewClosed") : "", r.ImagesDeleted);
+    }
+
     private async Task DeleteSessionAsync(string? sessionId)
     {
         if (string.IsNullOrEmpty(sessionId)) return;
@@ -1231,6 +1284,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Delete from DB
         _persistenceService.DeleteSession(sessionId);
+        await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
 
         for (int i = Sessions.Count - 1; i >= 0; i--)
         {
@@ -1374,10 +1428,13 @@ public partial class ChatViewModel : ViewModelBase
     {
         // Honor snooze
         if (SessionTurnCount < _toastSnoozeUntilTurn) return;
-        // Honor user setting (default true)
-        if (!_settingsService.Settings.EnableStrategicCompactionToast) return;
+        bool auto = _settingsService.Settings.AutoCompactWhenSuggested;
+        // Honor user setting (default true) — the auto tick works even with the toast itself switched off
+        if (!_settingsService.Settings.EnableStrategicCompactionToast && !auto) return;
         // Don't fire while a toast is already showing
         if (_showCompactionToast) return;
+        // Auto: never cut a turn in progress — this runs again when it ends (UpdateContextInfo).
+        if (auto && IsGenerating) return;
 
         int toolActionsTotal = CountToolActionsSinceMarker(messages);
         int toolActionsSince = Math.Max(0, toolActionsTotal - _toolActionsAtLastCompact);
@@ -1417,6 +1474,13 @@ public partial class ChatViewModel : ViewModelBase
 
     private void ShowToast(string severity, string title, string reason)
     {
+        if (_settingsService.Settings.AutoCompactWhenSuggested)
+        {
+            // Where the toast would ask: compact instead. A conversation with nothing to compact keeps the trigger
+            // marked (EvaluateCompactionTrigger sets it), so the 5-second refresh does not retry it every tick.
+            CompactConversation();
+            return;
+        }
         CompactionToastSeverity = severity;
         CompactionToastTitle = title;
         CompactionToastReason = reason;
@@ -2461,6 +2525,16 @@ public partial class ChatViewModel : ViewModelBase
         {
             UserInput = string.Empty;
             await ClearChatAsync();
+            return;
+        }
+        if (input.Equals("/close", StringComparison.OrdinalIgnoreCase) || input.Equals("/exit", StringComparison.OrdinalIgnoreCase))
+        {
+            // Close this chat's session: stop what its agent left running, then start a fresh chat (this one is kept).
+            UserInput = string.Empty;
+            if (!await EnsureIdleAsync()) return;
+            string? closing = CurrentSession?.Id;
+            NewSession();
+            await CleanUpSessionAsync(closing, deleteImages: false);
             return;
         }
         if (input.Equals("/new", StringComparison.OrdinalIgnoreCase))
@@ -3558,6 +3632,11 @@ public partial class ChatViewModel : ViewModelBase
             return toolName;
         }
         target = target.Replace('\n', ' ').Trim();
+        // A shell command is the long one (ssh -i … -o … admin@… 'bash …' ran past 300 characters): the row names the
+        // programs it ran; the full command is in the row's tooltip and in its expanded details.
+        if (args != null && args.ContainsKey("command") && !args.ContainsKey("path") && !args.ContainsKey("file_path")
+            && !args.ContainsKey("notebook_path"))
+            return ShortCommand(target);
         if (!string.IsNullOrEmpty(root) && Path.IsPathRooted(target))
         {
             try
@@ -3569,6 +3648,34 @@ public partial class ChatViewModel : ViewModelBase
             catch { /* not a path after all */ }
         }
         return target.Length > 90 ? target[..90] + "…" : target;
+    }
+
+    /// <summary>"cd web &amp;&amp; npm run build 2&gt;&amp;1 | tail -25; ls ../site" → "npm run build · ls": each step's program, with
+    /// its subcommand for tools that have one (npm run x, git push, dotnet build). cd / echo / sleep / export and what
+    /// a pipe feeds into are left out. At most 3 steps, 60 characters.</summary>
+    internal static string ShortCommand(string command)
+    {
+        var steps = new List<string>();
+        foreach (var raw in System.Text.RegularExpressions.Regex.Split(command, @"&&|\|\||;"))
+        {
+            var words = raw.Split('|')[0].Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .SkipWhile(w => w.Contains('=') && !w.StartsWith('-'))   // FOO=1 cmd …
+                .ToList();
+            if (words.Count == 0) continue;
+            string prog = Path.GetFileName(words[0].Trim('"', '\'', '('));
+            if (prog is "" or "cd" or "echo" or "sleep" or "true" or "set" or "export" or "pushd" or "popd") continue;
+            string step = prog;
+            if (words.Count > 1 && !words[1].StartsWith('-') && prog is "npm" or "npx" or "pnpm" or "yarn" or "git" or "dotnet"
+                    or "cargo" or "go" or "docker" or "pip" or "composer" or "flutter" or "gh" or "bun")
+            {
+                step += " " + words[1];
+                if (words[1] == "run" && words.Count > 2) step += " " + words[2];
+            }
+            if (!steps.Contains(step)) steps.Add(step);
+            if (steps.Count == 3) break;
+        }
+        string s = steps.Count == 0 ? command.Trim() : string.Join(" · ", steps);
+        return s.Length > 60 ? s[..60] + "…" : s;
     }
 
     private static string FormatToolDisplayName(string toolName, Dictionary<string, string>? args)
@@ -4101,6 +4208,7 @@ public partial class ChatViewModel : ViewModelBase
         CurrentSession?.Messages.Clear();
         _isDirty = true;
         StatusText = Loc("chat.status.cleared");
+        await CleanUpSessionAsync(CurrentSession?.Id, deleteImages: true);   // the rows that showed them are gone
     }
 
     /// <summary>Auto-deny any still-unanswered permission prompts before the message list is cleared

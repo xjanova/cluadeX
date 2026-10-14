@@ -52,9 +52,8 @@ public class DebugLogService
 
     public DebugLogService()
     {
-        _logDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "logs");
+        // The data home's logs folder: ~/.cluadex/logs, or <exe>\Data\logs for a portable copy / a test harness.
+        _logDir = Path.Combine(SettingsService.ResolveDataRoot(out _), "logs");
         try { Directory.CreateDirectory(_logDir); } catch { }
         Info("DebugLog", $"DebugLogService started · log dir = {_logDir}");
     }

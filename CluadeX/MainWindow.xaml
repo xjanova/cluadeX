@@ -952,8 +952,9 @@
                             </Grid>
                         </Border>
 
-                        <!-- Main content area — hosts the active page -->
-                        <ContentControl Grid.Row="1" Content="{Binding CurrentView}"/>
+                        <!-- Main content area — hosts the active page. The chat and the code editor are built once and
+                             kept (switching between them used to rebuild both); see Views/PageHost. -->
+                        <views:PageHost x:Name="PageArea" Grid.Row="1" Page="{Binding CurrentView}"/>
                     </Grid>
                 </Grid>
 

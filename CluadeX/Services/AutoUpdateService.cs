@@ -15,7 +15,9 @@ public class AutoUpdateService
 {
     private readonly HttpClient _httpClient;
     private readonly SettingsService _settingsService;
-    private const string BaseUrl = "https://xman4289.com/api/v1/products/cluadex";
+    // The store's slug for CluadeX. It was "cluadex", which the store does not have: every check got 404 and fell
+    // through to GitHub (checked 2026-10-13 — /api/v1/products/cluadex-ai-coding-assistant/version answers).
+    private const string BaseUrl = "https://xman4289.com/api/v1/products/cluadex-ai-coding-assistant";
     private const string GitHubReleasesApi = "https://api.github.com/repos/xjanova/cluadeX/releases/latest";
 
     public event Action<UpdateInfo>? OnUpdateAvailable;
@@ -225,27 +227,41 @@ public class AutoUpdateService
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
             using var response = await _httpClient.PostAsync($"{BaseUrl}/check-update", content, ct);
             var body = await response.Content.ReadAsStringAsync(ct);
-            var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("update_available", out var ua) && ua.GetBoolean())
+            if (ParseXmanCheck(body, CurrentVersion) is { } info)
             {
-                var info = new UpdateInfo
-                {
-                    NewVersion = root.TryGetProperty("version", out var v) ? v.GetString() ?? "" : "",
-                    CurrentVersion = CurrentVersion,
-                    DownloadUrl = root.TryGetProperty("download_url", out var dl) ? dl.GetString() ?? "" : "",
-                    Changelog = root.TryGetProperty("changelog", out var cl) ? cl.GetString() ?? "" : "",
-                    FileSize = root.TryGetProperty("file_size", out var fs) ? fs.GetInt64() : 0,
-                    FileName = root.TryGetProperty("download_filename", out var fn) ? fn.GetString() ?? "" : "",
-                    Sha256 = root.TryGetProperty("sha256", out var sh) ? sh.GetString() ?? "" : "",
-                };
                 OnUpdateAvailable?.Invoke(info);
                 return info;
             }
             _log?.Info("Update", $"xman API: no update (HTTP {(int)response.StatusCode})");
         }
         catch (Exception ex) { _log?.Warn("Update", $"xman API check failed: {ex.Message}"); }
+        return null;
+    }
+
+    /// <summary>The store's check-update reply → the update it offers, or null. The store answers
+    /// <c>{ has_update, latest_version, update: { version, filename, file_size, changelog, download_url, sha256 } }</c>
+    /// (Api/VersionController::check); the flat <c>update_available</c> shape this used to read never came back.
+    /// Public for the harness.</summary>
+    public static UpdateInfo? ParseXmanCheck(string body, string currentVersion)
+    {
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        static string Str(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+        static long Num(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
+
+        if (root.TryGetProperty("has_update", out var hu) && hu.ValueKind == JsonValueKind.True
+            && root.TryGetProperty("update", out var u) && u.ValueKind == JsonValueKind.Object)
+            return new UpdateInfo
+            {
+                NewVersion = Str(u, "version"), CurrentVersion = currentVersion, DownloadUrl = Str(u, "download_url"),
+                Changelog = Str(u, "changelog"), FileSize = Num(u, "file_size"), FileName = Str(u, "filename"), Sha256 = Str(u, "sha256"),
+            };
+        if (root.TryGetProperty("update_available", out var ua) && ua.ValueKind == JsonValueKind.True)   // the old flat shape
+            return new UpdateInfo
+            {
+                NewVersion = Str(root, "version"), CurrentVersion = currentVersion, DownloadUrl = Str(root, "download_url"),
+                Changelog = Str(root, "changelog"), FileSize = Num(root, "file_size"), FileName = Str(root, "download_filename"), Sha256 = Str(root, "sha256"),
+            };
         return null;
     }
 

@@ -123,7 +123,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         {
             // Reasoning model: no temperature/top_p, max_completion_tokens (includes reasoning tokens).
             requestObj["max_completion_tokens"] = Math.Max(settings.MaxTokens, ReasoningMaxTokensFloor);
-            if (EffortFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } effort)
+            if (EffortFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled) is { } effort)
                 requestObj["reasoning_effort"] = effort;
         }
         else
@@ -393,7 +393,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         if (reasoning)
         {
             var r = new Dictionary<string, object>();
-            if (EffortFor(model, settings.ReasoningEffort, settings.ExtendedThinkingEnabled) is { } e) r["effort"] = e;
+            if (EffortFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled) is { } e) r["effort"] = e;
             if (settings.ExtendedThinkingEnabled) r["summary"] = "auto";
             if (r.Count > 0) req["reasoning"] = r;
             req["include"] = new[] { "reasoning.encrypted_content" };

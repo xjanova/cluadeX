@@ -384,6 +384,66 @@ internal static partial class Program
         }
     }
 
+    /// <summary>Owner, 2026-10-13: "ถ้าเปลี่ยนธีมระหว่างทาง ไฟล์ในนี้จะหายไป และค้างช้า" — a theme switch with the editor
+    /// open, a folder expanded in the explorer and a long agent chat beside it. The explorer must keep every row and
+    /// the open folder, and the switch must not freeze the window.</summary>
+    static async Task ThemeSwitchKeepsWork(object themes)
+    {
+        Log("\n## Theme switch with work on screen: the editor, an expanded folder, a long chat");
+        var vm = MainVm.CodeEditorVM;
+        var chat = MainVm.ChatVM;
+        MainVm.NavigateToCommand.Execute("Code");
+        await Idle(300);
+        await WaitUntil(() => vm.Tree.Count > 0 && vm.Tree[0].Children.Any(n => n.IsDirectory), 5000);
+        var folder = vm.Tree[0].Children.FirstOrDefault(n => n.IsDirectory);
+        if (folder == null) { Check("theme switch: the fixture has a folder to expand", false); return; }
+        if (!folder.IsExpanded) vm.ToggleNodeCommand.Execute(folder);
+        await WaitUntil(() => folder.IsExpanded && folder.Children.Count > 0, 3000);
+        // A pipe run's chat: 300 tool rows and a dozen answers, like Reverse X phase 4.
+        int chatBefore = chat.Messages.Count;
+        for (int i = 0; i < 300; i++)
+            chat.Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.ToolAction, ToolKind = i % 3 == 0 ? "edit_file" : "read_file", ToolName = "read_file",
+                ToolVerb = "Read", ToolTarget = $"src/File{i}.cs", Content = $"src/File{i}.cs", ToolSuccess = true, ToolElapsedTime = "0.2s",
+            });
+        for (int i = 0; i < 12; i++)
+            chat.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = $"Step {i}: **done** — `src/File{i}.cs` updated.\n\n- one\n- two" });
+        await Idle(500);
+
+        var root = RootVisual(MainWin);
+        var tree = Find<System.Windows.Controls.TreeView>(root).FirstOrDefault(t => ReferenceEquals(t.ItemsSource, vm.Tree));
+        int Rows() => tree == null ? -1 : Find<System.Windows.Controls.TreeViewItem>(tree).Count(i => i.IsVisible);
+        int rowsBefore = Rows(), nodesBefore = vm.Tree.Count, childBefore = folder.Children.Count;
+        Log($"  explorer: {rowsBefore} rows on screen · {nodesBefore} root node(s) · {folder.Name} open with {childBefore} entries · chat {chat.Messages.Count} messages");
+        string start = (string)Prop(themes, "CurrentThemeId");
+        try
+        {
+            foreach (var id in new[] { "Classic", "NeonCyber", "Midnight" })
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                Invoke(themes, "Apply", id, false);
+                long applyMs = sw.ElapsedMilliseconds;
+                await Idle();
+                long settledMs = sw.ElapsedMilliseconds;
+                int rows = Rows();
+                Check($"theme switch to {id}: the explorer keeps every file row and the open folder",
+                    tree != null && rows == rowsBefore && vm.Tree.Count == nodesBefore && folder.IsExpanded && folder.Children.Count == childBefore,
+                    $"rows {rowsBefore}→{rows} · roots {nodesBefore}→{vm.Tree.Count} · {folder.Name} open={folder.IsExpanded} entries {childBefore}→{folder.Children.Count}");
+                Check($"theme switch to {id}: the window is usable again within 1.5 s (apply {applyMs} ms, settled {settledMs} ms)",
+                    settledMs < 1500, $"apply {applyMs} ms · settled {settledMs} ms");
+            }
+        }
+        finally
+        {
+            Invoke(themes, "Apply", start, false);
+            while (chat.Messages.Count > chatBefore) chat.Messages.RemoveAt(chat.Messages.Count - 1);
+            if (folder.IsExpanded) vm.ToggleNodeCommand.Execute(folder);
+            MainVm.NavigateToCommand.Execute("Chat");
+            await Idle(200);
+        }
+    }
+
     static async Task ExpandFolderCheck(string set)
     {
         var vm = MainVm.CodeEditorVM;
@@ -582,6 +642,7 @@ internal static partial class Program
 
         // 2. The theme service itself.
         await TestThemeService(themes);
+        await ThemeSwitchKeepsWork(themes);
 
         // 3. Every other theme, applied LIVE (the way the picker does it), then Midnight again: the live round trip
         //    must land on the startup look.

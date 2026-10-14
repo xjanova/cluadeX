@@ -68,6 +68,9 @@ internal static class Program
     // ── the "user" who answers permission prompts ──
     static readonly List<string> Prompts = new();
     static bool Answer;
+    /// <summary>The "user" answers Allow with "Allow in this chat" when the prompt offers it.</summary>
+    static bool AnswerForChat;
+    static PermissionRequestInfo? LastInfo;
     static AgentToolService Svc = null!;
     static readonly TestPolicy Policy = new();
 
@@ -122,7 +125,12 @@ internal static class Program
         typeof(HookService).GetField("_cachedHooks", BindingFlags.NonPublic | BindingFlags.Instance)!
             .SetValue(provider.GetRequiredService<HookService>(), new List<HookDefinition>());   // never the user's own hooks
         Svc = provider.GetRequiredService<AgentToolService>();
-        Svc.OnPermissionRequired += info => { lock (Prompts) Prompts.Add(info.Detail); return Task.FromResult(Answer); };
+        Svc.OnPermissionRequired += info =>
+        {
+            lock (Prompts) { Prompts.Add(info.Detail); LastInfo = info; }
+            if (Answer && AnswerForChat && info.ChatScopeKey != null) info.AllowedForChat = true;
+            return Task.FromResult(Answer);
+        };
         fs.WorkingDirectory = project;
         foreach (var r in perms.Rules.ToList()) perms.RemoveRule(r);   // a clean rule set for this run
         settings.Settings.Features.PermissionSystem = true;
@@ -283,6 +291,50 @@ internal static class Program
                 Policy.Risk = McpCallRisk.AlwaysAsk;
                 Policy.Active = false;
             }
+        });
+        await Case("K2", async () =>
+        {
+            // UX (Reverse X run, 2026-10-13): one ChatGPT session through a third-party MCP server (cluadex-chrome) asked
+            // 18 times for the same tool. "Allow in this chat" = that tool, this chat, until the chat changes.
+            string chatA = Svc.SessionKey;
+            try
+            {
+                Svc.SessionKey = "k2-chat-a";
+                Answer = true; AnswerForChat = true;
+                var (r1, n1, _) = await Gate("mcp__stub__browser_click", ("element", "first"));
+                bool offered = LastInfo?.ChatScopeKey != null && !LastInfo.AlwaysAsk;
+                var (r2, n2, _) = await Gate("mcp__stub__browser_click", ("element", "second, other arguments"));
+                Check("K2", "a third-party MCP tool offers 'Allow in this chat'; taken once, the same tool runs again without a prompt",
+                    offered && n1 == 1 && r1.Success && n2 == 0 && r2.Success, $"offered={offered} prompts={n1},{n2} {Seen(r2)}");
+                AnswerForChat = false;
+                var (_, n3, _) = await Gate("mcp__stub__brain_search", ("query", "other tool"));
+                Check("K2b", "…another tool of the same server still asks", n3 == 1, $"prompts={n3}");
+                Svc.SessionKey = "k2-chat-b";
+                var (_, n4, _) = await Gate("mcp__stub__browser_click", ("element", "chat b"));
+                Check("K2c", "…and another chat still asks for the tool allowed in chat A", n4 == 1, $"prompts={n4}");
+                var (_, n5, _) = await Gate("mcp__stub__browser_click", ("element", "chat b again"));
+                Check("K2d", "negative control: a plain Allow is not remembered — the next call asks again", n5 == 1, $"prompts={n5}");
+                var ask = new PermissionRule { Pattern = "*", Scope = "*", Action = PermAction.Ask, ToolName = "mcp__stub__brain_search" };
+                perms.AddRule(ask);
+                try
+                {
+                    AnswerForChat = true;
+                    var (_, n6, _) = await Gate("mcp__stub__brain_search", ("query", "ask rule x"));
+                    bool offered6 = LastInfo?.ChatScopeKey != null;
+                    var (_, n7, _) = await Gate("mcp__stub__brain_search", ("query", "ask rule y"));
+                    Check("K2e", "a tool the user's own Ask rule names never offers it and asks every time", !offered6 && n6 == 1 && n7 == 1, $"offered={offered6} prompts={n6},{n7}");
+                }
+                finally { perms.RemoveRule(ask); }
+                Policy.Active = true;
+                Policy.Risk = McpCallRisk.Ask;
+                try
+                {
+                    var (_, n8, _) = await Gate("mcp__stub__brain_search", ("query", "policy"));
+                    Check("K2f", "a call a policy judged keeps the policy's own asking (no chat-wide offer)", n8 == 1 && LastInfo?.ChatScopeKey == null, $"prompts={n8} key={LastInfo?.ChatScopeKey}");
+                }
+                finally { Policy.Risk = McpCallRisk.AlwaysAsk; Policy.Active = false; }
+            }
+            finally { AnswerForChat = false; Svc.SessionKey = chatA; }
         });
 
         // ═══════════════════ rules ═══════════════════

@@ -132,7 +132,8 @@ public sealed class PreviewViewModel : ViewModelBase
     private string _status = "";
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
 
-    private bool _isConsoleOpen = true;
+    // Starts folded: a page's errors filled half the preview. The bar still shows the error / warning counts.
+    private bool _isConsoleOpen = false;
     public bool IsConsoleOpen { get => _isConsoleOpen; set => SetProperty(ref _isConsoleOpen, value); }
 
     private string _consoleSummary = "";

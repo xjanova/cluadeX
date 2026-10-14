@@ -129,6 +129,17 @@ public static class DangerousCommandCheck
         return null;
     }
 
+    /// <summary>The refusal the agent reads. "Command blocked for safety: &lt;whole command&gt;" left the model guessing
+    /// which part of a long chained command tripped the list (Reverse X run, 2026-10-13: it split a working
+    /// `npm pack … &amp;&amp; tar …` into pieces until one passed); naming the line and the way around ends the guessing.</summary>
+    public static string BlockedMessage(string blockedLine)
+    {
+        string shown = blockedLine.Length > 200 ? blockedLine[..200] + "…" : blockedLine;
+        return $"Command blocked for safety: `{shown}` matches CluadeX's dangerous-command list (recursive delete, "
+            + "disk / registry / account changes, download cmdlets, piping into rm or del). Do that part another way: "
+            + "the file tools to write or delete files, curl or python to download, or a separate command without it.";
+    }
+
     private static string FirstLine(string command)
     {
         string t = command.Trim();
