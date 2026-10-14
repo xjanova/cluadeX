@@ -357,7 +357,7 @@
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
                         <BeginStoryboard>
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb1Tr"
                                                  Storyboard.TargetProperty="Y"
                                                  From="-10" To="10" Duration="0:0:9"/>
@@ -374,7 +374,7 @@
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
                         <BeginStoryboard>
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb2Tr"
                                                  Storyboard.TargetProperty="Y"
                                                  From="8" To="-8" Duration="0:0:11" BeginTime="0:0:2"/>
@@ -391,7 +391,7 @@
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
                         <BeginStoryboard>
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb3Tr"
                                                  Storyboard.TargetProperty="Y"
                                                  From="-12" To="12" Duration="0:0:14" BeginTime="0:0:5"/>
@@ -408,7 +408,7 @@
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
                         <BeginStoryboard>
-                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb4Tr"
                                                  Storyboard.TargetProperty="Y"
                                                  From="6" To="-6" Duration="0:0:8" BeginTime="0:0:1.5"/>
@@ -448,7 +448,7 @@
                             <Ellipse.Triggers>
                                 <EventTrigger RoutedEvent="Ellipse.Loaded">
                                     <BeginStoryboard>
-                                        <Storyboard RepeatBehavior="Forever">
+                                        <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
                                             <DoubleAnimation Storyboard.TargetName="haloRotate"
                                                              Storyboard.TargetProperty="Angle"
                                                              From="0" To="360" Duration="0:0:10"/>
@@ -823,8 +823,8 @@
             </Border>
         </Grid>
 
-        <!-- ═══ REWIND OVERLAY ═══ -->
-        <Grid Background="{DynamicResource Bg.Scrim.Busy}"
+        <!-- ═══ REWIND OVERLAY ═══ (its rings start on Loaded; code-behind pauses them while it is collapsed) -->
+        <Grid x:Name="RewindOverlay" Background="{DynamicResource Bg.Scrim.Busy}"
               Visibility="{Binding IsRewinding, Converter={StaticResource BoolVis}}">
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Grid Width="220" Height="220">

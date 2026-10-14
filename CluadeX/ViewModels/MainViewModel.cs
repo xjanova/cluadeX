@@ -550,6 +550,8 @@ public class MainViewModel : ViewModelBase
 
     /// <summary>Poll nvidia-smi every 2s on a background task, marshal back to the UI thread
     /// to update the sidebar live stats + rolling sparkline history.</summary>
+    private int _gpuPollBusy;
+
     private void StartGpuLivePolling()
     {
         _gpuLiveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -557,10 +559,15 @@ public class MainViewModel : ViewModelBase
         {
             // No model on this PC answering → nothing on screen shows the GPU; don't spawn nvidia-smi every 2 s for it.
             if (!ModelRunsOnThisPc) return;
+            // Minimized → the sidebar chart is off screen. A poll still running (a slow driver) → don't stack another.
+            if (App.Current?.MainWindow?.WindowState == System.Windows.WindowState.Minimized) return;
+            if (Interlocked.Exchange(ref _gpuPollBusy, 1) == 1) return;
             // Keep the UI responsive: nvidia-smi can take ~200ms on first call.
             Task.Run(() =>
             {
-                var stats = _gpuDetectionService.GetLiveStats();
+                GpuLiveStats? stats;
+                try { stats = _gpuDetectionService.GetLiveStats(); }
+                finally { Interlocked.Exchange(ref _gpuPollBusy, 0); }
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     if (stats == null)
