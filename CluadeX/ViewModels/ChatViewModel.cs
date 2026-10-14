@@ -2224,23 +2224,24 @@ public partial class ChatViewModel : ViewModelBase
                 if (thought.Length > 0) Ui(() => AddThinking(thought, step, replace: false));
                 return;
             }
-            string snapshot;
+            string snapshot, previousText = "";
             bool newStep;
             int count;
             lock (_lock)
             {
                 newStep = step != _step;
-                if (newStep) { _text.Clear(); _step = step; }
+                // The previous step's last 1-2 tokens were never shown (updates go every 3): its bubble gets them now.
+                if (newStep) { previousText = _text.ToString(); _text.Clear(); _step = step; }
                 _text.Append(token);
                 snapshot = _text.ToString();
                 count = ++_tokens;
             }
             if (Run is { } r) r.StreamingTokenCount++;
-            if (newStep) Ui(() => OpenBubble(snapshot, step), wait: true);
+            if (newStep) Ui(() => OpenBubble(snapshot, step, previousText), wait: true);
             else if (count % 3 == 0) Ui(() => { if (_bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
         }
 
-        private void OpenBubble(string text, int step)
+        private void OpenBubble(string text, int step, string previousText)
         {
             if (Run is { ActiveStatus: { } st } run)
             {
@@ -2248,7 +2249,11 @@ public partial class ChatViewModel : ViewModelBase
                 run.Messages.Remove(st);
                 run.ActiveStatus = null;
             }
-            if (_bubble != null) _bubble.IsStreaming = false;
+            if (_bubble != null)
+            {
+                if (previousText.Length > 0) _bubble.Content = previousText;
+                _bubble.IsStreaming = false;
+            }
             _bubble = new ChatMessage { Role = MessageRole.Assistant, Content = text, IsStreaming = true, ThinkingContent = _pendingThinking };
             _bubbleStep = step;
             _pendingThinking = "";
@@ -3050,6 +3055,9 @@ public partial class ChatViewModel : ViewModelBase
         // Thinking that arrived while no reply bubble of its step was open (a tool-only step): shown on the
         // next bubble. Touched on the UI thread only.
         string pendingThinking = "";
+        // Bubbles whose text is final (their step ended, or the turn did). A batched update queued earlier can run
+        // after that — Invoke outranks BeginInvoke — and must not put a shorter snapshot back. UI thread only.
+        var closedBubbles = new HashSet<ChatMessage>();
 
         void OnStreamToken(string token, int step)
         {
@@ -3074,6 +3082,10 @@ public partial class ChatViewModel : ViewModelBase
             // First token or new step: use sync Invoke to create the bubble
             if (needsNewBubble)
             {
+                // The previous step's bubble gets ALL its text: the screen is only updated every 3 tokens, so its
+                // last 1-2 tokens were never shown — a reply cut off when the next step began (a message typed
+                // while it worked, a tool call after the text).
+                string previousText = streamSb.ToString();
                 streamSb.Clear();
                 streamSb.Append(token);
                 lastStreamStep = step;
@@ -3088,7 +3100,11 @@ public partial class ChatViewModel : ViewModelBase
                     }
 
                     if (streamingMsg != null)
+                    {
+                        if (previousText.Length > 0) streamingMsg.Content = previousText;
                         streamingMsg.IsStreaming = false;
+                        closedBubbles.Add(streamingMsg);
+                    }
 
                     streamingMsg = new ChatMessage
                     {
@@ -3113,10 +3129,11 @@ public partial class ChatViewModel : ViewModelBase
             {
                 string snapshot = streamSb.ToString();
                 int capturedCount = run.StreamingTokenCount;
+                var bubble = streamingMsg;   // this step's bubble — by the time the update runs, a new step may own the field
                 App.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    if (streamingMsg != null)
-                        streamingMsg.Content = snapshot;
+                    if (bubble != null && !closedBubbles.Contains(bubble))
+                        bubble.Content = snapshot;
 
                     // Status update every 15 tokens (for the chat on screen only)
                     if (capturedCount % 15 == 0 && ReferenceEquals(run.Session, CurrentSession))
@@ -3222,6 +3239,7 @@ public partial class ChatViewModel : ViewModelBase
                     streamingMsg.Content = buffered;
                 }
                 streamingMsg.IsStreaming = false;
+                closedBubbles.Add(streamingMsg);
                 finalBubble = streamingMsg;
                 streamingMsg = null;
             }
@@ -3783,6 +3801,7 @@ public partial class ChatViewModel : ViewModelBase
         var thinkSb = new StringBuilder();
         int tokenCount = 0;
         bool firstToken = true;
+        bool replyComplete = false;   // UI thread only
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
@@ -3830,7 +3849,7 @@ public partial class ChatViewModel : ViewModelBase
                 string snapshot = sb.ToString();
                 App.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    assistantMsg.Content = snapshot;
+                    if (!replyComplete) assistantMsg.Content = snapshot;
                     if (capturedCount % 15 == 0 && _activeAgentStatusMsg != null)
                     {
                         int elapsed = (int)sw.Elapsed.TotalSeconds;
@@ -3843,9 +3862,11 @@ public partial class ChatViewModel : ViewModelBase
             }
         }
 
-        // Final content flush — ensure last tokens are shown
+        // Final content flush — ensure last tokens are shown. A batched update still queued runs after this (Invoke
+        // outranks BeginInvoke) and must not cut the reply back to an older snapshot.
         App.Current?.Dispatcher.Invoke(() =>
         {
+            replyComplete = true;
             assistantMsg.Content = sb.ToString();
             if (thinkSb.Length > 0) assistantMsg.ThinkingContent = thinkSb.ToString();
         });
