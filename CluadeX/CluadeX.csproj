@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.83</Version>
+    <Version>3.0.84</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -28,6 +28,14 @@
     <!-- We embed our own short git hash into InformationalVersion (EmbedGitCommitHash target);
          stop the SDK from appending the full 40-char revision on top of it. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- Debug builds go to bin\DebugBuild so a running CluadeX.exe (which locks
+       bin\Debug\...\CluadeX.exe) never breaks `dotnet build`.
+       Must come after TargetFramework is defined above. -->
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <OutputPath>bin\DebugBuild\$(TargetFramework)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
   <ItemGroup>

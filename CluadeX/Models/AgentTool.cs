@@ -138,6 +138,9 @@ public enum ToolType
 
     // Project (Services/Tools/ProjectToolModule)
     OpenProject,       // Open a project folder for the run (works with no project open)
+
+    // App lifecycle (Services/Tools/AppRestartToolModule)
+    RestartApp,        // Close CluadeX and start it again (optionally from a new build)
 }
 
 /// <summary>

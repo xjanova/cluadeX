@@ -897,6 +897,7 @@ public partial class App : Application
         services.AddSingleton<SessionCleanupService>();
         services.AddSingleton(sp => new ProjectRegistryService(sp.GetService<FileSystemService>(), sp.GetService<SettingsService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
         services.AddChromeConnector();
 
         // ViewModels

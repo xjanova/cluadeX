@@ -148,7 +148,7 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 ```bash
 cd E:\Code\ClaudeClient
 dotnet build CluadeX/CluadeX.csproj
-# Output: CluadeX\bin\Debug\net8.0-windows\CluadeX.exe
+# Output: CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe
 ```
 **Building while CluadeX is running fails with MSB3027** (the .exe is locked). Either kill it, or
 build somewhere else — which is also how to compile-check without disturbing a running instance:

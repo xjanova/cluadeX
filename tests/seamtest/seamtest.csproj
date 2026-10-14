@@ -14,7 +14,7 @@
   <!-- The REAL shipping assembly — linked, NOT rebuilt: build CluadeX first or you test a stale binary.
        Default is the normal Debug output; point it at another build with: dotnet run -p:CluadeXBin=<dir>\ -->
   <PropertyGroup>
-    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\Debug\net8.0-windows\</CluadeXBin>
+    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\DebugBuild\net8.0-windows\</CluadeXBin>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="CluadeX">

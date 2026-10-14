@@ -16,7 +16,7 @@
        The pet harness: renders every sprite to PNG and drives the pet logic (hatching, habits, floors, physics)
        against the real code. -->
   <PropertyGroup>
-    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\Debug\net8.0-windows\</CluadeXBin>
+    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\DebugBuild\net8.0-windows\</CluadeXBin>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="CluadeX">
