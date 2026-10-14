@@ -397,7 +397,30 @@ public partial class CodeEditorView : UserControl
     }
 
     private static ICSharpCode.AvalonEdit.Highlighting.IHighlightingDefinition? HighlightingFor(OpenFileTab tab)
-        => tab.Content.Length > NoHighlightChars ? null : NeonHighlighting.ForExtension(tab.Extension);
+        => tab.Content.Length > NoHighlightChars || HasLongLine(tab.Content, NoHighlightLineChars)
+            ? null : NeonHighlighting.ForExtension(tab.Extension);
+
+    /// <summary>A line longer than this opens without syntax colours (VS Code does the same). AvalonEdit colours a
+    /// line by splitting its visual elements once per highlighted span — on a 300 KB minified bundle or a one-line
+    /// JSON that is quadratic, and the UI thread spun in HighlightingColorizer.ColorizeLine until the app was killed
+    /// (2026-10-14: "เปิดไฟล์แล้วค้าง"). A small file can hit this; the size limit above never sees it.</summary>
+    private const int NoHighlightLineChars = 10_000;
+
+    /// <summary>True when some line of <paramref name="text"/> is longer than <paramref name="max"/> characters.</summary>
+    internal static bool HasLongLine(string text, int max)
+    {
+        if (text.Length <= max) return false;
+        int start = 0;
+        while (start < text.Length)
+        {
+            int nl = text.IndexOf('\n', start);
+            int end = nl < 0 ? text.Length : nl;
+            if (end - start > max) return true;
+            if (nl < 0) break;
+            start = nl + 1;
+        }
+        return false;
+    }
 
     // Live-follow: bring the line the agent just changed into view.
     private void OnScrollToLine(int line)
