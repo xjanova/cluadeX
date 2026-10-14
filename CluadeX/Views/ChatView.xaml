@@ -684,16 +684,27 @@
                                                                     <Grid>
                                                                         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                                                         <Grid Width="10" Height="10" VerticalAlignment="Center" Margin="0,0,7,0">
+                                                                            <!-- Pulses only while the node runs: a Loaded trigger kept every
+                                                                                 finished node animating, hidden, forever. -->
                                                                             <Ellipse Fill="{DynamicResource Accent.1}" Visibility="{Binding IsRunning, Converter={StaticResource BoolVis}}">
-                                                                                <Ellipse.Triggers>
-                                                                                    <EventTrigger RoutedEvent="Loaded">
-                                                                                        <BeginStoryboard>
-                                                                                            <Storyboard RepeatBehavior="Forever">
-                                                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.6" AutoReverse="True"/>
-                                                                                            </Storyboard>
-                                                                                        </BeginStoryboard>
-                                                                                    </EventTrigger>
-                                                                                </Ellipse.Triggers>
+                                                                                <Ellipse.Style>
+                                                                                    <Style TargetType="Ellipse">
+                                                                                        <Style.Triggers>
+                                                                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                                                                <DataTrigger.EnterActions>
+                                                                                                    <BeginStoryboard x:Name="NodePulse">
+                                                                                                        <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="20">
+                                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.25" To="1" Duration="0:0:0.6" AutoReverse="True"/>
+                                                                                                        </Storyboard>
+                                                                                                    </BeginStoryboard>
+                                                                                                </DataTrigger.EnterActions>
+                                                                                                <DataTrigger.ExitActions>
+                                                                                                    <StopStoryboard BeginStoryboardName="NodePulse"/>
+                                                                                                </DataTrigger.ExitActions>
+                                                                                            </DataTrigger>
+                                                                                        </Style.Triggers>
+                                                                                    </Style>
+                                                                                </Ellipse.Style>
                                                                             </Ellipse>
                                                                             <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Status.Success}"
                                                                                        Visibility="{Binding IsDone, Converter={StaticResource BoolVis}}"/>

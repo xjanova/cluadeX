@@ -70,6 +70,37 @@ public sealed class PageHost : Grid
         }
     }
 
+    /// <summary>Screen readers and other UI Automation clients see only the page on screen. WPF's default peer walks
+    /// every child — Collapsed ones too — and rebuilds that tree after each layout pass while a client listens
+    /// (M365 Copilot, the touch keyboard host, an IME…). With the kept chat and code editor (its docked chat
+    /// included) that walk ran on the UI thread non-stop: ~30% of a core at idle and stalls while typing
+    /// (2026-10-14, UIElementAutomationPeer.iterate in the stack).</summary>
+    protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() => new VisibleChildrenPeer(this);
+
+    private sealed class VisibleChildrenPeer : System.Windows.Automation.Peers.FrameworkElementAutomationPeer
+    {
+        public VisibleChildrenPeer(PageHost owner) : base(owner) { }
+
+        protected override List<System.Windows.Automation.Peers.AutomationPeer>? GetChildrenCore()
+        {
+            var host = (PageHost)Owner;
+            var list = new List<System.Windows.Automation.Peers.AutomationPeer>();
+            foreach (UIElement child in host.Children)
+            {
+                if (child.Visibility != Visibility.Visible) continue;
+                var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(child);
+                if (peer != null) list.Add(peer);
+                else if (child is FrameworkElement fe)
+                {
+                    // A plain container has no peer of its own: hand on its children's, as the default walk does.
+                    var inner = new System.Windows.Automation.Peers.FrameworkElementAutomationPeer(fe).GetChildren();
+                    if (inner != null) list.AddRange(inner);
+                }
+            }
+            return list;
+        }
+    }
+
     /// <summary>The view the page's implicit DataTemplate builds, or null (then it is shown the old way).</summary>
     private FrameworkElement? Build(object page)
     {

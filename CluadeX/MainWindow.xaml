@@ -535,7 +535,9 @@
                                         <Ellipse.Triggers>
                                             <EventTrigger RoutedEvent="Ellipse.Loaded">
                                                 <BeginStoryboard>
-                                                    <Storyboard RepeatBehavior="Forever">
+                                                    <!-- 15 fps: a blurred ellipse redrawn at 60 fps kept the render thread
+                                                         at ~30% of a core with the app idle (2026-10-14). -->
+                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
                                                         <DoubleAnimation Storyboard.TargetName="LogoHalo"
                                                                          Storyboard.TargetProperty="Angle"
                                                                          From="0" To="360" Duration="0:0:8"/>
