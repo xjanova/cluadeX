@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using CluadeX.Services;
 using ICSharpCode.AvalonEdit;
 
 namespace CluadeX.Views.Editor;
@@ -11,9 +12,10 @@ namespace CluadeX.Views.Editor;
 /// viewport drawn as a draggable window, the caret line marked, and agent-edited regions
 /// flagged on the left rail so you can see at a glance WHERE the AI touched the file.
 ///
-/// Rendering reads a plain string snapshot. Text changes are throttled (typing / typewriter
-/// reveal would otherwise rebuild per keystroke); scrolling repaints IMMEDIATELY, because a
-/// viewport box that lags the scrollbar reads as broken.
+/// Rebuilds read the document line by line — at most <see cref="MaxSamples"/> lines, every Nth one in a longer
+/// file, and only the start of each — so a million-line log costs a few thousand short reads instead of a copy
+/// of the whole text. Text changes are throttled (typing / typewriter reveal would otherwise rebuild per
+/// keystroke); scrolling repaints IMMEDIATELY, because a viewport box that lags the scrollbar reads as broken.
 /// </summary>
 public class MinimapControl : FrameworkElement
 {
@@ -27,18 +29,44 @@ public class MinimapControl : FrameworkElement
     private readonly List<LineMetric> _lines = new();
     private readonly record struct LineMetric(float Len, float Indent, bool Comment, bool Blank);
 
+    /// <summary>Lines in the document, and how many of them each entry of <see cref="_lines"/> stands for.</summary>
+    private int _lineCount;
+    private int _sampleStep = 1;
+    /// <summary>The strip has a few hundred pixel rows: more samples than this would draw the same picture.</summary>
+    private const int MaxSamples = 4000;
+    /// <summary>Indent and comment sniffing only look at the start of a line; the length comes from the line itself.</summary>
+    private const int MaxCharsPerLine = 240;
+
     /// <summary>Line ranges the agent recently changed (1-based, inclusive) — drawn on the left rail.</summary>
     private readonly List<(int From, int To)> _changed = new();
 
-    private static readonly Brush BarBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x82, 0x9A, 0xA5, 0xE8)));
-    private static readonly Brush CommentBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x40, 0x7C, 0x85, 0xA0)));
-    private static readonly Brush ViewportBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x1E, 0xFF, 0xFF, 0xFF)));
-    private static readonly Pen ViewportPen = Freeze(new Pen(new SolidColorBrush(Color.FromArgb(0x99, 0x4C, 0xDF, 0xFF)), 1));
-    private static readonly Brush HoverBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF)));
-    private static readonly Brush CaretBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xD3, 0x7E)));
-    private static readonly Brush ChangeBrush = Freeze(new SolidColorBrush(Color.FromArgb(0xE0, 0x5C, 0xFF, 0xB0)));
+    // Midnight's values, only for when no theme answers. Every paint reads the Editor.Minimap.* tokens, and the
+    // editor view repaints the minimap when the theme changes.
+    private static readonly Brush BarFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x82, 0x9A, 0xA5, 0xE8)));
+    private static readonly Brush CommentFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x40, 0x7C, 0x85, 0xA0)));
+    private static readonly Brush ViewportFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x1E, 0xFF, 0xFF, 0xFF)));
+    private static readonly Brush ViewportBorderFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x99, 0x4C, 0xDF, 0xFF)));
+    private static readonly Brush HoverFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF)));
+    private static readonly Brush CaretFallback = Freeze(new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xD3, 0x7E)));
+    private static readonly Brush ChangeFallback = Freeze(new SolidColorBrush(Color.FromArgb(0xE0, 0x5C, 0xFF, 0xB0)));
+
+    private Brush? _viewportPenBrush;
+    private Pen? _viewportPen;
 
     private static T Freeze<T>(T f) where T : Freezable { f.Freeze(); return f; }
+
+    /// <summary>The viewport outline in the current theme's colour — a new pen only when that brush changed
+    /// (a scroll repaints on every wheel tick).</summary>
+    private Pen ViewportPen()
+    {
+        var brush = ThemeService.BrushOf("Editor.Minimap.ViewportBorder", ViewportBorderFallback);
+        if (_viewportPen == null || !ReferenceEquals(brush, _viewportPenBrush))
+        {
+            _viewportPen = Freeze(new Pen(brush, 1));
+            _viewportPenBrush = brush;
+        }
+        return _viewportPen;
+    }
 
     public MinimapControl()
     {
@@ -132,41 +160,39 @@ public class MinimapControl : FrameworkElement
     private void RebuildLines()
     {
         _lines.Clear();
-        string text = _editor?.Text ?? "";
-        if (text.Length == 0) return;
+        var doc = _editor?.Document;
+        _lineCount = doc?.LineCount ?? 0;
+        if (doc == null || doc.TextLength == 0) { _lineCount = 0; return; }
 
-        var raw = new List<(int Len, int Indent, bool Comment)>(512);
+        _sampleStep = Math.Max(1, (int)Math.Ceiling(_lineCount / (double)MaxSamples));
+        var raw = new List<(int Len, int Indent, bool Comment)>(Math.Min(_lineCount, MaxSamples) + 1);
         int maxLen = 1;
-        int start = 0;
 
-        for (int i = 0; i <= text.Length; i++)
+        for (int n = 1; n <= _lineCount; n += _sampleStep)
         {
-            if (i != text.Length && text[i] != '\n') continue;
-
-            int end = i;
-            if (end > start && text[end - 1] == '\r') end--;   // CRLF
-            int len = end - start;
+            var line = doc.GetLineByNumber(n);
+            int len = line.Length;   // without the line break
+            string head = doc.GetText(line.Offset, Math.Min(len, MaxCharsPerLine));
 
             // Leading whitespace (tab = 4 cols) + cheap comment sniff on the first glyph pair.
             int indent = 0;
             bool comment = false;
-            int j = start;
-            for (; j < end; j++)
+            int j = 0;
+            for (; j < head.Length; j++)
             {
-                char c = text[j];
+                char c = head[j];
                 if (c == ' ') { indent++; continue; }
                 if (c == '\t') { indent += 4; continue; }
                 comment = c == '#'
-                    || (c == '/' && j + 1 < end && (text[j + 1] == '/' || text[j + 1] == '*'))
-                    || (c == '*' && j + 1 < end && text[j + 1] != '/')
-                    || (c == '<' && j + 3 < end && text[j + 1] == '!' && text[j + 2] == '-');
+                    || (c == '/' && j + 1 < head.Length && (head[j + 1] == '/' || head[j + 1] == '*'))
+                    || (c == '*' && j + 1 < head.Length && head[j + 1] != '/')
+                    || (c == '<' && j + 3 < head.Length && head[j + 1] == '!' && head[j + 2] == '-');
                 break;
             }
-            if (j >= end) { indent = 0; }   // whitespace-only line counts as blank
+            if (j >= head.Length && head.Length == len) { indent = 0; }   // whitespace-only line counts as blank
 
             raw.Add((len, indent, comment));
             if (len > maxLen) maxLen = len;
-            start = i + 1;
         }
 
         // Normalize against the p95-ish width so a couple of monster lines don't squash everything.
@@ -183,45 +209,52 @@ public class MinimapControl : FrameworkElement
     {
         // Invisible backplate keeps the whole strip hit-testable.
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, ActualWidth, ActualHeight));
-        if (_editor == null || _lines.Count == 0 || ActualHeight < 10 || ActualWidth < 8) return;
+        if (_editor == null || _lines.Count == 0 || _lineCount == 0 || ActualHeight < 10 || ActualWidth < 8) return;
 
         const double railW = 3;          // left rail for change markers
         double x0 = railW + 3;
         double usableW = Math.Max(4, ActualWidth - x0 - 3);
         int count = _lines.Count;
-        double yPerLine = ActualHeight / count;
-        double barH = Math.Clamp(yPerLine * 0.75, 0.6, 3.0);
+        double yPerLine = ActualHeight / _lineCount;           // one document line
+        double yPerSample = yPerLine * _sampleStep;            // one entry of _lines
+        double barH = Math.Clamp(yPerSample * 0.75, 0.6, 3.0);
 
         // When lines outnumber pixel rows, sample so we draw at most one bar per row.
         int step = Math.Max(1, (int)Math.Ceiling(count / Math.Max(1.0, ActualHeight)));
+
+        var barBrush = ThemeService.BrushOf("Editor.Minimap.Bar", BarFallback);
+        var commentBrush = ThemeService.BrushOf("Editor.Minimap.Comment", CommentFallback);
 
         for (int i = 0; i < count; i += step)
         {
             var m = _lines[i];
             if (m.Blank) continue;
-            double y = i * yPerLine;
+            double y = i * yPerSample;
             double bx = x0 + m.Indent * usableW;
             double bw = Math.Max(1.5, m.Len * usableW);
             if (bx + bw > ActualWidth - 2) bw = Math.Max(1.5, ActualWidth - 2 - bx);
-            dc.DrawRectangle(m.Comment ? CommentBrush : BarBrush, null, new Rect(bx, y, bw, barH));
+            dc.DrawRectangle(m.Comment ? commentBrush : barBrush, null, new Rect(bx, y, bw, barH));
         }
 
         // Agent-changed ranges on the left rail
+        var changeBrush = ThemeService.BrushOf("Editor.Minimap.Change", ChangeFallback);
         foreach (var (from, to) in _changed)
         {
             double y = (from - 1) * yPerLine;
             double h = Math.Max(2, (to - from + 1) * yPerLine);
-            dc.DrawRectangle(ChangeBrush, null, new Rect(0, y, railW, Math.Min(h, ActualHeight - y)));
+            dc.DrawRectangle(changeBrush, null, new Rect(0, y, railW, Math.Min(h, ActualHeight - y)));
         }
 
         // Caret line
         int caretLine = _editor.TextArea.Caret.Line;
-        if (caretLine >= 1 && caretLine <= count)
-            dc.DrawRectangle(CaretBrush, null, new Rect(x0 - 2, (caretLine - 1) * yPerLine, 2, Math.Max(1.5, barH)));
+        if (caretLine >= 1 && caretLine <= _lineCount)
+            dc.DrawRectangle(ThemeService.BrushOf("Editor.Minimap.Caret", CaretFallback), null,
+                new Rect(x0 - 2, (caretLine - 1) * yPerLine, 2, Math.Max(1.5, barH)));
 
         // Hover band
         if (_hoverY >= 0)
-            dc.DrawRectangle(HoverBrush, null, new Rect(0, Math.Max(0, _hoverY - 6), ActualWidth, 12));
+            dc.DrawRectangle(ThemeService.BrushOf("Editor.Minimap.Hover", HoverFallback), null,
+                new Rect(0, Math.Max(0, _hoverY - 6), ActualWidth, 12));
 
         // Viewport window — mapped through the SAME doc-height scale as the bars so the box
         // lines up with the code it represents.
@@ -230,7 +263,7 @@ public class MinimapControl : FrameworkElement
         double vpY = view.ScrollOffset.Y / docH * ActualHeight;
         double vpH = Math.Max(10, view.ActualHeight / docH * ActualHeight);
         if (vpY > ActualHeight - 4) vpY = ActualHeight - 4;
-        dc.DrawRoundedRectangle(ViewportBrush, ViewportPen,
+        dc.DrawRoundedRectangle(ThemeService.BrushOf("Editor.Minimap.Viewport", ViewportFallback), ViewportPen(),
             new Rect(1, Math.Max(0, vpY), Math.Max(2, ActualWidth - 2), Math.Min(vpH, ActualHeight - Math.Max(0, vpY))), 2, 2);
     }
 

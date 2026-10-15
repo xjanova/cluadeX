@@ -4,6 +4,9 @@ using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using CluadeX.Models;
 using CluadeX.Services;
+using CluadeX.Services.Background;
+using CluadeX.Services.Browser;
+using CluadeX.Services.Chrome;
 using CluadeX.Services.Mcp;
 using CluadeX.ViewModels;
 
@@ -23,6 +26,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // A test harness that creates App only for its XAML resources (chattest) gets exactly that. WPF calls
+        // OnStartup as soon as the harness's dispatcher runs, and this method then built a SECOND DI container
+        // (the harness's Thai UI checks read the wrong LocalizationService), showed MainWindow, auto-connected the
+        // installed BrainX against the user's vault, opened the real pipe, called the license server and rewrote
+        // ~/.cluadex/install.json to point at the harness exe. Only the entry assembly is checked here, so the app
+        // still starts as "dotnet CluadeX.dll"; install.json additionally requires CluadeX.exe (WriteInstallMarker).
+        if (!McpHostService.IsCluadeXApp()) return;
+
         // ─── Single instance ───
         // Two CluadeX processes fight over the SAME settings.json/session DB, and the second
         // instance's llama-server startup sweep kills the first instance's (still-owned) server —
@@ -30,7 +41,24 @@ public partial class App : Application
         _singleInstanceMutex = new System.Threading.Mutex(true, @"Local\CluadeX_SingleInstance", out bool isFirstInstance);
         if (!isFirstInstance)
         {
-            MessageBox.Show("CluadeX is already running — check your taskbar.\n(เปิดอยู่แล้ว — ดูที่ taskbar)",
+            // The installed app and a dev build share one data folder, so only one may run — but say which
+            // one is running, or "already running" sends the user hunting for the wrong window.
+            string other = "";
+            try
+            {
+                int me = Environment.ProcessId;
+                var running = System.Diagnostics.Process.GetProcessesByName("CluadeX").FirstOrDefault(p => p.Id != me);
+                string? path = running?.MainModule?.FileName;
+                if (path != null)
+                {
+                    bool installed = path.Contains(@"\AppData\Local\CluadeX\current\", StringComparison.OrdinalIgnoreCase);
+                    other = (installed ? "\n\nRunning: installed CluadeX / ตัวที่ติดตั้ง" : "\n\nRunning: DEV build / ตัว dev")
+                            + $"\n{path}";
+                }
+            }
+            catch { /* best effort */ }
+            MessageBox.Show("CluadeX is already running — close it first; two copies can't share the same chats and settings."
+                + "\n(CluadeX เปิดอยู่แล้ว — ปิดตัวนั้นก่อน เพราะสองตัวใช้แชทและการตั้งค่าชุดเดียวกัน)" + other,
                 "CluadeX", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;
@@ -50,6 +78,11 @@ public partial class App : Application
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
 
+        // Panel widths the user dragged (sidebar, explorer, chat pane, side panel) come back after a restart.
+        var panelSettings = _serviceProvider.GetRequiredService<SettingsService>();
+        CluadeX.Views.ResizeGrip.Load = key => panelSettings.Settings.PanelWidths.TryGetValue(key, out var w) ? w : null;
+        CluadeX.Views.ResizeGrip.Save = (key, w) => panelSettings.UpdateSettings(s => s.PanelWidths[key] = w);
+
         // Async commands catch their own exceptions so async-void can't kill the process — but that
         // made a throwing command look like a dead button with nothing in any log. Route those
         // failures to the same debug log + crash log the sync path already uses.
@@ -59,6 +92,11 @@ public partial class App : Application
             TryLogToDebugService(CluadeX.Models.LogLevel.Error, "Command",
                 $"{source} failed: {ex.Message}", ex);
         };
+
+        // The saved theme goes on screen before the first window exists, so nothing is drawn twice. A theme that
+        // fails to load (or a damaged setting) leaves the default Midnight in place — never a startup failure.
+        try { _serviceProvider.GetRequiredService<ThemeService>().ApplySaved(); }
+        catch (Exception ex) { WriteCrashLog("theme", ex); }
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
         mainWindow.Show();
@@ -81,40 +119,83 @@ public partial class App : Application
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>
         {
-            try
+            // License on its own task: up to four calls to xman4289.com (15 s timeout each when the network is
+            // bad) must not hold up the MCP servers below.
+            _ = Task.Run(async () =>
             {
-                // Validate license key against online API
-                var activation = _serviceProvider.GetRequiredService<ActivationService>();
-                await activation.ValidateOnlineAsync();
-                dbg?.Debug("Activation", "License validation finished");
-            }
-            catch (Exception ex)
-            {
-                dbg?.Warn("Activation", "License validate threw (offline?)", ex);
-            }
-
-            try
-            {
-                // Initialize MCP servers
-                var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
-
-                // Surface the manager on MainViewModel BEFORE starting anything, so the
-                // status chip shows "connecting…" and then whatever really happens —
-                // including a start that fails outright. Binding it afterwards would
-                // hide exactly the case the chip exists for.
-                Dispatcher.Invoke(() =>
+                try
                 {
-                    var mainVm = _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>();
-                    mainVm.McpServers = mcpManager;
-                });
+                    var activation = _serviceProvider!.GetRequiredService<ActivationService>();
+                    // Validate license key against online API
+                    await activation.ValidateOnlineAsync();
+                    dbg?.Debug("Activation", "License validation finished");
+                    // Register this PC with xman4289.com, take back a license it already holds, and give a
+                    // brand-new PC its free trial key straight away.
+                    await activation.AutoProvisionAsync();
+                }
+                catch (Exception ex)
+                {
+                    dbg?.Warn("Activation", "License check threw (offline?)", ex);
+                }
+            });
 
-                await mcpManager.InitializeAsync();
-                dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
-            }
-            catch (Exception ex)
+            // MCP servers on their own task too: a server that never answers initialize (an npx package still
+            // downloading, mcp-remote waiting for a login) can hold InitializeAsync for its whole startup timeout, and
+            // the pipe host, install.json and the bundled hooks below must not wait for that. A pipe task that arrives
+            // meanwhile waits for it briefly (WaitForMcpStartupAsync) and its caller is told when it was not ready.
+            var mcpStartup = Task.Run(async () =>
             {
-                dbg?.Warn("MCP", "McpServerManager init failed", ex);
-            }
+                try
+                {
+                    // Initialize MCP servers
+                    var mcpManager = _serviceProvider.GetRequiredService<McpServerManager>();
+
+                    // Surface the manager on MainViewModel BEFORE starting anything, so the
+                    // status chip shows "connecting…" and then whatever really happens —
+                    // including a start that fails outright. Binding it afterwards would
+                    // hide exactly the case the chip exists for.
+                    Dispatcher.Invoke(() =>
+                    {
+                        var mainVm = _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>();
+                        mainVm.McpServers = mcpManager;
+                    });
+
+                    await mcpManager.InitializeAsync();
+                    // Claude in Chrome switched on earlier but its entry is gone (a fresh mcp_servers.json): put it back.
+                    try { await _serviceProvider.GetRequiredService<Services.Chrome.ClaudeInChromeConnector>().EnsureAsync(); }
+                    catch (Exception ex) { dbg?.Warn("Chrome", "Claude in Chrome could not be restored", ex); }
+                    dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
+
+                    if (mcpManager.ConfigLoadFailed)
+                        dbg?.Warn("MCP", "mcp_servers.json could not be read — it is left untouched and nothing is written to it this session");
+
+                    // BrainX installed but not in our MCP list (installed after CluadeX, or before it existed):
+                    // connect it without asking — that is what installing it meant — unless the user removed it /
+                    // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
+                    // Not installed: invite, once.
+                    var auto = await mcpManager.AutoConnectInstalledBrainAsync();
+                    var brainSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
+                    if (auto != Services.Mcp.McpServerManager.BrainAutoConnect.NotNeeded)
+                    {
+                        dbg?.Info("MCP", $"installed BrainX startup check: {auto} · {mcpManager.BrainStatusText}");
+                    }
+                    else if (mcpManager.GetBrainInstallState() == Services.Mcp.McpServerManager.BrainInstall.NotInstalled
+                             && !brainSettings.BrainXInviteDismissed && !brainSettings.BrainXAutoConnectDeclined)
+                    {
+                        _ = Dispatcher.BeginInvoke(() => _serviceProvider!.GetRequiredService<ViewModels.MainViewModel>().ScheduleBrainXInvite());
+                    }
+                }
+                catch (Exception ex)
+                {
+                    dbg?.Warn("MCP", "McpServerManager init failed", ex);
+                }
+            });
+            try { _serviceProvider.GetRequiredService<McpServerManager>().TrackStartup(mcpStartup); }
+            catch (Exception ex) { dbg?.Warn("MCP", "could not track the MCP startup", ex); }
+
+            // Batches submitted before the last exit are still running (and paid for): pick their polling back up.
+            try { _serviceProvider.GetRequiredService<Services.Batch.BatchService>().EnsurePolling(); }
+            catch (Exception ex) { dbg?.Warn("Batch", "could not resume batch polling", ex); }
 
             try
             {
@@ -128,9 +209,9 @@ public partial class App : Application
                 await host.StartAsync();
                 dbg?.Info("MCP", $"McpHostService listening on pipe '{host.PipeName}'");
 
-                // Self-register a discovery marker (~/.cluadex/install.json) so an external orchestrator
+                // Self-register a discovery marker (<data root>\install.json) so an external orchestrator
                 // (e.g. BrainX's CluadeXLauncher) can find THIS install's exe + pipe without guessing paths.
-                WriteInstallMarker(host.PipeName);
+                WriteInstallMarker(host);
 
                 // Surface the host on MainViewModel so the sidebar status chip
                 // can data-bind to its observable properties. Do this on the UI
@@ -203,48 +284,46 @@ public partial class App : Application
     // ════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Write ~/.cluadex/install.json describing THIS running install (exe path, version, pipe name, token
-    /// file) so a launcher/orchestrator can discover and start CluadeX, and connect to its named pipe,
-    /// without hard-coding paths. Best-effort — never blocks startup.
+    /// Write install.json (exe path, version, pipe name, token file) into the app's data root — ~/.cluadex for an
+    /// installed app, &lt;exe&gt;\Data for a portable copy — so a launcher/orchestrator can discover and start CluadeX
+    /// and connect to its named pipe without hard-coding paths. Only CluadeX.exe itself writes it (a harness never
+    /// does), and every start of the installed app rewrites it, which repairs a marker a harness left behind.
+    /// Best-effort — never blocks startup.
     /// </summary>
-    private static void WriteInstallMarker(string pipeName)
+    private static void WriteInstallMarker(McpHostService host)
     {
-        try
-        {
-            string dir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
-            System.IO.Directory.CreateDirectory(dir);
-
-            string exe = Environment.ProcessPath ?? "";
-            var marker = new
-            {
-                exePath = exe,
-                installDir = string.IsNullOrEmpty(exe) ? "" : System.IO.Path.GetDirectoryName(exe),
-                version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "",
-                pipeName,
-                tokenFile = System.IO.Path.Combine(dir, "mcp-host-token"),
-                updatedAt = DateTime.UtcNow.ToString("o"),
-            };
-            System.IO.File.WriteAllText(
-                System.IO.Path.Combine(dir, "install.json"),
-                System.Text.Json.JsonSerializer.Serialize(marker, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { /* discovery marker is best-effort */ }
+        if (!McpHostService.WriteInstallMarker(host.DataDirectory, host.PipeName, host.TokenFilePath))
+            System.Diagnostics.Debug.WriteLine("install.json not written (not the CluadeX app, or the data folder refused the write)");
     }
+
+    /// <summary>How long an agent task from the pipe waits for the startup MCP servers (BrainX) before it runs anyway.</summary>
+    private static readonly TimeSpan McpStartupWait = TimeSpan.FromSeconds(15);
 
     private async Task<McpToolResult> HandleMcpToolAsync(McpToolInvocation invocation, CancellationToken ct)
     {
         try
         {
-            return invocation.ToolName switch
+            // The pipe accepts tasks before the MCP servers finished starting: an agent task waits for them briefly,
+            // and when they are still not ready its caller is told (its run may have had no brain / MCP tools).
+            string? startupNote = null;
+            if (invocation.ToolName is "cluadex.write_code" or "cluadex.run_skill" or "cluadex.review"
+                && _serviceProvider?.GetService<McpServerManager>() is { } mcpManager
+                && !await mcpManager.WaitForStartupAsync(McpStartupWait, ct))
+                startupNote = McpServerManager.StartupNotReadyNote;
+
+            var result = invocation.ToolName switch
             {
                 "cluadex.write_code"        => await HandleWriteCodeAsync(invocation.Arguments, ct),
                 "cluadex.run_skill"         => await HandleRunSkillAsync(invocation.Arguments, ct),
                 "cluadex.review"            => await HandleReviewAsync(invocation.Arguments, ct),
                 "cluadex.get_active_model"  => await HandleGetActiveModelAsync(ct),
                 "cluadex.set_model"         => await HandleSetModelAsync(invocation.Arguments, ct),
+                "cluadex.choose_model"      => await HandleChooseModelAsync(invocation.Arguments),
                 _ => ErrorResult($"Unknown tool '{invocation.ToolName}'"),
             };
+            if (startupNote != null)
+                result.Content.Add(new McpContentItem { Type = "text", Text = $"({startupNote})" });
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -252,7 +331,9 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            return ErrorResult($"Tool '{invocation.ToolName}' threw: {ex.Message}");
+            // The caller gets the kind of failure; the details (paths, stack) go to the debug log only.
+            TryLogToDebugService(CluadeX.Models.LogLevel.Error, "MCP", $"pipe tool '{invocation.ToolName}' threw", ex);
+            return ErrorResult($"Tool '{invocation.ToolName}' failed ({ex.GetType().Name}) — details are in CluadeX's Debug Log.");
         }
     }
 
@@ -269,9 +350,47 @@ public partial class App : Application
 
         if (string.IsNullOrWhiteSpace(spec))
             return ErrorResult("'spec' is required");
+        if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
+            return ErrorResult(stepsError!);
+        bool? acceptEdits = ReadBool(args, "acceptEdits");
 
-        string finalText = await chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, ct);
-        return TextResult(finalText);
+        var outcome = await chatVm.RunMcpTaskAsync(taskId, spec, lessons, contextFiles, cwd, ct, maxSteps, acceptEdits);
+        return ToMcpResult(outcome);
+    }
+
+    /// <summary>A run that failed, hit its step limit, was stopped in CluadeX or lost its caller is an error result —
+    /// it used to come back as isError=false, indistinguishable from success.</summary>
+    private static McpToolResult ToMcpResult(ViewModels.McpTaskOutcome outcome)
+        => outcome.IsError ? ErrorResult(outcome.Text) : TextResult(outcome.Text);
+
+    /// <summary>Optional "maxSteps": an integer 1-200 (a numeric string is accepted). Absent = the setting.</summary>
+    private static bool TryReadMaxSteps(System.Text.Json.JsonElement args, out int? maxSteps, out string? error)
+    {
+        maxSteps = null;
+        error = null;
+        if (args.ValueKind != System.Text.Json.JsonValueKind.Object || !args.TryGetProperty("maxSteps", out var v)
+            || v.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return true;
+        int n;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt32(out n)) { }
+        else if (v.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(v.GetString(), out n)) { }
+        else { error = "'maxSteps' must be an integer from 1 to 200"; return false; }
+        if (n < 1 || n > 200) { error = "'maxSteps' must be an integer from 1 to 200"; return false; }
+        maxSteps = n;
+        return true;
+    }
+
+    /// <summary>true/false (or "true"/"false"); anything else = not given.</summary>
+    private static bool? ReadBool(System.Text.Json.JsonElement args, string name)
+    {
+        if (args.ValueKind != System.Text.Json.JsonValueKind.Object || !args.TryGetProperty(name, out var v)) return null;
+        return v.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.True => true,
+            System.Text.Json.JsonValueKind.False => false,
+            System.Text.Json.JsonValueKind.String when bool.TryParse(v.GetString(), out bool b) => b,
+            _ => null,
+        };
     }
 
     private async Task<McpToolResult> HandleRunSkillAsync(System.Text.Json.JsonElement args, CancellationToken ct)
@@ -309,20 +428,23 @@ public partial class App : Application
         // UNRESTRICTED — /brainx-tester, whose entire point is that it cannot
         // write files, happily called write_file (observed 2026-07-31). The
         // in-app path sets this from SendMessage; the pipe path had no equivalent.
+        if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
+            return ErrorResult(stepsError!);
         var toolService = _serviceProvider.GetRequiredService<Services.AgentToolService>();
         if (skill.AllowedTools is { Count: > 0 })
             toolService.ActiveSkillAllowedTools = skill.AllowedTools;
 
         try
         {
-            string finalText = await chatVm.RunMcpTaskAsync(
+            var outcome = await chatVm.RunMcpTaskAsync(
                 taskId: $"{taskId}-skill-{skillName}",
                 spec: sb.ToString(),
                 lessons: null,
                 contextFiles: null,
                 workingDirectory: cwd,
-                ct: ct);
-            return TextResult(finalText);
+                ct: ct,
+                maxSteps: maxSteps);
+            return ToMcpResult(outcome);
         }
         finally
         {
@@ -386,6 +508,26 @@ public partial class App : Application
         }
         catch { /* non-NVIDIA or nvidia-smi missing — leave nulls */ }
 
+        // What the owner can pick from another app (BrainX's cowork room): the chat page's own model box — API
+        // models that have a key — and its effort levels. Read on the UI thread, where the chat keeps them.
+        object[] options = Array.Empty<object>();
+        string effort = "";
+        IReadOnlyList<string> efforts = Array.Empty<string>();
+        try
+        {
+            var chat = _serviceProvider.GetService<ViewModels.ChatViewModel>();
+            if (chat != null)
+                Dispatcher.Invoke(() =>
+                {
+                    options = chat.ChatModelChoices
+                        .Select(c => (object)new { provider = c.Provider.ToString(), model = c.Model, label = c.ProviderLabel, price = c.PriceLabel })
+                        .ToArray();
+                    effort = chat.ReasoningEffort;
+                    efforts = chat.EffortOptions;
+                });
+        }
+        catch { /* the model report must not fail over the extras */ }
+
         var payload = new
         {
             provider = providerType.ToString(),
@@ -394,6 +536,9 @@ public partial class App : Application
             ready,
             vramUsedMB = vramUsedMb,
             vramTotalMB = vramTotalMb,
+            effort,
+            options,
+            efforts,
             // Hint the orchestrator can show to the user.
             note = ready
                 ? "OK"
@@ -484,9 +629,8 @@ public partial class App : Application
         // before/after state to mcp-host.log so we can verify the path
         // taken if something looks off (e.g. settings still showing the
         // previous provider after a successful-looking response).
-        var logFile = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "mcp-host.log");
+        // The host's own log, in the data root (a portable copy keeps it next to the exe).
+        var logFile = System.IO.Path.Combine(settingsService.DataRoot, "mcp-host.log");
         var beforeProvider = providerManager.ActiveProviderType;
         var beforeReady = providerManager.ActiveProvider.IsReady;
         try { System.IO.File.AppendAllText(logFile,
@@ -567,14 +711,40 @@ public partial class App : Application
             "  - Suggested patch: minimal diff to address the comments (or 'none')\n\n" +
             "## Diff\n```diff\n" + diff + "\n```";
 
-        string finalText = await chatVm.RunMcpTaskAsync(
+        var outcome = await chatVm.RunMcpTaskAsync(
             taskId: $"{taskId}-review",
             spec: spec,
             lessons: null,
             contextFiles: null,
             workingDirectory: null,
             ct: ct);
-        return TextResult(finalText);
+        return ToMcpResult(outcome);
+    }
+
+    /// <summary>
+    /// BrainX's cowork room picked the chat's model and/or effort. Unlike set_model (Co-Pilot alignment, any provider
+    /// including a model on this PC) this goes through the chat page's model box and its rules — see
+    /// ChatViewModel.ChooseFromOutsideAsync. Returns { ok, model, effort, reason }.
+    /// </summary>
+    private async Task<McpToolResult> HandleChooseModelAsync(System.Text.Json.JsonElement args)
+    {
+        if (_serviceProvider == null) return ErrorResult("DI not initialised");
+        string? model = ReadString(args, "model");
+        string? effort = ReadString(args, "effort");
+        if (string.IsNullOrWhiteSpace(model) && string.IsNullOrWhiteSpace(effort))
+            return ErrorResult("'model' or 'effort' is required");
+
+        var chat = _serviceProvider.GetRequiredService<ViewModels.ChatViewModel>();
+        string? reason = await await Dispatcher.InvokeAsync(() => chat.ChooseFromOutsideAsync(model, effort));
+        string nowModel = "", nowEffort = "";
+        Dispatcher.Invoke(() => { nowModel = chat.SelectedChatModel?.Model ?? ""; nowEffort = chat.ReasoningEffort; });
+        return TextResult(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            ok = reason == null,
+            model = nowModel,
+            effort = nowEffort,
+            reason = reason ?? "",
+        }));
     }
 
     // ─── Tool result helpers ─────────────────────────────────────────────
@@ -638,16 +808,22 @@ public partial class App : Application
         services.AddSingleton<PermissionService>();
         services.AddSingleton<TaskManagerService>();
         services.AddSingleton<WebFetchService>();
-        services.AddSingleton<BuddyService>();
+        services.AddSingleton<Services.Pet.PetService>();
         services.AddSingleton<LocalizationService>();
+        // ThemeService — swaps Resources/Themes/<id>.xaml in Application.Resources at runtime (Settings › General).
+        services.AddSingleton<ThemeService>();
         services.AddSingleton<ActivationService>();
         services.AddSingleton<XmanLicenseService>();
+        // DgxSparkService — CluadeX driving the model an NVIDIA DGX Spark serves on the LAN (Ollama).
+        services.AddSingleton<DgxSparkService>();
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
         services.AddSingleton<LspClientService>();
         services.AddSingleton<SkillService>();
         services.AddSingleton<CostTrackingService>();
         services.AddSingleton<MemoryService>();
+        // BatchService — half-price batch API jobs (Anthropic / OpenAI), kept in batches.json and polled until done.
+        services.AddSingleton<Services.Batch.BatchService>();
         services.AddSingleton<SessionMemoryService>();
         services.AddSingleton<RepoMapService>();
         services.AddSingleton<EmbeddingService>();
@@ -710,6 +886,20 @@ public partial class App : Application
         services.AddSingleton<Services.Providers.LlamaServerProvider>();
         services.AddSingleton<Services.Providers.LocalGgufProvider>();
 
+        // Tool images on disk (DataRoot\screens\<chat>\NNN.jpg) — screenshots and MCP images, pruned per chat.
+        services.AddSingleton(sp => new Services.Vision.ToolImageStore(sp.GetRequiredService<SettingsService>()));
+
+        // Extension seams. Each team registers its own services in its own file (tool modules as
+        // Services.Tools.IAgentToolModule, MCP policies / launch resolvers, shell interceptors, prompt sections,
+        // exit work as IAppShutdownHook) — this list is the only line here that names them.
+        services.AddBackgroundModule();
+        services.AddBrowserModule();
+        services.AddSingleton<SessionCleanupService>();
+        services.AddSingleton(sp => new ProjectRegistryService(sp.GetService<FileSystemService>(), sp.GetService<SettingsService>()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
+        services.AddChromeConnector();
+
         // ViewModels
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<ChatViewModel>();
@@ -744,6 +934,8 @@ public partial class App : Application
 
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
             chatVm?.SaveNow();
+
+            _serviceProvider?.GetService<CostTrackingService>()?.FlushLedger();   // today's spend survives the restart
         }
         catch (Exception ex)
         {
@@ -751,10 +943,32 @@ public partial class App : Application
             System.Diagnostics.Debug.WriteLine($"OnExit flush failed: {ex.Message}");
         }
 
+        // Exit work registered by the modules (stop background dev servers, close the browser engine) — each hook
+        // on its own, so one that throws can't keep the rest from running. Before the container is disposed.
+        RunShutdownHooks(_serviceProvider);
+
         if (_serviceProvider is IDisposable disposable)
             disposable.Dispose();
 
         base.OnExit(e);
+    }
+
+    /// <summary>Run every registered <see cref="IAppShutdownHook"/> once. Never throws.</summary>
+    internal static void RunShutdownHooks(IServiceProvider? provider)
+    {
+        if (provider == null) return;
+        IEnumerable<IAppShutdownHook> hooks;
+        try { hooks = provider.GetServices<IAppShutdownHook>().ToList(); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"OnExit: shutdown hooks could not be resolved: {ex.Message}");
+            return;
+        }
+        foreach (var hook in hooks)
+        {
+            try { hook?.OnAppShutdown(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"OnExit: {hook?.GetType().Name} failed: {ex.Message}"); }
+        }
     }
 
     // ─── Global Exception Handlers ───

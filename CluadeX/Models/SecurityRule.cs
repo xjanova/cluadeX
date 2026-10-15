@@ -1,3 +1,5 @@
+using CluadeX.Services;
+
 namespace CluadeX.Models;
 
 /// <summary>
@@ -70,25 +72,25 @@ public class SecurityFinding
 
     public string SeverityColorHex => Severity switch
     {
-        SecuritySeverity.Critical => "#FF5EC4",
-        SecuritySeverity.High     => "#FF6E6E",
-        SecuritySeverity.Medium   => "#FFD166",
-        SecuritySeverity.Low      => "#4CDFFF",
-        SecuritySeverity.Info     => "#8388BD",
-        _                          => "#8388BD",
+        SecuritySeverity.Critical => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+        SecuritySeverity.High     => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+        SecuritySeverity.Medium   => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        SecuritySeverity.Low      => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+        SecuritySeverity.Info     => ThemeColors.Hex("Text.Muted", "#8388BD"),
+        _                          => ThemeColors.Hex("Text.Muted", "#8388BD"),
     };
 
     public string CategoryColorHex => Category switch
     {
-        "Secrets"    => "#FF6E6E",
-        "Injection"  => "#FF5EC4",
-        "Crypto"     => "#A672FF",
-        "Auth"       => "#FFD166",
-        "PathTraversal" => "#FF8AA6",
-        "Deserialize" => "#FF6E6E",
-        "Logging"    => "#FFD166",
-        "Hardcoded"  => "#FF8AA6",
-        _            => "#4CDFFF",
+        "Secrets"    => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+        "Injection"  => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+        "Crypto"     => ThemeColors.Hex("Accent.2", "#A672FF"),
+        "Auth"       => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        "PathTraversal" => ThemeColors.Hex("Accent.4", "#FF8AA6"),
+        "Deserialize" => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+        "Logging"    => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        "Hardcoded"  => ThemeColors.Hex("Accent.4", "#FF8AA6"),
+        _            => ThemeColors.Hex("Accent.1", "#4CDFFF"),
     };
 }
 

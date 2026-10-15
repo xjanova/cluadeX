@@ -56,13 +56,21 @@ public sealed class CompletionData : ICompletionData
     public void Complete(TextArea textArea, ISegment completionSegment, EventArgs insertionRequestEventArgs)
         => textArea.Document.Replace(completionSegment, _item.Label);
 
+    // The kind tag's colour is a theme token (Completion.Kind.*); these are Midnight's values for when no theme
+    // answers. The popup lives for one completion, so reading the token when it is built is enough.
+    private static readonly Brush LspFallback = Frozen(0x7E, 0xE0, 0xA3);
+    private static readonly Brush TypeFallback = Frozen(0x8A, 0xB8, 0xFF);
+    private static readonly Brush MethodFallback = Frozen(0xFF, 0xD3, 0x7E);
+    private static readonly Brush KeywordFallback = Frozen(0xC7, 0x9A, 0xFF);
+    private static readonly Brush OtherFallback = Frozen(0x8A, 0x8F, 0xB0);
+
     private static Brush KindBrush(string kind) => kind switch
     {
-        "lsp" => Frozen(0x7E, 0xE0, 0xA3),
-        "class" or "interface" or "struct" or "enum" or "record" or "type" => Frozen(0x8A, 0xB8, 0xFF),
-        "method" => Frozen(0xFF, 0xD3, 0x7E),
-        "keyword" => Frozen(0xC7, 0x9A, 0xFF),
-        _ => Frozen(0x8A, 0x8F, 0xB0),
+        "lsp" => ThemeService.BrushOf("Completion.Kind.Lsp", LspFallback),
+        "class" or "interface" or "struct" or "enum" or "record" or "type" => ThemeService.BrushOf("Completion.Kind.Type", TypeFallback),
+        "method" => ThemeService.BrushOf("Completion.Kind.Method", MethodFallback),
+        "keyword" => ThemeService.BrushOf("Completion.Kind.Keyword", KeywordFallback),
+        _ => ThemeService.BrushOf("Completion.Kind.Other", OtherFallback),
     };
 
     private static Brush Frozen(byte r, byte g, byte b)

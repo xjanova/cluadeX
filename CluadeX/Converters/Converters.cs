@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
 using CluadeX.Models;
+using CluadeX.Services;
 
 namespace CluadeX.Converters;
 
@@ -30,29 +31,21 @@ public class BoolToVisibilityConverter : IValueConverter
         => value is Visibility v && v == Visibility.Visible;
 }
 
+/// <summary>Message role → its label colour (Role.* tokens). The brushes are ThemeColors.Live: one per token, re-coloured
+/// in place on a theme switch, so a label already on screen follows it.</summary>
 public class RoleToBrushConverter : IValueConverter
 {
-    // Cached frozen brushes to avoid GC pressure
-    private static readonly SolidColorBrush UserBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x89, 0xB4, 0xFA)));
-    private static readonly SolidColorBrush AssistantBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)));
-    private static readonly SolidColorBrush ExecBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)));
-    private static readonly SolidColorBrush ToolBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x94, 0xE2, 0xD5)));
-    private static readonly SolidColorBrush SystemBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xCB, 0xA6, 0xF7)));
-    private static readonly SolidColorBrush StatusBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x9C, 0x9C, 0xAC)));  // Overlay1 — muted
-    private static readonly SolidColorBrush DefaultBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xCD, 0xD6, 0xF4)));
-    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
-
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value switch
         {
-            MessageRole.User => UserBrush,
-            MessageRole.Assistant => AssistantBrush,
-            MessageRole.CodeExecution => ExecBrush,
-            MessageRole.ToolAction => ToolBrush,
-            MessageRole.AgentStatus => StatusBrush,
-            MessageRole.System => SystemBrush,
-            _ => DefaultBrush,
+            MessageRole.User => ThemeColors.Live("Role.User", Color.FromRgb(0x89, 0xB4, 0xFA)),
+            MessageRole.Assistant => ThemeColors.Live("Role.Assistant", Color.FromRgb(0xA6, 0xE3, 0xA1)),
+            MessageRole.CodeExecution => ThemeColors.Live("Role.Exec", Color.FromRgb(0xF9, 0xE2, 0xAF)),
+            MessageRole.ToolAction => ThemeColors.Live("Role.Tool", Color.FromRgb(0x94, 0xE2, 0xD5)),
+            MessageRole.AgentStatus => ThemeColors.Live("Role.Status", Color.FromRgb(0x9C, 0x9C, 0xAC)),
+            MessageRole.System => ThemeColors.Live("Role.System", Color.FromRgb(0xCB, 0xA6, 0xF7)),
+            _ => ThemeColors.Live("Role.Default", Color.FromRgb(0xCD, 0xD6, 0xF4)),
         };
     }
 
@@ -60,25 +53,20 @@ public class RoleToBrushConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
+/// <summary>Message role → its bubble background (Role.*.Background tokens, live — see RoleToBrushConverter).</summary>
 public class RoleToBackgroundConverter : IValueConverter
 {
-    private static readonly SolidColorBrush UserBg = Freeze(new SolidColorBrush(Color.FromRgb(0x2F, 0x3D, 0x5C)));
-    private static readonly SolidColorBrush AssistantBg = Freeze(new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44)));
-    private static readonly SolidColorBrush ExecBg = Freeze(new SolidColorBrush(Color.FromRgb(0x3A, 0x35, 0x30)));
-    private static readonly SolidColorBrush ToolBg = Freeze(new SolidColorBrush(Color.FromRgb(0x2D, 0x3A, 0x3E)));
-    private static readonly SolidColorBrush StatusBg = Freeze(new SolidColorBrush(Color.FromRgb(0x1E, 0x1E, 0x2E)));  // Base — near-transparent
-    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
-
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value switch
         {
-            MessageRole.User => UserBg,
-            MessageRole.Assistant => AssistantBg,
-            MessageRole.CodeExecution => ExecBg,
-            MessageRole.ToolAction => ToolBg,
-            MessageRole.AgentStatus => StatusBg,
-            _ => AssistantBg,
+            // Only the user's own messages and run output sit on a surface. The assistant's reply is plain text on the
+            // page (a bubble around every answer made the transcript a stack of heavy cards), a tool call is a thin
+            // row on the sunken surface, a system line is muted text.
+            MessageRole.User => ThemeColors.Live("Role.User.Background", Color.FromRgb(0x2F, 0x3D, 0x5C)),
+            MessageRole.CodeExecution => ThemeColors.Live("Role.Exec.Background", Color.FromRgb(0x3A, 0x35, 0x30)),
+            MessageRole.ToolAction => ThemeColors.Live("State.Fill.Faint", Color.FromArgb(0x11, 0xFF, 0xFF, 0xFF)),
+            _ => Brushes.Transparent,
         };
     }
 
@@ -88,19 +76,22 @@ public class RoleToBackgroundConverter : IValueConverter
 
 public class RoleToLabelConverter : IValueConverter
 {
+    private static string L(string key) => CluadeX.Services.LocalizedResources.Instance[key];
+
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         return value switch
         {
-            MessageRole.User => "\U0001F464 You",
-            MessageRole.Assistant => "\u2728 CluadeX",
-            MessageRole.CodeExecution => "\u25B6 Execution",
-            MessageRole.ToolAction => "\U0001F527 Tool",
-            MessageRole.AgentStatus => "\u2699 Agent",
-            MessageRole.System => "\u2699 System",
-            MessageRole.PermissionRequest => "\U0001F512 Permission",
-            MessageRole.Thinking => "\U0001F9E0 Thinking",
-            _ => "Unknown",
+            MessageRole.User => "\U0001F464 " + L("chat.you"),
+            MessageRole.Assistant => "\u2728 " + L("chat.role.assistant"),
+            MessageRole.CodeExecution => "\u25B6 " + L("chat.role.execution"),
+            MessageRole.ToolAction => "\U0001F527 " + L("chat.role.tool"),
+            MessageRole.AgentStatus => "\u2699 " + L("chat.role.agent"),
+            MessageRole.System => "\u2699 " + L("chat.role.system"),
+            MessageRole.PermissionRequest => "\U0001F512 " + L("chat.role.permission"),
+            MessageRole.Thinking => "\U0001F9E0 " + L("chat.role.thinking"),
+            MessageRole.ContextSummary => "\U0001F5DC " + L("chat.role.summary"),
+            _ => "",
         };
     }
 
@@ -112,7 +103,12 @@ public class RoleToAlignmentConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
-        return value is MessageRole.User ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+        return value switch
+        {
+            MessageRole.User => HorizontalAlignment.Right,
+            MessageRole.ToolAction => HorizontalAlignment.Stretch,   // a list of equal rows, the time at the right edge
+            _ => HorizontalAlignment.Left,
+        };
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
@@ -125,9 +121,12 @@ public class RoleToMarginConverter : IValueConverter
     {
         return value switch
         {
-            MessageRole.User => new Thickness(100, 3, 12, 3),
-            MessageRole.AgentStatus => new Thickness(12, 1, 200, 1),  // compact, narrow
-            _ => new Thickness(12, 3, 100, 3),
+            // Inside the centred reading column: the user's message right-aligned, the reply full width, tool rows
+            // indented under the reply they belong to.
+            MessageRole.User => new Thickness(120, 8, 0, 4),
+            MessageRole.Assistant => new Thickness(0, 8, 0, 2),
+            MessageRole.ToolAction or MessageRole.AgentStatus or MessageRole.CodeExecution => new Thickness(20, 1, 0, 1),
+            _ => new Thickness(0, 3, 0, 3),
         };
     }
 
@@ -141,10 +140,36 @@ public class RoleToCornerRadiusConverter : IValueConverter
     {
         return value switch
         {
-            MessageRole.User => new CornerRadius(16, 16, 4, 16),    // Tail bottom-right
-            _ => new CornerRadius(16, 16, 16, 4),                   // Tail bottom-left
+            MessageRole.User => new CornerRadius(12, 12, 4, 12),    // tail bottom-right
+            MessageRole.ToolAction or MessageRole.CodeExecution => new CornerRadius(6),
+            _ => new CornerRadius(0),
         };
     }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+/// <summary>True when the two bound values are equal (the sidebar: is this session the one on screen?).</summary>
+public class EqualsMultiConverter : IMultiValueConverter
+{
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+        => values.Length == 2 && values[0] != null && Equals(values[0], values[1]);
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+/// <summary>Message role → the padding inside its body: none around the plain-text reply, a slim row for a tool.</summary>
+public class RoleToPaddingConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => value switch
+    {
+        MessageRole.User => new Thickness(12, 8, 12, 8),
+        MessageRole.ToolAction => new Thickness(10, 5, 8, 5),
+        MessageRole.CodeExecution => new Thickness(10, 8, 10, 8),
+        _ => new Thickness(0, 2, 0, 2),
+    };
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotImplementedException();
@@ -186,10 +211,10 @@ public class VramFitConverter : IValueConverter
         if (value is int requiredMB && parameter is string vramStr && int.TryParse(vramStr, out int availMB))
         {
             return requiredMB <= availMB
-                ? new SolidColorBrush(Color.FromRgb(0xA6, 0xE3, 0xA1)) // Green
-                : new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)); // Red
+                ? ThemeColors.Live("Status.Success.Soft", Color.FromRgb(0xA6, 0xE3, 0xA1))
+                : ThemeColors.Live("Status.Danger.Soft", Color.FromRgb(0xF3, 0x8B, 0xA8));
         }
-        return new SolidColorBrush(Color.FromRgb(0xA6, 0xAD, 0xC8)); // Subtext
+        return ThemeColors.Live("Text.Soft.Secondary", Color.FromRgb(0xA6, 0xAD, 0xC8));
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
@@ -217,9 +242,9 @@ public class ContextUsageBrushConverter : IValueConverter
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         double percent = value is double d ? d : 0;
-        if (percent < 50) return new SolidColorBrush(Color.FromRgb(0x94, 0xE2, 0xD5)); // Teal
-        if (percent < 75) return new SolidColorBrush(Color.FromRgb(0xF9, 0xE2, 0xAF)); // Yellow
-        return new SolidColorBrush(Color.FromRgb(0xF3, 0x8B, 0xA8)); // Red
+        if (percent < 50) return ThemeColors.Live("Progress.Context.Fill", Color.FromRgb(0x94, 0xE2, 0xD5));
+        if (percent < 75) return ThemeColors.Live("Status.Warning.Soft", Color.FromRgb(0xF9, 0xE2, 0xAF));
+        return ThemeColors.Live("Status.Danger.Soft", Color.FromRgb(0xF3, 0x8B, 0xA8));
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
@@ -258,6 +283,17 @@ public class NullToCollapsedConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
+/// <summary>Visible when the bound value's text equals ConverterParameter, else Collapsed
+/// (shows one settings category at a time).</summary>
+public class EqualsToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value?.ToString() == parameter?.ToString() ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
 public class NavItemConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
@@ -277,11 +313,10 @@ public class NavItemConverter : IValueConverter
 // Frozen brushes so they don't recreate per cell during diff/timeline render.
 public class DiffKindToBrushConverter : IValueConverter
 {
-    private static readonly SolidColorBrush AddBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x5C, 0xFF, 0xB0)));
-    private static readonly SolidColorBrush DelBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x6E, 0x6E)));
-    private static readonly SolidColorBrush HunkBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0x72, 0xFF)));
-    private static readonly SolidColorBrush NeutralBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xC0, 0xC6, 0xEE)));
-    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+    private static Brush AddBrush => ThemeColors.Live("Diff.Added", Color.FromRgb(0x5C, 0xFF, 0xB0));
+    private static Brush DelBrush => ThemeColors.Live("Diff.Deleted", Color.FromRgb(0xFF, 0x6E, 0x6E));
+    private static Brush HunkBrush => ThemeColors.Live("Diff.Hunk", Color.FromRgb(0xA6, 0x72, 0xFF));
+    private static Brush NeutralBrush => ThemeColors.Live("Diff.Context", Color.FromRgb(0xC0, 0xC6, 0xEE));
 
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
@@ -304,10 +339,9 @@ public class DiffKindToBrushConverter : IValueConverter
 
 public class DiffKindToBackgroundConverter : IValueConverter
 {
-    private static readonly SolidColorBrush AddBg = Freeze(new SolidColorBrush(Color.FromArgb(0x24, 0x5C, 0xFF, 0xB0)));
-    private static readonly SolidColorBrush DelBg = Freeze(new SolidColorBrush(Color.FromArgb(0x24, 0xFF, 0x6E, 0x6E)));
-    private static readonly SolidColorBrush HunkBg = Freeze(new SolidColorBrush(Color.FromArgb(0x20, 0xA6, 0x72, 0xFF)));
-    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+    private static Brush AddBg => ThemeColors.Live("Diff.Added.Background", Color.FromArgb(0x24, 0x5C, 0xFF, 0xB0));
+    private static Brush DelBg => ThemeColors.Live("Diff.Deleted.Background", Color.FromArgb(0x24, 0xFF, 0x6E, 0x6E));
+    private static Brush HunkBg => ThemeColors.Live("Diff.Hunk.Background", Color.FromArgb(0x20, 0xA6, 0x72, 0xFF));
 
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
@@ -331,9 +365,8 @@ public class DiffKindToBackgroundConverter : IValueConverter
 /// <summary>True → violet (AI), False → cyan (human). Used for commit dot + avatar accents.</summary>
 public class AiBoolToBrushConverter : IValueConverter
 {
-    private static readonly SolidColorBrush AiBrush = Freeze(new SolidColorBrush(Color.FromRgb(0xA6, 0x72, 0xFF)));
-    private static readonly SolidColorBrush HumanBrush = Freeze(new SolidColorBrush(Color.FromRgb(0x4C, 0xDF, 0xFF)));
-    private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
+    private static Brush AiBrush => ThemeColors.Live("Accent.2", Color.FromRgb(0xA6, 0x72, 0xFF));
+    private static Brush HumanBrush => ThemeColors.Live("Accent.1", Color.FromRgb(0x4C, 0xDF, 0xFF));
 
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
         => value is bool b && b ? AiBrush : HumanBrush;
@@ -345,20 +378,11 @@ public class AiBoolToBrushConverter : IValueConverter
 /// <summary>True → violet→cyan avatar gradient (AI); False → cyan→mint (human).</summary>
 public class AiBoolToAvatarConverter : IValueConverter
 {
-    private static readonly LinearGradientBrush AiGradient = Freeze(BuildGradient(
-        Color.FromRgb(0xA6, 0x72, 0xFF), Color.FromRgb(0x4C, 0xDF, 0xFF)));
-    private static readonly LinearGradientBrush HumanGradient = Freeze(BuildGradient(
-        Color.FromRgb(0x4C, 0xDF, 0xFF), Color.FromRgb(0x5C, 0xFF, 0xB0)));
-
-    private static LinearGradientBrush BuildGradient(Color from, Color to)
-    {
-        var b = new LinearGradientBrush(from, to, new Point(0, 0), new Point(1, 1));
-        return b;
-    }
-    private static LinearGradientBrush Freeze(LinearGradientBrush b) { b.Freeze(); return b; }
-
+    // Avatar.Ai / Avatar.Human — live gradients that follow a theme switch.
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        => value is bool b && b ? AiGradient : HumanGradient;
+        => value is bool b && b
+            ? ThemeColors.LiveGradient("Avatar.Ai", Color.FromRgb(0xA6, 0x72, 0xFF), Color.FromRgb(0x4C, 0xDF, 0xFF))
+            : ThemeColors.LiveGradient("Avatar.Human", Color.FromRgb(0x4C, 0xDF, 0xFF), Color.FromRgb(0x5C, 0xFF, 0xB0));
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotImplementedException();
@@ -387,7 +411,7 @@ public class HexToColorConverter : IValueConverter
             }
         }
         catch { }
-        return Color.FromRgb(0x83, 0x88, 0xBD);
+        return ThemeColors.Color("Text.Muted", Color.FromRgb(0x83, 0x88, 0xBD));
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

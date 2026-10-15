@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>themetest</AssemblyName>
+    <RootNamespace>ThemeTest</RootNamespace>
+    <NoWarn>MSB3277;CS0067</NoWarn>
+  </PropertyGroup>
+
+  <!-- The REAL shipping assembly — linked, NOT rebuilt: build CluadeX first or you test a stale binary.
+       dotnet run -p:CluadeXBin=<dir>\ points it at another build (the build lock writes to E:\cluadex-bld\...).
+       Everything theme-specific (ThemeService, AppSettings.Theme) is reached by reflection, so the SAME harness
+       also runs against a build from before the theme work — that is how the golden baseline was captured. -->
+  <PropertyGroup>
+    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\DebugBuild\net8.0-windows\</CluadeXBin>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="CluadeX">
+      <HintPath>$(CluadeXBin)CluadeX.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Versions must match what CluadeX was COMPILED against (Abstractions is unified to 10.x). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.5" />
+    <PackageReference Include="AvalonEdit" Version="6.3.0.90" />
+    <PackageReference Include="Markdig" Version="0.37.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <PackageReference Include="System.Management" Version="9.0.0" />
+    <PackageReference Include="Serilog" Version="4.1.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageReference Include="LLamaSharp" Version="0.26.0" />
+    <PackageReference Include="Velopack" Version="1.1.1" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+  </ItemGroup>
+
+  <!-- portable.txt next to the exe => SettingsService uses <exe>\Data as its data root, so this
+       harness never touches the user's real ~/.cluadex (settings, chat DB, buddy, license). -->
+  <ItemGroup>
+    <None Include="portable.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

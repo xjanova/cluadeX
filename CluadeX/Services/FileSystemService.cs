@@ -23,19 +23,28 @@ public class FileSystemService
     /// trust for the new folder and drop stale project hooks.</summary>
     public event Action? OnWorkingDirectoryChanged;
 
+    /// <summary>The project folder: the one a running agent started in (AgentRunScope) — so opening another project
+    /// while it runs never moves its tools — else the one the user has open. Setting it always changes the APP's
+    /// project (only the UI sets it; a run's folder is fixed when the run starts).</summary>
     public string WorkingDirectory
     {
-        get => _workingDirectory;
+        get => Root;
         set
         {
             if (string.Equals(_workingDirectory, value, StringComparison.OrdinalIgnoreCase)) return;
             _workingDirectory = value;
-            _readSnapshots.Clear();   // new project → the agent hasn't "read" anything here yet
+            // Not cleared: entries are full paths, so another project's never match — and a run still working in
+            // the previous project keeps its "has read this file" record.
             OnWorkingDirectoryChanged?.Invoke();
         }
     }
 
-    public bool HasWorkingDirectory => !string.IsNullOrEmpty(_workingDirectory) && Directory.Exists(_workingDirectory);
+    /// <summary>The project folder the user has open, ignoring any run (for the UI).</summary>
+    public string AppWorkingDirectory => _workingDirectory;
+
+    private string Root => AgentRunScope.Current?.WorkingDirectory ?? _workingDirectory;
+
+    public bool HasWorkingDirectory => !string.IsNullOrEmpty(Root) && Directory.Exists(Root);
 
     // ─── Read File ───
     public string ReadFile(string relativePath)
@@ -80,6 +89,73 @@ public class FileSystemService
         return (sb.ToString(), total);
     }
 
+    /// <summary>What <see cref="ReadForAgent"/> returns: the numbered slice plus everything the caller
+    /// needs to tell the model how to get the rest.</summary>
+    public sealed record AgentRead(
+        string Text, int TotalLines, int FromLine, int ToLine,
+        bool CutByBudget, bool IsBinary, long SizeBytes, bool IsValidUtf8);
+
+    /// <summary>Longest line shown verbatim; beyond it a minified bundle would swallow the whole budget.</summary>
+    public const int MaxLineChars = 2000;
+
+    /// <summary>
+    /// The agent's read: numbered "N\t" lines from <paramref name="startLine"/>, stopping at
+    /// <paramref name="maxLines"/> lines OR <paramref name="charBudget"/> characters, whichever comes first.
+    ///
+    /// A whole-file read used to return the entire file — a 5,000-line file came back as 48 KB, more than
+    /// a 12k-token local model's whole context, in a single tool call. Every read now fits the budget
+    /// and reports where it stopped so the model can page with offset.
+    /// </summary>
+    public AgentRead ReadForAgent(string relativePath, int startLine, int maxLines, int charBudget)
+    {
+        string fullPath = ResolveSafePath(relativePath);
+        if (Directory.Exists(fullPath))
+            throw new InvalidOperationException($"'{relativePath}' is a directory, not a file — use list_files or glob to see what it contains.");
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException($"File not found: {relativePath}");
+
+        long size = new FileInfo(fullPath).Length;
+        if (size > 16 * 1024 * 1024)
+            throw new InvalidOperationException($"'{relativePath}' is {size / (1024 * 1024)} MB — too large to read as text. Use grep_search to find the part you need.");
+        if (CluadeX.Helpers.TextFileCodec.LooksBinary(fullPath))
+            return new AgentRead("", 0, 0, 0, false, true, size, true);
+
+        var tf = CluadeX.Helpers.TextFileCodec.Read(fullPath);
+        if (tf.Text.Length == 0)
+            return new AgentRead("(the file is empty)\n", 0, 1, 0, false, false, size, true);
+        var lines = tf.Text.Replace("\r\n", "\n").Split('\n');
+        int total = lines.Length;
+        if (total > 0 && tf.Text.EndsWith("\n")) total--;   // "a\nb\n" is two lines, not three
+
+        if (startLine < 1) startLine = 1;
+        if (maxLines < 1) maxLines = 2000;
+        if (startLine > total)
+            return new AgentRead($"(the file has only {total} line(s))\n", total, startLine, total, false, false, size, tf.IsValidUtf8);
+
+        var sb = new StringBuilder();
+        int shown = 0, last = startLine - 1;
+        bool cut = false;
+        for (int i = startLine; i <= total && shown < maxLines; i++)
+        {
+            string line = lines[i - 1];
+            if (line.Length > MaxLineChars)
+                line = line[..MaxLineChars] + $"… [+{line.Length - MaxLineChars:N0} more characters on this line]";
+            string row = $"{i}\t{line}\n";
+            if (shown > 0 && sb.Length + row.Length > charBudget) { cut = true; break; }
+            sb.Append(row);
+            shown++;
+            last = i;
+        }
+        return new AgentRead(sb.ToString(), total, startLine, last, cut, false, size, tf.IsValidUtf8);
+    }
+
+    /// <summary>True when the agent has read or written this file in the current session.</summary>
+    public bool HasSeen(string relativePath)
+    {
+        try { return _readSnapshots.ContainsKey(ResolveSafePath(relativePath)); }
+        catch { return false; }
+    }
+
     // ─── Multi-edit (atomic batch find/replace on one file) ───
     /// <summary>
     /// Apply several find/replace edits to ONE file in a single atomic write: every edit is applied
@@ -96,17 +172,24 @@ public class FileSystemService
         if (edits == null || edits.Count == 0)
             throw new ArgumentException("No edits provided.");
 
-        string raw = File.ReadAllText(fullPath, Encoding.UTF8);
-        int crlfCount = CountOccurrences(raw, "\r\n");
-        int loneLfCount = CountOccurrences(raw, "\n") - crlfCount;
-        bool fileUsesCrLf = crlfCount > loneLfCount;
+        var tf = CluadeX.Helpers.TextFileCodec.Read(fullPath);
+        if (!tf.IsValidUtf8) throw new InvalidOperationException(CluadeX.Helpers.TextFileCodec.NotUtf8Message(relativePath));
+        string raw = tf.Text;
+        bool fileUsesCrLf = UsesCrLf(raw);
 
         var (ok, content, applied, message) = ApplyMultiEdit(raw.Replace("\r\n", "\n"), edits);
         if (!ok) return (false, applied, message);   // atomic: nothing written
 
         string outContent = fileUsesCrLf ? content.Replace("\n", "\r\n") : content;
-        File.WriteAllText(fullPath, outContent, Encoding.UTF8);
+        CluadeX.Helpers.TextFileCodec.Write(fullPath, outContent, tf.HasBom);
         return (true, applied, message);
+    }
+
+    /// <summary>The file's DOMINANT newline is CRLF (one stray CRLF in an LF file does not count).</summary>
+    private static bool UsesCrLf(string raw)
+    {
+        int crlf = CountOccurrences(raw, "\r\n");
+        return crlf > CountOccurrences(raw, "\n") - crlf;
     }
 
     /// <summary>Compute the result of a MultiEdit WITHOUT writing — for the pre-apply diff preview.</summary>
@@ -118,7 +201,7 @@ public class FileSystemService
             string fullPath = ResolveSafePath(relativePath);
             if (!File.Exists(fullPath) || edits == null || edits.Count == 0) return null;
             if (new FileInfo(fullPath).Length > 1_048_576) return null;
-            string content = File.ReadAllText(fullPath, Encoding.UTF8).Replace("\r\n", "\n");
+            string content = CluadeX.Helpers.TextFileCodec.Read(fullPath).Text.Replace("\r\n", "\n");
             var (ok, after, _, message) = ApplyMultiEdit(content, edits);
             return (ok, content, after, message);
         }
@@ -136,29 +219,68 @@ public class FileSystemService
             if (string.IsNullOrEmpty(find))
                 return (false, content, applied, $"edit #{i + 1}: 'find' is empty.");
 
-            string findN = find.Replace("\r\n", "\n");
-            string replaceN = replace.Replace("\r\n", "\n");
-            int count = CountOccurrences(content, findN);
-
-            if (count == 0)
-            {
-                string? flexed = TryFlexibleReplace(content, findN, replaceN);
-                if (flexed == null)
-                    return (false, content, applied, $"edit #{i + 1}: text not found — re-read the file and copy the exact block.");
-                content = flexed;
-            }
-            else if (count > 1 && !replaceAll)
-            {
-                return (false, content, applied, $"edit #{i + 1}: 'find' matches {count} times — add surrounding context to make it unique, or set replace_all.");
-            }
-            else
-            {
-                content = content.Replace(findN, replaceN);
-            }
+            var outcome = ApplyOneEdit(content, find, replace, replaceAll);
+            if (outcome.Ambiguous > 1)
+                return (false, content, applied, $"edit #{i + 1}: 'find' matches {outcome.Ambiguous} times — add surrounding context to make it unique, or set replace_all.");
+            if (outcome.Content == null)
+                return (false, content, applied, $"edit #{i + 1}: text not found — re-read the file and copy the exact block.");
+            content = outcome.Content;
             applied++;
         }
         return (true, content, applied, $"{applied} edit(s) applied");
     }
+
+    /// <summary>Result of matching one find/replace against \n-normalized content.</summary>
+    private readonly record struct EditOutcome(string? Content, int Replacements, int Ambiguous);
+
+    /// <summary>
+    /// The single matching core behind edit_file, multi_edit and the approval-dialog preview, so a
+    /// preview can never disagree with what the edit then does. In order:
+    ///   1. exact match (newline-normalized);
+    ///   2. whitespace-tolerant match — only when it lands on exactly one place — with the replacement
+    ///      re-indented to the file's own indentation;
+    ///   3. the same two again with read_file's "N\t" line-number prefixes removed, because a model that
+    ///      has just read a numbered file routinely pastes those prefixes into 'find'.
+    /// Content == null with Ambiguous &lt;= 1 means "not found".
+    /// </summary>
+    private static EditOutcome ApplyOneEdit(string content, string find, string replace, bool replaceAll)
+    {
+        string findN = find.Replace("\r\n", "\n");
+        string replaceN = replace.Replace("\r\n", "\n");
+
+        var first = MatchOnce(content, findN, replaceN, replaceAll);
+        if (first.Content != null || first.Ambiguous > 1) return first;
+
+        if (!HasLineNumberPrefixes(findN)) return first;
+        string strippedFind = StripLineNumberPrefixes(findN);
+        // Only strip the replacement when it carries the same prefixes; otherwise its digits are content.
+        string strippedReplace = HasLineNumberPrefixes(replaceN) ? StripLineNumberPrefixes(replaceN) : replaceN;
+        return MatchOnce(content, strippedFind, strippedReplace, replaceAll);
+    }
+
+    private static EditOutcome MatchOnce(string content, string findN, string replaceN, bool replaceAll)
+    {
+        if (findN.Length == 0) return new EditOutcome(null, 0, 0);
+        int count = CountOccurrences(content, findN);
+        if (count == 1 || (count > 1 && replaceAll))
+            return new EditOutcome(content.Replace(findN, replaceN), count, 0);
+        if (count > 1)
+            return new EditOutcome(null, 0, count);
+        string? flexed = TryFlexibleReplace(content, findN, replaceN);
+        return flexed != null ? new EditOutcome(flexed, 1, 0) : new EditOutcome(null, 0, 0);
+    }
+
+    private static readonly Regex LineNumberPrefix = new(@"^\s*\d+\t", RegexOptions.Compiled);
+
+    /// <summary>Every non-blank line starts with read_file's "N\t" prefix.</summary>
+    private static bool HasLineNumberPrefixes(string text)
+    {
+        var nonBlank = text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
+        return nonBlank.Count > 0 && nonBlank.All(l => LineNumberPrefix.IsMatch(l));
+    }
+
+    private static string StripLineNumberPrefixes(string text) =>
+        string.Join("\n", text.Split('\n').Select(l => LineNumberPrefix.Replace(l, "", 1)));
 
     // ─── Safe raw read (for diff capture) ───
     /// <summary>
@@ -231,16 +353,92 @@ public class FileSystemService
     /// Best-effort detection of the project's build / type-check command from marker files in the working
     /// directory root. Returns null when no build system is recognised (e.g. plain scripts).
     /// </summary>
-    public string? DetectBuildCommand()
+    public string? DetectBuildCommand() => DetectProjectCommand(test: false)?.Command;
+
+    /// <summary>
+    /// Best-effort detection of the project's TEST command. Returns null when no test setup is recognised.
+    /// Mirrors <see cref="DetectBuildCommand"/>.
+    /// </summary>
+    public string? DetectTestCommand() => DetectProjectCommand(test: true)?.Command;
+
+    /// <summary>A detected build/test command plus where it was found, for the tool's report.</summary>
+    public sealed record ProjectCommand(string Command, string FoundIn);
+
+    /// <summary>
+    /// Find the build (or test) command. Looks at the project root first, then BELOW it: a repository
+    /// whose only project lives in a subfolder (src/App/App.csproj, backend/package.json) used to get
+    /// "couldn't detect a build system" — which silently disabled the agent's build-verify step for
+    /// the most common repo layout there is.
+    /// </summary>
+    public ProjectCommand? DetectProjectCommand(bool test)
     {
         if (!HasWorkingDirectory) return null;
-        string dir = _workingDirectory;
+        string root = Root;
+
+        string? atRoot = DetectCommandIn(root, test);
+        if (atRoot != null) return new ProjectCommand(atRoot, "the project root");
+
+        string verb = test ? "test" : "build";
+        string Rel(string full) => Path.GetRelativePath(root, full).Replace('\\', '/');
+
+        // .NET: a solution anywhere below wins (it knows how its projects fit together).
+        var slns = FindBelow(root, "*.sln", 3);
+        if (slns.Count > 0)
+        {
+            string sln = slns[0];
+            return new ProjectCommand($"dotnet {verb} \"{Rel(sln)}\"", Rel(sln));
+        }
+
+        var projects = FindBelow(root, "*.csproj", 3)
+            .Concat(FindBelow(root, "*.fsproj", 3))
+            .Concat(FindBelow(root, "*.vbproj", 3))
+            .ToList();
+        if (projects.Count > 0)
+        {
+            var chosen = test ? projects.Where(IsDotnetTestProject).ToList() : projects;
+            if (chosen.Count > 0)
+            {
+                var take = chosen.Take(8).ToList();
+                string cmd = string.Join(" && ", take.Select(p => $"dotnet {verb} \"{Rel(p)}\""));
+                string where = take.Count == 1 ? Rel(take[0]) : $"{take.Count} projects" + (chosen.Count > 8 ? $" (of {chosen.Count})" : "");
+                return new ProjectCommand(cmd, where);
+            }
+        }
+
+        // Other ecosystems: a single project folder below the root.
+        foreach (var marker in new[] { "Cargo.toml", "go.mod", "package.json", "pom.xml", "build.gradle", "build.gradle.kts", "pyproject.toml" })
+        {
+            var hits = FindBelow(root, marker, 2);
+            if (hits.Count != 1) continue;
+            string dir = Path.GetDirectoryName(hits[0])!;
+            string? inner = DetectCommandIn(dir, test);
+            if (inner == null) continue;
+            return new ProjectCommand($"cd \"{Rel(dir)}\" && {inner}", Rel(dir));
+        }
+        return null;
+    }
+
+    /// <summary>The marker-file rules, applied to one directory.</summary>
+    private static string? DetectCommandIn(string dir, bool test)
+    {
         bool HasGlob(string pattern)
         {
             try { return Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly).Any(); }
             catch { return false; }
         }
         bool HasFile(string name) => File.Exists(Path.Combine(dir, name));
+
+        if (test)
+        {
+            if (HasGlob("*.sln") || HasGlob("*.csproj") || HasGlob("*.fsproj")) return "dotnet test";
+            if (HasFile("Cargo.toml")) return "cargo test";
+            if (HasFile("go.mod")) return "go test ./...";
+            if (HasFile("pyproject.toml") || HasFile("pytest.ini") || HasFile("tox.ini") || HasFile("setup.py")) return "pytest -q";
+            if (HasFile("package.json")) return "npm test";
+            if (HasFile("pom.xml")) return "mvn -q test";
+            if (HasFile("build.gradle") || HasFile("build.gradle.kts")) return "gradle test";
+            return null;
+        }
 
         if (HasGlob("*.sln")) return "dotnet build";
         if (HasGlob("*.csproj") || HasGlob("*.fsproj")) return "dotnet build";
@@ -255,38 +453,63 @@ public class FileSystemService
         return null;
     }
 
-    /// <summary>
-    /// Best-effort detection of the project's TEST command from marker files in the working-directory root.
-    /// Returns null when no test setup is recognised. Mirrors <see cref="DetectBuildCommand"/>.
-    /// </summary>
-    public string? DetectTestCommand()
+    /// <summary>Files matching <paramref name="pattern"/> up to <paramref name="maxDepth"/> folders below
+    /// <paramref name="root"/> (not in it), shallowest first, skipping build/vendor folders.</summary>
+    private static List<string> FindBelow(string root, string pattern, int maxDepth)
     {
-        if (!HasWorkingDirectory) return null;
-        string dir = _workingDirectory;
-        bool HasGlob(string pattern)
+        var found = new List<(string path, int depth)>();
+        var queue = new Queue<(string dir, int depth)>();
+        queue.Enqueue((root, 0));
+        while (queue.Count > 0)
         {
-            try { return Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly).Any(); }
-            catch { return false; }
+            var (dir, depth) = queue.Dequeue();
+            if (depth > 0)
+            {
+                try { foreach (var f in Directory.EnumerateFiles(dir, pattern, SearchOption.TopDirectoryOnly)) found.Add((f, depth)); }
+                catch { }
+            }
+            if (depth >= maxDepth) continue;
+            string[] subs;
+            try { subs = Directory.GetDirectories(dir); } catch { continue; }
+            foreach (var s in subs.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                if (!WorkspaceFiles.IsPrunedDirName(Path.GetFileName(s))) queue.Enqueue((s, depth + 1));
         }
-        bool HasFile(string name) => File.Exists(Path.Combine(dir, name));
+        return found.OrderBy(f => f.depth).ThenBy(f => f.path, StringComparer.OrdinalIgnoreCase).Select(f => f.path).ToList();
+    }
 
-        if (HasGlob("*.sln") || HasGlob("*.csproj") || HasGlob("*.fsproj")) return "dotnet test";
-        if (HasFile("Cargo.toml")) return "cargo test";
-        if (HasFile("go.mod")) return "go test ./...";
-        if (HasFile("pyproject.toml") || HasFile("pytest.ini") || HasFile("tox.ini") || HasFile("setup.py")) return "pytest -q";
-        if (HasFile("package.json")) return "npm test";
-        if (HasFile("pom.xml")) return "mvn -q test";
-        if (HasFile("build.gradle") || HasFile("build.gradle.kts")) return "gradle test";
-        return null;
+    private static bool IsDotnetTestProject(string projectPath)
+    {
+        if (Path.GetFileNameWithoutExtension(projectPath).Contains("test", StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            string xml = File.ReadAllText(projectPath);
+            return xml.Contains("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase)
+                || xml.Contains("<IsTestProject>true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     // ─── Write File ───
+    /// <summary>
+    /// Write a whole file. An existing file keeps its BOM (or lack of one) and its dominant newline style —
+    /// a model writing \n into a CRLF file otherwise turns a two-line change into a whole-file diff. A new
+    /// file is written as plain UTF-8 with no BOM.
+    /// </summary>
     public void WriteFile(string relativePath, string content)
     {
         string fullPath = ResolveSafePath(relativePath);
         string? dir = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        File.WriteAllText(fullPath, content, Encoding.UTF8);
+
+        bool bom = false;
+        if (File.Exists(fullPath))
+        {
+            var existing = CluadeX.Helpers.TextFileCodec.Read(fullPath);
+            bom = existing.HasBom;
+            if (existing.IsValidUtf8 && UsesCrLf(existing.Text))
+                content = content.Replace("\r\n", "\n").Replace("\n", "\r\n");
+        }
+        CluadeX.Helpers.TextFileCodec.Write(fullPath, content, bom);
     }
 
     // ─── Edit File (Find & Replace) ───
@@ -301,47 +524,26 @@ public class FileSystemService
         if (string.IsNullOrEmpty(find))
             throw new ArgumentException("The 'find' text must not be empty.");
 
-        string raw = File.ReadAllText(fullPath, Encoding.UTF8);
+        var tf = CluadeX.Helpers.TextFileCodec.Read(fullPath);
+        if (!tf.IsValidUtf8) throw new InvalidOperationException(CluadeX.Helpers.TextFileCodec.NotUtf8Message(relativePath));
+        string raw = tf.Text;
 
         // Remember the file's DOMINANT newline so we write it back unchanged — injecting \n into a \r\n
-        // file (or vice-versa) made edits "succeed" then show phantom whole-file diffs in git. Use the
-        // dominant style (not "any CRLF") so a mostly-LF file with one stray CRLF isn't fully converted.
-        int crlfCount = CountOccurrences(raw, "\r\n");
-        int loneLfCount = CountOccurrences(raw, "\n") - crlfCount;
-        bool fileUsesCrLf = crlfCount > loneLfCount;
+        // file (or vice-versa) made edits "succeed" then show phantom whole-file diffs in git.
+        bool fileUsesCrLf = UsesCrLf(raw);
 
         // Match on \n-normalized text. The model emits \n; the file is often \r\n; an Ordinal compare
         // then never matches — the #1 reason edit_file "can't find" text that's visibly right there.
-        string content = raw.Replace("\r\n", "\n");
-        string findN = find.Replace("\r\n", "\n");
-        string replaceN = replace.Replace("\r\n", "\n");
-
-        int count = CountOccurrences(content, findN);
-
-        if (count == 0)
-        {
-            // Exact match failed even after newline-normalizing. Try one whitespace-tolerant pass
-            // (ignore each line's leading/trailing horizontal whitespace) — but ONLY when it resolves
-            // to a single unambiguous location, so we never silently edit the wrong spot.
-            string? flexed = TryFlexibleReplace(content, findN, replaceN);
-            if (flexed == null) return (false, 0);
-            content = flexed;
-            count = 1;
-        }
-        else if (count > 1 && !replaceAll)
-        {
+        var outcome = ApplyOneEdit(raw.Replace("\r\n", "\n"), find, replace, replaceAll);
+        if (outcome.Ambiguous > 1)
             throw new InvalidOperationException(
-                $"The text to replace appears {count} times in {relativePath}. Add more surrounding " +
+                $"The text to replace appears {outcome.Ambiguous} times in {relativePath}. Add more surrounding " +
                 "context so the match is unique, or pass replace_all=true to change every occurrence.");
-        }
-        else
-        {
-            content = content.Replace(findN, replaceN);
-        }
+        if (outcome.Content == null) return (false, 0);
 
-        string outContent = fileUsesCrLf ? content.Replace("\n", "\r\n") : content;
-        File.WriteAllText(fullPath, outContent, Encoding.UTF8);
-        return (true, count);
+        string outContent = fileUsesCrLf ? outcome.Content.Replace("\n", "\r\n") : outcome.Content;
+        CluadeX.Helpers.TextFileCodec.Write(fullPath, outContent, tf.HasBom);
+        return (true, outcome.Replacements);
     }
 
     /// <summary>
@@ -358,28 +560,14 @@ public class FileSystemService
             if (!File.Exists(fullPath) || string.IsNullOrEmpty(find)) return null;
             if (new FileInfo(fullPath).Length > 1_048_576) return null;
 
-            string content = File.ReadAllText(fullPath, Encoding.UTF8).Replace("\r\n", "\n");
-            string findN = find.Replace("\r\n", "\n");
-            string replaceN = replace.Replace("\r\n", "\n");
+            var tf = CluadeX.Helpers.TextFileCodec.Read(fullPath);
+            if (!tf.IsValidUtf8) return null;
+            string content = tf.Text.Replace("\r\n", "\n");
 
-            int count = CountOccurrences(content, findN);
-            string after;
-            if (count == 0)
-            {
-                string? flexed = TryFlexibleReplace(content, findN, replaceN);
-                if (flexed == null) return null;
-                after = flexed;
-            }
-            else if (count > 1 && !replaceAll)
-            {
-                return null; // ambiguous — don't guess in a preview
-            }
-            else
-            {
-                after = content.Replace(findN, replaceN);
-            }
-
-            return (true, content, after);
+            // Same matcher as the real edit, so the approval dialog shows exactly what will happen.
+            var outcome = ApplyOneEdit(content, find, replace, replaceAll);
+            if (outcome.Content == null) return null;   // not found / ambiguous — the real edit explains why
+            return (true, content, outcome.Content);
         }
         catch { return null; }
     }
@@ -477,7 +665,10 @@ public class FileSystemService
             var matches = rx.Matches(content);
             if (matches.Count != 1) return null;
             var m = matches[0];
-            return content[..m.Index] + replace + content[(m.Index + m.Length)..];
+            // The model's indentation was wrong (that is why only the tolerant pass matched), so its
+            // replacement carries the same wrong indentation — map it onto the file's.
+            string adapted = CluadeX.Helpers.IndentAdapter.Adapt(findLines, m.Value.Split('\n'), replace);
+            return content[..m.Index] + adapted + content[(m.Index + m.Length)..];
         }
         catch { return null; } // RegexParseException / RegexMatchTimeoutException — fall back to "not found"
     }
@@ -537,7 +728,7 @@ public class FileSystemService
         {
             foreach (var file in Directory.EnumerateFiles(fullPath, pattern, SearchOption.AllDirectories))
             {
-                string rel = Path.GetRelativePath(_workingDirectory, file).Replace('\\', '/');
+                string rel = Path.GetRelativePath(Root, file).Replace('\\', '/');
                 // Skip common ignore dirs
                 if (rel.Contains("node_modules/") || rel.Contains("/bin/") || rel.Contains("/obj/") ||
                     rel.Contains("/.git/") || rel.Contains("/__pycache__/") || rel.Contains("/.vs/"))
@@ -563,7 +754,7 @@ public class FileSystemService
         {
             foreach (var file in Directory.EnumerateFiles(fullPath, filePattern, SearchOption.AllDirectories))
             {
-                string rel = Path.GetRelativePath(_workingDirectory, file).Replace('\\', '/');
+                string rel = Path.GetRelativePath(Root, file).Replace('\\', '/');
                 if (rel.Contains("node_modules/") || rel.Contains("/bin/") || rel.Contains("/obj/") ||
                     rel.Contains("/.git/") || rel.Contains("/__pycache__/") || rel.Contains("/.vs/"))
                     continue;
@@ -624,8 +815,8 @@ public class FileSystemService
         if (!HasWorkingDirectory) return "(no working directory set)";
 
         var sb = new StringBuilder();
-        sb.AppendLine(Path.GetFileName(_workingDirectory) + "/");
-        BuildTree(sb, _workingDirectory, "", 0, maxDepth);
+        sb.AppendLine(Path.GetFileName(Root) + "/");
+        BuildTree(sb, Root, "", 0, maxDepth);
         return sb.ToString().TrimEnd();
     }
 
@@ -694,7 +885,7 @@ public class FileSystemService
             string rootedFull;
             try { rootedFull = Path.GetFullPath(normalized); }
             catch { throw new UnauthorizedAccessException("Absolute paths are not allowed. Use relative paths from the project root."); }
-            string wdFull = Path.GetFullPath(_workingDirectory);
+            string wdFull = Path.GetFullPath(Root);
             string wdSep = wdFull.EndsWith(Path.DirectorySeparatorChar) ? wdFull : wdFull + Path.DirectorySeparatorChar;
             if (rootedFull.Equals(wdFull, StringComparison.OrdinalIgnoreCase))
                 normalized = ".";
@@ -705,11 +896,11 @@ public class FileSystemService
                     $"Access denied: '{relativePath}' is outside the project root. Use relative paths from the project root.");
         }
 
-        string fullPath = Path.GetFullPath(Path.Combine(_workingDirectory, normalized));
+        string fullPath = Path.GetFullPath(Path.Combine(Root, normalized));
 
         // Security: ensure path stays within working directory (handles .. traversal).
         // Compare with a trailing separator so "C:\App" doesn't accept sibling "C:\App-evil\secret".
-        string workDirFull = Path.GetFullPath(_workingDirectory);
+        string workDirFull = Path.GetFullPath(Root);
         string workDirSep = workDirFull.EndsWith(Path.DirectorySeparatorChar) ? workDirFull : workDirFull + Path.DirectorySeparatorChar;
         string compare = fullPath.EndsWith(Path.DirectorySeparatorChar) ? fullPath : fullPath + Path.DirectorySeparatorChar;
         if (!compare.StartsWith(workDirSep, StringComparison.OrdinalIgnoreCase))

@@ -5,49 +5,20 @@
              xmlns:vm="clr-namespace:CluadeX.ViewModels">
 
     <UserControl.Resources>
-        <!-- ── Neon retheme — local override of Catppuccin keys ── -->
-        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
-        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
-        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
-        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
-        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
-        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
-        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
-        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
-        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
-        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
-        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
-        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
-        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>
-        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
-        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
-        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
-        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>
-        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
-        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
-        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
-        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
-
         <Style x:Key="SettingLabel" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Margin" Value="0,0,0,6"/>
         </Style>
         <Style x:Key="SettingDesc" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style x:Key="SectionTitle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource BlueBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
             <Setter Property="FontSize" Value="16"/>
             <Setter Property="FontWeight" Value="Bold"/>
             <Setter Property="Margin" Value="0,20,0,12"/>
@@ -55,21 +26,21 @@
 
         <!-- Badge styles for permission actions -->
         <Style x:Key="AllowBadge" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource GreenBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="6,2"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
         <Style x:Key="DenyBadge" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource RedBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="6,2"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
         <Style x:Key="AskBadge" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource YellowBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
             <Setter Property="CornerRadius" Value="4"/>
             <Setter Property="Padding" Value="6,2"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
@@ -82,10 +53,10 @@
 
             <!-- Page Title -->
             <TextBlock Text="{services:Loc perms.title}" FontSize="24" FontWeight="Bold"
-                       Foreground="{StaticResource TextBrush}"
-                       FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
+                       Foreground="{DynamicResource Text.Primary}"
+                       FontFamily="{DynamicResource Font.Ui.Display}" Margin="0,0,0,4"/>
             <TextBlock Text="{services:Loc perms.subtitle}"
-                       Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,0,0,8"/>
+                       Foreground="{DynamicResource Text.Secondary}" FontSize="13" Margin="0,0,0,8"/>
 
             <!-- ═══════ RULES LIST ═══════ -->
             <TextBlock Text="{services:Loc perms.activeRules}" Style="{StaticResource SectionTitle}" Margin="0,4,0,12"/>
@@ -104,7 +75,7 @@
                                 <Setter Property="Padding" Value="4,6"/>
                                 <Setter Property="Margin" Value="0,1"/>
                                 <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                 <Setter Property="Template">
                                     <Setter.Value>
                                         <ControlTemplate TargetType="ListBoxItem">
@@ -114,10 +85,10 @@
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface0Brush}"/>
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Surface.Sunken}"/>
                                                 </Trigger>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="Bd" Property="Background" Value="{StaticResource Surface0Brush}"/>
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Surface.Sunken}"/>
                                                 </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
@@ -139,32 +110,32 @@
                                             VerticalAlignment="Center">
                                         <Border.Style>
                                             <Style TargetType="Border">
-                                                <Setter Property="Background" Value="{StaticResource YellowBrush}"/>
+                                                <Setter Property="Background" Value="{DynamicResource Status.Warning}"/>
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding Action}" Value="Allow">
-                                                        <Setter Property="Background" Value="{StaticResource GreenBrush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Status.Success}"/>
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding Action}" Value="Deny">
-                                                        <Setter Property="Background" Value="{StaticResource RedBrush}"/>
+                                                        <Setter Property="Background" Value="{DynamicResource Status.Danger}"/>
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
                                         </Border.Style>
-                                        <TextBlock Text="{Binding Action}" FontSize="11" FontWeight="Bold"
-                                                   Foreground="{StaticResource BaseBrush}"/>
+                                        <TextBlock Text="{Binding ActionLabel}" FontSize="11" FontWeight="Bold"
+                                                   Foreground="{DynamicResource Badge.Rule.Foreground}"/>
                                     </Border>
 
                                     <!-- Scope -->
-                                    <TextBlock Grid.Column="1" Text="{Binding Scope}" FontSize="12"
-                                               Foreground="{StaticResource Overlay0Brush}"
+                                    <TextBlock Grid.Column="1" Text="{Binding ScopeLabel}" FontSize="12"
+                                               Foreground="{DynamicResource Text.Muted}"
                                                VerticalAlignment="Center" Margin="0,0,8,0"
-                                               FontFamily="{StaticResource MonoFont}"/>
+                                               FontFamily="{DynamicResource Font.Mono.Display}"/>
 
                                     <!-- Pattern -->
                                     <TextBlock Grid.Column="2" Text="{Binding Pattern}" FontSize="13"
-                                               Foreground="{StaticResource TextBrush}"
+                                               Foreground="{DynamicResource Text.Primary}"
                                                VerticalAlignment="Center"
-                                               FontFamily="{StaticResource MonoFont}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
                                                TextTrimming="CharacterEllipsis"/>
                                 </Grid>
                             </DataTemplate>
@@ -172,8 +143,8 @@
                     </ListBox>
 
                     <!-- Empty state -->
-                    <TextBlock Text="{services:Loc perms.noRules}"
-                               Foreground="{StaticResource Overlay0Brush}" FontSize="12"
+                    <TextBlock Text="{services:Loc permsm.noRules}"
+                               Foreground="{DynamicResource Text.Muted}" FontSize="12"
                                Margin="4,8,0,4" FontStyle="Italic">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
@@ -207,10 +178,11 @@
 
                     <!-- Scope -->
                     <TextBlock Text="{services:Loc perms.scope}" Style="{StaticResource SettingLabel}"/>
-                    <TextBlock Text="{services:Loc perms.scopeDesc}"
+                    <TextBlock Text="{services:Loc permsm.scopeDesc}"
                                Style="{StaticResource SettingDesc}"/>
                     <ComboBox ItemsSource="{Binding ScopeOptions}"
-                              SelectedItem="{Binding NewScope}"
+                              DisplayMemberPath="Label" SelectedValuePath="Value"
+                              SelectedValue="{Binding NewScope}"
                               Style="{StaticResource ModernComboBox}"
                               Width="200" HorizontalAlignment="Left" Margin="0,0,0,16"/>
 

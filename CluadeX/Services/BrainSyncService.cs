@@ -111,9 +111,11 @@ public class BrainSyncService
         var server = FindBrainServer();
         if (server == null)
         {
+            // Shown on the Instincts page — localized. (Ctrl+5 is the Code Editor; the MCP page is reached from
+            // the Ctrl+K palette or the 🧠 chip.)
             return new BrainSyncResult
             {
-                Message = "ObsidianX brain MCP server is not running. Configure one in MCP Servers (Ctrl+5)."
+                Message = LocalizedResources.Instance["brain.sync.notRunning"]
             };
         }
 
@@ -147,15 +149,14 @@ public class BrainSyncService
                 }
             }
 
-            // Create a fresh note.
-            // FIX (audit CRITICAL #4): tags must reach brain as a real JSON
-            // array, not a quoted string. Use the object-typed overload so
-            // `BuildTags(instinct)` (a List<string>) serialises natively.
+            // Create a fresh note. brain_create_note declares tags as ONE comma-separated string
+            // ({"type":"string"} — read off the live server's schema 2026-10-09); a JSON array here
+            // failed every instinct sync.
             var createArgs = new Dictionary<string, object>
             {
                 ["title"] = BuildTitle(instinct),
                 ["folder"] = "Notes/Coding-Lessons",
-                ["tags"] = BuildTags(instinct),
+                ["tags"] = string.Join(",", BuildTags(instinct)),
                 ["content"] = BuildNoteBody(instinct),
             };
             _log.Debug("BrainSync", $"Creating new brain note for '{instinct.Pattern}'");
@@ -234,7 +235,7 @@ public class BrainSyncService
 
         var server = FindBrainServer();
         if (server == null)
-            return "(BrainX not connected — configure a brain MCP server in MCP Servers, Ctrl+5)";
+            return "(BrainX not connected — configure a brain MCP server in MCP Servers: Ctrl+K → MCP Servers, or click the 🧠 chip)";
 
         try
         {

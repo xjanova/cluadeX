@@ -62,8 +62,38 @@ public class AppSettings
     // Agent settings
     public bool AutoExecuteCode { get; set; } = false;
     public int MaxAutoFixAttempts { get; set; } = 3;
-    /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks.</summary>
-    public int MaxAgentIterations { get; set; } = 25;
+    /// <summary>Max steps the agentic loop takes before stopping (clamped 1–100). Higher handles bigger tasks —
+    /// 50, not 25: serve → open → check the console → fix → re-check a web page alone takes a dozen steps.</summary>
+    public int MaxAgentIterations { get; set; } = 50;
+
+    /// <summary>Start every chat in "Accept edits" mode: write_file / edit_file / multi_edit / create_directory
+    /// INSIDE the open project run without a prompt (never execute, MCP, browse or paths outside the project).</summary>
+    public bool AcceptEditsDefault { get; set; } = false;
+
+    // ─── Dev Preview: background processes + built-in browser (feature.devPreview) ───
+    /// <summary>Built-in browser engine: "auto" (WebView2, else an installed Edge/Chrome over CDP), "webview2" or "cdp".</summary>
+    public string BrowserEngine { get; set; } = "auto";
+    /// <summary>Longest edge, in pixels, of a screenshot sent to a model (also capped at ~1.15 MP).</summary>
+    public int BrowserScreenshotMaxEdge { get; set; } = 1568;
+    /// <summary>Pages outside localhost / the open project: "ask" (default), "allow" or "deny".</summary>
+    public string BrowserAllowExternal { get; set; } = "ask";
+    /// <summary>Most background processes (dev servers, watchers) running at once.</summary>
+    public int BgMaxProcesses { get; set; } = 8;
+    /// <summary>Tool images kept in the conversation sent to the model; older ones become a text note with the file path.</summary>
+    public int KeepRecentImages { get; set; } = 2;
+    /// <summary>Older tool images may pile up this many past KeepRecentImages before they are cut back in one go
+    /// (each cut rewrites an earlier turn: one prompt-cache restart per cut instead of one per screenshot).</summary>
+    public int ImagePruneSlack { get; set; } = 3;
+
+    // ─── Claude in Chrome connector (through Claude Code) ───
+    /// <summary>The user switched the "Browser (Claude in Chrome)" connector on.</summary>
+    public bool ChromeConnectorEnabled { get; set; } = false;
+    /// <summary>Full path of claude.exe (or cli.js) to use instead of the one CluadeX finds. Empty = find it.</summary>
+    public string ClaudeCodePathOverride { get; set; } = "";
+    /// <summary>The browser the connector drives when several are connected (the extension's device id). Empty = ask.</summary>
+    public string ChromePairedDeviceId { get; set; } = "";
+    /// <summary>Let Claude in Chrome act without its own per-action prompts — only honoured in bypass mode.</summary>
+    public bool ChromeActWithoutAsking { get; set; } = false;
     /// <summary>IDLE timeout (seconds) for an interactive model call in the chat/agent loop: the window
     /// resets on every streamed token, so a healthy (even slow) generation is never cut off — only a
     /// connection that produces NOTHING for this long is aborted, surfacing a clean "timed out" error
@@ -81,6 +111,10 @@ public class AppSettings
     /// <summary>Animate agent edits in the Code Editor as live typing (typewriter reveal of the changed
     /// region + flash highlight when done). Falls back to an instant refresh for very large changes.</summary>
     public bool LiveCodingAnimationEnabled { get; set; } = true;
+    /// <summary>Code Editor view toggles (toolbar): long lines wrap, spaces/tabs/line ends shown, text zoom.</summary>
+    public bool EditorWordWrap { get; set; }
+    public bool EditorShowWhitespace { get; set; }
+    public double EditorZoom { get; set; } = 1.0;
     public string PreferredLanguage { get; set; } = "C#";
 
     /// <summary>
@@ -176,7 +210,21 @@ public class AppSettings
     // When thinking is on, MaxTokens is auto-raised to 16384 if lower.
     public bool ExtendedThinkingEnabled { get; set; } = false;
     public int ThinkingBudgetTokens { get; set; } = 10000; // default 10K thinking tokens
+    /// <summary>"auto" or low / medium / high / xhigh / max — see <see cref="EffortLevels"/>.</summary>
+    public string ReasoningEffort { get; set; } = EffortLevels.Auto;
     public bool PromptCachingEnabled { get; set; } = true; // use Anthropic prompt caching
+    /// <summary>Claude loads MCP tools on demand (server-side tool search) instead of carrying every definition in
+    /// every request. Off = all tools up front, as before.</summary>
+    public bool ToolSearchEnabled { get; set; } = true;
+    /// <summary>A paid run that has spent this much (USD) stops and asks before going on; each "go on" allows the
+    /// same again. 0 = never asks.</summary>
+    public decimal RunBudgetUsd { get; set; } = 2m;
+    /// <summary>A paid run asks before going on once CluadeX has spent this much today (USD, all chats). 0 = no daily cap.</summary>
+    public decimal DailyBudgetUsd { get; set; }
+    /// <summary>The chat page's right-hand panel (project files, latest image, latest run) is shown.</summary>
+    public bool ChatSidePanel { get; set; } = true;
+    /// <summary>Widths the user dragged panels to, by <see cref="Views.ResizeGrip.Key"/> (px).</summary>
+    public Dictionary<string, double> PanelWidths { get; set; } = new();
     public bool ShowThinkingSteps { get; set; } = true; // show AI thinking/reasoning in chat
 
     /// <summary>
@@ -204,6 +252,17 @@ public class AppSettings
     // default to avoid surprising the user with LLM calls they didn't ask for.
     public bool SessionMemoryEnabled { get; set; } = false;
 
+    /// <summary>Background work nobody waits for (session-memory and instinct extraction) goes through the
+    /// provider's batch API when it has one — Anthropic and OpenAI: half the price, the result lands within
+    /// minutes to hours instead of seconds. Off → those calls run live, as before.</summary>
+    public bool BatchBackgroundWork { get; set; } = true;
+
+    /// <summary>The desktop pet says things now and then (moods, builds, late nights).</summary>
+    public bool PetTalks { get; set; } = true;
+
+    /// <summary>The pet may follow the mouse around to tease you.</summary>
+    public bool PetMischief { get; set; } = true;
+
     /// <summary>
     /// Instinct learning loop. When ON, after a session ends CluadeX runs a background LLM pass over the
     /// transcript to extract reusable behavioral instincts (corrections the user made, approaches that
@@ -219,6 +278,19 @@ public class AppSettings
     // it too chatty.
     public bool EnableStrategicCompactionToast { get; set; } = true;
 
+    /// <summary>Compact by itself where the toast would ask (owner, 2026-10-13: "ที่มันคอยถามว่าจะบีบอัดไหม ให้มีติ๊ก
+    /// เพื่อให้บีบอัดออโต้ได้"). Ticked on the toast or in Settings. A turn in progress is never cut: the compact waits
+    /// for it to end. Off by default — compacting changes what the model is sent, so it is the user's choice.</summary>
+    public bool AutoCompactWhenSuggested { get; set; } = false;
+
+    /// <summary>The credit balance the user read off the provider's billing page (USD; null = not set). No provider
+    /// offers an API for the prepaid balance (Anthropic, OpenAI, Google — checked 2026-10-13), so the spend panel shows
+    /// this minus what CluadeX has spent since <see cref="CreditBalanceSetAt"/> — an estimate, labelled as one.</summary>
+    public decimal? CreditBalanceUsd { get; set; }
+    public DateTime? CreditBalanceSetAt { get; set; }
+    /// <summary>Today's spend at the moment the balance was entered (what that day spent before it is not subtracted).</summary>
+    public decimal CreditBalanceSpentThatDay { get; set; }
+
     // Model Catalog view preference — list (default) vs grid (2-column tiles).
     public bool ModelCatalogGridView { get; set; } = false;
 
@@ -232,8 +304,39 @@ public class AppSettings
     // Language / Localization
     public string Language { get; set; } = "en"; // "en" or "th"
 
+    /// <summary>The theme the app starts in and the picker shows as in use: "Classic", "Midnight" or "NeonCyber"
+    /// (Services.ThemeIds). Anything else starts Midnight and is rewritten — see ThemeService.ApplySaved.</summary>
+    public string Theme { get; set; } = "Midnight";
+
     // Activation Key — unlocks advanced features
     public string? ActivationKey { get; set; }
+    /// <summary>Server license_type of <see cref="ActivationKey"/> (demo, yearly, lifetime, …).</summary>
+    public string? LicenseType { get; set; }
+    /// <summary>When the saved key stops working (UTC); null = never.</summary>
+    public DateTime? LicenseExpiresUtc { get; set; }
+    /// <summary>Last time the server confirmed the saved key (UTC) — bounds how long it keeps working offline.</summary>
+    public DateTime? LicenseValidatedUtc { get; set; }
+    /// <summary>This install already asked the server for its one free trial key — never ask again.</summary>
+    public bool LicenseTrialRequested { get; set; }
+    /// <summary>The "your free trial has ended" invitation has been shown.</summary>
+    public bool LicenseTrialEndedNoticeShown { get; set; }
+
+    /// <summary>The user chose "Not interested" / "don't show again" on the BrainX invitation — never opened by
+    /// itself again (the brain chip still opens it on request).</summary>
+    public bool BrainXInviteDismissed { get; set; }
+
+    /// <summary>The user removed BrainX on the MCP Servers page or pressed "Not interested": an installed BrainX is
+    /// no longer registered and started by itself at launch. Cleared only by pressing Connect / Install in the
+    /// BrainX window.</summary>
+    public bool BrainXAutoConnectDeclined { get; set; }
+
+    /// <summary>Host name or IP of the NVIDIA DGX Spark on the local network that serves models (null = none).</summary>
+    public string? DgxSparkHost { get; set; }
+
+    /// <summary>The context size in force before a Spark model raised it — put back the moment CluadeX leaves the
+    /// Spark, because the same setting sizes a local llama-server load (a Spark-sized window on a desktop GPU is
+    /// the out-of-VRAM case).</summary>
+    public uint? DgxSparkSavedContextSize { get; set; }
 
     // Feature Toggles — users can enable/disable optional features
     public FeatureToggles Features { get; set; } = new();
@@ -265,6 +368,10 @@ public class FeatureToggles
 
     // MCP Servers
     public bool McpServers { get; set; } = true;
+
+    // Dev Preview — bg_* background processes and browser_* built-in browser. On by default; the license gate
+    // (feature.devPreview, see Services/Tools/DevPreviewGate) decides separately whether it may run.
+    public bool DevPreview { get; set; } = true;
 
     // Security
     public bool PermissionSystem { get; set; } = true;

@@ -52,9 +52,8 @@ public class DebugLogService
 
     public DebugLogService()
     {
-        _logDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".cluadex", "logs");
+        // The data home's logs folder: ~/.cluadex/logs, or <exe>\Data\logs for a portable copy / a test harness.
+        _logDir = Path.Combine(SettingsService.ResolveDataRoot(out _), "logs");
         try { Directory.CreateDirectory(_logDir); } catch { }
         Info("DebugLog", $"DebugLogService started · log dir = {_logDir}");
     }
@@ -93,7 +92,8 @@ public class DebugLogService
     public string DumpAsText()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"# CluadeX debug log dump · {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"# CluadeX debug log dump · {DateTime.Now:yyyy-MM-dd HH:mm:ss}"));
         sb.AppendLine($"# Process started · ring buffer = {_ring.Count} entries");
         sb.AppendLine($"# Warnings={WarningCount} · Errors={ErrorCount} · Criticals={CriticalCount}");
         sb.AppendLine();

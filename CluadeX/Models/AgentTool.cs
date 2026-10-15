@@ -109,6 +109,38 @@ public enum ToolType
 
     // Instinct maintenance
     InstinctEvolve,  // Merge near-duplicate learned instincts (semantic clustering)
+
+    // ── Members below are executed by tool MODULES (Services/Tools/IAgentToolModule), not by
+    //    AgentToolService itself. Appended at the end so no existing member changes its value. ──
+
+    // Background processes and dev servers (Services/Background — feature.devPreview)
+    BgStart,         // Start a command in the background (dev server, watcher) and report when it is ready
+    BgServe,         // Serve a folder over http://localhost with the built-in static file server
+    BgOutput,        // Read a background process's output (tail / since last read)
+    BgStop,          // Stop a background process with its whole process tree
+    BgList,          // List background processes (id, port, url, status)
+
+    // Built-in browser (Services/Browser — feature.devPreview)
+    BrowserOpen,       // Open / navigate the built-in browser
+    BrowserScreenshot, // Capture the page (image for vision models + a pixel digest in text)
+    BrowserConsole,    // Read console messages and page errors
+    BrowserNetwork,    // Read network requests
+    BrowserRead,       // Read the page as text / element tree
+    BrowserFind,       // Find elements and return refs
+    BrowserClick,      // Click an element or a point
+    BrowserPointer,    // Low-level pointer / touch sequences (press, hold, drag)
+    BrowserType,       // Type text into the focused element
+    BrowserKey,        // Press keys
+    BrowserScroll,     // Scroll the page or an element
+    BrowserEval,       // Run JavaScript in the page
+    BrowserResize,     // Emulate a viewport (mobile / tablet / desktop)
+    BrowserClose,      // Close the browser session
+
+    // Project (Services/Tools/ProjectToolModule)
+    OpenProject,       // Open a project folder for the run (works with no project open)
+
+    // App lifecycle (Services/Tools/AppRestartToolModule)
+    RestartApp,        // Close CluadeX and start it again (optionally from a new build)
 }
 
 /// <summary>
@@ -139,10 +171,14 @@ public class ToolCall
         or ToolType.GitDiff or ToolType.GitBranch
         or ToolType.GhPrList or ToolType.GhIssueList or ToolType.GhRepoView
         or ToolType.WebSearch or ToolType.WebFetch
+        or ToolType.AgentSpawn   // each sub-agent has its own conversation; several run at once
         or ToolType.TaskList or ToolType.TaskOutput
         or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
         or ToolType.LspDiagnostics or ToolType.CodebaseSearch
-        or ToolType.ListSymbols or ToolType.FindSymbol => true,
+        or ToolType.ListSymbols or ToolType.FindSymbol
+        or ToolType.BgOutput or ToolType.BgList
+        or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
+        or ToolType.BrowserRead or ToolType.BrowserFind => true,
         _ => false,
     };
 
@@ -157,7 +193,10 @@ public class ToolCall
         or ToolType.TaskList or ToolType.TaskOutput
         or ToolType.AskUser or ToolType.MemoryList or ToolType.BrainRecall
         or ToolType.LspDiagnostics or ToolType.CodebaseSearch
-        or ToolType.ListSymbols or ToolType.FindSymbol => true,
+        or ToolType.ListSymbols or ToolType.FindSymbol
+        or ToolType.BgOutput or ToolType.BgList
+        or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
+        or ToolType.BrowserRead or ToolType.BrowserFind => true,
         _ => false,
     };
 }
@@ -182,6 +221,15 @@ public class ToolResult
 
     /// <summary>For file-mutating tools: the (relative) path that changed — drives the live editor follow.</summary>
     public string? FilePath { get; set; }
+
+    /// <summary>
+    /// Images the tool produced, for models that can see them (null = none). The base64 lives ONLY here:
+    /// <see cref="Output"/> carries a short "[image N: WxH attached, saved at …]" marker, so the text budgets
+    /// can never cut an image in half and nothing that persists Output (chat history, codex.db) stores image
+    /// bytes. Never serialized.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<ToolImage>? Images { get; set; }
 }
 
 /// <summary>Payload for a human-in-the-loop permission prompt (carries an optional preview diff).</summary>
@@ -192,6 +240,16 @@ public class PermissionRequestInfo
     public string Detail { get; set; } = string.Empty;
     /// <summary>Preview of the file change to be applied, shown before the user approves. Null = no preview.</summary>
     public EditDiffResult? Diff { get; set; }
+    /// <summary>Asked every time on purpose — the user's own "Ask" rule, or code run in their browser. A chat set to
+    /// "allow everything" still asks this one.</summary>
+    public bool AlwaysAsk { get; set; }
+    /// <summary>Set when the prompt may be answered "Allow in this chat": the tool's identity (server + tool). One
+    /// ChatGPT session through a third-party MCP server asked 18 times for the same javascript_tool (Reverse X run,
+    /// 2026-10-13), and the only way out was the chat's "allow everything", which lets every shell command through
+    /// too. Null = not offered: a prompt that always asks, a call a policy judged, or not an MCP tool.</summary>
+    public string? ChatScopeKey { get; set; }
+    /// <summary>The user answered "Allow in this chat": the same tool runs without asking again in this chat.</summary>
+    public bool AllowedForChat { get; set; }
 }
 
 /// <summary>
@@ -213,3 +271,8 @@ public class TodoItem
     public string Status { get; set; } = "pending"; // pending, in_progress, completed
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 }
+
+/// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
+/// name, with its Persona and AllowedTools).</summary>
+public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
+    IReadOnlyCollection<string>? AllowedTools = null);

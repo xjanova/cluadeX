@@ -153,7 +153,10 @@ public sealed class DatabaseService : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            // Delete old messages and re-insert (simple & reliable)
+            // Delete old messages and re-insert (simple & reliable). This rewrites the stored chat to exactly
+            // session.Messages, so callers must pass the WHOLE transcript: "Compact now" used to trim the list to
+            // its last 10 messages first, and this statement then erased the rest from disk. Compaction now only
+            // inserts a ContextSummary marker; nothing is removed from the list.
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
@@ -166,10 +169,11 @@ public sealed class DatabaseService : IDisposable
             for (int i = 0; i < session.Messages.Count; i++)
             {
                 var msg = session.Messages[i];
-                // Transient UI prompts are not history — and their Allow/Deny callback can't be persisted, so a
-                // reloaded one would render as a dead button. Skip them entirely (the resulting tool action,
-                // with its diff, is saved separately).
-                if (msg.Role == MessageRole.PermissionRequest) continue;
+                // Transient UI rows are not history. A permission prompt's Allow/Deny callback can't be persisted
+                // (a reloaded one would render as a dead button; the resulting tool action, with its diff, is
+                // saved separately). Status lines ("⏵ Reading…", "✓ N tokens · …") were saved as Assistant
+                // messages, reloaded, and sent back to the model as turns it never wrote.
+                if (msg.Role is MessageRole.PermissionRequest or MessageRole.AgentStatus or MessageRole.Thinking) continue;
                 using var cmd = conn.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
@@ -182,9 +186,17 @@ public sealed class DatabaseService : IDisposable
                 cmd.Parameters.AddWithValue("$role", (int)msg.Role);
                 cmd.Parameters.AddWithValue("$content", msg.Content ?? "");
                 cmd.Parameters.AddWithValue("$ts", msg.Timestamp.ToString("o"));
-                cmd.Parameters.AddWithValue("$tn", (object?)msg.ToolName ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tsm", (object?)msg.ToolSummary ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$to", (object?)msg.ToolOutput ?? DBNull.Value);
+                // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
+                // a file that has been damaged before.
+                bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0;
+                // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
+                bool agentMap = msg.AgentNodes != null;
+                cmd.Parameters.AddWithValue("$tn", userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$tsm", agentMap ? msg.AgentMapHeader : (object?)msg.ToolSummary ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$to", userImages
+                    ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
+                    : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
+                    : (object?)msg.ToolOutput ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tsuc", msg.ToolSuccess ? 1 : 0);
                 cmd.Parameters.AddWithValue("$err", msg.HasError ? 1 : 0);
                 cmd.Parameters.AddWithValue("$order", i);
@@ -264,22 +276,119 @@ public sealed class DatabaseService : IDisposable
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                session.Messages.Add(new ChatMessage
+                var role = (MessageRole)reader.GetInt32(1);
+                string content = reader.GetString(2);
+                // Rows written by builds that saved status lines as Assistant: read them back as what they are,
+                // so they stay out of the model's history and the next save drops them.
+                if (role == MessageRole.Assistant && ChatMessage.IsLegacyStatusLine(content))
+                    role = MessageRole.AgentStatus;
+                var loaded = new ChatMessage
                 {
                     Id = reader.GetString(0),
-                    Role = (MessageRole)reader.GetInt32(1),
-                    Content = reader.GetString(2),
+                    Role = role,
+                    Content = content,
                     Timestamp = DateTime.Parse(reader.GetString(3)),
                     ToolName = reader.IsDBNull(4) ? null : reader.GetString(4),
                     ToolSummary = reader.IsDBNull(5) ? null : reader.GetString(5),
                     ToolOutput = reader.IsDBNull(6) ? null : reader.GetString(6),
                     ToolSuccess = reader.GetInt32(7) == 1,
                     HasError = reader.GetInt32(8) == 1,
-                });
+                };
+                if (role == MessageRole.User && loaded.ToolName == AttachedImagesTag)
+                {
+                    try { loaded.AttachedImages = System.Text.Json.JsonSerializer.Deserialize<List<string>>(loaded.ToolOutput ?? "[]") ?? new(); }
+                    catch { /* unreadable list: the message without its pictures */ }
+                    loaded.ToolName = null;
+                    loaded.ToolOutput = null;
+                }
+                if (loaded.ToolName == AgentMapTag)
+                {
+                    try
+                    {
+                        var rows = System.Text.Json.JsonSerializer.Deserialize<List<AgentNodeRow>>(loaded.ToolOutput ?? "[]") ?? new();
+                        loaded.AgentNodes = new(rows.Select(r => r.ToNode()));
+                        loaded.AgentMapHeader = loaded.ToolSummary ?? "";
+                    }
+                    catch { /* unreadable: the card's text summary stays */ }
+                    loaded.ToolName = null;
+                    loaded.ToolSummary = null;
+                    loaded.ToolOutput = null;
+                }
+                session.Messages.Add(loaded);
             }
         }
 
         return session;
+    }
+
+    /// <summary>tool_name of a user message whose tool_output holds its attached images (a JSON list of paths).</summary>
+    private const string AttachedImagesTag = "@images";
+
+    /// <summary>tool_name of an agent map card whose tool_output holds its nodes (JSON) and tool_summary its header.</summary>
+    private const string AgentMapTag = "@agentmap";
+
+    /// <summary>An agent map node as saved. A node saved while it was still running (the app closed mid-run) comes
+    /// back as stopped — nothing is running it any more.</summary>
+    private sealed record AgentNodeRow(int Id, string Label, string Kind, string Task, string State, string Action,
+        int Steps, int ToolCalls, string Elapsed)
+    {
+        public static AgentNodeRow From(AgentNode n) =>
+            new(n.Id, n.Label, n.Kind, n.Task, n.State, n.Action, n.Steps, n.ToolCalls, n.Elapsed);
+
+        public AgentNode ToNode() => new()
+        {
+            Id = Id, Label = Label ?? "", Kind = Kind ?? "", Task = Task ?? "",
+            State = State == "running" ? "stopped" : State ?? "done",
+            Action = Action ?? "", Steps = Steps, ToolCalls = ToolCalls, Elapsed = Elapsed ?? "",
+        };
+    }
+
+    private bool? _healthy;
+
+    /// <summary>PRAGMA quick_check passed (checked once per run). Automatic deletes only run on a healthy
+    /// file: on a damaged one "has no messages" can be wrong — a broken index finds none — and the
+    /// empty-chat cleanup would delete real conversations (measured on 2026-10-09: a corrupt codex.db
+    /// answered EXISTS=false for every session while 5 of them held messages).</summary>
+    public bool IsHealthy
+    {
+        get
+        {
+            if (_healthy is { } known) return known;
+            try
+            {
+                using var conn = Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "PRAGMA quick_check(1);";
+                _healthy = cmd.ExecuteScalar() as string == "ok";
+            }
+            catch { _healthy = false; }   // "database disk image is malformed" lands here
+            return _healthy.Value;
+        }
+    }
+
+    /// <summary>Delete sessions that never got a message — an opened-but-unused "New Chat". With
+    /// <paramref name="sessionId"/>, only that one. The emptiness test runs against the messages table
+    /// itself, so a session whose messages merely failed to load can never match. Returns rows removed.</summary>
+    public int DeleteEmptySessions(string? sessionId = null)
+    {
+        if (!IsHealthy) return 0;
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM sessions WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.session_id = sessions.id)"
+                          + (sessionId != null ? " AND id = $id;" : ";");
+        if (sessionId != null) cmd.Parameters.AddWithValue("$id", sessionId);
+        return cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>True when the session has at least one stored message.</summary>
+    public bool SessionHasMessages(string sessionId)
+    {
+        if (!IsHealthy) return true;   // can't trust the answer — treat every session as worth keeping
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM messages WHERE session_id = $id);";
+        cmd.Parameters.AddWithValue("$id", sessionId);
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
     }
 
     /// <summary>Delete a session and all its messages (cascade).</summary>

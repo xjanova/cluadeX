@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Media;
+using CluadeX.Services;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Rendering;
 
@@ -14,7 +15,9 @@ namespace CluadeX.Views.Editor;
 /// </summary>
 public class AgentGlowRenderer : IBackgroundRenderer
 {
-    private static readonly Color GlowColor = Color.FromRgb(0xA6, 0x72, 0xFF);   // neon violet
+    /// <summary>Midnight's violet, only for when no theme answers. The real colour is the Editor.AgentGlow
+    /// token, read on every draw so a theme switch mid-glow simply continues in the new colour.</summary>
+    private static readonly Color FallbackGlow = Color.FromRgb(0xA6, 0x72, 0xFF);
     private const double FadeMs = 1600;
 
     private int _start = -1;
@@ -65,8 +68,9 @@ public class AgentGlowRenderer : IBackgroundRenderer
         if (end <= start) return;
 
         var segment = new TextSegment { StartOffset = start, EndOffset = end };
-        var fill = new SolidColorBrush(Color.FromArgb((byte)(0x30 * alpha), GlowColor.R, GlowColor.G, GlowColor.B));
-        var line = new SolidColorBrush(Color.FromArgb((byte)(0xA0 * alpha), GlowColor.R, GlowColor.G, GlowColor.B));
+        var glow = ThemeService.ColorOf("Editor.AgentGlow", FallbackGlow);
+        var fill = new SolidColorBrush(Color.FromArgb((byte)(0x30 * alpha), glow.R, glow.G, glow.B));
+        var line = new SolidColorBrush(Color.FromArgb((byte)(0xA0 * alpha), glow.R, glow.G, glow.B));
         fill.Freeze();
         line.Freeze();
         var pen = new Pen(line, 1.0);

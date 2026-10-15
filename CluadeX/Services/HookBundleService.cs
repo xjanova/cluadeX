@@ -9,7 +9,9 @@ namespace CluadeX.Services;
 ///
 /// On first run:
 ///   1. Copies bundled .ps1 scripts from the app's "Resources/HooksBundled" content
-///      directory into ~/.cluadex/hooks-bundled/ (only if missing or older).
+///      directory into ~/.cluadex/hooks-bundled/ whenever the deployed copy is missing or
+///      differs from the shipped one (a copy this service did not write is kept as
+///      &lt;name&gt;.ps1.&lt;yyyyMMdd-HHmmss&gt;.bak, and every replacement is logged under "Hooks").
 ///   2. Loads/creates ~/.cluadex/hooks-bundle-state.json which tracks which hooks
 ///      the user has enabled.
 ///   3. Projects the enabled set into ~/.cluadex/hooks-bundled.json — the same
@@ -21,6 +23,7 @@ namespace CluadeX.Services;
 public class HookBundleService
 {
     private readonly HookService _hookService;
+    private readonly DebugLogService? _log;
     private readonly string _bundleDir;          // ~/.cluadex/hooks-bundled/
     private readonly string _stateFile;          // ~/.cluadex/hooks-bundle-state.json
     private readonly string _projectedConfig;    // ~/.cluadex/hooks-bundled.json
@@ -31,9 +34,10 @@ public class HookBundleService
 
     public event Action? Changed;
 
-    public HookBundleService(HookService hookService)
+    public HookBundleService(HookService hookService, DebugLogService? debugLog = null)
     {
         _hookService = hookService;
+        _log = debugLog;
         string root = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".cluadex");
@@ -46,7 +50,13 @@ public class HookBundleService
         _catalog = BuildCatalog();
         LoadState();
         DeployBundledScripts();
+        // Re-projected on EVERY start from the catalog (the state file only stores on/off), so an existing
+        // install picks up a changed matcher — e.g. the shell-safety hooks now also cover task_create and
+        // powershell — without the user toggling anything.
         ProjectEnabledToConfig();
+        // HookService may already have cached the previous projection (anything that ran a hook before this
+        // service was first resolved); make it re-read the file we just wrote.
+        _hookService.ReloadHooks();
     }
 
     public IReadOnlyList<HookBundle> GetCatalog()
@@ -55,9 +65,24 @@ public class HookBundleService
         {
             // Hydrate IsEnabled from state for the UI
             foreach (var b in _catalog)
+            {
                 b.IsEnabled = _state.EnabledById.TryGetValue(b.Id, out var v) ? v : b.DefaultEnabled;
+                // Name/description in the UI language, re-read on every call so a language switch
+                // shows on the next refresh. The English text in BuildCatalog stays the fallback.
+                if (!_english.TryGetValue(b.Id, out var en)) _english[b.Id] = en = (b.Name, b.Description);
+                b.Name = Localized($"hookb.{b.Id}.name", en.Name);
+                b.Description = Localized($"hookb.{b.Id}.desc", en.Description);
+            }
             return _catalog.ToList();
         }
+    }
+
+    private readonly Dictionary<string, (string Name, string Description)> _english = new();
+
+    private static string Localized(string key, string fallback)
+    {
+        string s = LocalizedResources.Instance[key];
+        return s == key ? fallback : s;
     }
 
     public string BundleDir => _bundleDir;
@@ -83,9 +108,9 @@ public class HookBundleService
         try
         {
             string path = Path.Combine(_bundleDir, bundle.ScriptFile);
-            return File.Exists(path) ? File.ReadAllText(path) : "(not deployed yet)";
+            return File.Exists(path) ? File.ReadAllText(path) : LocalizedResources.Instance["hooklib.notDeployed"];
         }
-        catch (Exception ex) { return $"(error reading: {ex.Message})"; }
+        catch { return LocalizedResources.Instance["hooklib.readFailed"]; }
     }
 
     // ── State persistence ───────────────────────────────────────────────
@@ -120,37 +145,131 @@ public class HookBundleService
     private void DeployBundledScripts()
     {
         // Source dir: scripts copied to <app>/Resources/HooksBundled/ at build time.
-        string appDir = AppContext.BaseDirectory;
-        string sourceDir = Path.Combine(appDir, "Resources", "HooksBundled");
-        if (!Directory.Exists(sourceDir)) return;
+        string sourceDir = Path.Combine(AppContext.BaseDirectory, "Resources", "HooksBundled");
+        DeployScripts(sourceDir, _bundleDir, _log);
+    }
 
+    /// <summary>SHA-256 of every script this service wrote (name → hex), so the next deploy can tell its own
+    /// older release (replace quietly) from a copy someone edited (keep a backup).</summary>
+    public const string DeployedHashesFile = ".deployed-hashes.json";
+
+    /// <summary>
+    /// Make every deployed script in <paramref name="bundleDir"/> byte-identical to the shipped one.
+    /// The deployed copies are app-managed. The old rule ("copy only if the shipped file is NEWER") left
+    /// an outdated script in place whenever the deployed copy had a later timestamp — and the outdated
+    /// safety scripts block with exit 1 while echoing the model's command into stderr, the fail-open the
+    /// exit-2 contract closes. A differing copy that is not one this service wrote (its hash is not the one
+    /// recorded in <see cref="DeployedHashesFile"/> — a hand edit, or an install from before the record
+    /// existed) is kept as &lt;name&gt;.ps1.&lt;yyyyMMdd-HHmmss&gt;.bak first; timestamps decided this before,
+    /// and an edit made before an app update was overwritten without a copy. Every replacement is logged
+    /// (Info, category "Hooks") with the file and where its backup went. Returns how many were (re)written.
+    /// </summary>
+    public static int DeployScripts(string sourceDir, string bundleDir, DebugLogService? log = null)
+    {
+        if (!Directory.Exists(sourceDir)) return 0;
+        string hashesPath = Path.Combine(bundleDir, DeployedHashesFile);
+        var known = LoadDeployedHashes(hashesPath);
+        bool hashesChanged = false;
+        int written = 0;
         foreach (var srcPath in Directory.GetFiles(sourceDir, "*.ps1"))
         {
             string name = Path.GetFileName(srcPath);
-            string dstPath = Path.Combine(_bundleDir, name);
+            string dstPath = Path.Combine(bundleDir, name);
             try
             {
-                bool needsCopy = !File.Exists(dstPath) ||
-                                 File.GetLastWriteTimeUtc(srcPath) > File.GetLastWriteTimeUtc(dstPath);
-                if (needsCopy)
-                    File.Copy(srcPath, dstPath, overwrite: true);
+                byte[] shipped = File.ReadAllBytes(srcPath);
+                string shippedHash = Sha256Hex(shipped);
+                string? backup = null;
+                bool replacing = File.Exists(dstPath);
+                if (replacing)
+                {
+                    byte[] deployed = File.ReadAllBytes(dstPath);
+                    if (deployed.AsSpan().SequenceEqual(shipped))
+                    {
+                        if (!known.TryGetValue(name, out var h) || h != shippedHash) { known[name] = shippedHash; hashesChanged = true; }
+                        continue;
+                    }
+                    bool ours = known.TryGetValue(name, out var recorded) && recorded == Sha256Hex(deployed);
+                    if (!ours)
+                    {
+                        backup = UniqueBackupPath(dstPath);
+                        File.Copy(dstPath, backup, overwrite: false);
+                    }
+                }
+                File.Copy(srcPath, dstPath, overwrite: true);
+                known[name] = shippedHash;
+                hashesChanged = true;
+                written++;
+                if (replacing)
+                    log?.Info("Hooks", backup != null
+                        ? $"Hook Library: {name} differed from the shipped script and was not written by CluadeX; replaced it with the shipped version. The previous copy is kept as {backup}"
+                        : $"Hook Library: {name} was an older CluadeX release; replaced it with the shipped version (no backup needed) in {bundleDir}");
             }
-            catch { /* file lock, perms — skip silently */ }
+            catch (Exception ex)
+            {
+                log?.Warn("Hooks", $"Hook Library: could not deploy {name} to {bundleDir} — the next start tries again", ex);
+            }
         }
+        if (hashesChanged)
+        {
+            try
+            {
+                File.WriteAllText(hashesPath, JsonSerializer.Serialize(known, new JsonSerializerOptions { WriteIndented = true }));
+            }
+            catch (Exception ex)
+            {
+                log?.Warn("Hooks", $"Hook Library: could not record the deployed script hashes in {hashesPath}", ex);
+            }
+        }
+        return written;
+    }
+
+    private static Dictionary<string, string> LoadDeployedHashes(string path)
+    {
+        try
+        {
+            if (File.Exists(path)
+                && JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) is { } d)
+                return new Dictionary<string, string>(d, StringComparer.OrdinalIgnoreCase);
+        }
+        catch { /* corrupt record → every differing copy is backed up (the safe side) */ }
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string Sha256Hex(byte[] bytes) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+
+    /// <summary>&lt;file&gt;.&lt;yyyyMMdd-HHmmss&gt;.bak (Gregorian digits whatever the UI culture), never an existing name.</summary>
+    private static string UniqueBackupPath(string dstPath)
+    {
+        string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+        string p = $"{dstPath}.{stamp}.bak";
+        for (int n = 2; File.Exists(p); n++) p = $"{dstPath}.{stamp}-{n}.bak";
+        return p;
     }
 
     // ── Projection: enabled bundle → hooks-bundled.json ────────────────
 
     private void ProjectEnabledToConfig()
     {
-        // Build the same hooks.json format HookService.ParseHooksFile expects.
-        var grouped = new Dictionary<string, List<object>>();
-        foreach (var b in _catalog)
+        try
         {
-            bool on = _state.EnabledById.TryGetValue(b.Id, out var v) ? v : b.DefaultEnabled;
+            File.WriteAllText(_projectedConfig, BuildProjectedConfig(_catalog, _state.EnabledById, _bundleDir));
+        }
+        catch { /* projection failure shouldn't crash */ }
+    }
+
+    /// <summary>The hooks.json text (the format HookService.ParseHooksFile reads) for the enabled
+    /// bundles. Matchers come from the catalog, never from the saved state.</summary>
+    public static string BuildProjectedConfig(IEnumerable<HookBundle> catalog, IReadOnlyDictionary<string, bool> enabledById, string bundleDir)
+    {
+        var grouped = new Dictionary<string, List<object>>();
+        foreach (var b in catalog)
+        {
+            bool on = enabledById.TryGetValue(b.Id, out var v) ? v : b.DefaultEnabled;
             if (!on) continue;
 
-            string scriptPath = Path.Combine(_bundleDir, b.ScriptFile);
+            string scriptPath = Path.Combine(bundleDir, b.ScriptFile);
             string command = BuildShellCommand(scriptPath, b);
 
             if (!grouped.TryGetValue(b.Phase, out var list))
@@ -166,16 +285,20 @@ public class HookBundleService
             });
         }
 
-        var doc = new { hooks = grouped };
-        try
-        {
-            var json = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_projectedConfig, json);
-        }
-        catch { /* projection failure shouldn't crash */ }
+        return JsonSerializer.Serialize(new { hooks = grouped }, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    private static string BuildShellCommand(string scriptPath, HookBundle bundle)
+    /// <summary>Tokens the hook process already receives exactly through the environment
+    /// (CLUADEX_HOOK_* — see HookService). They are NOT put on the command line: the payload is
+    /// unbounded (a write_file's whole content in {arguments} overflowed cmd.exe's 8,191-char limit
+    /// and blocked every large write), and a path or command squeezed through cmd quoting arrives
+    /// altered ($ and % stripped, "R&amp;D" mangled).</summary>
+    private static readonly HashSet<string> EnvironmentTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "{tool}", "{path}", "{command}", "{arguments}", "{cwd}",
+    };
+
+    public static string BuildShellCommand(string scriptPath, HookBundle bundle)
     {
         // Build: powershell -NoProfile -ExecutionPolicy Bypass -File "<script>" <token args>
         var sb = new System.Text.StringBuilder();
@@ -183,10 +306,11 @@ public class HookBundleService
         sb.Append(scriptPath);
         sb.Append('"');
 
-        // Forward whatever tokens the bundle declares as named params.
+        // Forward the remaining (small, numeric/name) tokens as named params.
         // The script's param() block must match the casing here.
         foreach (var tok in bundle.SubstitutionTokens)
         {
+            if (EnvironmentTokens.Contains(tok)) continue;
             // strip braces for the param name; the value remains substituted by HookService
             string param = tok.Trim('{', '}');
             sb.Append(' ').Append('-').Append(Capitalize(param)).Append(' ').Append('"').Append(tok).Append('"');
@@ -199,6 +323,25 @@ public class HookBundleService
     private static string Capitalize(string s) =>
         string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
+    /// <summary>Every tool that writes file content. The file hooks used to match write_file alone,
+    /// so an agent that edited instead of rewrote (the usual case) skipped the secret scan,
+    /// prettier and the console.log check entirely. HookService understands "a|b" matchers.</summary>
+    public const string FileWriteTools = "write_file|edit_file|multi_edit";
+
+    /// <summary>Every tool that runs a shell command. The shell-safety hooks matched run_command alone,
+    /// so the same command sent as task_create (a background task), powershell, or as run_build /
+    /// run_tests (whose optional "command" overrides the detected one and runs through the same shell)
+    /// skipped the dangerous-command, push-gate, pre-commit and dev-server checks. The scripts read the
+    /// payload's "command" — or, for powershell, "script". bg_start (a background dev server; task_create is now
+    /// its alias) sends "command" too.</summary>
+    public const string ShellCommandTools = "run_command|task_create|bg_start|powershell|run_build|run_tests";
+
+    /// <summary>Timeout of every bundled PreToolUse hook. A PreToolUse timeout BLOCKS the tool, and a bundled hook
+    /// is a PowerShell process whose cold start alone can pass 3 s on a loaded machine — at 3000 ms the advisory
+    /// dangerous-command check timed out and blocked a plain run_build (tooltest B2). 10 s covers a cold start
+    /// with room to spare; a hook that really hangs is still stopped.</summary>
+    public const int PreToolUseTimeoutMs = 10000;
+
     // ── Catalog — the 15 Sprint-3-#2 bundles ───────────────────────────
 
     private static List<HookBundle> BuildCatalog() => new()
@@ -208,52 +351,52 @@ public class HookBundleService
         {
             Id = "pretool-block-dev-server",
             Name = "Block Dev Server Outside Workspace",
-            Description = "Refuses run_command when it spawns a long-running dev server (npm run dev, vite, next, etc.) outside the current workspace.",
-            Phase = "PreToolUse", Matcher = "run_command",
+            Description = "Refuses a shell command (run_command / task_create / bg_start / powershell / run_build / run_tests) that starts a long-running dev server (npm run dev, vite, next, etc.) when no workspace folder is open.",
+            Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-block-dev-server.ps1",
             SubstitutionTokens = new() { "{command}", "{cwd}" },
-            Category = "safety", Risk = "med", TimeoutMs = 5000,
+            Category = "safety", Risk = "med", TimeoutMs = PreToolUseTimeoutMs,
         },
         new HookBundle
         {
             Id = "pretool-git-push-confirm",
             Name = "Git Push Confirmation Gate",
-            Description = "Stops git push to main / master / production unless the command contains '--force-confirmed' or a marker file exists.",
-            Phase = "PreToolUse", Matcher = "run_command",
+            Description = "Stops git push to main / master / production — sent through run_command / task_create / bg_start / powershell / run_build / run_tests — unless the command contains '--force-confirmed' or a marker file exists.",
+            Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-git-push-confirm.ps1",
             SubstitutionTokens = new() { "{command}" },
-            Category = "safety", Risk = "high", TimeoutMs = 5000,
+            Category = "safety", Risk = "high", TimeoutMs = PreToolUseTimeoutMs,
         },
         new HookBundle
         {
             Id = "pretool-secret-scan",
             Name = "Secret Scan",
             Description = "Scans the content being written/edited for API keys, private keys, JWTs, AWS credentials before allowing the write to proceed.",
-            Phase = "PreToolUse", Matcher = "write_file",
+            Phase = "PreToolUse", Matcher = FileWriteTools,
             ScriptFile = "pretool-secret-scan.ps1",
             SubstitutionTokens = new() { "{path}", "{arguments}" },
-            Category = "safety", Risk = "high", TimeoutMs = 8000,
+            Category = "safety", Risk = "high", TimeoutMs = PreToolUseTimeoutMs,
             DefaultEnabled = true,
         },
         new HookBundle
         {
             Id = "pretool-pre-commit-quality",
             Name = "Pre-Commit Quality Check",
-            Description = "Before git commit, ensures no .env / *.key / *.pem files are staged.",
-            Phase = "PreToolUse", Matcher = "run_command",
+            Description = "Before a git commit run through run_command / task_create / bg_start / powershell / run_build / run_tests, ensures no .env / *.key / *.pem files are staged.",
+            Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-pre-commit-quality.ps1",
             SubstitutionTokens = new() { "{command}", "{cwd}" },
-            Category = "safety", Risk = "med", TimeoutMs = 8000,
+            Category = "safety", Risk = "med", TimeoutMs = PreToolUseTimeoutMs,
         },
         new HookBundle
         {
             Id = "pretool-dangerous-cmd-warn",
             Name = "Dangerous Command Warning",
-            Description = "Refuses rm -rf /, format c:, drop database, git push --force --no-verify, and similar destructive commands.",
-            Phase = "PreToolUse", Matcher = "run_command",
+            Description = "Refuses rm -rf /, format c:, drop database, git push --force --no-verify and similar destructive commands sent through run_command / task_create / bg_start / powershell / run_build / run_tests.",
+            Phase = "PreToolUse", Matcher = ShellCommandTools,
             ScriptFile = "pretool-dangerous-cmd-warn.ps1",
             SubstitutionTokens = new() { "{command}" },
-            Category = "safety", Risk = "high", TimeoutMs = 3000,
+            Category = "safety", Risk = "high", TimeoutMs = PreToolUseTimeoutMs,
             DefaultEnabled = true,
         },
 
@@ -262,8 +405,8 @@ public class HookBundleService
         {
             Id = "posttool-prettier-format",
             Name = "Prettier Format",
-            Description = "After write_file or edit_file on JS/TS/CSS/JSON/MD, runs prettier --write if installed.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After write_file / edit_file / multi_edit on JS/TS/CSS/JSON/MD, runs prettier --write if installed.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-prettier-format.ps1",
             SubstitutionTokens = new() { "{path}" },
             Category = "quality", Risk = "low", TimeoutMs = 10000,
@@ -272,8 +415,8 @@ public class HookBundleService
         {
             Id = "posttool-typescript-check",
             Name = "TypeScript Type Check",
-            Description = "After write_file on a .ts/.tsx file, runs tsc --noEmit on it and reports errors to the debug log.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After write_file / edit_file / multi_edit on a .ts/.tsx file, runs tsc --noEmit on it and reports errors to the debug log.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-typescript-check.ps1",
             SubstitutionTokens = new() { "{path}" },
             Category = "quality", Risk = "low", TimeoutMs = 20000,
@@ -282,8 +425,8 @@ public class HookBundleService
         {
             Id = "posttool-console-log-warn",
             Name = "console.log Linter",
-            Description = "After write_file/edit_file on .js/.ts, greps for forgotten console.log statements and prints a warning.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After write_file / edit_file / multi_edit on .js/.ts, greps for forgotten console.log statements and prints a warning.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-console-log-warn.ps1",
             SubstitutionTokens = new() { "{path}" },
             Category = "quality", Risk = "low", TimeoutMs = 5000,
@@ -302,8 +445,8 @@ public class HookBundleService
         {
             Id = "posttool-quality-gate",
             Name = "Quality Gate (build + test)",
-            Description = "After any *.cs / *.csproj write, runs dotnet build --no-restore -nologo. Logs result to debug log.",
-            Phase = "PostToolUse", Matcher = "write_file",
+            Description = "After any *.cs / *.csproj write or edit, runs dotnet build --no-restore -nologo. Logs result to debug log.",
+            Phase = "PostToolUse", Matcher = FileWriteTools,
             ScriptFile = "posttool-quality-gate.ps1",
             SubstitutionTokens = new() { "{path}", "{cwd}" },
             Category = "quality", Risk = "low", TimeoutMs = 60000,

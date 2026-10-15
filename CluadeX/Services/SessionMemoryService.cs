@@ -21,6 +21,8 @@ public class SessionMemoryService
     private readonly LocalizationService _localizationService;
     private readonly InstinctService? _instinctService;
     private readonly BrainSyncService? _brainSync;
+    private readonly Batch.BatchService? _batchService;
+    private readonly FileSystemService? _fileSystem;
 
     // Keep extraction cheap — if a session is too short there's nothing to learn,
     // and too long would blow past typical context windows for a background pass.
@@ -28,13 +30,18 @@ public class SessionMemoryService
     private const int MaxMessagesToScan = 60;
     private const int MaxTranscriptChars = 60_000;
 
+    /// <summary>custom_ids of the two requests in a session-memory batch.</summary>
+    public const string MemoryRequestId = "memory", InstinctRequestId = "instincts";
+
     public SessionMemoryService(
         MemoryService memoryService,
         AiProviderManager providerManager,
         SettingsService settingsService,
         LocalizationService localizationService,
         InstinctService? instinctService = null,
-        BrainSyncService? brainSync = null)
+        BrainSyncService? brainSync = null,
+        Batch.BatchService? batchService = null,
+        FileSystemService? fileSystem = null)
     {
         _memoryService = memoryService;
         _providerManager = providerManager;
@@ -42,11 +49,16 @@ public class SessionMemoryService
         _localizationService = localizationService;
         _instinctService = instinctService;
         _brainSync = brainSync;
+        _batchService = batchService;
+        _fileSystem = fileSystem;
+        _batchService?.RegisterHandler(Batch.BatchKinds.SessionMemory, DeliverBatchAsync);
     }
 
     /// <summary>
     /// Kick off extraction for a finished session without awaiting. Safe to call from
     /// UI code — all work (including the LLM round-trip) runs on a background thread.
+    /// Goes through the provider's batch API (half price, answer within minutes to hours) when
+    /// <see cref="AppSettings.BatchBackgroundWork"/> is on and the provider has one.
     /// </summary>
     public void ExtractInBackground(IReadOnlyList<ChatMessage> messages)
     {
@@ -57,11 +69,14 @@ public class SessionMemoryService
 
         // Copy defensively — the session's message list can keep mutating after we return.
         var snapshot = messages.ToList();
+        // The project the chat was in: a batch answer can arrive after the user moved on to another one.
+        string? project = _fileSystem?.HasWorkingDirectory == true ? _fileSystem.WorkingDirectory : null;
 
         _ = Task.Run(async () =>
         {
             try
             {
+                if (await TrySubmitBatchAsync(snapshot, wantMemory, wantInstincts, project, CancellationToken.None)) return;
                 if (wantMemory) await ExtractAndSaveAsync(snapshot, CancellationToken.None);
                 if (wantInstincts) await ExtractInstinctsAsync(snapshot, CancellationToken.None);
             }
@@ -70,6 +85,43 @@ public class SessionMemoryService
                 // Extraction is best-effort. Never surface errors to the user.
             }
         });
+    }
+
+    /// <summary>Send the extraction as one batch (memory + instincts, two requests). False when batch is off,
+    /// the provider has no batch API, or it refused the batch — the caller then runs it live.</summary>
+    public async Task<bool> TrySubmitBatchAsync(IReadOnlyList<ChatMessage> messages, bool wantMemory, bool wantInstincts,
+        string? projectPath, CancellationToken ct)
+    {
+        if (!_settingsService.Settings.BatchBackgroundWork || _batchService?.CanBatchNow != true) return false;
+        string transcript = BuildTranscript(messages);
+        if (string.IsNullOrWhiteSpace(transcript)) return true;   // nothing to learn either way
+
+        var requests = new List<Batch.BatchRequest>();
+        if (wantMemory)
+            requests.Add(new(MemoryRequestId, SystemPromptForMemoryExtraction, [], BuildExtractionPrompt(transcript)));
+        if (wantInstincts && _instinctService != null)
+            requests.Add(new(InstinctRequestId, SystemPromptForInstinctExtraction, [], BuildInstinctPrompt(transcript)));
+        if (requests.Count == 0) return true;
+        try
+        {
+            string title = _localizationService.CurrentLanguage == "th" ? "สกัดความจำจากแชท" : "Session memory extraction";
+            await _batchService.SubmitAsync(Batch.BatchKinds.SessionMemory, title, requests, projectPath: projectPath, ct: ct);
+            return true;
+        }
+        catch (Batch.BatchException) { return false; }
+        catch (System.Net.Http.HttpRequestException) { return false; }
+    }
+
+    /// <summary>The results of a session-memory batch: save the memories, record the instincts.</summary>
+    private async Task<bool> DeliverBatchAsync(Batch.BatchJob job)
+    {
+        foreach (var r in job.Results ?? [])
+        {
+            if (!r.Ok) continue;
+            if (r.CustomId == MemoryRequestId) SaveCandidates(ParseMemoryCandidates(r.Text), job.ProjectPath);
+            else if (r.CustomId == InstinctRequestId) await ApplyInstinctsAsync(ParseInstinctCandidates(r.Text), CancellationToken.None);
+        }
+        return true;
     }
 
     /// <summary>Synchronous API for callers that want to await (tests, settings-triggered runs).</summary>
@@ -96,7 +148,11 @@ public class SessionMemoryService
             return;
         }
 
-        var candidates = ParseMemoryCandidates(response);
+        SaveCandidates(ParseMemoryCandidates(response), projectRoot: null);
+    }
+
+    private void SaveCandidates(List<MemoryCandidate> candidates, string? projectRoot)
+    {
         if (candidates.Count == 0) return;
 
         // Deduplicate against existing memories by name (case-insensitive)
@@ -114,13 +170,17 @@ public class SessionMemoryService
                     type: candidate.Type,
                     description: candidate.Description,
                     content: candidate.Content,
-                    isProjectScope: candidate.Scope == "project");
+                    isProjectScope: candidate.Scope == "project",
+                    projectRoot: projectRoot);
             }
             catch { /* best-effort */ }
         }
     }
 
     // ─── Instinct extraction (Wave 5 — the learning loop) ───────────────
+
+    private static string BuildInstinctPrompt(string transcript) =>
+        $"TRANSCRIPT:\n---\n{transcript}\n---\n\nReturn a JSON array of instincts learned. Empty array if nothing clear.";
 
     /// <summary>
     /// Extract reusable behavioral instincts from the transcript and feed them into the Instinct
@@ -141,14 +201,18 @@ public class SessionMemoryService
         {
             response = await provider.GenerateAsync(
                 history: new List<ChatMessage>(),
-                userMessage: $"TRANSCRIPT:\n---\n{transcript}\n---\n\nReturn a JSON array of instincts learned. Empty array if nothing clear.",
+                userMessage: BuildInstinctPrompt(transcript),
                 systemPrompt: SystemPromptForInstinctExtraction,
                 ct: ct);
         }
         catch { return; }
 
-        var candidates = ParseInstinctCandidates(response);
-        if (candidates.Count == 0) return;
+        await ApplyInstinctsAsync(ParseInstinctCandidates(response), ct);
+    }
+
+    private async Task ApplyInstinctsAsync(List<InstinctCandidate> candidates, CancellationToken ct)
+    {
+        if (_instinctService == null || candidates.Count == 0) return;
 
         foreach (var c in candidates)
         {

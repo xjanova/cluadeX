@@ -58,11 +58,14 @@ public class InstinctService
                     _cache = JsonSerializer.Deserialize<InstinctStore>(json,
                         new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                         ?? new InstinctStore();
+                    if (RemoveUntouchedDemoSeeds(_cache) > 0) Save(_cache);
                 }
                 else
                 {
-                    _cache = SeedDemoStore();
-                    Save(_cache);
+                    // A fresh install starts EMPTY. It used to be seeded with three made-up
+                    // "learned" instincts (fake occurrence counts and dates) that went straight into
+                    // every system prompt — including "always commit + push without asking".
+                    _cache = new InstinctStore();
                 }
             }
             catch
@@ -493,41 +496,33 @@ public class InstinctService
         return s;
     }
 
-    /// <summary>3 demo instincts shipped on first run so the UI isn't empty.</summary>
-    private static InstinctStore SeedDemoStore() => new()
+    /// <summary>
+    /// The three fabricated instincts earlier builds seeded into every new store, with the exact
+    /// counts they were seeded with. They were never observed — they claimed 8/15/5 sightings on day
+    /// one and were injected into every system prompt as "learned" behaviour.
+    /// </summary>
+    private static readonly (string Pattern, int Occurrences, int Accepts, int Rejects)[] LegacyDemoSeeds =
     {
-        Instincts = new()
-        {
-            new Instinct
-            {
-                Pattern = "Run dotnet build after every C# edit before declaring done",
-                Trigger = "User asks to edit any .cs / .xaml file",
-                Action = "End the turn with `dotnet build` and only declare done if it succeeds.",
-                Tags = new() { "csharp", "verify" },
-                OccurrenceCount = 8, AcceptCount = 3,
-                FirstSeen = DateTime.UtcNow.AddDays(-12),
-                LastSeen = DateTime.UtcNow.AddHours(-2),
-            },
-            new Instinct
-            {
-                Pattern = "User prefers Thai status reports with English code/file paths",
-                Trigger = "Reporting completion of a task",
-                Action = "Write Thai prose for status, but keep file paths, commands, and code in English.",
-                Tags = new() { "style", "communication" },
-                OccurrenceCount = 15, AcceptCount = 6,
-                FirstSeen = DateTime.UtcNow.AddDays(-20),
-                LastSeen = DateTime.UtcNow.AddMinutes(-30),
-            },
-            new Instinct
-            {
-                Pattern = "Always commit + push when user says 'push' (no further confirmation)",
-                Trigger = "User says push / push ก่อน / ขึ้น git",
-                Action = "Stage everything relevant, write a thorough commit message, push without asking.",
-                Tags = new() { "git", "workflow" },
-                OccurrenceCount = 5, AcceptCount = 2, RejectCount = 0,
-                FirstSeen = DateTime.UtcNow.AddDays(-4),
-                LastSeen = DateTime.UtcNow.AddHours(-6),
-            },
-        },
+        ("Run dotnet build after every C# edit before declaring done", 8, 3, 0),
+        ("User prefers Thai status reports with English code/file paths", 15, 6, 0),
+        ("Always commit + push when user says 'push' (no further confirmation)", 5, 2, 0),
     };
+
+    /// <summary>
+    /// Drop those seeds from an existing store — but ONLY the ones the user never touched: same
+    /// pattern, counts exactly as seeded, never promoted or synced. One the user accepted, rejected,
+    /// promoted, or that was genuinely observed again (count moved) is theirs now and stays.
+    /// </summary>
+    private static int RemoveUntouchedDemoSeeds(InstinctStore store)
+    {
+        int removed = store.Instincts.RemoveAll(i =>
+            !i.Promoted
+            && string.IsNullOrEmpty(i.BrainNoteId)
+            && LegacyDemoSeeds.Any(s =>
+                string.Equals(s.Pattern, i.Pattern, StringComparison.Ordinal)
+                && s.Occurrences == i.OccurrenceCount
+                && s.Accepts == i.AcceptCount
+                && s.Rejects == i.RejectCount));
+        return removed;
+    }
 }

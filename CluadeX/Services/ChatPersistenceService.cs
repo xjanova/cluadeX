@@ -9,10 +9,13 @@ namespace CluadeX.Services;
 public class ChatPersistenceService
 {
     private readonly DatabaseService _db;
+    /// <summary>For the chat's saved screenshots (DataRoot\screens\&lt;chat&gt;); null = not wired (old callers).</summary>
+    private readonly SettingsService? _settings;
 
-    public ChatPersistenceService(DatabaseService db)
+    public ChatPersistenceService(DatabaseService db, SettingsService? settings = null)
     {
         _db = db;
+        _settings = settings;
     }
 
     /// <summary>Save a single chat session.</summary>
@@ -55,14 +58,48 @@ public class ChatPersistenceService
         }
     }
 
-    /// <summary>Delete a session.</summary>
+    /// <summary>Delete a session — and the screenshots its agent turns saved (browsing data: page captures of
+    /// possibly logged-in sites must not outlive the chat the user deleted).</summary>
     public void DeleteSession(string sessionId)
     {
+        bool deleted = false;
         try
         {
             _db.DeleteSession(sessionId);
+            deleted = true;
         }
         catch { }
+        // Only once the chat is really gone — a failed delete leaves the chat AND its screenshots.
+        if (deleted && _settings != null && !string.IsNullOrWhiteSpace(sessionId))
+        {
+            try { Vision.ToolImageWire.DeleteSessionImages(Vision.ToolImageWire.StoreFor(_settings), sessionId); }
+            catch { /* best-effort: the 7-day prune still removes them */ }
+        }
+    }
+
+    /// <summary>False when the chat database failed its integrity check (automatic cleanup is then off).</summary>
+    public bool IsDatabaseHealthy
+    {
+        get { try { return _db.IsHealthy; } catch { return false; } }
+    }
+
+    /// <summary>Remove sessions with no messages (all, or just <paramref name="sessionId"/>).</summary>
+    public int DeleteEmptySessions(string? sessionId = null)
+    {
+        try { return _db.DeleteEmptySessions(sessionId); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to prune empty sessions: {ex.Message}");
+            return 0;
+        }
+    }
+
+    /// <summary>True when the session has stored messages. On a DB error answers true — the caller
+    /// then leaves the session alone, which is the safe side.</summary>
+    public bool SessionHasMessages(string sessionId)
+    {
+        try { return _db.SessionHasMessages(sessionId); }
+        catch { return true; }
     }
 
     /// <summary>Auto-generate a title from the first user message.</summary>

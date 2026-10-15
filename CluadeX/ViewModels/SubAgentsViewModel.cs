@@ -15,6 +15,8 @@ namespace CluadeX.ViewModels;
 public class SubAgentsViewModel : ViewModelBase
 {
     private readonly SubAgentService _service;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService _log;
 
     public ObservableCollection<SubAgentDefinition> Agents { get; } = new();
 
@@ -41,7 +43,7 @@ public class SubAgentsViewModel : ViewModelBase
         {
             if (_selected == null) return "";
             return _selected.AllowedTools.Count == 0
-                ? "(inherits all tools from parent)"
+                ? _loc.T("subag.inheritsTools")
                 : string.Join(", ", _selected.AllowedTools);
         }
     }
@@ -51,7 +53,7 @@ public class SubAgentsViewModel : ViewModelBase
         get
         {
             if (_selected == null) return "";
-            return $"[ACTION: subagent_invoke]\ntype: {_selected.Name}\nprompt: <your task here>";
+            return $"[ACTION: subagent_invoke]\ntype: {_selected.Name}\nprompt: <your task here>\n[/ACTION]";
         }
     }
 
@@ -66,9 +68,12 @@ public class SubAgentsViewModel : ViewModelBase
     public ICommand CopyInvokeCommand { get; }
     public ICommand OpenUserAgentsFolderCommand { get; }
 
-    public SubAgentsViewModel(SubAgentService service)
+    public SubAgentsViewModel(SubAgentService service, LocalizationService loc, DebugLogService log)
     {
         _service = service;
+        _loc = loc;
+        _log = log;
+        _loc.LanguageChanged += () => OnPropertyChanged(nameof(SelectedToolsDisplay));
         RefreshCommand = new RelayCommand(Refresh);
         SelectCommand = new RelayCommand<SubAgentDefinition>(a => { if (a != null) Selected = a; });
         CopyInvokeCommand = new RelayCommand(() =>
@@ -77,9 +82,9 @@ public class SubAgentsViewModel : ViewModelBase
             try
             {
                 System.Windows.Clipboard.SetText(SelectedInvokeSnippet);
-                StatusMessage = $"Copied invoke snippet for {_selected.Name}";
+                StatusMessage = string.Format(_loc.T("subag.copied"), _selected.Name);
             }
-            catch { StatusMessage = "Clipboard write failed"; }
+            catch { StatusMessage = _loc.T("subag.clipboardFailed"); }
         });
         OpenUserAgentsFolderCommand = new RelayCommand(() =>
         {
@@ -89,13 +94,18 @@ public class SubAgentsViewModel : ViewModelBase
             try
             {
                 Directory.CreateDirectory(dir);
+                // A folder path: the shell opens it in Explorer (it can't "run" a directory).
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = dir, UseShellExecute = true,
                 });
-                StatusMessage = $"Opened {dir}";
+                StatusMessage = string.Format(_loc.T("subag.openedFolder"), dir);
             }
-            catch (Exception ex) { StatusMessage = $"Open folder failed: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                _log.Warn("SubAgents", "Open agents folder failed", ex);
+                StatusMessage = _loc.T("subag.openFolderFailed");
+            }
         });
 
         Refresh();
@@ -124,6 +134,6 @@ public class SubAgentsViewModel : ViewModelBase
         {
             Selected ??= Agents.FirstOrDefault();
         }
-        StatusMessage = $"{Agents.Count} subagents · {BuiltInCount} built-in · {CustomCount} custom";
+        StatusMessage = string.Format(_loc.T("subag.summary"), Agents.Count, BuiltInCount, CustomCount);
     }
 }

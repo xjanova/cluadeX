@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using CluadeX.Models;
 
 namespace CluadeX.Services;
@@ -95,8 +95,64 @@ public class ContextMemoryService
         return total;
     }
 
-    /// <summary>Maximum context tokens from settings.</summary>
-    public int MaxContextTokens => (int)_settingsService.Settings.ContextSize;
+    /// <summary>The context window of the model that answers this chat. It used to be Settings.ContextSize for
+    /// every provider — a LOCAL setting (12,288 by default) — so with Claude (1M tokens) about 11k tokens of
+    /// chat read as FULL, the bar said "Start a New Chat NOW", and the agent loop's 75% auto-compaction
+    /// summarised history a 1M-token model had plenty of room for.</summary>
+    public int MaxContextTokens
+    {
+        get
+        {
+            var s = _settingsService.Settings;
+            string? model = s.ProviderConfigs.TryGetValue(s.ActiveProvider.ToString(), out var cfg) ? cfg.EffectiveModelId : null;
+            if (s.ActiveProvider == AiProviderType.Anthropic && string.IsNullOrWhiteSpace(model))
+                model = Providers.AnthropicProvider.DefaultModel;
+            return ContextWindowFor(s.ActiveProvider, model, s.ContextSize);
+        }
+    }
+
+    /// <summary>Context window in tokens for a provider + model. Local backends (GGUF, llama-server, Ollama) run
+    /// at the window the user configured. API models use the published windows; an unknown id gets its
+    /// family's conservative value, so a model released after this build never reads as roomier than it is.</summary>
+    public static int ContextWindowFor(AiProviderType provider, string? modelId, uint localContextSize)
+    {
+        string id = (modelId ?? "").Trim().ToLowerInvariant();
+        switch (provider)
+        {
+            case AiProviderType.Local:
+            case AiProviderType.LlamaServer:
+            case AiProviderType.Ollama:
+                return (int)Math.Max(512u, localContextSize);
+
+            case AiProviderType.Anthropic:
+            {
+                // Claude Opus/Sonnet 4.6+, Fable/Mythos and Haiku 5.5+: 1M. Haiku 4.5 and older: 200K.
+                var m = Regex.Match(id, @"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d)(?!\d))?");
+                if (!m.Success) return 200_000;
+                string family = m.Groups[1].Value;
+                int v = int.Parse(m.Groups[2].Value) * 10 + (m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0);
+                bool oneMillion = family is "fable" or "mythos"
+                    || (family is "opus" or "sonnet" && v >= 46)
+                    || (family == "haiku" && v >= 55);
+                return oneMillion ? 1_000_000 : 200_000;
+            }
+
+            case AiProviderType.OpenAI:
+                if (id.StartsWith("gpt-4.1")) return 1_047_576;
+                if (id.StartsWith("gpt-5")) return 400_000;
+                if (id.StartsWith("o1") || id.StartsWith("o3") || id.StartsWith("o4")) return 200_000;
+                return 128_000;   // gpt-4o, gpt-4-turbo and anything unrecognised
+
+            case AiProviderType.Gemini:
+                return id.StartsWith("gemini-1.5-pro") ? 2_097_152 : 1_048_576;
+
+            case AiProviderType.ClaudeDev:
+                return 200_000;   // the Claude Code CLI's standard window
+
+            default:
+                return 128_000;
+        }
+    }
 
     /// <summary>
     /// Get context usage as percentage (0-100).
@@ -117,41 +173,6 @@ public class ContextMemoryService
         int used = CalculateTotalTokens(messages);
         int max = MaxContextTokens;
         return $"{used:N0} / {max:N0} tokens ({GetContextUsagePercent(messages):F0}%)";
-    }
-
-    /// <summary>
-    /// Get process memory usage display string.
-    /// </summary>
-    public string GetMemoryUsageDisplay()
-    {
-        try
-        {
-            using var process = Process.GetCurrentProcess();
-            long workingSet = process.WorkingSet64;
-            return $"RAM: {FormatBytes(workingSet)}";
-        }
-        catch
-        {
-            return "RAM: --";
-        }
-    }
-
-    /// <summary>Get working set in MB.</summary>
-    public double GetWorkingSetMB()
-    {
-        try
-        {
-            using var process = Process.GetCurrentProcess();
-            return process.WorkingSet64 / (1024.0 * 1024.0);
-        }
-        catch { return 0; }
-    }
-
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes < 1024L * 1024) return $"{bytes / 1024.0:F1} KB";
-        if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F0} MB";
-        return $"{bytes / (1024.0 * 1024 * 1024):F2} GB";
     }
 
     /// <summary>
@@ -249,6 +270,25 @@ public class ContextMemoryService
         var toSummarize = messages.Take(messages.Count - keepRecent).ToList();
         var toKeep = messages.Skip(messages.Count - keepRecent).ToList();
 
+        var summaryMsg = new ChatMessage
+        {
+            Role = MessageRole.System,
+            Content = BuildCompactionSummary(toSummarize),
+        };
+
+        var result = new List<ChatMessage> { summaryMsg };
+        result.AddRange(toKeep);
+        return result;
+    }
+
+    /// <summary>
+    /// A model-facing summary of <paramref name="toSummarize"/> (no AI call): every user request, the latest
+    /// tool actions and the gist of the assistant's replies. <paramref name="previousSummary"/> — the summary of
+    /// an earlier compaction — is carried forward, so compacting twice never forgets the first stretch.
+    /// Used by the agent loop's automatic compaction and by the chat's "Compact now" marker.
+    /// </summary>
+    public string BuildCompactionSummary(IReadOnlyList<ChatMessage> toSummarize, string? previousSummary = null)
+    {
         // Smart summary: extract key info rather than blindly truncating
         var userRequests = new List<string>();
         var toolActions = new List<string>();
@@ -280,6 +320,11 @@ public class ContextMemoryService
         }
 
         var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(previousSummary))
+        {
+            sb.AppendLine(previousSummary.Trim());
+            sb.AppendLine();
+        }
         sb.AppendLine($"[Context Summary — {toSummarize.Count} earlier messages compressed]");
 
         if (userRequests.Count > 0)
@@ -307,14 +352,6 @@ public class ContextMemoryService
                 sb.AppendLine($"  - {d}");
         }
 
-        var summaryMsg = new ChatMessage
-        {
-            Role = MessageRole.System,
-            Content = sb.ToString(),
-        };
-
-        var result = new List<ChatMessage> { summaryMsg };
-        result.AddRange(toKeep);
-        return result;
+        return sb.ToString().TrimEnd();
     }
 }

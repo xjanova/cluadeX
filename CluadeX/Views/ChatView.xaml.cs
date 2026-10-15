@@ -20,9 +20,25 @@ public partial class ChatView : UserControl
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        // The chat page is kept and only hidden when another page is shown (Views/PageHost): coming back is not a
+        // Loaded any more, so give the input box its focus back here — on the chat page, not the one docked in the
+        // editor (the editor keeps the caret).
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true && !_hostedInEditor)
+                Dispatcher.InvokeAsync(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        };
+        SizeChanged += (_, _) => UpdateSidePanelRoom();
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
+            // Ctrl+V with a picture on the clipboard attaches it; text still pastes as text.
+            if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && DataContext is ChatViewModel pasteVm
+                && TryPasteImages(pasteVm))
+            {
+                e.Handled = true;
+                return;
+            }
             if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
             {
                 if (DataContext is ChatViewModel vm && vm.SendMessageCommand.CanExecute(null))
@@ -57,38 +73,96 @@ public partial class ChatView : UserControl
         };
     }
 
+    /// <summary>The same chat is also hosted in the Edit page's narrow right pane, which already shows the project's
+    /// files and a terminal: there the side panel only squeezed the conversation into a sliver.</summary>
+    private bool _hostedInEditor;
+
+    /// <summary>The conversation keeps at least this much width beside the side panel (whatever width it was dragged to).</summary>
+    private const double MinConversationWidth = 600;
+
+    private void UpdateSidePanelRoom()
+    {
+        double panel = double.IsNaN(SidePanel.Width) ? 300 : SidePanel.Width;
+        bool room = !_hostedInEditor && ActualWidth >= panel + MinConversationWidth;
+        SidePanelHost.Visibility = room ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        _hostedInEditor = FindAncestor<CodeEditorView>(this) != null;
+        UpdateSidePanelRoom();
         InputBox.Focus();
+        HookScrollViewer();
 
         if (DataContext is ChatViewModel vm)
         {
             if (_scrollHandler != null)
                 vm.ScrollToBottom -= _scrollHandler;
-            if (_collectionHandler != null)
-                vm.Messages.CollectionChanged -= _collectionHandler;
+            if (_collectionHandler != null && _watched != null)
+                _watched.CollectionChanged -= _collectionHandler;
 
+            // Follow new output only while the reader is already at the bottom. This used to jump to the end
+            // on every change and every 20 streamed tokens, so nobody could scroll up to read while a reply
+            // streamed — the view yanked them back down.
             _scrollHandler = () =>
             {
                 Dispatcher.InvokeAsync(
-                    () => ScrollToEnd(),
+                    () => { if (_stickToBottom) ScrollToEnd(); },
                     System.Windows.Threading.DispatcherPriority.Background);
             };
 
-            _collectionHandler = (_, _) =>
+            _collectionHandler = (_, args) =>
             {
+                // The user just sent something, or a whole chat was swapped in: take them to the end.
+                bool force = args.Action == NotifyCollectionChangedAction.Reset
+                    || (args.NewItems?.OfType<ChatMessage>().Any(m => m.Role == MessageRole.User) ?? false);
+                if (force) _stickToBottom = true;
                 Dispatcher.InvokeAsync(
-                    () => ScrollToEnd(),
+                    () => { if (_stickToBottom) ScrollToEnd(); },
                     System.Windows.Threading.DispatcherPriority.Background);
             };
 
             vm.ScrollToBottom += _scrollHandler;
-            vm.Messages.CollectionChanged += _collectionHandler;
+            WatchMessages(vm);
+            vm.PropertyChanged -= OnVmPropertyChanged;
+            vm.PropertyChanged += OnVmPropertyChanged;
+            vm.DictationApplied -= OnDictationApplied;
+            vm.DictationApplied += OnDictationApplied;
         }
+    }
+
+    /// <summary>Spoken words just landed in the box: keep the caret (and the view) at the end, where they arrive.</summary>
+    private void OnDictationApplied()
+    {
+        InputBox.CaretIndex = InputBox.Text.Length;
+        InputBox.ScrollToEnd();
+    }
+
+    private System.Collections.ObjectModel.ObservableCollection<ChatMessage>? _watched;
+
+    /// <summary>Follow the list on screen: each chat has its own list, swapped in when another chat is opened.</summary>
+    private void WatchMessages(ChatViewModel vm)
+    {
+        if (_watched != null && _collectionHandler != null) _watched.CollectionChanged -= _collectionHandler;
+        _watched = vm.Messages;
+        if (_collectionHandler != null) _watched.CollectionChanged += _collectionHandler;
+        _stickToBottom = true;
+        Dispatcher.InvokeAsync(ScrollToEnd, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ChatViewModel.Messages) && sender is ChatViewModel vm) WatchMessages(vm);
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        if (_chatScrollViewer != null)
+        {
+            _chatScrollViewer.ScrollChanged -= OnChatScrollChanged;
+            _chatScrollViewer = null;
+        }
+
         if (DataContext is ChatViewModel vm)
         {
             if (_scrollHandler != null)
@@ -96,9 +170,11 @@ public partial class ChatView : UserControl
                 vm.ScrollToBottom -= _scrollHandler;
                 _scrollHandler = null;
             }
+            vm.PropertyChanged -= OnVmPropertyChanged;
             if (_collectionHandler != null)
             {
-                vm.Messages.CollectionChanged -= _collectionHandler;
+                if (_watched != null) _watched.CollectionChanged -= _collectionHandler;
+                _watched = null;
                 _collectionHandler = null;
             }
         }
@@ -107,10 +183,37 @@ public partial class ChatView : UserControl
     // ─── ScrollToEnd via ListBox's internal ScrollViewer ───
 
     private ScrollViewer? _chatScrollViewer;
+    /// <summary>True while the reader is at (or within a few lines of) the bottom — only then does new output
+    /// pull the view down.</summary>
+    private bool _stickToBottom = true;
+    private const double BottomSlackPx = 48;
+
+    private void HookScrollViewer()
+    {
+        if (_chatScrollViewer != null) return;
+        _chatScrollViewer = FindVisualChild<ScrollViewer>(ChatList);
+        if (_chatScrollViewer != null)
+            _chatScrollViewer.ScrollChanged += OnChatScrollChanged;
+    }
+
+    private void OnChatScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (sender is not ScrollViewer sv) return;
+        if (e.ExtentHeightChange == 0 && e.ViewportHeightChange == 0)
+        {
+            // The offset moved by itself: the user scrolled (wheel, drag, keys) — remember where they are.
+            _stickToBottom = sv.ScrollableHeight - sv.VerticalOffset <= BottomSlackPx;
+        }
+        else if (_stickToBottom)
+        {
+            // Content grew (a message arrived, a reply streamed, a bubble re-measured): keep following.
+            sv.ScrollToEnd();
+        }
+    }
 
     private void ScrollToEnd()
     {
-        _chatScrollViewer ??= FindVisualChild<ScrollViewer>(ChatList);
+        HookScrollViewer();
         _chatScrollViewer?.ScrollToEnd();
     }
 
@@ -123,6 +226,13 @@ public partial class ChatView : UserControl
             var found = FindVisualChild<T>(child);
             if (found != null) return found;
         }
+        return null;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject child) where T : DependencyObject
+    {
+        for (var p = VisualTreeHelper.GetParent(child); p != null; p = VisualTreeHelper.GetParent(p))
+            if (p is T t) return t;
         return null;
     }
 
@@ -152,19 +262,15 @@ public partial class ChatView : UserControl
         }
     }
 
-    // ─── Retry — resend the last user message ───
+    // ─── Retry — re-run the question THIS failed reply answered ───
+    // (It used to resend the latest user message whatever bubble was hovered, as a duplicate.)
 
     private void RetryMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is ChatViewModel vm)
+        if (DataContext is ChatViewModel vm && sender is FrameworkElement fe && fe.DataContext is ChatMessage failed
+            && vm.RetryMessageCommand.CanExecute(failed))
         {
-            var lastUserMsg = vm.Messages.LastOrDefault(m => m.Role == MessageRole.User);
-            if (lastUserMsg != null)
-            {
-                vm.UserInput = lastUserMsg.Content;
-                if (vm.SendMessageCommand.CanExecute(null))
-                    vm.SendMessageCommand.Execute(null);
-            }
+            vm.RetryMessageCommand.Execute(failed);
         }
     }
 
@@ -186,24 +292,190 @@ public partial class ChatView : UserControl
 
     // ─── Permission request ───
 
+    // Answering collapses the buttons and shows a localized outcome label (bound to PermissionOutcome) — they
+    // used to stay clickable with a literal English "*Allowed*" appended to the prompt text.
+    /// <summary>Right panel: a double-clicked file opens in the code editor.</summary>
+    private void ProjectTree_DoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm && ProjectTreeView.SelectedItem is FileNode { IsDirectory: false } node)
+        {
+            vm.RequestOpenFile(node.FullPath);
+            e.Handled = true;
+        }
+    }
+
+    private void SideTreeRefresh_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm) vm.RefreshProjectTree(force: true);
+    }
+
+    private void SidePanelHide_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm) vm.ShowSidePanel = false;
+    }
+
+    /// <summary>The composer's "+": its menu opens on a left click, above the button.</summary>
+    private void MoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { ContextMenu: { } menu } button)
+        {
+            menu.DataContext = button.DataContext;
+            menu.PlacementTarget = button;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+            menu.IsOpen = true;
+        }
+    }
+
+    private void QuestionOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: ChatMessage msg } fe && fe.DataContext is string option)
+            msg.AnswerQuestion(option);
+    }
+
+    private void QuestionSend_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AnswerQuestion(msg.AnswerDraft);
+    }
+
+    private void QuestionBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter && sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+        {
+            msg.AnswerQuestion(msg.AnswerDraft);
+            e.Handled = true;
+        }
+    }
+
     private void PermissionAllow_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg && !msg.PermissionAnswered)
-        {
-            msg.PermissionAnswered = true;
-            msg.Content += "\n*Allowed*";
-            msg.PermissionCallback?.Invoke(true);
-        }
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.ResolvePermission(PermissionOutcome.Allowed);
+    }
+
+    /// <summary>Under this width the composer's buttons get a row of their own.</summary>
+    internal const double NarrowComposerWidth = 640;
+
+    private void ComposerStrip_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged) ApplyComposerLayout(e.NewSize.Width);
+    }
+
+    /// <summary>A narrow composer (the chat docked beside the editor — owner's screenshot, 2026-10-13): the mic / send /
+    /// stop column kept its width, the options were left ~270 px and each took a line of its own. Under
+    /// <see cref="NarrowComposerWidth"/> the buttons move to their own row on the right, the options get the full width,
+    /// and the "effort" / "budget" words give way to the boxes' tooltips. Internal for the harness.</summary>
+    internal void ApplyComposerLayout(double width)
+    {
+        bool narrow = width > 0 && width < NarrowComposerWidth;
+        Grid.SetColumnSpan(ComposerOptions, narrow ? 2 : 1);
+        Grid.SetRow(ComposerButtons, narrow ? 1 : 0);
+        Grid.SetColumn(ComposerButtons, narrow ? 0 : 1);
+        Grid.SetColumnSpan(ComposerButtons, narrow ? 2 : 1);
+        ComposerButtons.HorizontalAlignment = narrow ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
+        ComposerButtons.Margin = narrow ? new Thickness(0, 4, 0, 0) : new Thickness(0);
+        EffortLabel.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        BudgetLabel.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        ChatModelBox.MinWidth = narrow ? 150 : 180;
+        ApprovalBox.MinWidth = narrow ? 120 : 150;
+    }
+
+    private void PermissionAllowChat_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AllowPermissionForChat();
     }
 
     private void PermissionDeny_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg && !msg.PermissionAnswered)
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.ResolvePermission(PermissionOutcome.Denied);
+    }
+
+    // ─── Attaching images: Ctrl+V, drop, "+" ───
+
+    /// <summary>
+    /// A picture on the clipboard — a screenshot, an image copied in a browser, image files copied in Explorer — is
+    /// attached to the next message. The "PNG" format comes first (browsers and the Snipping Tool put one there with
+    /// its alpha intact); the bitmap form is flattened onto opaque, since many apps hand WPF a 32-bit DIB whose alpha
+    /// channel is garbage and the picture would arrive invisible. False when there is no picture: paste as usual.
+    /// </summary>
+    private static bool TryPasteImages(ChatViewModel vm)
+    {
+        try
         {
-            msg.PermissionAnswered = true;
-            msg.Content += "\n*Denied*";
-            msg.PermissionCallback?.Invoke(false);
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList().Cast<string>().Where(ChatViewModel.LooksLikeImageFile).ToList();
+                if (files.Count > 0) { vm.AttachImageFiles(files); return true; }
+            }
+            if (Clipboard.ContainsData("PNG") && Clipboard.GetData("PNG") is System.IO.MemoryStream png)
+            {
+                vm.AttachImageBytes(png.ToArray());
+                return true;
+            }
+            if (Clipboard.ContainsImage() && Clipboard.GetImage() is System.Windows.Media.Imaging.BitmapSource bmp)
+            {
+                var opaque = new System.Windows.Media.Imaging.FormatConvertedBitmap(bmp, PixelFormats.Bgr32, null, 0);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(opaque));
+                using var ms = new System.IO.MemoryStream();
+                enc.Save(ms);
+                vm.AttachImageBytes(ms.ToArray());
+                return true;
+            }
         }
+        catch { /* the clipboard is held by another app right now — paste normally */ }
+        return false;
+    }
+
+    private static string[] DroppedImageFiles(DragEventArgs e) =>
+        e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] files
+            ? files.Where(ChatViewModel.LooksLikeImageFile).ToArray()
+            : Array.Empty<string>();
+
+    /// <summary>Image files dragged over the composer (Preview: the text box would refuse a file drop).</summary>
+    private void Composer_PreviewDragOver(object sender, DragEventArgs e)
+    {
+        if (DroppedImageFiles(e).Length == 0) return;
+        e.Effects = DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private void Composer_PreviewDrop(object sender, DragEventArgs e)
+    {
+        var files = DroppedImageFiles(e);
+        if (files.Length == 0 || DataContext is not ChatViewModel vm) return;
+        vm.AttachImageFiles(files);
+        e.Handled = true;
+        InputBox.Focus();
+    }
+
+    /// <summary>"+" › Attach image…: pick one or more pictures.</summary>
+    private void AttachImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ChatViewModel vm) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Multiselect = true,
+            Filter = "Images|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.tif;*.tiff",
+        };
+        if (dlg.ShowDialog(Window.GetWindow(this)) == true) vm.AttachImageFiles(dlg.FileNames);
+        InputBox.Focus();
+    }
+
+    // ─── Tool-row thumbnail → the full image ───
+
+    /// <summary>Opens the image a tool saved, in the system's image viewer. Only an existing local .jpg/.png/.webp/.gif
+    /// is handed to the shell (<see cref="ChatViewModel.IsOpenableImage"/>) — never a URL, a share or another file type.</summary>
+    private void ToolThumbnail_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string path } || !ChatViewModel.IsOpenableImage(path)) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true })?.Dispose();
+        }
+        catch { /* no viewer registered for images — nothing else to do */ }
     }
 
     // ─── Suggested prompts ───
@@ -217,4 +489,33 @@ public partial class ChatView : UserControl
                 vm.SendMessageCommand.Execute(null);
         }
     }
+}
+
+/// <summary>
+/// A tool-row thumbnail from an image file path: decoded small (≈240 px tall), read fully into memory and the file
+/// closed at once — so a thumbnail never holds a lock on a screenshot the store later prunes — and nothing (no
+/// image) when the file is gone or unreadable.
+/// </summary>
+public sealed class ThumbnailSourceConverter : System.Windows.Data.IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+    {
+        if (value is not string path || !ChatViewModel.IsOpenableImage(path)) return null;
+        try
+        {
+            var bmp = new System.Windows.Media.Imaging.BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bmp.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
+            bmp.DecodePixelHeight = 240;
+            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch { return null; }
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
 }

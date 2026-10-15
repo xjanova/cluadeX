@@ -27,14 +27,15 @@ public class PluginService
 
         // The catalog is the source of truth for a built-in plugin's hooks. Installed copies
         // persist hooks.json at install time, so a later bug-fix to a hook command (e.g. the
-        // branch-protector's batch `%%b` → cmd `findstr`) would otherwise never reach machines
+        // branch-protector's findstr one-liner, which never matched git's LF output → a script) would otherwise never reach machines
         // that already installed it. Re-materialize hooks.json for installed catalog plugins.
         try { ResyncInstalledCatalogHooks(); } catch { /* best-effort — never block startup */ }
     }
 
     /// <summary>
-    /// Rewrites hooks.json for every installed plugin whose folder matches a curated-catalog id,
-    /// so catalog hook fixes propagate to existing installs without a manual reinstall.
+    /// Rewrites hooks.json (and the hook scripts) for every installed plugin whose folder matches a
+    /// curated-catalog id, so catalog hook fixes propagate to existing installs without a manual reinstall.
+    /// This is also what moves existing installs off the old hooks that spliced {path} into a shell string.
     /// </summary>
     private void ResyncInstalledCatalogHooks()
     {
@@ -45,26 +46,51 @@ public class PluginService
         {
             string id = System.IO.Path.GetFileName(dir);
             if (!byId.TryGetValue(id, out var catalog) || catalog.Hooks.Count == 0) continue;
-
-            var hooksConfig = new Dictionary<string, object>();
-            var preHooks = catalog.Hooks.Where(h => h.Phase == "PreToolUse").ToList();
-            var postHooks = catalog.Hooks.Where(h => h.Phase == "PostToolUse").ToList();
-            if (preHooks.Count > 0)
-                hooksConfig["PreToolUse"] = preHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
-            if (postHooks.Count > 0)
-                hooksConfig["PostToolUse"] = postHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
-
-            var hooksJson = JsonSerializer.Serialize(new Dictionary<string, object> { ["hooks"] = hooksConfig }, JsonOptions);
-            string target = System.IO.Path.Combine(dir, "hooks.json");
-            // Only rewrite when the content actually changed — avoids needless disk writes each launch.
-            try
-            {
-                if (!File.Exists(target) || File.ReadAllText(target) != hooksJson)
-                    File.WriteAllText(target, hooksJson);
-            }
+            try { WriteCatalogHookFiles(catalog, dir); }
             catch { /* skip a locked/unwritable plugin dir */ }
         }
     }
+
+    /// <summary>The literal that catalog hook commands use for their own install folder.</summary>
+    private const string PluginDirToken = "{plugin_dir}";
+
+    /// <summary>
+    /// Write a catalog plugin's hook scripts and hooks.json into <paramref name="pluginDir"/>. Each file is only
+    /// rewritten when its content changed (this runs at every launch).
+    /// </summary>
+    internal static void WriteCatalogHookFiles(CatalogPlugin catalog, string pluginDir)
+    {
+        if (CatalogScripts.TryGetValue(catalog.Id, out var scripts))
+        {
+            foreach (var (fileName, content) in scripts)
+                WriteIfChanged(System.IO.Path.Combine(pluginDir, fileName), HookScriptPrelude + content,
+                    new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true)); // PS 5.1 reads BOM-less files as ANSI
+        }
+
+        var hooksConfig = new Dictionary<string, object>();
+        foreach (var phase in new[] { "PreToolUse", "PostToolUse" })
+        {
+            var hooks = catalog.Hooks.Where(h => h.Phase == phase).ToList();
+            if (hooks.Count > 0)
+                hooksConfig[phase] = hooks.Select(h => new
+                {
+                    matcher = h.Matcher,
+                    command = h.Command.Replace(PluginDirToken, pluginDir.TrimEnd('\\', '/')),
+                    timeout = h.TimeoutMs,
+                }).ToList();
+        }
+        var hooksJson = JsonSerializer.Serialize(new Dictionary<string, object> { ["hooks"] = hooksConfig }, JsonOptions);
+        WriteIfChanged(System.IO.Path.Combine(pluginDir, "hooks.json"), hooksJson, new System.Text.UTF8Encoding(false));
+    }
+
+    private static void WriteIfChanged(string path, string content, System.Text.Encoding encoding)
+    {
+        if (File.Exists(path) && File.ReadAllText(path) == content) return;
+        File.WriteAllText(path, content, encoding);
+    }
+
+    /// <summary>True when a catalog plugin actually does something once installed (it has hooks).</summary>
+    public static bool IsImplemented(CatalogPlugin catalog) => catalog.Hooks.Count > 0;
 
     /// <summary>Scans subdirectories of the plugins folder for manifest.json files.</summary>
     public List<PluginInfo> ScanPlugins()
@@ -83,7 +109,7 @@ public class PluginService
         foreach (var dir in Directory.GetDirectories(_pluginsDir))
         {
             var manifestPath = System.IO.Path.Combine(dir, "manifest.json");
-            if (!File.Exists(manifestPath))
+            if (System.IO.Path.GetFileName(dir).StartsWith('.') || !File.Exists(manifestPath))
                 continue;
 
             try
@@ -134,19 +160,74 @@ public class PluginService
         PluginsChanged?.Invoke();
     }
 
-    /// <summary>Copies a plugin directory into the plugins folder.</summary>
-    public void InstallPlugin(string sourcePath)
+    public enum InstallCheck { Ok, NotFound, NoManifest, InsidePluginsFolder, ContainsPluginsFolder, AlreadyInstalled }
+
+    /// <summary>
+    /// Can <paramref name="sourcePath"/> be installed? The "Add plugin" picker used to open IN the plugins
+    /// folder, so picking an installed plugin made source == destination: the old code deleted the destination
+    /// (= the source) and then crashed copying a folder that no longer existed. A source that CONTAINS the
+    /// plugins folder (e.g. the data folder) would copy into itself forever.
+    /// </summary>
+    public InstallCheck CheckInstallSource(string sourcePath)
     {
-        if (!Directory.Exists(sourcePath))
-            return;
+        if (string.IsNullOrWhiteSpace(sourcePath) || !Directory.Exists(sourcePath)) return InstallCheck.NotFound;
+        string src = NormalizeDir(sourcePath);
+        string plugins = NormalizeDir(_pluginsDir);
+        if (src.StartsWith(plugins, StringComparison.OrdinalIgnoreCase)) return InstallCheck.InsidePluginsFolder;
+        if (plugins.StartsWith(src, StringComparison.OrdinalIgnoreCase)) return InstallCheck.ContainsPluginsFolder;
+        if (!File.Exists(System.IO.Path.Combine(sourcePath, "manifest.json"))) return InstallCheck.NoManifest;
+        if (Directory.Exists(InstallTargetFor(sourcePath))) return InstallCheck.AlreadyInstalled;
+        return InstallCheck.Ok;
+    }
 
-        var dirName = System.IO.Path.GetFileName(sourcePath);
-        var destPath = System.IO.Path.Combine(_pluginsDir, dirName);
+    /// <summary>Where <see cref="InstallPlugin"/> would put a source folder.</summary>
+    public string InstallTargetFor(string sourcePath) =>
+        System.IO.Path.Combine(_pluginsDir, System.IO.Path.GetFileName(sourcePath.TrimEnd('\\', '/')));
 
-        if (Directory.Exists(destPath))
-            Directory.Delete(destPath, true);
+    private static string NormalizeDir(string p) =>
+        System.IO.Path.GetFullPath(p).TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar;
 
-        CopyDirectory(sourcePath, destPath);
+    /// <summary>
+    /// Copy a plugin directory into the plugins folder. The copy goes to a temp folder first and is swapped in
+    /// only when complete, so a failure half-way never leaves a half-copied plugin — or, when replacing, no
+    /// plugin at all. Replacing an installed plugin requires <paramref name="overwrite"/> (ask the user first).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">the source failed <see cref="CheckInstallSource"/>.</exception>
+    public void InstallPlugin(string sourcePath, bool overwrite = false)
+    {
+        var check = CheckInstallSource(sourcePath);
+        if (check == InstallCheck.AlreadyInstalled && !overwrite)
+            throw new InvalidOperationException($"A plugin named '{System.IO.Path.GetFileName(sourcePath)}' is already installed.");
+        if (check is not (InstallCheck.Ok or InstallCheck.AlreadyInstalled))
+            throw new InvalidOperationException($"Cannot install '{sourcePath}': {check}.");
+
+        string destPath = InstallTargetFor(sourcePath);
+        // Staging lives NEXT TO the plugins folder, not in it: HookService loads hooks from every plugins\*
+        // folder with a manifest, so a half-copied or left-over replaced copy inside it would run as a plugin.
+        string staging = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(_pluginsDir.TrimEnd('\\', '/'))!, ".plugins-staging");
+        Directory.CreateDirectory(staging);
+        string tempPath = System.IO.Path.Combine(staging, $"installing-{Guid.NewGuid():N}");
+        string? oldPath = null;
+        try
+        {
+            CopyDirectory(sourcePath, tempPath);
+            if (Directory.Exists(destPath))
+            {
+                oldPath = System.IO.Path.Combine(staging, $"replaced-{Guid.NewGuid():N}");
+                Directory.Move(destPath, oldPath);
+            }
+            Directory.Move(tempPath, destPath);
+        }
+        catch
+        {
+            try { if (Directory.Exists(tempPath)) Directory.Delete(tempPath, true); } catch { }
+            // Put the previous version back if the swap got half-way.
+            try { if (oldPath != null && Directory.Exists(oldPath) && !Directory.Exists(destPath)) Directory.Move(oldPath, destPath); } catch { }
+            throw;
+        }
+        if (oldPath != null)
+            try { Directory.Delete(oldPath, true); } catch { /* left in the staging folder, outside plugins\ */ }
+        PluginsChanged?.Invoke();
     }
 
     /// <summary>Returns a list of enabled plugin names.</summary>
@@ -158,7 +239,7 @@ public class PluginService
     /// <summary>Returns the plugins directory path.</summary>
     public string PluginsDirectory => _pluginsDir;
 
-    /// <summary>Removes a plugin directory entirely.</summary>
+    /// <summary>Removes a plugin directory entirely (callers confirm first — it holds any hook edits).</summary>
     public void UninstallPlugin(string name)
     {
         var plugins = ScanPlugins();
@@ -167,12 +248,19 @@ public class PluginService
         {
             DisablePlugin(name);
             Directory.Delete(plugin.Path, true);
+            PluginsChanged?.Invoke();
         }
     }
 
     /// <summary>Installs a catalog plugin by generating its manifest.json and hook files.</summary>
+    /// <exception cref="InvalidOperationException">the plugin has no hooks yet (installing it would do nothing).</exception>
     public void InstallCatalogPlugin(CatalogPlugin catalog)
     {
+        // 11 of the 20 catalog entries have no hooks: installing one wrote a manifest + README and the page
+        // then showed it "installed and enabled" while it did nothing at all.
+        if (!IsImplemented(catalog))
+            throw new InvalidOperationException($"Catalog plugin '{catalog.Id}' has no hooks yet.");
+
         var pluginDir = System.IO.Path.Combine(_pluginsDir, catalog.Id);
         Directory.CreateDirectory(pluginDir);
 
@@ -200,25 +288,12 @@ public class PluginService
                      $"## What it does\n{catalog.HookSummary}\n";
         File.WriteAllText(System.IO.Path.Combine(pluginDir, "README.md"), readme);
 
-        // Generate hooks.json for HookService integration
-        if (catalog.Hooks.Count > 0)
-        {
-            var hooksConfig = new Dictionary<string, object>();
-            var preHooks = catalog.Hooks.Where(h => h.Phase == "PreToolUse").ToList();
-            var postHooks = catalog.Hooks.Where(h => h.Phase == "PostToolUse").ToList();
-
-            if (preHooks.Count > 0)
-                hooksConfig["PreToolUse"] = preHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
-            if (postHooks.Count > 0)
-                hooksConfig["PostToolUse"] = postHooks.Select(h => new { matcher = h.Matcher, command = h.Command, timeout = h.TimeoutMs }).ToList();
-
-            var hooksFile = new Dictionary<string, object> { ["hooks"] = hooksConfig };
-            var hooksJson = JsonSerializer.Serialize(hooksFile, JsonOptions);
-            File.WriteAllText(System.IO.Path.Combine(pluginDir, "hooks.json"), hooksJson);
-        }
+        // Generate hooks.json (+ hook scripts) for HookService integration
+        WriteCatalogHookFiles(catalog, pluginDir);
 
         // Auto-enable on install
         EnablePlugin(catalog.Name);
+        PluginsChanged?.Invoke();
     }
 
     // ─── Curated Plugin Catalog ─────────────────────────────────────
@@ -238,10 +313,10 @@ public class PluginService
             Version = "1.2.0", Category = "code-quality", Icon = "\u2728",
             Author = "CluadeX Team", Tags = ["lint", "format", "prettier", "black"],
             HookEvents = ["PostToolUse"],
-            HookSummary = "After FileWrite/FileEdit, runs the project's configured formatter (detects package.json scripts, .prettierrc, pyproject.toml, rustfmt.toml).",
-            HookSummaryTh = "หลังเขียน/แก้ไฟล์ จะรัน formatter ที่ตั้งค่าไว้ในโปรเจกต์อัตโนมัติ",
-            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = "npx prettier --write {path} 2>nul || python -m black {path} 2>nul || echo formatted" },
-                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = "npx prettier --write {path} 2>nul || python -m black {path} 2>nul || echo formatted" }],
+            HookSummary = "After FileWrite/FileEdit, formats the file with the formatter already installed for its language: prettier (JS/TS/JSON/CSS/MD/HTML/YAML, the project's own copy — nothing is downloaded), black (Python), rustfmt (Rust).",
+            HookSummaryTh = "หลังเขียน/แก้ไฟล์ จะจัดรูปแบบด้วย formatter ที่ติดตั้งไว้แล้วตามภาษา: prettier (JS/TS/JSON/CSS/MD/HTML/YAML ใช้ตัวในโปรเจกต์ ไม่ดาวน์โหลดเพิ่ม), black (Python), rustfmt (Rust)",
+            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = PsHook("lint.ps1"), TimeoutMs = 20000 },
+                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = PsHook("lint.ps1"), TimeoutMs = 20000 }],
         },
         new CatalogPlugin
         {
@@ -270,8 +345,8 @@ public class PluginService
             HookEvents = ["PostToolUse"],
             HookSummary = "After FileWrite/FileEdit on .ts/.tsx/.py files, runs type checker and reports errors.",
             HookSummaryTh = "หลังแก้ไฟล์ .ts/.tsx/.py จะรัน type checker และรายงาน error",
-            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = "npx tsc --noEmit 2>nul || python -m mypy {path} 2>nul || echo type-check-done", TimeoutMs = 30000 },
-                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = "npx tsc --noEmit 2>nul || python -m mypy {path} 2>nul || echo type-check-done", TimeoutMs = 30000 }],
+            Hooks = [new() { Phase = "PostToolUse", Matcher = "write_file", Command = PsHook("typecheck.ps1"), TimeoutMs = 30000 },
+                     new() { Phase = "PostToolUse", Matcher = "edit_file", Command = PsHook("typecheck.ps1"), TimeoutMs = 30000 }],
         },
 
         // ═══ Security ═══
@@ -285,10 +360,11 @@ public class PluginService
             Version = "1.3.0", Category = "security", Icon = "\U0001F575\uFE0F",
             Author = "CluadeX Team", Tags = ["security", "secrets", "api-keys", "scan"],
             HookEvents = ["PreToolUse"],
-            HookSummary = "Before FileWrite, scans content with regex patterns for AWS keys, GitHub tokens, private keys, passwords in URLs, etc. Blocks if found.",
-            HookSummaryTh = "ก่อนเขียนไฟล์ จะสแกนเนื้อหาด้วย regex เพื่อหา AWS key, GitHub token, private key ฯลฯ บล็อกถ้าพบ",
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "findstr /r /c:\"AKIA\" /c:\"ghp_\" /c:\"-----BEGIN\" /c:\"sk-\" {path} && exit 1 || exit 0" },
-                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = "findstr /r /c:\"AKIA\" /c:\"ghp_\" /c:\"-----BEGIN\" /c:\"sk-\" {path} && exit 1 || exit 0" }],
+            HookSummary = "Before FileWrite/FileEdit, scans the NEW content (not the file already on disk) for AWS keys, GitHub/Slack/Google tokens, sk-… API keys, private keys and passwords in URLs. Blocks the write if one is found.",
+            HookSummaryTh = "ก่อนเขียน/แก้ไฟล์ จะสแกนเนื้อหาใหม่ (ไม่ใช่ไฟล์เดิมบนดิสก์) หา AWS key, token ของ GitHub/Slack/Google, API key แบบ sk-…, private key และรหัสผ่านใน URL บล็อกการเขียนถ้าพบ",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = PsHook("secret-scan.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = PsHook("secret-scan.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "multi_edit", Command = PsHook("secret-scan.ps1") }],
         },
         new CatalogPlugin
         {
@@ -314,11 +390,12 @@ public class PluginService
             Version = "1.1.0", Category = "security", Icon = "\U0001F512",
             Author = "CluadeX Team", Tags = ["security", "path", "traversal"],
             HookEvents = ["PreToolUse"],
-            HookSummary = "Before FileRead/FileWrite/FileEdit, validates paths are within project root. Resolves symlinks and rejects traversal.",
-            HookSummaryTh = "ก่อนอ่าน/เขียน/แก้ไฟล์ จะตรวจสอบว่า path อยู่ในโปรเจกต์ แก้ symlink และปฏิเสธ traversal",
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "echo {path} | findstr /r \"\\.\\.\" && exit 1 || exit 0" },
-                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = "echo {path} | findstr /r \"\\.\\.\" && exit 1 || exit 0" },
-                     new() { Phase = "PreToolUse", Matcher = "read_file", Command = "echo {path} | findstr /r \"\\.\\.\" && exit 1 || exit 0" }],
+            HookSummary = "Before FileRead/FileWrite/FileEdit, blocks any path that resolves outside the open project folder — ../ traversal, absolute paths elsewhere, and symlinks/junctions inside the project that point outside it.",
+            HookSummaryTh = "ก่อนอ่าน/เขียน/แก้ไฟล์ จะบล็อก path ที่ชี้ออกนอกโฟลเดอร์โปรเจกต์ — ทั้ง ../ path แบบเต็มที่อยู่ที่อื่น และ symlink/junction ในโปรเจกต์ที่ชี้ออกไปข้างนอก",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = PsHook("path-guard.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = PsHook("path-guard.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "multi_edit", Command = PsHook("path-guard.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "read_file", Command = PsHook("path-guard.ps1") }],
         },
 
         // ═══ Git & Version Control ═══
@@ -345,14 +422,12 @@ public class PluginService
             Version = "1.0.0", Category = "git", Icon = "\U0001F6A7",
             Author = "CluadeX Team", Tags = ["git", "branch", "protection"],
             HookEvents = ["PreToolUse"],
-            HookSummary = "Before BashTool git commit/push, checks current branch. Blocks if on protected branch (main, master, develop).",
-            HookSummaryTh = "ก่อน git commit/push จะตรวจ branch ปัจจุบัน บล็อกถ้าอยู่บน branch ที่ป้องกัน",
-            // Runs via `cmd /c` (HookService), so use findstr — NOT batch `for /f %%b`, which is
-            // .bat-only syntax and errors with "%%b was unexpected at this time" on the command line.
-            // findstr /x /i matches the current branch exactly (case-insensitive) against the
-            // protected set; a match blocks (exit 1) with a clear stderr message, else allows (exit 0).
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit", Command = "git branch --show-current | findstr /x /i \"main master develop\" >nul && (echo [branch-protector] Blocked: don't commit directly to a protected branch. Create a feature branch first. 1>&2 & exit 1) || exit 0" },
-                     new() { Phase = "PreToolUse", Matcher = "git_push", Command = "git branch --show-current | findstr /x /i \"main master develop\" >nul && (echo [branch-protector] Blocked: don't push directly to a protected branch. Open a PR from a feature branch. 1>&2 & exit 1) || exit 0" }],
+            HookSummary = "Before git_commit / git_push, checks the current branch. Blocks (exit 2) if it is a protected branch (main, master, develop).",
+            HookSummaryTh = "ก่อน git_commit / git_push จะตรวจ branch ปัจจุบัน บล็อก (exit 2) ถ้าเป็น branch ที่ป้องกันไว้ (main, master, develop)",
+            // A script, not the old one-liner  git branch --show-current | findstr /x /i "main master develop" :
+            // git prints the branch with a bare LF, findstr /x never matches a line that does not end in CRLF,
+            // so that hook never blocked anything.
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "git_commit|git_push", Command = PsHook("branch-protect.ps1") }],
         },
         new CatalogPlugin
         {
@@ -476,10 +551,11 @@ public class PluginService
             Version = "1.0.0", Category = "safety", Icon = "\U0001F4BE",
             Author = "CluadeX Team", Tags = ["backup", "safety", "recovery"],
             HookEvents = ["PreToolUse"],
-            HookSummary = "Before FileWrite/FileEdit, copies the original file to .cluadex-backups/{timestamp}/{path}. Auto-cleans old backups (>7 days).",
-            HookSummaryTh = "ก่อนเขียน/แก้ไฟล์ จะคัดลอกไฟล์ต้นฉบับไปที่ .cluadex-backups/ ลบสำเนาเก่าอัตโนมัติ (>7 วัน)",
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "if exist {path} (mkdir .cluadex-backups 2>nul & copy /y {path} .cluadex-backups\\ >nul 2>nul)" },
-                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = "if exist {path} (mkdir .cluadex-backups 2>nul & copy /y {path} .cluadex-backups\\ >nul 2>nul)" }],
+            HookSummary = "Before FileWrite/FileEdit, copies the original file to .cluadex-backups/{yyyyMMdd-HHmmss}/{path} in the project. Backup folders older than 7 days are removed automatically.",
+            HookSummaryTh = "ก่อนเขียน/แก้ไฟล์ จะคัดลอกไฟล์ต้นฉบับไปที่ .cluadex-backups/{วันเวลา}/{path} ในโปรเจกต์ และลบโฟลเดอร์สำรองที่เก่ากว่า 7 วันให้อัตโนมัติ",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = PsHook("backup.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "edit_file", Command = PsHook("backup.ps1") },
+                     new() { Phase = "PreToolUse", Matcher = "multi_edit", Command = PsHook("backup.ps1") }],
         },
         new CatalogPlugin
         {
@@ -491,9 +567,9 @@ public class PluginService
             Version = "1.0.0", Category = "safety", Icon = "\U0001F4CF",
             Author = "CluadeX Team", Tags = ["safety", "size", "limit"],
             HookEvents = ["PreToolUse"],
-            HookSummary = "Before FileWrite, checks if content exceeds max file size (default 500KB). Warns or blocks oversized writes.",
-            HookSummaryTh = "ก่อนเขียนไฟล์ จะตรวจว่าเนื้อหาเกินขนาดสูงสุด (ค่าเริ่มต้น 500KB) เตือนหรือบล็อกไฟล์ใหญ่เกิน",
-            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = "powershell -NoProfile -Command \"if ((Get-Item '{path}' -ErrorAction SilentlyContinue).Length -gt 512000) { exit 1 } else { exit 0 }\"" }],
+            HookSummary = "Before FileWrite, checks the size of the NEW content and blocks it above 500 KB (set the CLUADEX_SIZE_GUARD_KB environment variable to change the limit).",
+            HookSummaryTh = "ก่อนเขียนไฟล์ จะตรวจขนาดของเนื้อหาใหม่ และบล็อกถ้าเกิน 500 KB (ตั้งตัวแปรสภาพแวดล้อม CLUADEX_SIZE_GUARD_KB เพื่อเปลี่ยนขีดจำกัด)",
+            Hooks = [new() { Phase = "PreToolUse", Matcher = "write_file", Command = PsHook("size-guard.ps1") }],
         },
 
         // ═══ AI Enhancement ═══
@@ -524,6 +600,267 @@ public class PluginService
             HookSummaryTh = "หลังเขียน/แก้ไฟล์ จะรีวิวการเปลี่ยนแปลงด้วย AI เพื่อหาปัญหาและ anti-pattern ทั่วไป",
         },
     ];
+
+    // ─── Catalog hook scripts ───────────────────────────────────────
+    // The old catalog hooks spliced {path} into cmd / PowerShell strings. HookService's escaping is for cmd
+    // only, so size-guard's  Get-Item '{path}'  ran code for a file named  a'+(Start-Process calc)+'.txt .
+    // Every hook that needs the path or the new content is now a script that reads them from the
+    // environment HookService sets (CLUADEX_HOOK_PATH / CLUADEX_HOOK_CWD / CLUADEX_HOOK_PAYLOAD_FILE), and
+    // the hook command line contains nothing that came from the model.
+
+    private static string PsHook(string script) =>
+        $"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{PluginDirToken}\\{script}\"";
+
+    /// <summary>Shared helpers put in front of every catalog script (ASCII only — Windows PowerShell 5.1).</summary>
+    public const string HookScriptPrelude = """
+        # Generated by CluadeX for a catalog plugin. It is rewritten at every launch - edits here are not kept.
+        # Input comes from the environment CluadeX sets for each hook (CLUADEX_HOOK_TOOL, CLUADEX_HOOK_PATH,
+        # CLUADEX_HOOK_CWD, CLUADEX_HOOK_PAYLOAD_FILE). Nothing is spliced into a command line, so a file named
+        # like  a'+(Start-Process calc)+'.txt  is only an odd file name here, never code.
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+
+        function Get-HookCwd {
+            $cwd = $env:CLUADEX_HOOK_CWD
+            if ([string]::IsNullOrWhiteSpace($cwd)) { $cwd = (Get-Location).ProviderPath }
+            return [IO.Path]::GetFullPath($cwd)
+        }
+
+        function Resolve-HookPath {
+            $p = $env:CLUADEX_HOOK_PATH
+            if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+            try { return [IO.Path]::GetFullPath([IO.Path]::Combine((Get-HookCwd), $p)) } catch { return $null }
+        }
+
+        function Read-HookArgs {
+            $f = $env:CLUADEX_HOOK_PAYLOAD_FILE
+            if ([string]::IsNullOrWhiteSpace($f) -or -not [IO.File]::Exists($f)) { return $null }
+            try { $j = [IO.File]::ReadAllText($f, [Text.Encoding]::UTF8) | ConvertFrom-Json } catch { return $null }
+            if ($null -ne $j -and $j.PSObject.Properties['arguments']) { $j = $j.arguments }
+            if ($j -is [string]) { try { $j = $j | ConvertFrom-Json } catch { return $null } }
+            return $j
+        }
+
+        # A refusal: the reason goes to stderr and the script ends with exit 2, the deliberate-block code
+        # (CluadeX / Claude Code contract) - never reclassified as a broken script. The reason never quotes a
+        # value the model chose (a path, the content): stderr is handed back to the model.
+        function Write-HookBlock([string]$message) { [Console]::Error.WriteLine($message); exit 2 }
+
+        # Characters cmd.exe re-reads when Windows hands arguments to a .cmd shim (npx, prettier.cmd, tsc.cmd).
+        $CmdMeta = '[&|<>^%!()"]'
+
+        """;
+
+    private const string SecretScanScript = """
+        $payloadFile = $env:CLUADEX_HOOK_PAYLOAD_FILE
+        if ([string]::IsNullOrWhiteSpace($payloadFile) -or -not [IO.File]::Exists($payloadFile)) { exit 0 }
+
+        $texts = New-Object 'System.Collections.Generic.List[string]'
+        function Add-Text($node, [string]$key) {
+            if ($null -eq $node) { return }
+            if ($node -is [string]) {
+                # The path and the text being REPLACED (edit_file "find", old_*) are not new content -
+                # removing a leaked key must not be blocked.
+                if ($key -match '^(path|file_path|find|search|old_\w*)$') { return }
+                if ($key -eq 'edits' -and $node.TrimStart().StartsWith('[')) {
+                    try { Add-Text ($node | ConvertFrom-Json) $key; return } catch { }
+                }
+                $texts.Add($node)
+                return
+            }
+            if ($node -is [System.Management.Automation.PSCustomObject]) {
+                foreach ($prop in $node.PSObject.Properties) { Add-Text $prop.Value $prop.Name }
+                return
+            }
+            if ($node -is [System.Collections.IEnumerable]) { foreach ($item in $node) { Add-Text $item $key } }
+        }
+
+        $a = Read-HookArgs
+        if ($null -ne $a) { Add-Text $a '' }
+        else { $texts.Add([IO.File]::ReadAllText($payloadFile, [Text.Encoding]::UTF8)) }   # unparseable: scan it raw
+
+        # Real key shapes only. The old check was findstr "sk-", which matched task-, disk-, risk-... in any file.
+        $checks = [ordered]@{
+            'an AWS access key'       = '(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])'
+            'a GitHub token'          = '(?<![A-Za-z0-9_])(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})'
+            'a private key'           = '-----BEGIN (RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY( BLOCK)?-----'
+            'an API key (sk-...)'     = '(?<![A-Za-z0-9_-])sk-(ant-|proj-|live-|test-)?[A-Za-z0-9_-]{20,}'
+            'a Slack token'           = '(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}'
+            'a Google API key'        = '(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}'
+            'a password inside a URL' = '(?i)\b[a-z][a-z0-9+.-]{1,15}://[^\s:/@''"]{1,64}:(?![$<{*%])[^\s:/@''"]{8,}@'
+        }
+        foreach ($t in $texts) {
+            foreach ($c in $checks.GetEnumerator()) {
+                if ([regex]::IsMatch($t, $c.Value)) {
+                    Write-HookBlock ("[secret-scanner] Blocked: the new content contains what looks like {0}. Keep secrets in an environment variable or an untracked .env file, not in source." -f $c.Key)
+                    exit 2
+                }
+            }
+        }
+        exit 0
+        """;
+
+    private const string SizeGuardScript = """
+        $limit = 500 * 1024
+        $kb = 0
+        if ([int]::TryParse([string]$env:CLUADEX_SIZE_GUARD_KB, [ref]$kb) -and $kb -gt 0) { $limit = $kb * 1024 }
+
+        $payloadFile = $env:CLUADEX_HOOK_PAYLOAD_FILE
+        if ([string]::IsNullOrWhiteSpace($payloadFile) -or -not [IO.File]::Exists($payloadFile)) { exit 0 }
+
+        # Measure the NEW content. The old guard measured the file already on disk, i.e. the version being replaced.
+        $bytes = -1
+        $a = Read-HookArgs
+        if ($null -ne $a) {
+            foreach ($k in 'content', 'file_text', 'text') {
+                if ($a.PSObject.Properties[$k] -and $null -ne $a.$k) { $bytes = [Text.Encoding]::UTF8.GetByteCount([string]$a.$k); break }
+            }
+        } else {
+            # Too big for ConvertFrom-Json: the payload's own size (content + a little JSON) is close enough.
+            $bytes = ([IO.FileInfo]$payloadFile).Length
+        }
+        if ($bytes -gt $limit) {
+            Write-HookBlock ("[size-guard] Blocked: the new file would be {0} KB; the limit is {1} KB. Split it into smaller files, or raise CLUADEX_SIZE_GUARD_KB." -f [math]::Ceiling($bytes / 1024), [math]::Floor($limit / 1024))
+            exit 2
+        }
+        exit 0
+        """;
+
+    private const string BackupScript = """
+        try {
+            $full = Resolve-HookPath
+            if ($null -eq $full -or -not [IO.File]::Exists($full)) { exit 0 }
+            $cwd = (Get-HookCwd).TrimEnd('\') + '\'
+            $root = [IO.Path]::Combine($cwd, '.cluadex-backups')
+            if ($full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) { exit 0 }
+
+            $rel = if ($full.StartsWith($cwd, [StringComparison]::OrdinalIgnoreCase)) { $full.Substring($cwd.Length) } else { [IO.Path]::GetFileName($full) }
+            # Invariant culture: under a Thai UI culture the year would otherwise be the Buddhist-era 25xx.
+            $inv = [Globalization.CultureInfo]::InvariantCulture
+            $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss', $inv)
+            $dest = [IO.Path]::Combine([IO.Path]::Combine($root, $stamp), $rel)
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
+            [IO.File]::Copy($full, $dest, $true)
+
+            # Keep 7 days. Only folders whose NAME is a backup stamp are ever removed.
+            $cutoff = (Get-Date).AddDays(-7)
+            foreach ($d in [IO.Directory]::GetDirectories($root)) {
+                $name = [IO.Path]::GetFileName($d)
+                $when = [datetime]::MinValue
+                if ([datetime]::TryParseExact($name, 'yyyyMMdd-HHmmss', $inv, [Globalization.DateTimeStyles]::None, [ref]$when) -and $when -lt $cutoff) {
+                    [IO.Directory]::Delete($d, $true)
+                }
+            }
+        } catch {
+            # A failed backup must never block the edit itself.
+        }
+        exit 0
+        """;
+
+    private const string PathGuardScript = """
+        $p = $env:CLUADEX_HOOK_PATH
+        if ([string]::IsNullOrWhiteSpace($p)) { exit 0 }
+        if ([string]::IsNullOrWhiteSpace($env:CLUADEX_HOOK_CWD)) { exit 0 }   # no project folder to guard
+        $root = (Get-HookCwd).TrimEnd('\') + '\'
+        $full = Resolve-HookPath
+        if ($null -eq $full) { Write-HookBlock '[path-guard] Blocked: that is not a valid file path.'; exit 2 }
+        if (-not ($full.TrimEnd('\') + '\').StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-HookBlock ("[path-guard] Blocked: the path is outside the project folder {0}. Work on files inside the project." -f $root.TrimEnd('\'))
+            exit 2
+        }
+        # A symlink or junction inside the project can still lead outside it.
+        try {
+            $cur = $full
+            while ($null -ne $cur -and $cur.Length -gt $root.Length) {
+                if ([IO.File]::Exists($cur) -or [IO.Directory]::Exists($cur)) {
+                    $item = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+                    if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                        $target = @($item.Target) | Select-Object -First 1
+                        if ($target) {
+                            $t = [IO.Path]::GetFullPath([IO.Path]::Combine([IO.Path]::GetDirectoryName($cur), ([string]$target).Replace('\??\', '')))
+                            if (-not ($t.TrimEnd('\') + '\').StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                                Write-HookBlock '[path-guard] Blocked: the path goes through a link (symlink or junction) that points outside the project folder.'
+                                exit 2
+                            }
+                        }
+                    }
+                }
+                $cur = [IO.Path]::GetDirectoryName($cur)
+            }
+        } catch { }
+        exit 0
+        """;
+
+    private const string BranchProtectScript = """
+        $ErrorActionPreference = 'Continue'   # git writes to stderr outside a repository; under 'Stop' PS 5.1 would abort on it
+        if (-not (Get-Command git -ErrorAction SilentlyContinue)) { exit 0 }   # no git, nothing to protect
+        $branch = ''
+        try { $branch = [string](& git branch --show-current 2>$null | Select-Object -First 1) } catch { exit 0 }
+        $branch = $branch.Trim()
+        # Compared in PowerShell, not with findstr /x: git ends the line with a bare LF and findstr /x never
+        # matched it, so the old one-liner never blocked. -contains is case-insensitive.
+        if (@('main', 'master', 'develop') -contains $branch) {
+            Write-HookBlock "[branch-protector] Blocked: the current branch is protected (main / master / develop). Create a feature branch, commit there and open a pull request."
+            exit 2
+        }
+        exit 0
+        """;
+
+    private const string LintScript = """
+        $ErrorActionPreference = 'Continue'   # native tools write to stderr; under 'Stop' PS 5.1 would abort on it
+        $full = Resolve-HookPath
+        if ($null -eq $full -or -not [IO.File]::Exists($full)) { exit 0 }
+        $cwd = Get-HookCwd
+        $ext = [IO.Path]::GetExtension($full).ToLowerInvariant()
+        try {
+            if ($ext -in '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.json', '.css', '.scss', '.less', '.md', '.html', '.vue', '.yaml', '.yml') {
+                # prettier.cmd is a batch shim and Windows re-reads a batch file's arguments through cmd.exe, so a
+                # name containing & | < > ^ % ! ( ) " could run a command there: such files are skipped.
+                if ($full -match $CmdMeta -or $cwd -match $CmdMeta) { exit 0 }
+                $prettier = [IO.Path]::Combine($cwd, 'node_modules', '.bin', 'prettier.cmd')
+                if ([IO.File]::Exists($prettier)) { & $prettier --write "$full" 2>&1 | Out-Null }
+            } elseif ($ext -eq '.py') {
+                if (Get-Command black -ErrorAction SilentlyContinue) { & black -q -- "$full" 2>&1 | Out-Null }
+            } elseif ($ext -eq '.rs') {
+                if (Get-Command rustfmt -ErrorAction SilentlyContinue) { & rustfmt -- "$full" 2>&1 | Out-Null }
+            }
+        } catch { }
+        exit 0
+        """;
+
+    private const string TypeCheckScript = """
+        $ErrorActionPreference = 'Continue'   # native tools write to stderr; under 'Stop' PS 5.1 would abort on it
+        $full = Resolve-HookPath
+        if ($null -eq $full -or -not [IO.File]::Exists($full)) { exit 0 }
+        $cwd = Get-HookCwd
+        $ext = [IO.Path]::GetExtension($full).ToLowerInvariant()
+        try {
+            if ($ext -in '.ts', '.tsx', '.mts', '.cts') {
+                if ($cwd -match $CmdMeta) { exit 0 }   # tsc.cmd is a batch shim - see auto-lint
+                $tsc = [IO.Path]::Combine($cwd, 'node_modules', '.bin', 'tsc.cmd')
+                if ([IO.File]::Exists($tsc) -and [IO.File]::Exists([IO.Path]::Combine($cwd, 'tsconfig.json'))) {
+                    & $tsc --noEmit 2>&1 | Select-Object -First 40 | ForEach-Object { "$_" }
+                }
+            } elseif ($ext -eq '.py') {
+                if (Get-Command mypy -ErrorAction SilentlyContinue) {
+                    & mypy -- "$full" 2>&1 | Select-Object -First 40 | ForEach-Object { "$_" }
+                }
+            }
+        } catch { }
+        exit 0
+        """;
+
+    /// <summary>Script files each catalog plugin installs next to its hooks.json (id → file → body).</summary>
+    private static readonly Dictionary<string, Dictionary<string, string>> CatalogScripts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["auto-lint"] = new() { ["lint.ps1"] = LintScript },
+        ["type-checker"] = new() { ["typecheck.ps1"] = TypeCheckScript },
+        ["secret-scanner"] = new() { ["secret-scan.ps1"] = SecretScanScript },
+        ["path-guard"] = new() { ["path-guard.ps1"] = PathGuardScript },
+        ["backup-before-edit"] = new() { ["backup.ps1"] = BackupScript },
+        ["size-guard"] = new() { ["size-guard.ps1"] = SizeGuardScript },
+        ["branch-protector"] = new() { ["branch-protect.ps1"] = BranchProtectScript },
+    };
 
     private List<string> LoadEnabledPluginNames()
     {

@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -12,17 +13,24 @@ namespace CluadeX.Services.Helpers;
 /// </summary>
 public static class InputDialog
 {
-    private static Brush Res(string key, Brush fallback)
-        => Application.Current?.TryFindResource(key) as Brush ?? fallback;
+    // Theme tokens (Tokens.md): every colour is a resource reference, so the dialog is drawn in the theme on screen
+    // and follows a switch while it is open. Midnight values = the Catppuccin colours this dialog always had.
+    private const string Bg = "Dialog.Simple.Background";       // #1E1E2E
+    private const string Field = "Dialog.Simple.Field";         // #181825 (text box, secondary button)
+    private const string Stroke = "Dialog.Simple.Border";       // #313244
+    private const string Text = "Text.Soft";                    // #CDD6F4
+    private const string Subtle = "Text.Soft.Muted";            // #6C7086
+    private const string Accent = "Accent.2.Soft";              // #CBA6F7 (caret, primary button)
+    private const string OnAccent = "Text.Inverse";             // #1E1E2E (primary button text)
+
+    private static T Tok<T>(T e, DependencyProperty p, string token) where T : FrameworkElement
+    {
+        e.SetResourceReference(p, token);
+        return e;
+    }
 
     public static string? Show(string title, string prompt, string? placeholder = null, string? initialText = null)
     {
-        var bg = Res("BaseBrush", new SolidColorBrush(Color.FromRgb(0x1e, 0x1e, 0x2e)));
-        var panel = Res("MantleBrush", new SolidColorBrush(Color.FromRgb(0x18, 0x18, 0x25)));
-        var stroke = Res("Surface0Brush", new SolidColorBrush(Color.FromRgb(0x31, 0x32, 0x44)));
-        var text = Res("TextBrush", new SolidColorBrush(Color.FromRgb(0xcd, 0xd6, 0xf4)));
-        var subtle = Res("Overlay0Brush", new SolidColorBrush(Color.FromRgb(0x6c, 0x70, 0x86)));
-        var accent = Res("MauveBrush", new SolidColorBrush(Color.FromRgb(0xcb, 0xa6, 0xf7)));
 
         var win = new Window
         {
@@ -39,50 +47,48 @@ public static class InputDialog
 
         var outer = new Border
         {
-            Background = bg,
-            BorderBrush = stroke,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(22),
-            Effect = new System.Windows.Media.Effects.DropShadowEffect
-            {
-                Color = Colors.Black, BlurRadius = 24, ShadowDepth = 0, Opacity = 0.55,
-            },
         };
+        Tok(outer, Border.BackgroundProperty, Bg);
+        Tok(outer, Border.BorderBrushProperty, Stroke);
+        Tok(outer, UIElement.EffectProperty, "Shadow.Dialog.Simple");
 
         var stack = new StackPanel();
 
-        stack.Children.Add(new TextBlock
+        stack.Children.Add(Tok(new TextBlock
         {
-            Text = title, Foreground = text, FontSize = 16, FontWeight = FontWeights.SemiBold,
+            Text = title, FontSize = 16, FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 4),
-        });
-        stack.Children.Add(new TextBlock
+        }, TextBlock.ForegroundProperty, Text));
+        stack.Children.Add(Tok(new TextBlock
         {
-            Text = prompt, Foreground = subtle, FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            Text = prompt, FontSize = 12, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 14),
-        });
+        }, TextBlock.ForegroundProperty, Subtle));
 
         var box = new TextBox
         {
             Text = initialText ?? "",
-            Background = panel,
-            Foreground = text,
-            CaretBrush = accent,
-            BorderBrush = stroke,
             BorderThickness = new Thickness(1),
             Padding = new Thickness(10, 8, 10, 8),
             FontSize = 13,
             FontFamily = new FontFamily("Consolas, Cascadia Code, Segoe UI"),
         };
+        Tok(box, Control.BackgroundProperty, Field);
+        Tok(box, Control.ForegroundProperty, Text);
+        Tok(box, TextBoxBase.CaretBrushProperty, Accent);
+        Tok(box, Control.BorderBrushProperty, Stroke);
 
         // Placeholder overlay (shown only while empty).
         var placeholderText = new TextBlock
         {
-            Text = placeholder ?? "", Foreground = subtle, FontSize = 13, IsHitTestVisible = false,
+            Text = placeholder ?? "", FontSize = 13, IsHitTestVisible = false,
             Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
             Visibility = string.IsNullOrEmpty(box.Text) ? Visibility.Visible : Visibility.Collapsed,
         };
+        Tok(placeholderText, TextBlock.ForegroundProperty, Subtle);
         box.TextChanged += (_, _) =>
             placeholderText.Visibility = string.IsNullOrEmpty(box.Text) ? Visibility.Visible : Visibility.Collapsed;
 
@@ -109,14 +115,14 @@ public static class InputDialog
                 Content = label,
                 Padding = new Thickness(16, 7, 16, 7),
                 Margin = new Thickness(8, 0, 0, 0),
-                Foreground = primary ? Res("BaseBrush", Brushes.Black) : text,
-                Background = primary ? accent : panel,
-                BorderBrush = stroke,
                 BorderThickness = new Thickness(primary ? 0 : 1),
                 Cursor = Cursors.Hand,
                 FontSize = 13,
                 FontWeight = primary ? FontWeights.SemiBold : FontWeights.Normal,
             };
+            Tok(b, Control.ForegroundProperty, primary ? OnAccent : Text);
+            Tok(b, Control.BackgroundProperty, primary ? Accent : Field);
+            Tok(b, Control.BorderBrushProperty, Stroke);
             return b;
         }
 

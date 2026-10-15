@@ -17,6 +17,8 @@ public class InstinctsViewModel : ViewModelBase
     private readonly InstinctService _service;
     private readonly BrainSyncService _brainSync;
     private readonly SkillService _skillService;
+    private readonly LocalizationService _loc;
+    private readonly DebugLogService _log;
     private readonly System.Windows.Threading.DispatcherTimer _brainPoll;
     private bool _lastBrainAvailable;
     private string _lastBrainText = "";
@@ -79,11 +81,14 @@ public class InstinctsViewModel : ViewModelBase
     public bool BrainAvailable => _brainSync.IsBrainAvailable;
     public string BrainStatusText => _brainSync.StatusText;
 
-    public InstinctsViewModel(InstinctService service, BrainSyncService brainSync, SkillService skillService)
+    public InstinctsViewModel(InstinctService service, BrainSyncService brainSync, SkillService skillService,
+        LocalizationService loc, DebugLogService log)
     {
         _service = service;
         _brainSync = brainSync;
         _skillService = skillService;
+        _loc = loc;
+        _log = log;
 
         // The BRAIN/OFFLINE chip and the brain-sync buttons read expression-bodied pass-throughs
         // (no backing field), so they latched to whatever was true when the page was first built —
@@ -106,51 +111,73 @@ public class InstinctsViewModel : ViewModelBase
         _brainPoll.Start();
         RefreshCommand = new RelayCommand(() => Refresh());
         SelectCommand = new RelayCommand<Instinct>(i => { if (i != null) Selected = i; });
+
+        // Every store mutation is file I/O (instincts.json) — a locked or read-only file used to
+        // throw straight out of a button handler. Each command now reports a localized failure and
+        // logs the details.
         AcceptCommand = new RelayCommand(() =>
         {
-            if (_selected == null) return;
-            _service.Accept(_selected.Id);
-            StatusMessage = $"Accepted '{Trim(_selected.Pattern)}' → confidence {_selected.Confidence:P0}";
-            Refresh(preserveSelection: _selected.Id);
+            var sel = _selected;
+            if (sel == null) return;
+            string id = sel.Id, label = Trim(sel.Pattern);
+            if (!Try("accept", () => _service.Accept(id))) return;
+            Refresh(preserveSelection: id);
+            var live = Instincts.FirstOrDefault(i => i.Id == id);
+            StatusMessage = string.Format(T("inst.accepted"), label, (live ?? sel).Confidence.ToString("P0"));
         });
         RejectCommand = new RelayCommand(() =>
         {
-            if (_selected == null) return;
-            _service.Reject(_selected.Id);
-            StatusMessage = $"Rejected '{Trim(_selected.Pattern)}' → confidence {_selected.Confidence:P0}";
-            Refresh(preserveSelection: _selected.Id);
+            var sel = _selected;
+            if (sel == null) return;
+            string id = sel.Id, label = Trim(sel.Pattern);
+            if (!Try("reject", () => _service.Reject(id))) return;
+            Refresh(preserveSelection: id);
+            var live = Instincts.FirstOrDefault(i => i.Id == id);
+            StatusMessage = string.Format(T("inst.rejected"), label, (live ?? sel).Confidence.ToString("P0"));
         });
         DeleteCommand = new RelayCommand(() =>
         {
-            if (_selected == null) return;
-            var snip = Trim(_selected.Pattern);
-            _service.Delete(_selected.Id);
+            var sel = _selected;
+            if (sel == null) return;
+            var snip = Trim(sel.Pattern);
+            // Permanent: the instinct, its votes and its observation history are gone from the store.
+            var confirm = System.Windows.MessageBox.Show(
+                string.Format(T("inst.deleteConfirm"), sel.Pattern),
+                T("inst.deleteTitle"),
+                System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning,
+                System.Windows.MessageBoxResult.No);
+            if (confirm != System.Windows.MessageBoxResult.Yes) return;
+
+            if (!Try("delete", () => _service.Delete(sel.Id))) return;
             Selected = null;
             Refresh();
-            StatusMessage = $"Deleted '{snip}'";
+            StatusMessage = string.Format(T("inst.deleted"), snip);
         });
         PromoteCommand = new RelayCommand(() =>
         {
-            if (_selected == null) return;
-            var path = _service.PromoteToSkill(_selected.Id);
+            var sel = _selected;
+            if (sel == null) return;
+            string id = sel.Id;
+            string? path = null;
+            if (!Try("promote", () => path = _service.PromoteToSkill(id))) return;
             if (path != null)
             {
                 // The skill file is on disk, but SkillService caches its list forever — without
                 // this the new skill stayed invisible to the agent and to /-completion until restart.
                 _skillService.ReloadSkills();
-                StatusMessage = $"Promoted → {Path.GetFileName(path)} (available now)";
-                Refresh(preserveSelection: _selected.Id);
+                StatusMessage = string.Format(T("inst.promoted"), Path.GetFileName(path));
+                Refresh(preserveSelection: id);
             }
             else
             {
-                StatusMessage = "Promote failed (confidence too low or already promoted)";
+                StatusMessage = T("inst.promoteRefused");
             }
         });
         AddCommand = new RelayCommand(() =>
         {
             if (string.IsNullOrWhiteSpace(_newPattern))
             {
-                StatusMessage = "Pattern is required";
+                StatusMessage = T("inst.patternRequired");
                 return;
             }
             var inst = new Instinct
@@ -161,33 +188,38 @@ public class InstinctsViewModel : ViewModelBase
                 Tags = _newTags.Split(',', StringSplitOptions.RemoveEmptyEntries)
                               .Select(t => t.Trim()).Where(t => t.Length > 0).ToList(),
             };
-            var added = _service.Add(inst);
+            Instinct? added = null;
+            if (!Try("add", () => added = _service.Add(inst)) || added == null) return;
             NewPattern = NewTrigger = NewAction = NewTags = "";
             Refresh(preserveSelection: added.Id);
-            StatusMessage = $"Added '{Trim(added.Pattern)}'";
+            StatusMessage = string.Format(T("inst.added"), Trim(added.Pattern));
         });
         ExportCommand = new RelayCommand(() =>
         {
             var dlg = new SaveFileDialog
             {
-                Title = "Export instincts to JSON",
-                Filter = "JSON file|*.json",
+                Title = T("inst.exportTitle"),
+                Filter = T("inst.jsonFilter"),
                 FileName = $"instincts-{DateTime.Now:yyyyMMdd}.json",
             };
             if (dlg.ShowDialog() != true) return;
             try
             {
                 _service.ExportTo(dlg.FileName);
-                StatusMessage = $"Exported {Instincts.Count} instincts → {dlg.FileName}";
+                StatusMessage = string.Format(T("inst.exported"), Instincts.Count, dlg.FileName);
             }
-            catch (Exception ex) { StatusMessage = $"Export failed: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                _log.Warn("Instincts", "Export failed", ex);
+                StatusMessage = T("inst.exportFailed");
+            }
         });
         ImportCommand = new RelayCommand(() =>
         {
             var dlg = new OpenFileDialog
             {
-                Title = "Import instincts from JSON",
-                Filter = "JSON file|*.json",
+                Title = T("inst.importTitle"),
+                Filter = T("inst.jsonFilter"),
                 CheckFileExists = true,
             };
             if (dlg.ShowDialog() != true) return;
@@ -195,9 +227,14 @@ public class InstinctsViewModel : ViewModelBase
             {
                 int n = _service.ImportFrom(dlg.FileName);
                 Refresh();
-                StatusMessage = n == 0 ? "Nothing imported (duplicates skipped)" : $"Imported {n} new instinct(s)";
+                StatusMessage = n == 0 ? T("inst.importNone") : string.Format(T("inst.imported"), n);
             }
-            catch (Exception ex) { StatusMessage = $"Import failed: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                // Usually a file that isn't an instincts export (JsonException) — say so plainly.
+                _log.Warn("Instincts", "Import failed", ex);
+                StatusMessage = T("inst.importFailed");
+            }
         });
         OpenStoreFolderCommand = new RelayCommand(() =>
         {
@@ -206,14 +243,20 @@ public class InstinctsViewModel : ViewModelBase
                 var dir = Path.GetDirectoryName(StorePath);
                 if (!string.IsNullOrEmpty(dir))
                 {
+                    Directory.CreateDirectory(dir);
+                    // A folder path: the shell opens it in Explorer (it can't "run" a directory).
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                     {
                         FileName = dir, UseShellExecute = true,
                     });
-                    StatusMessage = $"Opened {dir}";
+                    StatusMessage = string.Format(T("inst.openedFolder"), dir);
                 }
             }
-            catch (Exception ex) { StatusMessage = $"Open folder failed: {ex.Message}"; }
+            catch (Exception ex)
+            {
+                _log.Warn("Instincts", "Open store folder failed", ex);
+                StatusMessage = T("inst.openFolderFailed");
+            }
         });
         SyncToBrainCommand = new AsyncRelayCommand(async () =>
         {
@@ -224,7 +267,7 @@ public class InstinctsViewModel : ViewModelBase
             if (selected == null) return;
             string id = selected.Id;
             string label = Trim(selected.Pattern);
-            StatusMessage = $"Syncing '{label}' to brain...";
+            StatusMessage = string.Format(T("inst.syncing"), label);
 
             var result = await _brainSync.SyncInstinctAsync(selected);
 
@@ -238,7 +281,7 @@ public class InstinctsViewModel : ViewModelBase
                 {
                     live.BrainNoteId = result.NoteId;
                     live.LastSeen = DateTime.UtcNow;
-                    _service.Persist(live);
+                    if (!Try("persist", () => _service.Persist(live))) return;
                 }
                 StatusMessage = $"✓ {result.Message}";
                 Refresh(preserveSelection: id);
@@ -255,20 +298,24 @@ public class InstinctsViewModel : ViewModelBase
             // not persist EVERY SyncedToBrain instinct (which would include
             // previously-synced ones with stale in-memory state). Persist
             // only the entries the sync call modified during this batch.
-            StatusMessage = "Syncing all STRONG instincts to brain...";
+            StatusMessage = T("inst.syncingAll");
 
-            // Snapshot before sync so we can diff afterward
-            var beforeIds = Instincts.Where(i => i.SyncedToBrain).Select(i => i.Id).ToHashSet();
+            // SNAPSHOT, not the live collection: the sync awaits between instincts, and any store
+            // change meanwhile (an Accept, the Stop hook recording an observation) fires Changed →
+            // Refresh → Instincts.Clear(). Enumerating the live ObservableCollection then threw
+            // "Collection was modified", or re-added items and synced them twice.
+            var batch = Instincts.ToList();
+            var beforeIds = batch.Where(i => i.SyncedToBrain).Select(i => i.Id).ToHashSet();
 
-            var (synced, skipped, failed) = await _brainSync.SyncAllStrongAsync(Instincts);
+            var (synced, skipped, failed) = await _brainSync.SyncAllStrongAsync(batch);
 
             // Only persist instincts that became synced during THIS call
-            foreach (var i in Instincts)
+            foreach (var i in batch)
             {
                 if (i.SyncedToBrain && !beforeIds.Contains(i.Id))
-                    _service.Persist(i);
+                    Try("persist", () => _service.Persist(i));
             }
-            StatusMessage = $"Brain sync: {synced} synced · {skipped} skipped · {failed} failed";
+            StatusMessage = string.Format(T("inst.syncAllResult"), synced, skipped, failed);
             Refresh(preserveSelection: _selected?.Id);
         });
 
@@ -283,21 +330,49 @@ public class InstinctsViewModel : ViewModelBase
             App.Current?.Dispatcher.BeginInvoke(() => Refresh(preserveSelection: _selected?.Id));
     }
 
+    private string T(string key) => _loc.T(key);
+
+    /// <summary>Run a store mutation; on failure log the details and show a localized line.</summary>
+    private bool Try(string what, Action action)
+    {
+        try
+        {
+            action();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Instincts", $"Instinct {what} failed", ex);
+            StatusMessage = T("inst.saveFailed");
+            return false;
+        }
+    }
+
     public void Refresh(string? preserveSelection = null)
     {
         Instincts.Clear();
-        foreach (var i in _service.GetAll()) Instincts.Add(i);
+        List<Instinct> all;
+        try { all = _service.GetAll(); }
+        catch (Exception ex)
+        {
+            _log.Warn("Instincts", "Loading instincts failed", ex);
+            all = new List<Instinct>();
+        }
+        foreach (var i in all) Instincts.Add(i);
         if (preserveSelection != null)
             Selected = Instincts.FirstOrDefault(i => i.Id == preserveSelection) ?? Instincts.FirstOrDefault();
         else
-            Selected ??= Instincts.FirstOrDefault();
+            Selected = _selected == null ? Instincts.FirstOrDefault()
+                : Instincts.FirstOrDefault(i => i.Id == _selected.Id) ?? Instincts.FirstOrDefault();
 
         OnPropertyChanged(nameof(StrongCount));
         OnPropertyChanged(nameof(EmergingCount));
         OnPropertyChanged(nameof(TotalCount));
         OnPropertyChanged(nameof(CanPromoteSelected));
         if (string.IsNullOrEmpty(_statusMessage))
-            StatusMessage = $"{TotalCount} instincts · {StrongCount} strong · {EmergingCount} emerging";
+            StatusMessage = TotalCount == 0
+                ? T("inst.emptyStore")
+                : string.Format(T("inst.summary"), TotalCount, StrongCount, EmergingCount);
     }
 
     private static string Trim(string s) => s.Length <= 40 ? s : s[..40] + "…";

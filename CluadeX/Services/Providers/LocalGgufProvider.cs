@@ -181,6 +181,23 @@ public class LocalGgufProvider : IAiProvider
         }
     }
 
+    /// <summary>
+    /// Unload the model from whichever backend holds it: stops llama-server (freeing its VRAM and the file
+    /// lock) and/or unloads LLamaSharp. The Models page used to unload only LLamaSharp, while the default
+    /// path (GPU → llama-server) kept the server and its VRAM alive behind a "Model unloaded" message — and
+    /// deleting that model then failed with "file in use". Safe to call when nothing is loaded.
+    /// </summary>
+    public async Task UnloadAsync()
+    {
+        await UnloadInternalAsync();
+        // Also release a backend that was started outside this router (e.g. an older auto-load path).
+        if (_llamaService.IsModelLoaded) _llamaService.UnloadModel();
+        if (_serverProvider.IsServerRunning) await _serverProvider.StopServerAsync();
+        _activeBackend = Backend.None;
+        _loadedModelPath = null;
+        OnStatusChanged?.Invoke("No model loaded");
+    }
+
     /// <summary>Unload whichever backend is currently active. Pass <paramref name="keepBackend"/> to skip unloading one.</summary>
     private async Task UnloadInternalAsync(Backend keepBackend = Backend.None)
     {
@@ -220,6 +237,11 @@ public class LocalGgufProvider : IAiProvider
     // legacy [ACTION:] text loop for LlamaSharp models as before.
     public bool SupportsNativeToolUse
         => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsNativeToolUse;
+
+    /// <summary>Tool images: only through the llama-server backend, and only when it has a vision projector —
+    /// false today (LLamaSharp in-process never sees images).</summary>
+    public bool SupportsToolResultImages(string modelId)
+        => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsToolResultImages(modelId);
 
     public Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages,

@@ -22,8 +22,10 @@ public class SettingsService
         catch { return plainText; }
     }
 
-    private static string DecryptString(string encryptedText)
+    /// <summary>Decrypt an "ENC:" value. <paramref name="failed"/> is true when it could not be decrypted here.</summary>
+    private static string DecryptString(string encryptedText, out bool failed)
     {
+        failed = false;
         if (string.IsNullOrEmpty(encryptedText)) return encryptedText;
         if (!encryptedText.StartsWith("ENC:")) return encryptedText; // legacy plaintext
         try
@@ -32,33 +34,73 @@ public class SettingsService
             byte[] data = ProtectedData.Unprotect(encrypted, null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(data);
         }
-        catch { return string.Empty; }
+        catch
+        {
+            failed = true;
+            return string.Empty;
+        }
     }
 
-    /// <summary>Encrypt all API keys in settings before saving.</summary>
-    private static void EncryptSecrets(AppSettings settings)
+    // ─── Secrets that could not be decrypted on this machine ───
+    // DPAPI (CurrentUser) only decrypts on the Windows account that encrypted. A portable copy carried to
+    // another PC loaded every API key as "", and the next save — any setting at all — wrote "" back over
+    // the encrypted blobs: the keys were gone even on the original PC. The blobs are now remembered and
+    // written back unchanged unless the user enters a new key.
+    private readonly Dictionary<string, string> _undecryptable = new(StringComparer.Ordinal);
+    private const string HfTokenSecretId = "HuggingFaceToken";
+    private static string ProviderSecretId(string provider) => "Provider:" + provider;
+
+    /// <summary>Keys stored on disk that could not be decrypted here ("HuggingFaceToken", "Provider:Anthropic", …).
+    /// Empty when everything decrypted. The settings page tells the user to re-enter them.</summary>
+    public IReadOnlyCollection<string> UndecryptableSecrets
+    {
+        get { lock (_ioLock) return _undecryptable.Keys.ToList(); }
+    }
+
+    /// <summary>Encrypt all API keys in settings before saving. A key that could not be decrypted on this PC and
+    /// was not replaced by the user is written back as its original encrypted blob.</summary>
+    private void EncryptSecrets(AppSettings settings)
     {
         if (!string.IsNullOrEmpty(settings.HuggingFaceToken) && !settings.HuggingFaceToken.StartsWith("ENC:"))
             settings.HuggingFaceToken = EncryptString(settings.HuggingFaceToken);
+        else if (string.IsNullOrEmpty(settings.HuggingFaceToken) && _undecryptable.TryGetValue(HfTokenSecretId, out var hfBlob))
+            settings.HuggingFaceToken = hfBlob;
 
         foreach (var kvp in settings.ProviderConfigs)
         {
             if (!string.IsNullOrEmpty(kvp.Value.ApiKey) && !kvp.Value.ApiKey.StartsWith("ENC:"))
                 kvp.Value.ApiKey = EncryptString(kvp.Value.ApiKey);
+            else if (string.IsNullOrEmpty(kvp.Value.ApiKey) && _undecryptable.TryGetValue(ProviderSecretId(kvp.Key), out var blob))
+                kvp.Value.ApiKey = blob;
         }
     }
 
-    /// <summary>Decrypt all API keys in settings after loading.</summary>
-    private static void DecryptSecrets(AppSettings settings)
+    /// <summary>Decrypt all API keys in settings after loading, remembering the blobs that fail.</summary>
+    private void DecryptSecrets(AppSettings settings)
     {
+        _undecryptable.Clear();
         if (!string.IsNullOrEmpty(settings.HuggingFaceToken))
-            settings.HuggingFaceToken = DecryptString(settings.HuggingFaceToken);
+        {
+            string blob = settings.HuggingFaceToken;
+            settings.HuggingFaceToken = DecryptString(blob, out bool failed);
+            if (failed) _undecryptable[HfTokenSecretId] = blob;
+        }
 
         foreach (var kvp in settings.ProviderConfigs)
         {
-            if (!string.IsNullOrEmpty(kvp.Value.ApiKey))
-                kvp.Value.ApiKey = DecryptString(kvp.Value.ApiKey);
+            if (string.IsNullOrEmpty(kvp.Value.ApiKey)) continue;
+            string blob = kvp.Value.ApiKey;
+            kvp.Value.ApiKey = DecryptString(blob, out bool failed);
+            if (failed) _undecryptable[ProviderSecretId(kvp.Key)] = blob;
         }
+    }
+
+    /// <summary>After a successful save: a secret the user has re-entered no longer needs its old blob.</summary>
+    private void ForgetReplacedSecrets()
+    {
+        if (!string.IsNullOrEmpty(_settings.HuggingFaceToken)) _undecryptable.Remove(HfTokenSecretId);
+        foreach (var kvp in _settings.ProviderConfigs)
+            if (!string.IsNullOrEmpty(kvp.Value.ApiKey)) _undecryptable.Remove(ProviderSecretId(kvp.Key));
     }
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -83,16 +125,28 @@ public class SettingsService
 
     public event Action? SettingsChanged;
 
+    /// <summary>The data home this build uses: &lt;exe&gt;\Data next to a "portable" / "portable.txt" marker, else
+    /// ~/.cluadex. One rule for services created before this one — the debug log had its own and always wrote
+    /// ~/.cluadex/logs, so a portable copy and every test harness wrote into the user's real log (2026-10-13: 90 lines
+    /// of mcptest's stub servers in the log a pipe run was being watched through).</summary>
+    public static string ResolveDataRoot(out bool portable)
+    {
+        string exeDir = AppDomain.CurrentDomain.BaseDirectory;
+        portable = File.Exists(Path.Combine(exeDir, "portable")) || File.Exists(Path.Combine(exeDir, "portable.txt"));
+        return portable
+            ? Path.Combine(exeDir, "Data")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex");
+    }
+
     public SettingsService()
     {
         // Detect portable mode: if "portable" or "portable.txt" exists next to the exe
-        string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        IsPortable = File.Exists(Path.Combine(exeDir, "portable"))
-                  || File.Exists(Path.Combine(exeDir, "portable.txt"));
+        string root = ResolveDataRoot(out bool portable);
+        IsPortable = portable;
 
         if (IsPortable)
         {
-            _dataRoot = Path.Combine(exeDir, "Data");
+            _dataRoot = root;
             _settingsPath = Path.Combine(_dataRoot, "settings.json");
         }
         else
@@ -214,11 +268,20 @@ public class SettingsService
         }
     }
 
-    public void Save()
+    /// <summary>Why the last <see cref="Save"/> failed (null after a successful save).</summary>
+    public string? LastSaveError { get; private set; }
+
+    /// <summary>
+    /// Write settings.json. Returns false when the write failed — it used to swallow the exception while the
+    /// settings page said "Saved ✓". Folders are NOT created here any more: the page auto-saves while a path is
+    /// being typed, and creating every intermediate value made folders like "D:\Mod" appear.
+    /// </summary>
+    public bool Save()
     {
         // Capture subscribers outside the lock so the Save() call itself doesn't hold
         // the IO lock while handlers run (they may re-enter via settings reads).
         Action? changedHandlers = null;
+        bool ok = false;
         lock (_ioLock)
         {
             try
@@ -253,18 +316,23 @@ public class SettingsService
                 else
                     File.Move(tempPath, _settingsPath);
 
-                EnsureDirectoriesExist();
+                ForgetReplacedSecrets();
+                LastSaveError = null;
+                ok = true;
                 changedHandlers = SettingsChanged;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.GetType().Name}: {ex.Message}");
+                LastSaveError = $"{ex.GetType().Name}: {ex.Message}";
+                System.Diagnostics.Debug.WriteLine($"Failed to save settings: {LastSaveError}");
             }
         }
         changedHandlers?.Invoke();
+        return ok;
     }
 
-    public void UpdateSettings(Action<AppSettings> update)
+    /// <summary>Apply <paramref name="update"/> and save. Returns false when the save failed (see LastSaveError).</summary>
+    public bool UpdateSettings(Action<AppSettings> update)
     {
         AiProviderType before;
         AiProviderType after;
@@ -284,15 +352,15 @@ public class SettingsService
                 var stack = new System.Diagnostics.StackTrace(skipFrames: 1, fNeedFileInfo: false);
                 var caller = stack.GetFrames()?.FirstOrDefault(f => f.GetMethod()?.Name != "UpdateSettings")?.GetMethod();
                 var callerName = caller != null ? $"{caller.DeclaringType?.Name}.{caller.Name}" : "?";
-                var logFile = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".cluadex", "mcp-host.log");
+                // The data home (~/.cluadex installed; <exe>\Data portable) — a portable copy and the test harnesses
+                // must not write into the user's real ~/.cluadex.
+                var logFile = System.IO.Path.Combine(_dataRoot, "mcp-host.log");
                 System.IO.File.AppendAllText(logFile,
                     $"{DateTime.Now:O} ActiveProvider FLIP {before} -> {after}  caller={callerName}\n");
             }
             catch { /* best-effort */ }
         }
-        Save();
+        return Save();
     }
 
     /// <summary>Fill in any blank directory paths with sensible defaults.</summary>

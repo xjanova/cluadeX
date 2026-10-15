@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JSON and JSON with comments (tsconfig, VS Code settings).
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, PropertyName -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="JSONC" extensions=".json;.jsonc" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="// comment" />
+  <Color name="String" foreground="#CE9178" exampleText="&quot;value&quot;" />
+  <Color name="PropertyName" foreground="#9CDCFE" exampleText="&quot;key&quot;:" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="-12.5e3" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="true" />
+
+  <RuleSet>
+    <!-- JSONC comments. Strings are spans, so "https://x" is never cut short by //. -->
+    <Span color="Comment" begin="//" />
+    <Span color="Comment" multiline="true" begin="/\*" end="\*/" />
+    <!-- A key is a string followed by a colon; listed before the value span so it wins at the same column. -->
+    <Span color="PropertyName">
+      <Begin>"(?=(?:[^"\\]|\\.)*"\s*:)</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet><Span begin="\\" end="." /></RuleSet>
+    </Span>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word><Word>null</Word>
+    </Keywords>
+    <Rule color="Number">-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b</Rule>
+  </RuleSet>
+</SyntaxDefinition>

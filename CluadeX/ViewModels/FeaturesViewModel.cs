@@ -18,7 +18,7 @@ public class FeatureItem : ViewModelBase
     public bool IsEnabled
     {
         get => _isEnabled;
-        set => SetProperty(ref _isEnabled, value);
+        set { if (SetProperty(ref _isEnabled, value)) OnPropertyChanged(nameof(CanToggle)); }
     }
 
     private bool _isLocked;
@@ -28,8 +28,11 @@ public class FeatureItem : ViewModelBase
         set { SetProperty(ref _isLocked, value); OnPropertyChanged(nameof(CanToggle)); }
     }
 
-    /// <summary>Can this feature be toggled? Must be toggleable AND not locked by activation.</summary>
-    public bool CanToggle => IsToggleable && !IsLocked;
+    /// <summary>
+    /// Can this feature be toggled? A locked feature can still be switched OFF (never on) — before, a free user
+    /// could not even turn off something that was already running.
+    /// </summary>
+    public bool CanToggle => IsToggleable && (!IsLocked || IsEnabled);
 
     private bool _isUnlocked = true;
     public bool IsUnlocked
@@ -47,6 +50,43 @@ public class FeatureItem : ViewModelBase
 
     private string _statusLabel = "";
     public string StatusLabel { get => _statusLabel; set => SetProperty(ref _statusLabel, value); }
+
+    /// <summary>An extra line under the description (Dev Preview: the browser engine found, or how to install it).</summary>
+    private string _detail = "";
+    public string Detail { get => _detail; set => SetProperty(ref _detail, value); }
+
+    /// <summary>An optional setting shown under the description (Dev Preview: what to do with sites outside this
+    /// PC — ask / allow / block). Empty = none.</summary>
+    public ObservableCollection<FeatureChoice> Choices { get; } = new();
+    public bool HasChoices => Choices.Count > 0;
+
+    private string _choiceLabel = "";
+    public string ChoiceLabel { get => _choiceLabel; set => SetProperty(ref _choiceLabel, value); }
+
+    private string _choiceTip = "";
+    public string ChoiceTip { get => _choiceTip; set => SetProperty(ref _choiceTip, value); }
+
+    private string? _selectedChoice;
+    /// <summary>The chosen <see cref="FeatureChoice.Value"/>; a change is saved through <see cref="ChoiceChanged"/>.</summary>
+    public string? SelectedChoice
+    {
+        get => _selectedChoice;
+        set
+        {
+            if (string.IsNullOrEmpty(value)) return;   // the list being relabelled never clears the setting
+            if (SetProperty(ref _selectedChoice, value)) ChoiceChanged?.Invoke(value);
+        }
+    }
+
+    public Action<string>? ChoiceChanged { get; set; }
+}
+
+/// <summary>One option of a <see cref="FeatureItem"/> setting (the label follows the language).</summary>
+public class FeatureChoice : ViewModelBase
+{
+    public string Value { get; init; } = "";
+    private string _label = "";
+    public string Label { get => _label; set => SetProperty(ref _label, value); }
 }
 
 public class FeaturesViewModel : ViewModelBase
@@ -90,6 +130,29 @@ public class FeaturesViewModel : ViewModelBase
     // Activation
     private bool _isActivated;
     public bool IsActivated { get => _isActivated; set => SetProperty(ref _isActivated, value); }
+
+    /// <summary>
+    /// Deactivate is offered for a PAID key only. During a trial it released the demo key on the server, and
+    /// the user could not get it back (the key is shown masked, so they could not even re-type it).
+    /// </summary>
+    private bool _canDeactivate;
+    public bool CanDeactivate { get => _canDeactivate; set => SetProperty(ref _canDeactivate, value); }
+
+    /// <summary>
+    /// Features the app ACTUALLY gates behind activation today (checked where the feature runs): the cloud
+    /// providers (Settings ▸ Apply refuses them unactivated), and the agent's GitHub, web-fetch and background
+    /// task tools (AgentToolService). Everything else is not enforced anywhere, so the page must not show a
+    /// lock on it — HuggingFace, Plugins, Context memory, Smart editing, and above all the security toggles
+    /// (permissions, dangerous-command blocking), which a free user must always be able to switch.
+    /// ActivationService.IsFeatureUnlocked should be made to agree with this list.
+    /// </summary>
+    public static readonly HashSet<string> GatedFeatures = new(StringComparer.Ordinal)
+    {
+        "feature.openai", "feature.anthropic", "feature.gemini", "feature.multiProvider",
+        "feature.github", "feature.webFetch", "feature.devPreview",
+    };
+
+    private bool IsUnlockedForDisplay(string key) => !GatedFeatures.Contains(key) || _activation.IsFeatureUnlocked(key);
     private string _activationTier = "Free";
     public string ActivationTier { get => _activationTier; set => SetProperty(ref _activationTier, value); }
     private string _activationKeyInput = "";
@@ -107,11 +170,15 @@ public class FeaturesViewModel : ViewModelBase
     public ICommand DeactivateCommand { get; }
     public ICommand ForceActivateCommand { get; }
 
-    public FeaturesViewModel(SettingsService settingsService, LocalizationService loc, ActivationService activation)
+    private readonly DebugLogService? _log;
+
+    public FeaturesViewModel(SettingsService settingsService, LocalizationService loc, ActivationService activation,
+        DebugLogService? log = null)
     {
         _settingsService = settingsService;
         _loc = loc;
         _activation = activation;
+        _log = log;
 
         ToggleFeatureCommand = new RelayCommand<FeatureItem>(ToggleFeature);
         ActivateCommand = new AsyncRelayCommand(DoActivateAsync);
@@ -139,19 +206,32 @@ public class FeaturesViewModel : ViewModelBase
     private void RefreshActivationState()
     {
         IsActivated = _activation.IsActivated;
+        CanDeactivate = _activation.IsActivated && !_activation.IsTrial;
         ActivationTier = _activation.TierDisplayName;
     }
 
     private async Task DoActivateAsync()
     {
         ShowForceActivate = false;
-        ActivationMessage = "Activating...";
+        ActivationMessage = _loc.T("featuresm.activating");
         ActivationSuccess = false;
 
-        var (success, message) = await _activation.ActivateAsync(ActivationKeyInput);
-        ActivationMessage = message;
-        ActivationSuccess = success;
-        if (success) { ActivationKeyInput = ""; ShowForceActivate = false; }
+        try
+        {
+            var (success, message, code) = await _activation.ActivateAsync(ActivationKeyInput);
+            // Offline: the message is "Connection failed: " + a raw exception text — say it in words instead.
+            ActivationMessage = code == XmanLicenseService.ErrorOffline || string.IsNullOrWhiteSpace(message)
+                ? _loc.T("license.offline")
+                : message;
+            ActivationSuccess = success;
+            if (success) { ActivationKeyInput = ""; ShowForceActivate = false; }
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("License", "Activation threw", ex);
+            ActivationMessage = _loc.T("featuresm.activateFailed");
+            ActivationSuccess = false;
+        }
     }
 
     private async Task DoForceActivateAsync()
@@ -159,30 +239,38 @@ public class FeaturesViewModel : ViewModelBase
         var key = !string.IsNullOrEmpty(_pendingKey) ? _pendingKey : ActivationKeyInput;
         if (string.IsNullOrWhiteSpace(key)) return;
 
-        ActivationMessage = "Transferring license...";
+        ActivationMessage = _loc.T("featuresm.transferring");
         ActivationSuccess = false;
 
         try
         {
             var (success, message) = await _activation.ActivateForceAsync(key);
-            ActivationMessage = message;
+            ActivationMessage = !success && (string.IsNullOrWhiteSpace(message) || message.StartsWith("Connection failed:", StringComparison.Ordinal))
+                ? _loc.T("license.offline")
+                : message;
             ActivationSuccess = success;
             ShowForceActivate = false;
             if (success) { ActivationKeyInput = ""; _pendingKey = ""; }
         }
         catch (Exception ex)
         {
-            ActivationMessage = $"Transfer failed: {ex.Message}";
+            _log?.Error("License", "License transfer threw", ex);
+            ActivationMessage = _loc.T("featuresm.transferFailed");
             ActivationSuccess = false;
         }
     }
 
     private void DoDeactivate()
     {
+        if (!CanDeactivate) return;   // never release a trial key — see CanDeactivate
+        // Destructive: Pro switches off on this PC — ask first.
+        var answer = System.Windows.MessageBox.Show(_loc.T("license.deactivateConfirm"), "CluadeX",
+            System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question,
+            System.Windows.MessageBoxResult.No);
+        if (answer != System.Windows.MessageBoxResult.Yes) return;
+
         _activation.Deactivate();
-        ActivationMessage = _loc.CurrentLanguage == "th"
-            ? "ปิดการใช้งานแล้ว กลับสู่โหมดฟรี"
-            : "Deactivated. Returned to Free tier.";
+        ActivationMessage = _loc.T("featuresm.deactivated");
         ActivationSuccess = false;
     }
 
@@ -199,14 +287,14 @@ public class FeaturesViewModel : ViewModelBase
     {
         foreach (var item in items)
         {
-            // Ask the ONE authority. This used to consult a second, hand-maintained free-tier
-            // list here, which drifted from ActivationService — e.g. local Git became free there
-            // but not here, so the Git toggle greyed out for good after any activation change.
-            bool unlocked = _activation.IsFeatureUnlocked(item.Key);
+            // ActivationService is the authority for what is gated, intersected with GatedFeatures (what is
+            // actually enforced) so the page never shows a lock that nothing behind it honours.
+            bool unlocked = IsUnlockedForDisplay(item.Key);
 
             item.IsLocked = !unlocked;
             item.IsUnlocked = unlocked;
         }
+        RefreshCollection(items);
     }
 
 
@@ -230,10 +318,12 @@ public class FeaturesViewModel : ViewModelBase
             Key = "feature.chatPersistence", Icon = "\U0001F4BE",
             Category = "core", IsToggleable = false, IsEnabled = true,
         });
+        // Markdown is always rendered: the MarkdownRendering setting this toggle wrote is read by nothing, so it
+        // is shown as a built-in instead of a switch that does nothing.
         CoreFeatures.Add(new FeatureItem
         {
             Key = "feature.markdown", Icon = "\U0001F4DD",
-            Category = "core", IsToggleable = true, IsEnabled = ft.MarkdownRendering,
+            Category = "core", IsToggleable = false, IsEnabled = true,
         });
         CoreFeatures.Add(new FeatureItem
         {
@@ -318,6 +408,18 @@ public class FeaturesViewModel : ViewModelBase
             Key = "feature.smartEditing", Icon = "\u2728",
             Category = "tools", IsToggleable = true, IsEnabled = ft.SmartEditing,
         });
+        // Dev Preview: background dev servers + the built-in browser the agent drives (Detail = engine probe;
+        // the choice = what the built-in browser does with sites outside this PC).
+        var devPreview = new FeatureItem
+        {
+            Key = "feature.devPreview", Icon = "\U0001F441\ufe0f",
+            Category = "tools", IsToggleable = true, IsEnabled = ft.DevPreview,
+        };
+        foreach (var value in new[] { "ask", "allow", "deny" }) devPreview.Choices.Add(new FeatureChoice { Value = value });
+        string mode = (_settingsService.Settings.BrowserAllowExternal ?? "ask").Trim().ToLowerInvariant();
+        devPreview.SelectedChoice = mode is "allow" or "deny" ? mode : "ask";
+        devPreview.ChoiceChanged = SaveBrowserExternalMode;
+        ToolFeatures.Add(devPreview);
 
         // ─── Security ───
         SecurityFeatures.Add(new FeatureItem
@@ -357,11 +459,6 @@ public class FeaturesViewModel : ViewModelBase
             Key = "feature.plugins", Icon = "\U0001F9E9",
             Category = "fun", IsToggleable = true, IsEnabled = ft.PluginSystem,
         });
-        FunFeatures.Add(new FeatureItem
-        {
-            Key = "feature.taskManager", Icon = "\U0001F4CB",
-            Category = "fun", IsToggleable = true, IsEnabled = ft.TaskManager,
-        });
     }
 
     private void RefreshLabels()
@@ -393,7 +490,7 @@ public class FeaturesViewModel : ViewModelBase
             item.Name = _loc.T(item.Key);
             item.Description = _loc.T(item.Key + ".desc");
 
-            bool unlocked = _activation.IsFeatureUnlocked(item.Key);
+            bool unlocked = IsUnlockedForDisplay(item.Key);
             item.IsLocked = !unlocked;
             item.IsUnlocked = unlocked;
 
@@ -405,16 +502,62 @@ public class FeaturesViewModel : ViewModelBase
                 item.StatusLabel = _loc.T("features.free");
             else
                 item.StatusLabel = item.IsEnabled ? _loc.T("features.enabled") : _loc.T("features.disabled");
+
+            if (item.Key == "feature.devPreview")
+            {
+                item.Detail = DevPreviewEngineLine();
+                item.ChoiceLabel = _loc.T("devPreview.externalLabel");
+                item.ChoiceTip = _loc.T("devPreview.externalTip");
+                foreach (var c in item.Choices) c.Label = _loc.T("devPreview.external." + c.Value);
+            }
+        }
+    }
+
+    /// <summary>Settings ▸ Features ▸ Dev Preview ▸ Sites outside this PC: "ask", "allow" or "deny".</summary>
+    private void SaveBrowserExternalMode(string value)
+    {
+        if (value is not ("ask" or "allow" or "deny")) return;
+        if (string.Equals(_settingsService.Settings.BrowserAllowExternal, value, StringComparison.OrdinalIgnoreCase)) return;
+        _settingsService.Settings.BrowserAllowExternal = value;
+        if (!_settingsService.Save())
+        {
+            _log?.Error("Features", $"Saving the external-sites choice failed: {_settingsService.LastSaveError}");
+            ActivationSuccess = false;
+            ActivationMessage = _loc.T("featuresm.saveFailed");
+        }
+    }
+
+    /// <summary>"Engine: WebView2 154.0… · Edge … · Chrome …" or the command that installs the runtime.</summary>
+    private string DevPreviewEngineLine()
+    {
+        try
+        {
+            var info = Services.Browser.BrowserEngineProbe.Probe();
+            return info.HasWebView2
+                ? string.Format(_loc.T("devPreview.engineFound"), info.Summary)
+                : string.Format(_loc.T("devPreview.engineMissing"), Services.Browser.BrowserEngineProbe.InstallCommand);
+        }
+        catch (Exception ex)
+        {
+            _log?.Error("Features", "Browser engine probe failed", ex);
+            return string.Format(_loc.T("devPreview.engineMissing"), Services.Browser.BrowserEngineProbe.InstallCommand);
         }
     }
 
     private void ToggleFeature(FeatureItem? item)
     {
-        if (item == null || !item.CanToggle) return;
+        if (item == null || !item.IsToggleable) return;
 
         // Don't toggle here — the CheckBox.IsChecked two-way binding already toggled IsEnabled.
-        // We only need to update the status label and sync to settings.
-        item.StatusLabel = item.IsEnabled ? _loc.T("features.enabled") : _loc.T("features.disabled");
+        // A locked feature may only be switched OFF: undo an attempt to switch it on.
+        if (item.IsLocked && item.IsEnabled)
+        {
+            item.IsEnabled = false;
+            return;
+        }
+        item.StatusLabel = item.IsLocked
+            ? "\U0001F512 " + _loc.T("features.requiresKey")
+            : item.IsEnabled ? _loc.T("features.enabled") : _loc.T("features.disabled");
 
         // Sync back to settings
         var ft = _settingsService.Settings.Features;
@@ -422,17 +565,21 @@ public class FeaturesViewModel : ViewModelBase
         {
             case "feature.buddy": ft.BuddyCompanion = item.IsEnabled; break;
             case "feature.plugins": ft.PluginSystem = item.IsEnabled; break;
-            case "feature.taskManager": ft.TaskManager = item.IsEnabled; break;
+            case "feature.devPreview": ft.DevPreview = item.IsEnabled; break;
             case "feature.webFetch": ft.WebFetch = item.IsEnabled; break;
             case "feature.git": ft.GitIntegration = item.IsEnabled; break;
             case "feature.github": ft.GitHubIntegration = item.IsEnabled; break;
             case "feature.contextMemory": ft.ContextMemory = item.IsEnabled; break;
             case "feature.smartEditing": ft.SmartEditing = item.IsEnabled; break;
-            case "feature.markdown": ft.MarkdownRendering = item.IsEnabled; break;
             case "feature.permissions": ft.PermissionSystem = item.IsEnabled; break;
             case "feature.commandBlock": ft.DangerousCommandBlocking = item.IsEnabled; break;
         }
 
-        _settingsService.Save();
+        if (!_settingsService.Save())
+        {
+            _log?.Error("Features", $"Saving the {item.Key} toggle failed: {_settingsService.LastSaveError}");
+            ActivationSuccess = false;
+            ActivationMessage = _loc.T("featuresm.saveFailed");
+        }
     }
 }

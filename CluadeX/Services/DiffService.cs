@@ -42,20 +42,20 @@ public static class DiffService
         if (a.Length > MaxDiffLines || b.Length > MaxDiffLines)
         {
             result.Truncated = true;
-            result.Note = $"File too large to align ({Math.Max(a.Length, b.Length):N0} lines).";
+            result.Note = string.Format(L("diff.tooLargeToAlign"), Math.Max(a.Length, b.Length).ToString("N0"));
             return result;
         }
 
         if (oldText.Length == 0 && newText.Length == 0)
         {
-            result.Note = "Both sides are empty.";
+            result.Note = L("diff.bothEmpty");
             return result;
         }
 
         var script = Diff(a, b, out bool hitCap);
         result.Truncated = hitCap;
         if (hitCap)
-            result.Note = "The two versions differ too much to align line by line — showing them as a full replacement.";
+            result.Note = L("diff.tooDifferent");
 
         BuildRows(script, result);
         return result;
@@ -194,6 +194,11 @@ public static class DiffService
         int max = Math.Min(n + m, MaxEditDistance);
         int offset = n + m;                 // k can range over [-(n+m), n+m]
         var v = new int[2 * (n + m) + 1];
+
+        // Only the diagonals step d can have touched, k ∈ [-d, d], are kept — and that is all the
+        // backtrack ever reads. The old trace cloned the WHOLE v array every step: for a 60,000-line
+        // lockfile that is 240,000 ints × up to 2,000 steps ≈ 1.9 GB, enough to take the app down.
+        // The band costs (D+1)² ints in total — 16 MB at the edit-distance ceiling.
         var trace = new List<int[]>();
 
         for (int d = 0; d <= max; d++)
@@ -212,11 +217,11 @@ public static class DiffService
 
                 if (x >= n && y >= m)
                 {
-                    trace.Add((int[])v.Clone());
-                    return Backtrack(a, b, trace, offset, d);
+                    trace.Add(Band(v, offset, d));
+                    return Backtrack(a, b, trace, d);
                 }
             }
-            trace.Add((int[])v.Clone());
+            trace.Add(Band(v, offset, d));
         }
 
         // Past the ceiling — say so and degrade to a wholesale replacement rather than lying.
@@ -227,18 +232,29 @@ public static class DiffService
         return replace;
     }
 
-    private static List<DiffOp> Backtrack(string[] a, string[] b, List<int[]> trace, int offset, int finalD)
+    /// <summary>Copy of v for diagonals [-d, d]: band[k + d] == v[k + offset].</summary>
+    private static int[] Band(int[] v, int offset, int d)
+    {
+        var band = new int[2 * d + 1];
+        Array.Copy(v, offset - d, band, 0, band.Length);
+        return band;
+    }
+
+    private static List<DiffOp> Backtrack(string[] a, string[] b, List<int[]> trace, int finalD)
     {
         var reversed = new List<DiffOp>();
         int x = a.Length, y = b.Length;
 
         for (int d = finalD; d > 0; d--)
         {
-            var v = trace[d - 1];
+            // Step d chose between diagonals k-1 and k+1 of step d-1, which always lie in that
+            // step's band [-(d-1), d-1] — so the band is all we need.
+            var band = trace[d - 1];
+            int bo = d - 1;                      // band offset for step d-1
             int k = x - y;
 
-            int prevK = (k == -d || (k != d && v[k - 1 + offset] < v[k + 1 + offset])) ? k + 1 : k - 1;
-            int prevX = v[prevK + offset];
+            int prevK = (k == -d || (k != d && band[k - 1 + bo] < band[k + 1 + bo])) ? k + 1 : k - 1;
+            int prevX = band[prevK + bo];
             int prevY = prevX - prevK;
 
             while (x > prevX && y > prevY) { reversed.Add(new DiffOp(DiffOpKind.Equal, a[--x])); y--; }
@@ -285,7 +301,7 @@ public static class DiffService
             var block = new ConflictBlock
             {
                 StartLine = i + 1,
-                OursLabel = LabelFrom(lines[i], OursMarker, "current"),
+                OursLabel = LabelFrom(lines[i], OursMarker, L("diff.labelCurrent")),
             };
 
             int j = i + 1;
@@ -312,7 +328,7 @@ public static class DiffService
                 }
                 if (line.StartsWith(TheirsMarker, StringComparison.Ordinal))
                 {
-                    block.TheirsLabel = LabelFrom(line, TheirsMarker, "incoming");
+                    block.TheirsLabel = LabelFrom(line, TheirsMarker, L("diff.labelIncoming"));
                     block.EndLine = j + 1;
                     closed = true;
                     j++;
@@ -417,6 +433,10 @@ public static class DiffService
 
     private static string[] SplitLines(string text) =>
         text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+
+    /// <summary>Static service, so it reads the UI language through the XAML proxy (falls back to
+    /// the key itself before the app has initialised it — e.g. in a harness).</summary>
+    internal static string L(string key) => LocalizedResources.Instance[key];
 }
 
 // ═══════════════════════════ Models ═══════════════════════════
@@ -457,29 +477,29 @@ public sealed class ConflictBlock
     public int StartLine { get; set; }
     /// <summary>1-based line of the <c>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</c> marker.</summary>
     public int EndLine { get; set; }
-    public string OursLabel { get; set; } = "current";
-    public string TheirsLabel { get; set; } = "incoming";
+    public string OursLabel { get; set; } = DiffService.L("diff.labelCurrent");
+    public string TheirsLabel { get; set; } = DiffService.L("diff.labelIncoming");
     public List<string> OurLines { get; set; } = new();
     public List<string> BaseLines { get; set; } = new();
     public List<string> TheirLines { get; set; } = new();
     public bool HasBase { get; set; }
 
-    public string Title => $"Conflict {Index + 1} · line {StartLine}";
-    public string OursSummary => $"{OursLabel} ({OurLines.Count} line{(OurLines.Count == 1 ? "" : "s")})";
-    public string TheirsSummary => $"{TheirsLabel} ({TheirLines.Count} line{(TheirLines.Count == 1 ? "" : "s")})";
+    public string Title => string.Format(DiffService.L("diff.conflictTitle"), Index + 1, StartLine);
+    public string OursSummary => string.Format(DiffService.L("diff.sideSummary"), OursLabel, OurLines.Count);
+    public string TheirsSummary => string.Format(DiffService.L("diff.sideSummary"), TheirsLabel, TheirLines.Count);
     public string OursPreview => Preview(OurLines);
     public string TheirsPreview => Preview(TheirLines);
 
     private static string Preview(List<string> lines)
     {
-        if (lines.Count == 0) return "(empty)";
+        if (lines.Count == 0) return DiffService.L("diff.emptySide");
         var sb = new StringBuilder();
         for (int i = 0; i < Math.Min(6, lines.Count); i++)
         {
             if (i > 0) sb.Append('\n');
             sb.Append(lines[i].Length > 160 ? lines[i][..160] + "…" : lines[i]);
         }
-        if (lines.Count > 6) sb.Append($"\n… +{lines.Count - 6} more");
+        if (lines.Count > 6) sb.Append('\n').Append(string.Format(DiffService.L("diff.moreLines"), lines.Count - 6));
         return sb.ToString();
     }
 }

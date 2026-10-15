@@ -33,11 +33,18 @@ public class GitHubService
     {
         // Normalize input
         string repoUrl = NormalizeRepoUrl(repoInput);
-        string repoName = ExtractRepoName(repoUrl);
 
-        // Determine target directory
-        string target = targetDir ?? Path.Combine(
-            _settingsService.Settings.ModelDirectory.Replace("Models", "Projects"), repoName);
+        // Determine target directory: the caller's, else <Projects>\<repo name>. The name comes from the URL
+        // (which the model wrote), so it is reduced to one safe folder name and the result must lie inside
+        // Projects — "…/C:foo" used to make Path.Combine drop the Projects folder altogether.
+        string? target = targetDir ?? DefaultCloneTarget(
+            _settingsService.Settings.ModelDirectory.Replace("Models", "Projects"), repoUrl);
+        if (target == null)
+            return new GitResult
+            {
+                Success = false,
+                Error = string.Format(LocalizedResources.Instance["chat.clone.badTarget"], ExtractRepoName(repoUrl)),
+            };
 
         if (Directory.Exists(target) && Directory.GetFileSystemEntries(target).Length > 0)
         {
@@ -182,12 +189,19 @@ public class GitHubService
     // Helpers
     // ═══════════════════════════════════════════
 
-    private static string NormalizeRepoUrl(string input)
+    /// <summary>
+    /// The URL a clone of <paramref name="input"/> really fetches: a full URL as given, "owner/repo" as a
+    /// GitHub https URL. Internal so the permission gate judges the same URL the clone uses — matched on
+    /// the raw input, "HTTPS://host/x" passed a rule and was then cloned as https://github.com/HTTPS://….
+    /// </summary>
+    internal static string NormalizeRepoUrl(string input)
     {
-        input = input.Trim();
+        input = (input ?? "").Trim();
 
-        // Already a full URL
-        if (input.StartsWith("https://") || input.StartsWith("git@"))
+        // Already a full URL (scheme names are case-insensitive). http:// is left alone, never rewritten.
+        if (input.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            || input.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || input.StartsWith("git@", StringComparison.OrdinalIgnoreCase))
             return input;
 
         // owner/repo format → https URL
@@ -203,11 +217,59 @@ public class GitHubService
                 .Replace(";", "").Replace("&", "").Replace("|", "")
                 .Replace("%", "").Replace("^", "").Replace("!", "");
 
-    private static string ExtractRepoName(string repoUrl)
+    /// <summary>
+    /// Where a clone with no folder given lands: <paramref name="projectsRoot"/>\&lt;repo name&gt; — or null when
+    /// that is not strictly inside <paramref name="projectsRoot"/> (it always is for a name from
+    /// <see cref="ExtractRepoName"/>; this is the check that proves it).
+    /// </summary>
+    internal static string? DefaultCloneTarget(string projectsRoot, string repoUrl)
     {
-        string name = Path.GetFileNameWithoutExtension(repoUrl.TrimEnd('/'));
-        if (string.IsNullOrEmpty(name)) name = "repo";
-        return name;
+        try
+        {
+            string root = Path.GetFullPath(projectsRoot);
+            string target = Path.GetFullPath(Path.Combine(root, ExtractRepoName(repoUrl)));
+            string prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+            return target.Length > prefix.Length && target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                ? target : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// The folder name for a clone of <paramref name="repoUrl"/>, as git names it (the last segment, ".git"
+    /// dropped) — reduced to ONE safe file name: the last segment again after URL-decoding ("%2e%2e",
+    /// "..%2F"), ':' treated as a separator ("C:foo" is a drive-relative path, which Path.Combine lets replace
+    /// the base folder), invalid characters replaced, trailing dots and spaces dropped (".." is the parent).
+    /// Nothing usable left, or a device name (CON, NUL, …) → "repo".
+    /// </summary>
+    internal static string ExtractRepoName(string repoUrl)
+    {
+        string s = (repoUrl ?? "").Trim();
+        if (s.Contains("://"))
+        {
+            int q = s.IndexOfAny(['?', '#']);   // a URL's query / fragment is not part of the name
+            if (q >= 0) s = s[..q];
+        }
+        string name = LastSegment(s);
+        try { name = Uri.UnescapeDataString(name); } catch { }
+        name = LastSegment(name);
+        if (name.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) name = name[..^4];
+        foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '-');
+        name = name.Trim().TrimEnd('.', ' ');
+        return name.Length == 0 || IsDeviceName(name) ? "repo" : name;
+
+        static string LastSegment(string p)
+        {
+            p = p.TrimEnd('/', '\\');
+            int cut = p.LastIndexOfAny(['/', '\\', ':']);
+            return cut >= 0 ? p[(cut + 1)..] : p;
+        }
+        static bool IsDeviceName(string n)
+        {
+            string stem = n.Split('.')[0].TrimEnd().ToUpperInvariant();
+            return stem is "CON" or "PRN" or "AUX" or "NUL"
+                || (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && char.IsDigit(stem[3]));
+        }
     }
 
     private async Task<GitResult> RunGhAsync(string arguments, int timeoutMs = 30000)

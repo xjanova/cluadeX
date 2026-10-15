@@ -65,7 +65,12 @@ public class LocalizedResources : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs("Item[]"));
     }
 
-    public string this[string key] => _loc?.T(key) ?? key;
+    /// <summary>English until <see cref="Initialize"/> runs (very early startup, a contract harness). It used
+    /// to return the bare key, and a formatted message — "chat.perm.hookBlocked" with the hook's reason as
+    /// {0} — lost its whole content.</summary>
+    private static readonly Lazy<LocalizationService> EnglishFallback = new(() => new LocalizationService());
+
+    public string this[string key] => (_loc ?? EnglishFallback.Value).T(key);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }

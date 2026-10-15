@@ -15,7 +15,9 @@ public class AutoUpdateService
 {
     private readonly HttpClient _httpClient;
     private readonly SettingsService _settingsService;
-    private const string BaseUrl = "https://xman4289.com/api/v1/products/cluadex";
+    // The store's slug for CluadeX. It was "cluadex", which the store does not have: every check got 404 and fell
+    // through to GitHub (checked 2026-10-13 — /api/v1/products/cluadex-ai-coding-assistant/version answers).
+    private const string BaseUrl = "https://xman4289.com/api/v1/products/cluadex-ai-coding-assistant";
     private const string GitHubReleasesApi = "https://api.github.com/repos/xjanova/cluadeX/releases/latest";
 
     public event Action<UpdateInfo>? OnUpdateAvailable;
@@ -65,8 +67,48 @@ public class AutoUpdateService
         UpdateAttemptLog.Load(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex"));
 
-    private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(
-        new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false));
+    /// <summary>Set to a folder (or http URL) holding a Velopack release feed — the Releases/ output of
+    /// <c>vpk pack</c> — to test a self-update end to end before anything is published to GitHub.</summary>
+    public const string FeedOverrideVariable = "CLUADEX_UPDATE_FEED";
+
+    private Velopack.UpdateManager Vpk => _vpk ??= new Velopack.UpdateManager(CreateSource());
+
+    private Velopack.Sources.IUpdateSource CreateSource()
+    {
+        string? feed = Environment.GetEnvironmentVariable(FeedOverrideVariable)?.Trim();
+        if (!string.IsNullOrEmpty(feed))
+        {
+            _log?.Warn("Update", $"update feed overridden by {FeedOverrideVariable}: {feed}");
+            return feed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                ? new Velopack.Sources.SimpleWebSource(feed)
+                : new Velopack.Sources.SimpleFileSource(new DirectoryInfo(feed));
+        }
+        return new Velopack.Sources.GithubSource("https://github.com/xjanova/cluadeX", null, false);
+    }
+
+    /// <summary>How this copy was started — shown on the title bar so the installed app and a dev build
+    /// sitting side by side are never mistaken for each other.</summary>
+    public enum BuildKind { Installed, Portable, Dev }
+
+    /// <summary>Installed = Velopack layout (…\current\CluadeX.exe with sq.version, Update.exe one level
+    /// up); Portable = a portable marker next to the exe; anything else is a developer build.</summary>
+    public static BuildKind CurrentBuildKind
+    {
+        get
+        {
+            try
+            {
+                string exeDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+                string? parent = Path.GetDirectoryName(exeDir);
+                if (File.Exists(Path.Combine(exeDir, "sq.version")) && parent != null && File.Exists(Path.Combine(parent, "Update.exe")))
+                    return BuildKind.Installed;
+                if (File.Exists(Path.Combine(exeDir, "portable")) || File.Exists(Path.Combine(exeDir, "portable.txt")))
+                    return BuildKind.Portable;
+            }
+            catch { /* fall through */ }
+            return BuildKind.Dev;
+        }
+    }
 
     /// <summary>True when this build can actually self-update (installed via Setup.exe).</summary>
     public bool CanSelfUpdate
@@ -185,27 +227,41 @@ public class AutoUpdateService
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
             using var response = await _httpClient.PostAsync($"{BaseUrl}/check-update", content, ct);
             var body = await response.Content.ReadAsStringAsync(ct);
-            var doc = JsonDocument.Parse(body);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("update_available", out var ua) && ua.GetBoolean())
+            if (ParseXmanCheck(body, CurrentVersion) is { } info)
             {
-                var info = new UpdateInfo
-                {
-                    NewVersion = root.TryGetProperty("version", out var v) ? v.GetString() ?? "" : "",
-                    CurrentVersion = CurrentVersion,
-                    DownloadUrl = root.TryGetProperty("download_url", out var dl) ? dl.GetString() ?? "" : "",
-                    Changelog = root.TryGetProperty("changelog", out var cl) ? cl.GetString() ?? "" : "",
-                    FileSize = root.TryGetProperty("file_size", out var fs) ? fs.GetInt64() : 0,
-                    FileName = root.TryGetProperty("download_filename", out var fn) ? fn.GetString() ?? "" : "",
-                    Sha256 = root.TryGetProperty("sha256", out var sh) ? sh.GetString() ?? "" : "",
-                };
                 OnUpdateAvailable?.Invoke(info);
                 return info;
             }
             _log?.Info("Update", $"xman API: no update (HTTP {(int)response.StatusCode})");
         }
         catch (Exception ex) { _log?.Warn("Update", $"xman API check failed: {ex.Message}"); }
+        return null;
+    }
+
+    /// <summary>The store's check-update reply → the update it offers, or null. The store answers
+    /// <c>{ has_update, latest_version, update: { version, filename, file_size, changelog, download_url, sha256 } }</c>
+    /// (Api/VersionController::check); the flat <c>update_available</c> shape this used to read never came back.
+    /// Public for the harness.</summary>
+    public static UpdateInfo? ParseXmanCheck(string body, string currentVersion)
+    {
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        static string Str(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+        static long Num(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
+
+        if (root.TryGetProperty("has_update", out var hu) && hu.ValueKind == JsonValueKind.True
+            && root.TryGetProperty("update", out var u) && u.ValueKind == JsonValueKind.Object)
+            return new UpdateInfo
+            {
+                NewVersion = Str(u, "version"), CurrentVersion = currentVersion, DownloadUrl = Str(u, "download_url"),
+                Changelog = Str(u, "changelog"), FileSize = Num(u, "file_size"), FileName = Str(u, "filename"), Sha256 = Str(u, "sha256"),
+            };
+        if (root.TryGetProperty("update_available", out var ua) && ua.ValueKind == JsonValueKind.True)   // the old flat shape
+            return new UpdateInfo
+            {
+                NewVersion = Str(root, "version"), CurrentVersion = currentVersion, DownloadUrl = Str(root, "download_url"),
+                Changelog = Str(root, "changelog"), FileSize = Num(root, "file_size"), FileName = Str(root, "download_filename"), Sha256 = Str(root, "sha256"),
+            };
         return null;
     }
 

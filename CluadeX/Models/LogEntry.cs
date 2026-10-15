@@ -1,3 +1,5 @@
+using CluadeX.Services;
+
 namespace CluadeX.Models;
 
 /// <summary>One entry in the in-app debug log. Both the ring buffer (for UI)
@@ -19,34 +21,37 @@ public class LogEntry
     public string TimestampDisplay => Timestamp.ToString("HH:mm:ss.fff");
     public string LevelDisplay => Level.ToString().ToUpperInvariant();
 
+    // Colours are theme tokens (ThemeColors.Hex): read by the bindings of the Debug Log page, in the theme on screen.
     public string LevelColorHex => Level switch
     {
-        LogLevel.Trace    => "#555A8C",
-        LogLevel.Debug    => "#8388BD",
-        LogLevel.Info     => "#4CDFFF",
-        LogLevel.Warning  => "#FFD166",
-        LogLevel.Error    => "#FF6E6E",
-        LogLevel.Critical => "#FF5EC4",
-        _                 => "#C0C6EE",
+        LogLevel.Trace    => ThemeColors.Hex("Text.Faint", "#555A8C"),
+        LogLevel.Debug    => ThemeColors.Hex("Text.Muted", "#8388BD"),
+        LogLevel.Info     => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+        LogLevel.Warning  => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        LogLevel.Error    => ThemeColors.Hex("Status.Danger", "#FF6E6E"),
+        LogLevel.Critical => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+        _                 => ThemeColors.Hex("Text.Secondary", "#C0C6EE"),
     };
 
     public string CategoryColorHex => Category switch
     {
-        "Agent"    => "#A672FF",
-        "Tool"     => "#4CDFFF",
-        "Provider" => "#FF8AA6",
-        "MCP"      => "#5CFFB0",
-        "FileIO"   => "#FFD166",
-        "Git"      => "#FFD166",
-        "UI"       => "#FF5EC4",
-        "Update"   => "#4CDFFF",
-        _          => "#8388BD",
+        "Agent"    => ThemeColors.Hex("Accent.2", "#A672FF"),
+        "Tool"     => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+        "Provider" => ThemeColors.Hex("Accent.4", "#FF8AA6"),
+        "MCP"      => ThemeColors.Hex("Status.Success", "#5CFFB0"),
+        "FileIO"   => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        "Git"      => ThemeColors.Hex("Status.Warning", "#FFD166"),
+        "UI"       => ThemeColors.Hex("Accent.3", "#FF5EC4"),
+        "Update"   => ThemeColors.Hex("Accent.1", "#4CDFFF"),
+        _          => ThemeColors.Hex("Text.Muted", "#8388BD"),
     };
 
     /// <summary>Compact one-line render for "Copy all" / clipboard.</summary>
     public string ToFlatString()
     {
-        var line = $"{Timestamp:yyyy-MM-dd HH:mm:ss.fff}  [{LevelDisplay,-8}] [{Category,-8}] {Message}";
+        // Invariant: on a Thai-culture PC the default calendar is Buddhist and the log said 2569-10-09.
+        var line = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{Timestamp:yyyy-MM-dd HH:mm:ss.fff}  [{LevelDisplay,-8}] [{Category,-8}] {Message}");
         return Exception == null ? line : line + "\n" + Exception;
     }
 }

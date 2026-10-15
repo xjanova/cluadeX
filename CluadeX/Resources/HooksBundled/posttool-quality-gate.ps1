@@ -1,11 +1,14 @@
 ﻿# Hook: posttool-quality-gate
-# Phase: PostToolUse / matcher write_file
+# Phase: PostToolUse / matcher write_file|edit_file|multi_edit
 # After C# file write, runs `dotnet build --no-restore -nologo` and logs result.
 param(
   [string]$Path = "",
   [string]$Cwd = ""
 )
 
+# Exact values from the CluadeX hook contract (no command-line quoting; see HookService).
+if ($env:CLUADEX_HOOK_PATH) { $Path = $env:CLUADEX_HOOK_PATH }
+if ($env:CLUADEX_HOOK_CWD) { $Cwd = $env:CLUADEX_HOOK_CWD }
 if (-not $Path) { exit 0 }
 $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
 if ($ext -notin @('.cs', '.csproj', '.props', '.targets')) { exit 0 }
@@ -14,10 +17,10 @@ $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 if (-not $dotnet) { exit 0 }
 
 # Use $Cwd if a .csproj/.sln lives there; otherwise walk up from $Path
-$root = if ($Cwd -and (Test-Path $Cwd)) { $Cwd } else { Split-Path $Path -Parent }
+$root = if ($Cwd -and (Test-Path -LiteralPath $Cwd)) { $Cwd } else { Split-Path $Path -Parent }
 
 try {
-  Push-Location $root
+  Push-Location -LiteralPath $root
   $output = & dotnet build --no-restore -nologo -v quiet 2>&1
   $exit = $LASTEXITCODE
   Pop-Location

@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not $TargetDir) {
-    $TargetDir = Join-Path $PSScriptRoot ".." "bin" "Debug" "net8.0-windows" "runtimes" "win-x64" "native"
+    $TargetDir = Join-Path $PSScriptRoot ".." "bin" "DebugBuild" "net8.0-windows" "runtimes" "win-x64" "native"
 }
 
 $baseUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$Tag"

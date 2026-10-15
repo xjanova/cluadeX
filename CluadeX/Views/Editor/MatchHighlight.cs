@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
-using System.Windows.Media;
 
 namespace CluadeX.Views.Editor;
 
@@ -16,10 +15,8 @@ namespace CluadeX.Views.Editor;
 /// </summary>
 public static class MatchHighlight
 {
-    private static readonly Brush HighlightBrush = Freeze(new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xC5, 0x4C)));
-    private static readonly Brush HighlightInk = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0xF4, 0xD6)));
-
-    private static Brush Freeze(Brush b) { b.Freeze(); return b; }
+    // The matched span's colours are the Editor.Match / Editor.Match.Foreground tokens, attached as resource
+    // references so an open result list follows a theme switch without being rebuilt.
 
     public static readonly DependencyProperty TextProperty = DependencyProperty.RegisterAttached(
         "Text", typeof(string), typeof(MatchHighlight),
@@ -62,12 +59,10 @@ public static class MatchHighlight
         if (start + length > text.Length) length = text.Length - start;
 
         if (start > 0) tb.Inlines.Add(new Run(text[..start]));
-        tb.Inlines.Add(new Run(text.Substring(start, length))
-        {
-            Background = HighlightBrush,
-            Foreground = HighlightInk,
-            FontWeight = FontWeights.SemiBold,
-        });
+        var match = new Run(text.Substring(start, length)) { FontWeight = FontWeights.SemiBold };
+        match.SetResourceReference(TextElement.BackgroundProperty, "Editor.Match");
+        match.SetResourceReference(TextElement.ForegroundProperty, "Editor.Match.Foreground");
+        tb.Inlines.Add(match);
         int after = start + length;
         if (after < text.Length) tb.Inlines.Add(new Run(text[after..]));
     }

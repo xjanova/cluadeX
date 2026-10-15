@@ -96,8 +96,10 @@ public class McpToolRegistry
         }
     }
 
-    /// <summary>Generate tool definition text for the LLM system prompt.</summary>
-    public string GetToolDefinitionsPrompt()
+    /// <summary>Generate tool definition text for the LLM system prompt. <paramref name="describe"/> (optional)
+    /// gives the description to show for a tool, or null to leave the tool out — how tool policies hide a tool
+    /// or reword it in the [ACTION:] catalogue exactly as they do in the native schemas.</summary>
+    public string GetToolDefinitionsPrompt(Func<McpTool, string?>? describe = null)
     {
         lock (_lock)
         {
@@ -108,35 +110,42 @@ public class McpToolRegistry
             sb.AppendLine("    MCP SERVER TOOLS (external tool servers):");
             sb.AppendLine();
 
-            foreach (var (serverName, tools) in _serverTools)
+            foreach (var (serverName, allTools) in _serverTools)
             {
-                if (tools.Count == 0) continue;
+                var shown = allTools
+                    .Select(t => (Tool: t, Description: describe == null ? t.Description ?? "" : describe(t)))
+                    .Where(x => x.Description != null)
+                    .ToList();
+                if (shown.Count == 0) continue;
 
-                sb.AppendLine($"    [{serverName}] — {tools.Count} tool(s):");
+                sb.AppendLine($"    [{serverName}] — {shown.Count} tool(s):");
                 sb.AppendLine();
 
-                foreach (var tool in tools)
+                foreach (var (tool, description) in shown)
                 {
-                    sb.AppendLine($"    {tool.QualifiedName} — {tool.Description}");
+                    sb.AppendLine($"    {tool.QualifiedName} — {description}");
 
-                    // Generate parameter hints from inputSchema
+                    // Parameter hints from the SANITIZED schema — the same types the native schema and the argument
+                    // typing use ($ref / anyOf / ["string","null"] resolved; limits folded into the description). A raw
+                    // "type" array used to throw here and take the whole [ACTION:] catalogue down.
                     if (tool.InputSchema.HasValue)
                     {
-                        var schema = tool.InputSchema.Value;
-                        if (schema.TryGetProperty("properties", out var props))
+                        var schema = McpSchemaSanitizer.SanitizeCached(tool.ServerName, tool.Name, tool.InputSchema);
+                        if (schema.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
                         {
                             sb.AppendLine($"        [ACTION: {tool.QualifiedName}]");
                             var required = new HashSet<string>();
-                            if (schema.TryGetProperty("required", out var reqArr))
+                            if (schema.TryGetProperty("required", out var reqArr) && reqArr.ValueKind == JsonValueKind.Array)
                             {
                                 foreach (var r in reqArr.EnumerateArray())
-                                    required.Add(r.GetString() ?? "");
+                                    if (r.ValueKind == JsonValueKind.String) required.Add(r.GetString() ?? "");
                             }
 
                             foreach (var prop in props.EnumerateObject())
                             {
-                                string type = prop.Value.TryGetProperty("type", out var t) ? t.GetString() ?? "string" : "string";
-                                string desc = prop.Value.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+                                string type = McpSchemaSanitizer.TypeOf(prop.Value) ?? "string";
+                                string desc = prop.Value.TryGetProperty("description", out var d)
+                                    && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
                                 string reqMark = required.Contains(prop.Name) ? " (required)" : "";
                                 sb.AppendLine($"        {prop.Name}: <{type}>{reqMark} — {desc}");
                             }

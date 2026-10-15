@@ -7,15 +7,126 @@
              xmlns:views="clr-namespace:CluadeX.Views"
              xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
              xmlns:editor="clr-namespace:CluadeX.Views.Editor"
+             xmlns:preview="clr-namespace:CluadeX.Views.Preview"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance Type=vm:CodeEditorViewModel}"
-             Background="{StaticResource NeonBg0Brush}"
-             FontFamily="{StaticResource NeonUiFont}"
+             Background="{DynamicResource Bg.Window}"
+             FontFamily="{DynamicResource Font.Ui.Display}"
              Loaded="OnLoaded"
              KeyDown="OnPageKeyDown">
     <UserControl.Resources>
+        <!-- ═══ Editor toolbar / find bar / status bar controls ═══
+             Not focusable: a click must leave the keyboard in the editor, so Undo / Cut / Paste act on it. -->
+        <Style x:Key="EdToolBtn" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinWidth" Value="28"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="EdToolToggle" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinWidth" Value="28"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}"
+                                BorderThickness="1" BorderBrush="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Accent.1.Tint.Strong}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- A text button in the find bar ("Replace", "Replace all", "Go") -->
+        <Style x:Key="EdTextBtn" TargetType="Button" BasedOn="{StaticResource EdToolBtn}">
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="Margin" Value="4,0,0,0"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
+        </Style>
+        <!-- Status bar item: flat, small; a click opens its menu -->
+        <Style x:Key="EdStatusBtn" TargetType="Button" BasedOn="{StaticResource EdToolBtn}">
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+        </Style>
+        <Style x:Key="EdToolSep" TargetType="Rectangle">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Margin" Value="5,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="{DynamicResource Border.Subtle}"/>
+        </Style>
+        <Style x:Key="EdStatusText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="10,0,0,0"/>
+        </Style>
+        <Style x:Key="EdFindInput" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource Accent.1}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Mono.Display}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
         <!-- File tree row template (recursive via HierarchicalDataTemplate) -->
         <HierarchicalDataTemplate x:Key="TreeNodeTemplate" DataType="{x:Type m:FileTreeNode}"
                                   ItemsSource="{Binding Children}">
@@ -31,8 +142,8 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#1AFFFFFF"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -46,7 +157,7 @@
                     </Grid.ColumnDefinitions>
                     <!-- Chevron / folder-marker -->
                     <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                               Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center">
+                               Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Text" Value=""/>
@@ -73,7 +184,7 @@
                     <!-- Folder icon OR extension monogram -->
                     <Border Grid.Column="1" Width="22" Height="14" Margin="4,0,6,0"
                             VerticalAlignment="Center" CornerRadius="3" BorderThickness="1"
-                            BorderBrush="{StaticResource NeonLineBrush}" Background="#22000000">
+                            BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Sunken}">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Style.Triggers>
@@ -86,7 +197,7 @@
                         </Border.Style>
                         <Grid>
                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonAmberBrush}"
+                                       Foreground="{DynamicResource Status.Warning}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -101,7 +212,7 @@
                                 </TextBlock.Style>
                             </TextBlock>
                             <TextBlock Text="{Binding ExtensionLabel}" FontSize="8" FontWeight="Bold"
-                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
@@ -122,12 +233,12 @@
 
                     <!-- Name -->
                     <TextBlock Grid.Column="2" Text="{Binding Name}" FontSize="12"
-                               Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis"/>
 
                     <!-- Git badge -->
                     <TextBlock Grid.Column="3" Text="{Binding GitBadge}" FontSize="10" FontWeight="Bold"
-                               FontFamily="{StaticResource NeonMonoFont}" Margin="6,0,4,0"
+                               FontFamily="{DynamicResource Font.Mono.Display}" Margin="6,0,4,0"
                                VerticalAlignment="Center">
                         <TextBlock.Foreground>
                             <SolidColorBrush Color="{Binding GitBadgeColorHex, Converter={StaticResource HexToColor}, FallbackValue=#8388BD}"/>
@@ -147,8 +258,8 @@
                         <Setter Property="BorderBrush" Value="Transparent"/>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                <Setter Property="Background" Value="#7011152E"/>
-                                <Setter Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                                <Setter Property="Background" Value="{DynamicResource Surface.Input}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
@@ -164,7 +275,7 @@
                             </Border>
                             <ControlTemplate.Triggers>
                                 <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bd" Property="Background" Value="#15FFFFFF"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
                                 </Trigger>
                             </ControlTemplate.Triggers>
                         </ControlTemplate>
@@ -177,9 +288,9 @@
                         </Grid.ColumnDefinitions>
                         <Border Grid.Column="0" Width="22" Height="14" Margin="0,0,8,0"
                                 CornerRadius="3" BorderThickness="1"
-                                BorderBrush="{StaticResource NeonLineBrush}" Background="#22000000">
+                                BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Sunken}">
                             <TextBlock Text="{Binding Extension}" FontSize="8" FontWeight="Bold"
-                                       FontFamily="{StaticResource NeonMonoFont}"
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock.Foreground>
                                     <SolidColorBrush Color="{Binding ExtensionColorHex, Converter={StaticResource HexToColor}, FallbackValue=#8388BD}"/>
@@ -187,7 +298,7 @@
                             </TextBlock>
                         </Border>
                         <TextBlock Grid.Column="1" Text="{Binding TabTitle}"
-                                   Foreground="{StaticResource NeonInk1Brush}"
+                                   Foreground="{DynamicResource Text.Secondary}"
                                    FontSize="12" VerticalAlignment="Center"/>
                         <Button Grid.Column="2" Width="18" Height="18" Margin="10,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
@@ -196,12 +307,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="9">
                                         <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="8"
-                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   Foreground="{DynamicResource Text.Faint}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#33FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Pressed}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -215,14 +326,14 @@
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="240"/>   <!-- File tree -->
+            <ColumnDefinition Width="Auto"/>  <!-- File tree (ExplorerPanel.Width, resizable) -->
             <ColumnDefinition Width="*"/>     <!-- Editor center -->
-            <ColumnDefinition Width="400"/>   <!-- Chat panel -->
+            <ColumnDefinition Width="Auto"/>  <!-- Chat panel (EditorChatPanel.Width, resizable) -->
         </Grid.ColumnDefinitions>
 
         <!-- ═════════════ FILE TREE PANEL ═════════════ -->
-        <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{StaticResource NeonLineBrush}"
-                Background="#8C0A0C22">
+        <Border x:Name="ExplorerPanel" Grid.Column="0" Width="240" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Border.Subtle}"
+                Background="{DynamicResource Sidebar.Background}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>  <!-- Activity switcher: Explorer | Search -->
@@ -244,16 +355,16 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="5,0,0,5"
-                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1,1,0,1"
+                                            BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,1,0,1"
                                             Padding="{TemplateBinding Padding}">
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
                                         </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -263,23 +374,23 @@
                                            Margin="0,0,6,0" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
                                 <TextBlock Text="{services:Loc editor.explorer}" FontSize="10" FontWeight="Bold"
-                                           FontFamily="{StaticResource NeonMonoFont}" VerticalAlignment="Center">
+                                           FontFamily="{DynamicResource Font.Mono.Display}" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsExplorerPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -293,16 +404,16 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="0"
-                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1,1,0,1"
+                                            BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,1,0,1"
                                             Padding="{TemplateBinding Padding}">
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
                                         </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -312,23 +423,23 @@
                                            Margin="0,0,6,0" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
                                 <TextBlock Text="{services:Loc editor.search}" FontSize="10" FontWeight="Bold"
-                                           FontFamily="{StaticResource NeonMonoFont}" VerticalAlignment="Center">
+                                           FontFamily="{DynamicResource Font.Mono.Display}" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsSearchPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -342,16 +453,16 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="0,5,5,0"
-                                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
+                                            BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
                                             Padding="{TemplateBinding Padding}">
                                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <DataTrigger Binding="{Binding IsDebugPanelActive}" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
                                         </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -361,23 +472,23 @@
                                            Margin="0,0,6,0" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsDebugPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonCyanBrush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
                                 <TextBlock Text="{services:Loc editor.debug}" FontSize="10" FontWeight="Bold"
-                                           FontFamily="{StaticResource NeonMonoFont}" VerticalAlignment="Center">
+                                           FontFamily="{DynamicResource Font.Mono.Display}" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsDebugPanelActive}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -407,8 +518,8 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="{services:Loc editor.explorer}" FontSize="10" FontWeight="Bold"
-                                   FontFamily="{StaticResource NeonMonoFont}"
-                                   Foreground="{StaticResource NeonInk3Brush}"
+                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Faint}"
                                    VerticalAlignment="Center"
                                    Style="{StaticResource Letterspacing15}"/>
                         <!-- Clone a GitHub repo straight from the workbench -->
@@ -419,12 +530,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="4">
                                         <TextBlock Text="&#xE753;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{StaticResource NeonCyanBrush}"
+                                                   Foreground="{DynamicResource Accent.1}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -439,12 +550,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="4">
                                         <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{StaticResource NeonAmberBrush}"
+                                                   Foreground="{DynamicResource Status.Warning}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -457,12 +568,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="4">
                                         <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                   Foreground="{StaticResource NeonCyanBrush}"
+                                                   Foreground="{DynamicResource Accent.1}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -473,8 +584,8 @@
 
                 <!-- Project card -->
                 <Border Grid.Row="1" Margin="10,2,10,8" Padding="12,8" CornerRadius="6"
-                        Background="#7011152E"
-                        BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
+                        Background="{DynamicResource Surface.Input}"
+                        BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
                         Visibility="{Binding HasWorkingDirectory, Converter={StaticResource BoolVis}}">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -483,14 +594,14 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="13"
-                                   Foreground="{StaticResource NeonCyanBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                   Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="{Binding ProjectName}" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{StaticResource NeonInk0Brush}"
+                                       Foreground="{DynamicResource Text.Primary}"
                                        TextTrimming="CharacterEllipsis" MaxWidth="160"/>
                             <TextBlock Text="{Binding ProjectFileCount}" FontSize="9"
-                                       FontFamily="{StaticResource NeonMonoFont}"
-                                       Foreground="{StaticResource NeonInk3Brush}" Margin="0,2,0,0"/>
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Text.Faint}" Margin="0,2,0,0"/>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -500,13 +611,13 @@
                             Visibility="{Binding HasWorkingDirectory, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                     <TextBlock Text="{services:Loc editor.noProject}" FontSize="13" FontWeight="SemiBold"
                                HorizontalAlignment="Center"
-                               Foreground="{StaticResource NeonInk1Brush}"/>
+                               Foreground="{DynamicResource Text.Secondary}"/>
                     <TextBlock Text="{services:Loc editor.noProjectHint}"
                                FontSize="11" Margin="0,8,0,16" TextWrapping="Wrap" TextAlignment="Center"
-                               Foreground="{StaticResource NeonInk3Brush}"/>
+                               Foreground="{DynamicResource Text.Faint}"/>
                     <Button Command="{Binding OpenFolderCommand}" HorizontalAlignment="Center"
-                            Background="{StaticResource NeonRewindGradient}" BorderThickness="0"
-                            Foreground="White" Padding="14,7" Cursor="Hand">
+                            Background="{DynamicResource Banner.Button.Background}" BorderThickness="0"
+                            Foreground="{DynamicResource Text.OnAccent}" Padding="14,7" Cursor="Hand">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border Background="{TemplateBinding Background}" CornerRadius="6"
@@ -523,8 +634,11 @@
                 </StackPanel>
 
                 <!-- Tree -->
+                <!-- Only with a folder open: the empty tree (transparent, so still hit-testable) lay over the
+                     empty state's "Open Folder" button and swallowed every click on it. -->
                 <TreeView Grid.Row="2" ItemsSource="{Binding Tree}"
                           ItemTemplate="{StaticResource TreeNodeTemplate}"
+                          Visibility="{Binding HasWorkingDirectory, Converter={StaticResource BoolVis}}"
                           Background="Transparent" BorderThickness="0"
                           ScrollViewer.VerticalScrollBarVisibility="Auto"
                           ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -533,15 +647,110 @@
                         <Style TargetType="TreeViewItem">
                             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
                             <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Foreground" Value="{StaticResource NeonInk1Brush}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
                             <Setter Property="Background" Value="Transparent"/>
+                            <!-- WPF's own TreeViewItem template (Aero2, .NET 8) copied 1:1 — same layout, same glyph
+                                 geometry — with the expander glyph's colours as theme tokens (they were the system
+                                 theme's fixed greys). Selection keeps the system highlight, as before. -->
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="TreeViewItem">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" MinWidth="19"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition/>
+                                            </Grid.RowDefinitions>
+                                            <ToggleButton x:Name="Expander" ClickMode="Press" Focusable="False" Width="16" Height="16"
+                                                          IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                                                <ToggleButton.Template>
+                                                    <ControlTemplate TargetType="ToggleButton">
+                                                        <Border Padding="5,5,5,5" Background="Transparent" Width="16" Height="16">
+                                                            <Path x:Name="ExpandPath"
+                                                                  Fill="{DynamicResource Tree.Glyph.Fill}"
+                                                                  Stroke="{DynamicResource Tree.Glyph.Stroke}">
+                                                                <Path.Data>
+                                                                    <PathGeometry Figures="M0,0L0,6L6,0z"/>
+                                                                </Path.Data>
+                                                                <Path.RenderTransform>
+                                                                    <RotateTransform Angle="135" CenterX="3" CenterY="3"/>
+                                                                </Path.RenderTransform>
+                                                            </Path>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsChecked" Value="True">
+                                                                <Setter TargetName="ExpandPath" Property="RenderTransform">
+                                                                    <Setter.Value>
+                                                                        <RotateTransform Angle="180" CenterX="3" CenterY="3"/>
+                                                                    </Setter.Value>
+                                                                </Setter>
+                                                                <Setter TargetName="ExpandPath" Property="Fill" Value="{DynamicResource Tree.Glyph.Expanded.Fill}"/>
+                                                                <Setter TargetName="ExpandPath" Property="Stroke" Value="{DynamicResource Tree.Glyph.Expanded.Stroke}"/>
+                                                            </Trigger>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="ExpandPath" Property="Fill" Value="{DynamicResource Tree.Glyph.Hover.Fill}"/>
+                                                                <Setter TargetName="ExpandPath" Property="Stroke" Value="{DynamicResource Tree.Glyph.Hover.Stroke}"/>
+                                                            </Trigger>
+                                                            <MultiTrigger>
+                                                                <MultiTrigger.Conditions>
+                                                                    <Condition Property="IsMouseOver" Value="True"/>
+                                                                    <Condition Property="IsChecked" Value="True"/>
+                                                                </MultiTrigger.Conditions>
+                                                                <Setter TargetName="ExpandPath" Property="Fill" Value="{DynamicResource Tree.Glyph.Hover.Expanded.Fill}"/>
+                                                                <Setter TargetName="ExpandPath" Property="Stroke" Value="{DynamicResource Tree.Glyph.Hover.Expanded.Stroke}"/>
+                                                            </MultiTrigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </ToggleButton.Template>
+                                            </ToggleButton>
+                                            <Border x:Name="Bd" Grid.Column="1" SnapsToDevicePixels="True"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    Background="{TemplateBinding Background}"
+                                                    Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter x:Name="PART_Header" ContentSource="Header"
+                                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                            </Border>
+                                            <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"/>
+                                        </Grid>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsExpanded" Value="False">
+                                                <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed"/>
+                                            </Trigger>
+                                            <Trigger Property="HasItems" Value="False">
+                                                <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}"/>
+                                            </Trigger>
+                                            <MultiTrigger>
+                                                <MultiTrigger.Conditions>
+                                                    <Condition Property="IsSelected" Value="True"/>
+                                                    <Condition Property="Selector.IsSelectionActive" Value="False"/>
+                                                </MultiTrigger.Conditions>
+                                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.InactiveSelectionHighlightBrushKey}}"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}}"/>
+                                            </MultiTrigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
                         </Style>
                     </TreeView.ItemContainerStyle>
                 </TreeView>
 
                 <!-- Source Control panel — real git state: branch, changed files, commit box -->
                 <Border Grid.Row="3" Padding="10" BorderThickness="0,1,0,0"
-                        BorderBrush="{StaticResource NeonLineBrush}" MaxHeight="300">
+                        BorderBrush="{DynamicResource Border.Subtle}" MaxHeight="300">
                     <StackPanel>
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
@@ -550,21 +759,27 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="{services:Loc editor.sourceControl}" FontSize="10" FontWeight="Bold"
-                                       FontFamily="{StaticResource NeonMonoFont}"
-                                       Foreground="{StaticResource NeonInk3Brush}"
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Text.Faint}"
                                        Style="{StaticResource Letterspacing15}"
                                        VerticalAlignment="Center"/>
                             <!-- Branch switcher — pick a local branch to check it out -->
-                            <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="3" Padding="4,0" Margin="0,0,4,0"
+                            <Border Grid.Column="1" Background="{DynamicResource Surface.Badge}" CornerRadius="3" Padding="4,0" Margin="0,0,4,0"
                                     Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}"
                                     ToolTip="{services:Loc editor.switchBranch}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                               Foreground="{StaticResource NeonAmberBrush}" Margin="2,0,2,0" VerticalAlignment="Center"/>
+                                               Foreground="{DynamicResource Status.Warning}" Margin="2,0,2,0" VerticalAlignment="Center"/>
+                                    <!-- Explicit: arrowing through the list must not check anything out. The
+                                         choice is committed when the dropdown closes or Enter is pressed
+                                         (and then still confirmed by the VM). -->
                                     <ComboBox ItemsSource="{Binding GitBranches}"
-                                              SelectedItem="{Binding SelectedBranch}"
-                                              FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                              Foreground="{StaticResource NeonAmberBrush}"
+                                              SelectedItem="{Binding SelectedBranch, UpdateSourceTrigger=Explicit}"
+                                              DropDownClosed="OnBranchDropDownClosed"
+                                              KeyDown="OnBranchKeyDown"
+                                              LostKeyboardFocus="OnBranchLostFocus"
+                                              FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
+                                              Foreground="{DynamicResource Status.Warning}"
                                               Background="Transparent" BorderThickness="0"
                                               MinWidth="52" Padding="2,0"
                                               VerticalAlignment="Center"/>
@@ -577,12 +792,12 @@
                                     <ControlTemplate TargetType="Button">
                                         <Border x:Name="bd" Background="Transparent" CornerRadius="3">
                                             <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                       Foreground="{DynamicResource Text.Faint}"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -592,8 +807,8 @@
 
                         <!-- Changed files (click to open) -->
                         <TextBlock Text="{Binding GitChangeCount}" FontSize="9" Margin="0,0,0,4"
-                                   FontFamily="{StaticResource NeonMonoFont}"
-                                   Foreground="{StaticResource NeonInk3Brush}"
+                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Faint}"
                                    Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}"/>
                         <ScrollViewer MaxHeight="96" VerticalScrollBarVisibility="Auto"
                                       Visibility="{Binding HasGitRepo, Converter={StaticResource BoolVis}}">
@@ -613,7 +828,7 @@
                                                     </Border>
                                                     <ControlTemplate.Triggers>
                                                         <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                                         </Trigger>
                                                     </ControlTemplate.Triggers>
                                                 </ControlTemplate>
@@ -625,11 +840,11 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Text="{Binding Status}" FontSize="9" Width="18"
-                                                           FontFamily="{StaticResource NeonMonoFont}" FontWeight="Bold"
+                                                           FontFamily="{DynamicResource Font.Mono.Display}" FontWeight="Bold"
                                                            Foreground="{Binding StatusColor}" VerticalAlignment="Center"/>
                                                 <TextBlock Grid.Column="1" Text="{Binding FileName}" FontSize="10"
-                                                           FontFamily="{StaticResource NeonMonoFont}"
-                                                           Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                                           Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center"/>
                                                 <!-- Per-file diff view (git diff in a Patch-highlighted tab) -->
                                                 <Button Grid.Column="2" Width="16" Height="14" Margin="4,0,0,0"
                                                         Background="Transparent" BorderThickness="0" Cursor="Hand"
@@ -640,12 +855,12 @@
                                                         <ControlTemplate TargetType="Button">
                                                             <Border x:Name="db" Background="Transparent" CornerRadius="2">
                                                                 <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                                           Foreground="{StaticResource NeonCyanBrush}"
+                                                                           Foreground="{DynamicResource Accent.1}"
                                                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                             </Border>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="db" Property="Background" Value="#33FFFFFF"/>
+                                                                    <Setter TargetName="db" Property="Background" Value="{DynamicResource State.Pressed}"/>
                                                                 </Trigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
@@ -664,27 +879,38 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <Border Background="#3311132E" BorderBrush="{StaticResource NeonLineHiBrush}"
+                            <Border Background="{DynamicResource Surface.Input}" BorderBrush="{DynamicResource Border.Default}"
                                     BorderThickness="1" CornerRadius="4" Margin="0,0,4,0">
                                 <TextBox Text="{Binding CommitMessage, UpdateSourceTrigger=PropertyChanged}"
                                          Background="Transparent" BorderThickness="0" Padding="6,3"
-                                         FontSize="10" FontFamily="{StaticResource NeonMonoFont}"
-                                         Foreground="{StaticResource NeonInk0Brush}"
-                                         CaretBrush="{StaticResource NeonAmberBrush}"
+                                         FontSize="10" FontFamily="{DynamicResource Font.Mono.Display}"
+                                         Foreground="{DynamicResource Text.Primary}"
+                                         CaretBrush="{DynamicResource Status.Warning}"
                                          ToolTip="{services:Loc editor.commitMessage}"/>
                             </Border>
                             <Button Grid.Column="1" Command="{Binding CommitCommand}" Cursor="Hand"
-                                    Padding="8,3" Background="#5528a06E" BorderBrush="{StaticResource NeonLineHiBrush}"
-                                    BorderThickness="1" Foreground="{StaticResource NeonInk0Brush}" FontSize="10"
+                                    Padding="8,3" Background="{DynamicResource Button.Success.Background}" BorderBrush="{DynamicResource Border.Default}"
+                                    BorderThickness="1" Foreground="{DynamicResource Button.Flat.Foreground}" FontSize="10"
                                     ToolTip="{services:Loc editor.stageAndCommit}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
                                                 BorderBrush="{TemplateBinding BorderBrush}"
                                                 BorderThickness="{TemplateBinding BorderThickness}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter/>
                                         </Border>
+                                        <!-- A disabled button must LOOK disabled: these templates drew the
+                                             same box whether or not a click would do anything. -->
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                                 <StackPanel Orientation="Horizontal">
@@ -698,16 +924,26 @@
                         <StackPanel Orientation="Horizontal">
                             <Button Command="{Binding SaveActiveCommand}" Cursor="Hand"
                                     Padding="8,4" Margin="0,0,4,0"
-                                    Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10">
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}" FontSize="10"
+                                    ToolTip="{services:Loc ide.saveTip}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
                                                 BorderBrush="{TemplateBinding BorderBrush}"
                                                 BorderThickness="{TemplateBinding BorderThickness}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter/>
                                         </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Button.Flat.Hover.Background}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                                 <StackPanel Orientation="Horizontal">
@@ -717,16 +953,26 @@
                             </Button>
                             <Button Command="{Binding SaveAllCommand}" Cursor="Hand"
                                     Padding="8,4"
-                                    Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10">
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}" FontSize="10"
+                                    ToolTip="{services:Loc ide.saveAllTip}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
-                                        <Border Background="{TemplateBinding Background}" CornerRadius="4"
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
                                                 BorderBrush="{TemplateBinding BorderBrush}"
                                                 BorderThickness="{TemplateBinding BorderThickness}"
                                                 Padding="{TemplateBinding Padding}">
                                             <ContentPresenter/>
                                         </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource Button.Flat.Hover.Background}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Button.Template>
                                 <StackPanel Orientation="Horizontal">
@@ -754,8 +1000,8 @@
 
                 <!-- Query -->
                 <Grid Grid.Row="0" Margin="10,10,10,0">
-                    <Border Background="#3311132E" CornerRadius="5"
-                            BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                    <Border Background="{DynamicResource Surface.Input}" CornerRadius="5"
+                            BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -763,14 +1009,14 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonInk3Brush}"
+                                       Foreground="{DynamicResource Text.Faint}"
                                        VerticalAlignment="Center" Margin="8,0,0,0"/>
                             <TextBox x:Name="SearchBox" Grid.Column="1"
                                      Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0" Padding="7,6"
-                                     Foreground="{StaticResource NeonInk0Brush}"
-                                     CaretBrush="{StaticResource NeonCyanBrush}"
-                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     CaretBrush="{DynamicResource Accent.1}"
+                                     FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                      KeyDown="OnSearchBoxKeyDown"/>
                             <Button Grid.Column="2" Width="20" Height="20" Margin="0,0,6,0" Cursor="Hand"
                                     Background="Transparent" BorderThickness="0"
@@ -780,12 +1026,12 @@
                                     <ControlTemplate TargetType="Button">
                                         <Border x:Name="bd" Background="Transparent" CornerRadius="10">
                                             <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                       Foreground="{DynamicResource Text.Faint}"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -812,11 +1058,11 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                             </Trigger>
                                             <Trigger Property="IsChecked" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
-                                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonCyanBrush}"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -827,29 +1073,29 @@
 
                     <ToggleButton IsChecked="{Binding SearchMatchCase, Mode=TwoWay}"
                                   ToolTip="{services:Loc editor.matchCase}">
-                        <TextBlock Text="Aa" FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
-                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                        <TextBlock Text="Aa" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
+                                   Foreground="{DynamicResource Text.Secondary}"/>
                     </ToggleButton>
                     <ToggleButton IsChecked="{Binding SearchWholeWord, Mode=TwoWay}"
                                   ToolTip="{services:Loc editor.wholeWord}">
-                        <TextBlock Text="ab" FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                        <TextBlock Text="ab" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                                    TextDecorations="Underline"
-                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                                   Foreground="{DynamicResource Text.Secondary}"/>
                     </ToggleButton>
                     <ToggleButton IsChecked="{Binding SearchIsRegex, Mode=TwoWay}"
                                   ToolTip="{services:Loc editor.useRegex}">
-                        <TextBlock Text=".*" FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
-                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                        <TextBlock Text=".*" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
+                                   Foreground="{DynamicResource Text.Secondary}"/>
                     </ToggleButton>
                     <ToggleButton IsChecked="{Binding SearchFiltersExpanded, Mode=TwoWay}"
                                   ToolTip="{services:Loc editor.toggleFilters}">
                         <TextBlock Text="&#xE71C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                   Foreground="{StaticResource NeonInk1Brush}"/>
+                                   Foreground="{DynamicResource Text.Secondary}"/>
                     </ToggleButton>
 
                     <TextBlock Text="{services:Loc editor.searching}" FontSize="10" Margin="8,0,0,0"
                                VerticalAlignment="Center"
-                               Foreground="{StaticResource NeonCyanBrush}"
+                               Foreground="{DynamicResource Accent.1}"
                                Visibility="{Binding IsSearching, Converter={StaticResource BoolVis}}"/>
                 </StackPanel>
 
@@ -857,56 +1103,56 @@
                 <StackPanel Grid.Row="2" Margin="10,6,10,0"
                             Visibility="{Binding SearchFiltersExpanded, Converter={StaticResource BoolVis}}">
                     <TextBlock Text="{services:Loc editor.filesToInclude}" FontSize="9"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="2,0,0,2"/>
-                    <Border Background="#3311132E" CornerRadius="4" Margin="0,0,0,6"
-                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
+                               Foreground="{DynamicResource Text.Faint}" Margin="2,0,0,2"/>
+                    <Border Background="{DynamicResource Surface.Input}" CornerRadius="4" Margin="0,0,0,6"
+                            BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
                         <TextBox Text="{Binding SearchInclude, UpdateSourceTrigger=PropertyChanged, Delay=300}"
                                  Background="Transparent" BorderThickness="0" Padding="7,4"
-                                 Foreground="{StaticResource NeonInk1Brush}"
-                                 CaretBrush="{StaticResource NeonCyanBrush}"
-                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="11"/>
+                                 Foreground="{DynamicResource Text.Secondary}"
+                                 CaretBrush="{DynamicResource Accent.1}"
+                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"/>
                     </Border>
                     <TextBlock Text="{services:Loc editor.filesToExclude}" FontSize="9"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="2,0,0,2"/>
-                    <Border Background="#3311132E" CornerRadius="4"
-                            BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1">
+                               Foreground="{DynamicResource Text.Faint}" Margin="2,0,0,2"/>
+                    <Border Background="{DynamicResource Surface.Input}" CornerRadius="4"
+                            BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1">
                         <TextBox Text="{Binding SearchExclude, UpdateSourceTrigger=PropertyChanged, Delay=300}"
                                  Background="Transparent" BorderThickness="0" Padding="7,4"
-                                 Foreground="{StaticResource NeonInk1Brush}"
-                                 CaretBrush="{StaticResource NeonCyanBrush}"
-                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="11"/>
+                                 Foreground="{DynamicResource Text.Secondary}"
+                                 CaretBrush="{DynamicResource Accent.1}"
+                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"/>
                     </Border>
                 </StackPanel>
 
                 <!-- Rename bar (F2) — preview is mandatory before anything is written to disk -->
                 <Border Grid.Row="3" Margin="10,8,10,0" Padding="10,8" CornerRadius="6"
-                        Background="#70241436" BorderBrush="{StaticResource NeonMagentaBrush}" BorderThickness="1"
+                        Background="{DynamicResource Bg.Panel.Solid}" BorderBrush="{DynamicResource Accent.3}" BorderThickness="1"
                         Visibility="{Binding IsRenameMode, Converter={StaticResource BoolVis}}">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                             <TextBlock Text="&#xE8AC;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMagentaBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                       Foreground="{DynamicResource Accent.3}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock Text="{services:Loc editor.renameSymbol}" FontSize="10" FontWeight="Bold"
-                                       FontFamily="{StaticResource NeonMonoFont}"
-                                       Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center"/>
                             <TextBlock Text="{Binding RenameOldName}" FontSize="11" Margin="8,0,0,0"
-                                       FontFamily="{StaticResource NeonMonoFont}"
-                                       Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center"
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis" MaxWidth="120"/>
                         </StackPanel>
-                        <Border Background="#3311132E" CornerRadius="4" Margin="0,0,0,6"
-                                BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                        <Border Background="{DynamicResource Surface.Input}" CornerRadius="4" Margin="0,0,0,6"
+                                BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
                             <TextBox x:Name="RenameBox" Text="{Binding RenameNewName, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0" Padding="7,5"
-                                     Foreground="{StaticResource NeonInk0Brush}"
-                                     CaretBrush="{StaticResource NeonMagentaBrush}"
-                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     CaretBrush="{DynamicResource Accent.3}"
+                                     FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
                                      KeyDown="OnRenameBoxKeyDown"/>
                         </Border>
                         <StackPanel Orientation="Horizontal">
                             <Button Command="{Binding PreviewRenameCommand}" Cursor="Hand" Padding="9,4" Margin="0,0,6,0"
-                                    Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource NeonInk0Brush}" FontSize="10">
+                                    Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                    Foreground="{DynamicResource Button.Flat.Foreground}" FontSize="10">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
                                         <Border Background="{TemplateBinding Background}" CornerRadius="4"
@@ -921,8 +1167,8 @@
                             </Button>
                             <Button Command="{Binding ApplyRenameCommand}" Cursor="Hand" Padding="9,4" Margin="0,0,6,0"
                                     IsEnabled="{Binding CanApplyRename}"
-                                    Background="#66C2185B" BorderBrush="{StaticResource NeonMagentaBrush}" BorderThickness="1"
-                                    Foreground="White" FontSize="10"
+                                    Background="{DynamicResource Button.Danger.Solid.Background}" BorderBrush="{DynamicResource Accent.3}" BorderThickness="1"
+                                    Foreground="{DynamicResource Text.OnAccent}" FontSize="10"
                                     ToolTip="{services:Loc editor.applyRenameTip}">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
@@ -942,8 +1188,8 @@
                                 <TextBlock Text="{Binding RenameApplyLabel}"/>
                             </Button>
                             <Button Command="{Binding CancelRenameCommand}" Cursor="Hand" Padding="9,4"
-                                    Background="Transparent" BorderBrush="{StaticResource NeonLineBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource NeonInk2Brush}" FontSize="10">
+                                    Background="Transparent" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                                    Foreground="{DynamicResource Text.Muted}" FontSize="10">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
                                         <Border Background="{TemplateBinding Background}" CornerRadius="4"
@@ -963,16 +1209,16 @@
                 <!-- Context (what this list is) + summary + error -->
                 <StackPanel Grid.Row="4" Margin="12,8,10,4">
                     <TextBlock Text="{Binding SearchContextLabel}" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{StaticResource NeonCyanBrush}" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Accent.1}" TextWrapping="Wrap"
                                Visibility="{Binding HasSearchContext, Converter={StaticResource BoolVis}}"/>
                     <TextBlock Text="{Binding SearchSummary}" FontSize="10"
-                               FontFamily="{StaticResource NeonMonoFont}"
-                               Foreground="{StaticResource NeonInk3Brush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                               FontFamily="{DynamicResource Font.Mono.Display}"
+                               Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="0,2,0,0"/>
                     <TextBlock Text="{Binding SearchError}" FontSize="10" TextWrapping="Wrap" Margin="0,2,0,0"
-                               Foreground="{StaticResource NeonMagentaBrush}"
+                               Foreground="{DynamicResource Accent.3}"
                                Visibility="{Binding HasSearchError, Converter={StaticResource BoolVis}}"/>
                     <TextBlock Text="{services:Loc editor.noResults}" FontSize="10" Margin="0,2,0,0"
-                               Foreground="{StaticResource NeonInk3Brush}"
+                               Foreground="{DynamicResource Text.Faint}"
                                Visibility="{Binding HasNoResults, Converter={StaticResource BoolVis}}"/>
                 </StackPanel>
 
@@ -998,7 +1244,7 @@
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bd" Property="Background" Value="#1AFFFFFF"/>
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover}"/>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -1012,7 +1258,7 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" FontFamily="Segoe MDL2 Assets" FontSize="8"
                                                        VerticalAlignment="Center" Margin="0,0,5,0"
-                                                       Foreground="{StaticResource NeonInk3Brush}">
+                                                       Foreground="{DynamicResource Text.Faint}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Text" Value="&#xE70D;"/>
@@ -1026,17 +1272,17 @@
                                             </TextBlock>
                                             <TextBlock Grid.Column="1" Text="{Binding FileName}" FontSize="11"
                                                        FontWeight="SemiBold" VerticalAlignment="Center"
-                                                       Foreground="{StaticResource NeonInk0Brush}"/>
+                                                       Foreground="{DynamicResource Text.Primary}"/>
                                             <TextBlock Grid.Column="2" Text="{Binding Directory}" FontSize="9"
                                                        Margin="6,0,0,0" VerticalAlignment="Center"
                                                        TextTrimming="CharacterEllipsis"
-                                                       Foreground="{StaticResource NeonInk3Brush}"/>
-                                            <Border Grid.Column="3" Background="#22FFFFFF" CornerRadius="3"
+                                                       Foreground="{DynamicResource Text.Faint}"/>
+                                            <Border Grid.Column="3" Background="{DynamicResource Surface.Badge}" CornerRadius="3"
                                                     Padding="4,0" MinWidth="16" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding MatchCount}" FontSize="9"
                                                            HorizontalAlignment="Center"
-                                                           FontFamily="{StaticResource NeonMonoFont}"
-                                                           Foreground="{StaticResource NeonInk2Brush}"/>
+                                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                                           Foreground="{DynamicResource Text.Muted}"/>
                                             </Border>
                                         </Grid>
                                     </Button>
@@ -1059,7 +1305,7 @@
                                                             </Border>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="bd" Property="Background" Value="#2628326E"/>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource Surface.Raised}"/>
                                                                 </Trigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
@@ -1071,11 +1317,11 @@
                                                         </Grid.ColumnDefinitions>
                                                         <TextBlock Grid.Column="0" Text="{Binding LineLabel}" FontSize="9"
                                                                    HorizontalAlignment="Right" Margin="0,0,8,0"
-                                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                                   Foreground="{DynamicResource Text.Faint}"/>
                                                         <TextBlock Grid.Column="1" FontSize="11"
-                                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                                   Foreground="{StaticResource NeonInk1Brush}"
+                                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                                   Foreground="{DynamicResource Text.Secondary}"
                                                                    TextTrimming="CharacterEllipsis"
                                                                    editor:MatchHighlight.Start="{Binding PreviewColumn}"
                                                                    editor:MatchHighlight.Length="{Binding Length}"
@@ -1101,7 +1347,7 @@
                 <StackPanel>
                     <!-- Target + transport controls -->
                     <TextBlock Text="{Binding DebugTargetLabel}" FontSize="10" TextWrapping="Wrap"
-                               Foreground="{StaticResource NeonInk2Brush}" Margin="0,0,0,6"/>
+                               Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,6"/>
 
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                         <StackPanel.Resources>
@@ -1113,13 +1359,13 @@
                                 <Setter Property="Template">
                                     <Setter.Value>
                                         <ControlTemplate TargetType="Button">
-                                            <Border x:Name="bd" Background="#3328326E" CornerRadius="4"
-                                                    BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                                            <Border x:Name="bd" Background="{DynamicResource Button.Flat.Background}" CornerRadius="4"
+                                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
                                                 <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="bd" Property="Background" Value="#5528326E"/>
+                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource Button.Flat.Hover.Background}"/>
                                                 </Trigger>
                                                 <Trigger Property="IsEnabled" Value="False">
                                                     <Setter TargetName="bd" Property="Opacity" Value="0.3"/>
@@ -1135,70 +1381,76 @@
                                 Visibility="{Binding IsNotDebugging, Converter={StaticResource BoolVis}}"
                                 ToolTip="{services:Loc editor.startDebug}">
                             <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMintBrush}"/>
+                                       Foreground="{DynamicResource Status.Success}"/>
                         </Button>
                         <Button Command="{Binding ContinueDebugCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
                                 Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
                                 ToolTip="{services:Loc editor.continueDebug}">
                             <TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMintBrush}"/>
+                                       Foreground="{DynamicResource Status.Success}"/>
                         </Button>
                         <Button Command="{Binding StepOverCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
                                 Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
                                 ToolTip="{services:Loc editor.stepOver}">
                             <TextBlock Text="&#xE72A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                                       Foreground="{DynamicResource Accent.1}"/>
                         </Button>
                         <Button Command="{Binding StepIntoCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
                                 Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
                                 ToolTip="{services:Loc editor.stepInto}">
                             <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                                       Foreground="{DynamicResource Accent.1}"/>
                         </Button>
                         <Button Command="{Binding StepOutCommand}" IsEnabled="{Binding IsPausedAtBreakpoint}"
                                 Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
                                 ToolTip="{services:Loc editor.stepOut}">
                             <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonCyanBrush}"/>
+                                       Foreground="{DynamicResource Accent.1}"/>
+                        </Button>
+                        <Button Command="{Binding PauseDebugCommand}" IsEnabled="{Binding CanPauseDebug}"
+                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
+                                ToolTip="{services:Loc ide.pauseDebug}">
+                            <TextBlock Text="&#xE769;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{DynamicResource Status.Warning}"/>
                         </Button>
                         <Button Command="{Binding StopDebugCommand}"
                                 Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"
                                 ToolTip="{services:Loc editor.stopDebug}">
                             <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMagentaBrush}"/>
+                                       Foreground="{DynamicResource Accent.3}"/>
                         </Button>
                         <Button Command="{Binding ShowDebugCommand}" ToolTip="{services:Loc editor.refreshAdapters}">
                             <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                       Foreground="{StaticResource NeonInk2Brush}"/>
+                                       Foreground="{DynamicResource Text.Muted}"/>
                         </Button>
                     </StackPanel>
 
                     <TextBlock Text="{Binding DebugStatus}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,8"
-                               FontFamily="{StaticResource NeonMonoFont}"
-                               Foreground="{StaticResource NeonAmberBrush}"/>
+                               FontFamily="{DynamicResource Font.Mono.Display}"
+                               Foreground="{DynamicResource Status.Warning}"/>
 
                     <!-- Installed adapters -->
                     <TextBlock Text="{services:Loc editor.adapters}" FontSize="9" FontWeight="Bold"
-                               FontFamily="{StaticResource NeonMonoFont}"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"/>
+                               FontFamily="{DynamicResource Font.Mono.Display}"
+                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
                     <ItemsControl ItemsSource="{Binding DebugAdapters}" Margin="0,0,0,10">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Margin="0,0,0,4" Padding="7,5" CornerRadius="4"
-                                        Background="#4011132E" BorderBrush="{StaticResource NeonLineBrush}"
+                                        Background="{DynamicResource Surface.Sunken}" BorderBrush="{DynamicResource Border.Subtle}"
                                         BorderThickness="1">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="{Binding Language}" FontSize="10" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource NeonInk0Brush}"/>
+                                                       Foreground="{DynamicResource Text.Primary}"/>
                                             <TextBlock Text="{Binding StatusLabel}" FontSize="9" Margin="6,0,0,0"
                                                        VerticalAlignment="Center">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="{StaticResource NeonInk3Brush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource Text.Faint}"/>
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding IsAvailable}" Value="True">
-                                                                <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
+                                                                <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -1207,8 +1459,8 @@
                                         </StackPanel>
                                         <TextBlock Text="{Binding InstallHint}" FontSize="9" TextWrapping="Wrap"
                                                    Margin="0,3,0,0"
-                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   Foreground="{DynamicResource Text.Faint}"
                                                    Visibility="{Binding IsAvailable, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                                     </StackPanel>
                                 </Border>
@@ -1218,8 +1470,8 @@
 
                     <!-- Call stack -->
                     <TextBlock Text="{services:Loc editor.callStack}" FontSize="9" FontWeight="Bold"
-                               FontFamily="{StaticResource NeonMonoFont}"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"
+                               FontFamily="{DynamicResource Font.Mono.Display}"
+                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"
                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"/>
                     <ListBox ItemsSource="{Binding CallStack}" SelectedItem="{Binding SelectedFrame, Mode=TwoWay}"
                              Background="Transparent" BorderThickness="0" MaxHeight="130" Margin="0,0,0,10"
@@ -1228,11 +1480,11 @@
                             <DataTemplate>
                                 <StackPanel>
                                     <TextBlock Text="{Binding Name}" FontSize="10"
-                                               Foreground="{StaticResource NeonInk0Brush}"
+                                               Foreground="{DynamicResource Text.Primary}"
                                                TextTrimming="CharacterEllipsis"/>
                                     <TextBlock Text="{Binding Location}" FontSize="9"
-                                               FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonInk3Brush}"/>
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Faint}"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -1240,8 +1492,8 @@
 
                     <!-- Variables -->
                     <TextBlock Text="{services:Loc editor.variables}" FontSize="9" FontWeight="Bold"
-                               FontFamily="{StaticResource NeonMonoFont}"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"
+                               FontFamily="{DynamicResource Font.Mono.Display}"
+                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"
                                Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}"/>
                     <ItemsControl ItemsSource="{Binding DebugVariables}" Margin="0,0,0,10"
                                   Visibility="{Binding IsDebugging, Converter={StaticResource BoolVis}}">
@@ -1253,11 +1505,11 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="{Binding Name}" FontSize="10"
-                                               FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonCyanBrush}" Margin="0,0,6,0"/>
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Accent.1}" Margin="0,0,6,0"/>
                                     <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="10"
-                                               FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonInk1Brush}"
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Secondary}"
                                                TextTrimming="CharacterEllipsis" ToolTip="{Binding Type}"/>
                                 </Grid>
                             </DataTemplate>
@@ -1271,8 +1523,8 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="{services:Loc editor.breakpoints}" FontSize="9" FontWeight="Bold"
-                                   FontFamily="{StaticResource NeonMonoFont}"
-                                   Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                         <Button Grid.Column="1" Command="{Binding ClearBreakpointsCommand}" Cursor="Hand"
                                 Background="Transparent" BorderThickness="0" Padding="0"
                                 ToolTip="{services:Loc editor.clearBreakpoints}">
@@ -1280,11 +1532,11 @@
                                 <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
                             </Button.Template>
                             <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                       Foreground="{StaticResource NeonInk3Brush}"/>
+                                       Foreground="{DynamicResource Text.Faint}"/>
                         </Button>
                     </Grid>
                     <TextBlock Text="{services:Loc editor.noBreakpoints}" FontSize="9" TextWrapping="Wrap"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,10">
+                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,10">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Visibility" Value="Collapsed"/>
@@ -1305,7 +1557,7 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <Ellipse Grid.Column="0" Width="8" Height="8" Fill="#FF5370"
+                                    <Ellipse Grid.Column="0" Width="8" Height="8" Fill="{DynamicResource Editor.Breakpoint}"
                                              VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <Button Grid.Column="1" Cursor="Hand" HorizontalContentAlignment="Left"
                                             Background="Transparent" BorderThickness="0" Padding="0"
@@ -1316,8 +1568,8 @@
                                             <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
                                         </Button.Template>
                                         <TextBlock Text="{Binding Label}" FontSize="10"
-                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                   Foreground="{StaticResource NeonInk1Brush}"
+                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   Foreground="{DynamicResource Text.Secondary}"
                                                    TextTrimming="CharacterEllipsis"/>
                                     </Button>
                                     <Button Grid.Column="2" Cursor="Hand" Background="Transparent"
@@ -1329,7 +1581,7 @@
                                             <ControlTemplate TargetType="Button"><ContentPresenter/></ControlTemplate>
                                         </Button.Template>
                                         <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                                   Foreground="{DynamicResource Text.Faint}"/>
                                     </Button>
                                 </Grid>
                             </DataTemplate>
@@ -1338,33 +1590,33 @@
 
                     <!-- Debug console -->
                     <TextBlock Text="{services:Loc editor.debugConsole}" FontSize="9" FontWeight="Bold"
-                               FontFamily="{StaticResource NeonMonoFont}"
-                               Foreground="{StaticResource NeonInk3Brush}" Margin="0,0,0,4"/>
-                    <Border Background="#0A06071A" CornerRadius="4" BorderThickness="1"
-                            BorderBrush="{StaticResource NeonLineBrush}" Height="140">
+                               FontFamily="{DynamicResource Font.Mono.Display}"
+                               Foreground="{DynamicResource Text.Faint}" Margin="0,0,0,4"/>
+                    <Border Background="{DynamicResource Editor.Background}" CornerRadius="4" BorderThickness="1"
+                            BorderBrush="{DynamicResource Border.Subtle}" Height="140">
                         <TextBox x:Name="DebugOut" Text="{Binding DebugConsole, Mode=OneWay}"
                                  IsReadOnly="True" TextWrapping="NoWrap"
                                  Background="Transparent" BorderThickness="0" Padding="7,4"
-                                 Foreground="{StaticResource NeonInk1Brush}"
-                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
+                                 Foreground="{DynamicResource Text.Secondary}"
+                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                  TextChanged="OnDebugOutputChanged"/>
                     </Border>
-                    <Border Background="#3311132E" CornerRadius="4" Margin="0,4,0,0"
-                            BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                    <Border Background="{DynamicResource Surface.Input}" CornerRadius="4" Margin="0,4,0,0"
+                            BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="&gt;" FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
-                                       Foreground="{StaticResource NeonAmberBrush}"
+                            <TextBlock Text="&gt;" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
+                                       Foreground="{DynamicResource Status.Warning}"
                                        VerticalAlignment="Center" Margin="7,0,4,0"/>
                             <TextBox Grid.Column="1" Text="{Binding DebugEvalInput, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0" Padding="0,5,7,5"
-                                     Foreground="{StaticResource NeonInk0Brush}"
-                                     CaretBrush="{StaticResource NeonAmberBrush}"
-                                     FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     CaretBrush="{DynamicResource Status.Warning}"
+                                     FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                                      ToolTip="{services:Loc editor.evaluateTip}"
                                      KeyDown="OnDebugEvalKeyDown"/>
                         </Grid>
@@ -1378,19 +1630,62 @@
         <Grid Grid.Column="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>   <!-- Tab strip -->
+                <RowDefinition Height="Auto"/>   <!-- Toolbar -->
                 <RowDefinition Height="Auto"/>   <!-- Merge-conflict banner -->
+                <RowDefinition Height="Auto"/>   <!-- Find / replace / go-to bar -->
                 <RowDefinition Height="*"/>      <!-- Code area + minimap (or the diff editor) -->
+                <RowDefinition Height="Auto"/>   <!-- Status bar -->
                 <RowDefinition Height="Auto"/>   <!-- Terminal drawer -->
             </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>    <!-- Editor -->
+                <ColumnDefinition Width="Auto"/> <!-- PREVIEW split (built-in browser) -->
+            </Grid.ColumnDefinitions>
+
+            <!-- ══════════ PREVIEW split — the built-in browser the agent drives (Dev Preview) ══════════
+                 Its own column over all rows, so no WPF overlay (diff editor, banner) ever sits on top of the
+                 page's native window. The page itself belongs to BrowserService and survives page switches. -->
+            <preview:PreviewDock Grid.Column="1" Grid.Row="0" Grid.RowSpan="7"
+                                 Visibility="{Binding IsChecked, ElementName=PreviewToggle, Converter={StaticResource BoolVis}}"/>
 
             <!-- Tab strip -->
-            <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}"
-                    Background="#8C0A0C22">
+            <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"
+                    Background="{DynamicResource Bg.Panel}">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
+                    <!-- PREVIEW split toggle -->
+                    <!-- IsChecked lives in the app-wide PreviewViewModel: this view is rebuilt on every visit. -->
+                    <ToggleButton x:Name="PreviewToggle" Grid.Column="2" Margin="0,3,8,3" Padding="8,3" Cursor="Hand"
+                                  IsChecked="{Binding IsDockOpen, Source={x:Static vm:PreviewViewModel.Current}, Mode=TwoWay}"
+                                  ToolTip="{services:Loc preview.toggleTip}">
+                        <ToggleButton.Template>
+                            <ControlTemplate TargetType="ToggleButton">
+                                <Border x:Name="bd" Background="Transparent" BorderThickness="1" CornerRadius="4"
+                                        BorderBrush="{DynamicResource Border.Subtle}" Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource Accent.1.Tint.Strong}"/>
+                                        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </ToggleButton.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE774;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{DynamicResource Accent.1}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc preview.title}" FontSize="11" Foreground="{DynamicResource Accent.1}"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
                     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <ItemsControl ItemsSource="{Binding Tabs}" ItemTemplate="{StaticResource EditorTabTemplate}">
                             <ItemsControl.ItemsPanel>
@@ -1404,7 +1699,7 @@
                          HTML opens in the browser, anything else in its default app. -->
                     <Button Grid.Column="1" Margin="6,3,8,3" Padding="8,3" Cursor="Hand"
                             Background="Transparent" BorderThickness="1"
-                            BorderBrush="{StaticResource NeonLineBrush}"
+                            BorderBrush="{DynamicResource Border.Subtle}"
                             Click="OnPreviewClick"
                             Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}"
                             ToolTip="{services:Loc editor.previewTip}">
@@ -1418,26 +1713,112 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE7B3;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMintBrush}" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="{services:Loc editor.preview}" FontSize="11" Foreground="{StaticResource NeonMintBrush}"
+                                       Foreground="{DynamicResource Status.Success}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc editor.preview}" FontSize="11" Foreground="{DynamicResource Status.Success}"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
                 </Grid>
             </Border>
 
+            <!-- ══════════ EDITOR TOOLBAR — the standard tools (owner 2026-10-12: "เซฟตรงไหน ไม่มีเลย") ══════════
+                 File · Undo/Redo · Clipboard · Find/Replace/Go to · Comment + the tools menu · view toggles. Every
+                 button also has its Notepad++ / VS Code shortcut (tooltips). -->
+            <Border x:Name="EditorToolbar" Grid.Row="1" Background="{DynamicResource Bg.Panel}" BorderThickness="0,0,0,1"
+                    BorderBrush="{DynamicResource Border.Subtle}" Padding="6,3">
+                <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="TbNew" Style="{StaticResource EdToolBtn}" Content="&#xE8A5;" Click="OnNewFile" ToolTip="{services:Loc edt.new}"/>
+                    <Button x:Name="TbOpen" Style="{StaticResource EdToolBtn}" Content="&#xE8E5;" Click="OnOpenFile" ToolTip="{services:Loc edt.open}"/>
+                    <Button x:Name="TbSave" Style="{StaticResource EdToolBtn}" Command="{Binding SaveActiveCommand}" ToolTip="{services:Loc edt.save}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc editor.save}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="TbSaveAs" Style="{StaticResource EdToolBtn}" Content="&#xE792;" Click="OnSaveAs"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.saveAs}"/>
+                    <Button x:Name="TbSaveAll" Style="{StaticResource EdToolBtn}" Content="&#xE78C;" Command="{Binding SaveAllCommand}"
+                            ToolTip="{services:Loc edt.saveAll}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbUndo" Style="{StaticResource EdToolBtn}" Content="&#xE7A7;" Click="OnUndo" ToolTip="{services:Loc edt.undo}"/>
+                    <Button x:Name="TbRedo" Style="{StaticResource EdToolBtn}" Content="&#xE7A6;" Click="OnRedo" ToolTip="{services:Loc edt.redo}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbCut" Style="{StaticResource EdToolBtn}" Content="&#xE8C6;" Click="OnCut"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.cut}"/>
+                    <Button x:Name="TbCopy" Style="{StaticResource EdToolBtn}" Content="&#xE8C8;" Click="OnCopy"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.copy}"/>
+                    <Button x:Name="TbPaste" Style="{StaticResource EdToolBtn}" Content="&#xE77F;" Click="OnPaste"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.paste}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbFind" Style="{StaticResource EdToolBtn}" Content="&#xE721;" Click="OnFind"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.find}"/>
+                    <Button x:Name="TbReplace" Style="{StaticResource EdToolBtn}" Content="&#xE8AB;" Click="OnReplace"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.replace}"/>
+                    <Button x:Name="TbGoTo" Style="{StaticResource EdToolBtn}" Content="&#xE8AD;" Click="OnGoTo"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.goTo}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <Button x:Name="TbComment" Style="{StaticResource EdToolBtn}" Content="&#xE90A;" Click="OnToggleComment"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.comment}"/>
+                    <Button x:Name="TbTools" Style="{StaticResource EdToolBtn}" Click="OnToolsMenu"
+                            IsEnabled="{Binding HasActiveTab}" ToolTip="{services:Loc edt.toolsTip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc edt.tools}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,4,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="ToolsMenu">
+                                <MenuItem Header="{services:Loc edt.dupLine}" InputGestureText="Ctrl+D" Click="OnDuplicateLines"/>
+                                <MenuItem Header="{services:Loc edt.delLine}" InputGestureText="Ctrl+Shift+L" Click="OnDeleteLines"/>
+                                <MenuItem Header="{services:Loc edt.moveUp}" InputGestureText="Alt+↑" Click="OnMoveLinesUp"/>
+                                <MenuItem Header="{services:Loc edt.moveDown}" InputGestureText="Alt+↓" Click="OnMoveLinesDown"/>
+                                <MenuItem Header="{services:Loc edt.joinLines}" InputGestureText="Ctrl+J" Click="OnJoinLines"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.upper}" InputGestureText="Ctrl+Shift+U" Click="OnUpperCase"/>
+                                <MenuItem Header="{services:Loc edt.lower}" InputGestureText="Ctrl+U" Click="OnLowerCase"/>
+                                <MenuItem Header="{services:Loc edt.title}" Click="OnTitleCase"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.sortAsc}" Click="OnSortAsc"/>
+                                <MenuItem Header="{services:Loc edt.sortDesc}" Click="OnSortDesc"/>
+                                <MenuItem Header="{services:Loc edt.dedupe}" Click="OnRemoveDuplicates"/>
+                                <MenuItem Header="{services:Loc edt.removeEmpty}" Click="OnRemoveEmpty"/>
+                                <MenuItem Header="{services:Loc edt.trimTrailing}" Click="OnTrimTrailing"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.tabsToSpaces}" Click="OnTabsToSpaces"/>
+                                <MenuItem Header="{services:Loc edt.spacesToTabs}" Click="OnSpacesToTabs"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.foldAll}" Click="OnFoldAll"/>
+                                <MenuItem Header="{services:Loc edt.unfoldAll}" Click="OnUnfoldAll"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.selectAll}" InputGestureText="Ctrl+A" Click="OnSelectAll"/>
+                                <MenuItem Header="{services:Loc edt.columnTip}" IsEnabled="False"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <ToggleButton x:Name="TbWrap" Style="{StaticResource EdToolToggle}" Content="&#xE751;" Click="OnToggleWrap"
+                                  ToolTip="{services:Loc edt.wrap}"/>
+                    <ToggleButton x:Name="TbWhitespace" Style="{StaticResource EdToolToggle}" Content="¶" FontFamily="Segoe UI" FontSize="14"
+                                  Click="OnToggleWhitespace" ToolTip="{services:Loc edt.whitespace}"/>
+                    <Button x:Name="TbZoomOut" Style="{StaticResource EdToolBtn}" Content="&#xE71F;" Click="OnZoomOut" ToolTip="{services:Loc edt.zoomOut}"/>
+                    <Button x:Name="TbZoomIn" Style="{StaticResource EdToolBtn}" Content="&#xE8A3;" Click="OnZoomIn" ToolTip="{services:Loc edt.zoomIn}"/>
+                </WrapPanel>
+            </Border>
+
             <!-- ══════════ MERGE-CONFLICT banner ══════════
                  Appears whenever the open buffer still has git's markers in it. Resolutions edit the
                  TAB (undoable, saved deliberately) — never the file behind the user's back. -->
-            <Border Grid.Row="1" Padding="12,8" BorderThickness="0,0,0,1"
-                    Background="#70301028" BorderBrush="{StaticResource NeonMagentaBrush}"
+            <Border Grid.Row="2" Padding="12,8" BorderThickness="0,0,0,1"
+                    Background="{DynamicResource Banner.Danger.Background}" BorderBrush="{DynamicResource Accent.3}"
                     Visibility="{Binding HasConflicts, Converter={StaticResource BoolVis}}">
                 <StackPanel>
                     <Grid>
@@ -1448,15 +1829,15 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="&#xE7BA;" FontFamily="Segoe MDL2 Assets" FontSize="13"
-                                   Foreground="{StaticResource NeonMagentaBrush}"
+                                   Foreground="{DynamicResource Accent.3}"
                                    VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock Grid.Column="1" Text="{Binding ConflictSummary}" FontSize="11"
-                                   Foreground="{StaticResource NeonInk0Brush}" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap"
                                    VerticalAlignment="Center"/>
                         <Button Grid.Column="2" Command="{Binding AcceptAllOursCommand}" Cursor="Hand"
                                 Padding="8,3" Margin="8,0,4,0" FontSize="10"
-                                Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                Foreground="{StaticResource NeonInk0Brush}"
+                                Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                Foreground="{DynamicResource Button.Flat.Foreground}"
                                 ToolTip="{services:Loc editor.acceptAllCurrentTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
@@ -1472,8 +1853,8 @@
                         </Button>
                         <Button Grid.Column="3" Command="{Binding AcceptAllTheirsCommand}" Cursor="Hand"
                                 Padding="8,3" FontSize="10"
-                                Background="#3328326E" BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                                Foreground="{StaticResource NeonInk0Brush}"
+                                Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                Foreground="{DynamicResource Button.Flat.Foreground}"
                                 ToolTip="{services:Loc editor.acceptAllIncomingTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
@@ -1501,7 +1882,7 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border Margin="0,0,0,6" Padding="8,6" CornerRadius="5"
-                                        Background="#4011132E" BorderBrush="{StaticResource NeonLineBrush}"
+                                        Background="{DynamicResource Surface.Sunken}" BorderBrush="{DynamicResource Border.Subtle}"
                                         BorderThickness="1">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -1521,20 +1902,20 @@
                                                     </ControlTemplate>
                                                 </Button.Template>
                                                 <TextBlock Text="{Binding Title}" FontSize="10" FontWeight="Bold"
-                                                           FontFamily="{StaticResource NeonMonoFont}"
-                                                           Foreground="{StaticResource NeonCyanBrush}"/>
+                                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                                           Foreground="{DynamicResource Accent.1}"/>
                                             </Button>
                                             <TextBlock Text="{Binding OursSummary}" FontSize="9" Margin="0,3,0,0"
-                                                       Foreground="{StaticResource NeonMintBrush}"/>
+                                                       Foreground="{DynamicResource Status.Success}"/>
                                             <TextBlock Text="{Binding OursPreview}" FontSize="10" MaxHeight="42"
-                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                       Foreground="{StaticResource NeonInk2Brush}"
+                                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                                       Foreground="{DynamicResource Text.Muted}"
                                                        TextTrimming="CharacterEllipsis"/>
                                             <TextBlock Text="{Binding TheirsSummary}" FontSize="9" Margin="0,4,0,0"
-                                                       Foreground="{StaticResource NeonAmberBrush}"/>
+                                                       Foreground="{DynamicResource Status.Warning}"/>
                                             <TextBlock Text="{Binding TheirsPreview}" FontSize="10" MaxHeight="42"
-                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                       Foreground="{StaticResource NeonInk2Brush}"
+                                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                                       Foreground="{DynamicResource Text.Muted}"
                                                        TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,0,0">
@@ -1545,19 +1926,19 @@
                                                     <Setter Property="Margin" Value="0,0,0,4"/>
                                                     <Setter Property="FontSize" Value="10"/>
                                                     <Setter Property="MinWidth" Value="92"/>
-                                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                                    <Setter Property="Foreground" Value="{DynamicResource Button.Flat.Foreground}"/>
                                                     <Setter Property="Template">
                                                         <Setter.Value>
                                                             <ControlTemplate TargetType="Button">
-                                                                <Border x:Name="bd" Background="#3328326E" CornerRadius="4"
-                                                                        BorderBrush="{StaticResource NeonLineHiBrush}"
+                                                                <Border x:Name="bd" Background="{DynamicResource Button.Flat.Background}" CornerRadius="4"
+                                                                        BorderBrush="{DynamicResource Border.Default}"
                                                                         BorderThickness="1"
                                                                         Padding="{TemplateBinding Padding}">
                                                                     <ContentPresenter HorizontalAlignment="Center"/>
                                                                 </Border>
                                                                 <ControlTemplate.Triggers>
                                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                                        <Setter TargetName="bd" Property="Background" Value="#5528326E"/>
+                                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource Button.Flat.Hover.Background}"/>
                                                                     </Trigger>
                                                                 </ControlTemplate.Triggers>
                                                             </ControlTemplate>
@@ -1589,27 +1970,109 @@
                 </StackPanel>
             </Border>
 
+            <!-- ══════════ FIND / REPLACE / GO TO LINE bar (Ctrl+F · Ctrl+H · Ctrl+G) ══════════
+                 Every match on screen is highlighted; "3 of 17" counts them. Regex mode follows Notepad++:
+                 '.' never eats a CR, '$' works on CRLF lines, \n \t and $1 work in the replacement. -->
+            <Border x:Name="FindBar" Grid.Row="3" Visibility="Collapsed" Background="{DynamicResource Surface.Sunken}"
+                    BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}" Padding="8,5">
+                <StackPanel>
+                    <StackPanel x:Name="FindRow" Orientation="Horizontal">
+                        <Border Width="300" CornerRadius="4" BorderThickness="1" Background="{DynamicResource Input.Background}"
+                                BorderBrush="{DynamicResource Input.Border}" x:Name="FindBoxFrame">
+                            <Grid>
+                                <TextBox x:Name="FindBox" Style="{StaticResource EdFindInput}" TextChanged="OnFindTextChanged"
+                                         PreviewKeyDown="OnFindBoxKeyDown"/>
+                                <TextBlock Text="{services:Loc edt.findHint}" IsHitTestVisible="False" Margin="8,0" FontSize="12"
+                                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=FindBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <ToggleButton x:Name="FindCase" Style="{StaticResource EdToolToggle}" Content="Aa" FontFamily="Segoe UI" FontSize="12"
+                                      Margin="6,0,0,0" Click="OnFindOptionChanged" ToolTip="{services:Loc edt.matchCase}"/>
+                        <ToggleButton x:Name="FindWord" Style="{StaticResource EdToolToggle}" FontFamily="Segoe UI" FontSize="12"
+                                      Click="OnFindOptionChanged" ToolTip="{services:Loc edt.wholeWord}">
+                            <TextBlock Text="ab" TextDecorations="Underline"/>
+                        </ToggleButton>
+                        <ToggleButton x:Name="FindRegex" Style="{StaticResource EdToolToggle}" Content=".*" FontFamily="Consolas" FontSize="12"
+                                      Click="OnFindOptionChanged" ToolTip="{services:Loc edt.regex}"/>
+                        <TextBlock x:Name="FindCount" MinWidth="96" Margin="8,0" FontSize="11" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource Text.Muted}"/>
+                        <Button x:Name="FindPrevBtn" Style="{StaticResource EdToolBtn}" Content="&#xE74A;" Click="OnFindPrev" ToolTip="{services:Loc edt.findPrev}"/>
+                        <Button x:Name="FindNextBtn" Style="{StaticResource EdToolBtn}" Content="&#xE74B;" Click="OnFindNext" ToolTip="{services:Loc edt.findNext}"/>
+                        <Button x:Name="FindReplaceToggle" Style="{StaticResource EdToolBtn}" Content="&#xE8AB;" Click="OnReplace" ToolTip="{services:Loc edt.replace}"/>
+                        <Button Style="{StaticResource EdToolBtn}" Content="&#xE711;" FontSize="10" Click="OnCloseFindBar" ToolTip="{services:Loc edt.closeBar}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="ReplaceRow" Orientation="Horizontal" Margin="0,5,0,0" Visibility="Collapsed">
+                        <Border Width="300" CornerRadius="4" BorderThickness="1" Background="{DynamicResource Input.Background}"
+                                BorderBrush="{DynamicResource Input.Border}">
+                            <Grid>
+                                <TextBox x:Name="ReplaceBox" Style="{StaticResource EdFindInput}" PreviewKeyDown="OnReplaceBoxKeyDown"/>
+                                <TextBlock Text="{services:Loc edt.replaceHint}" IsHitTestVisible="False" Margin="8,0" FontSize="12"
+                                           Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=ReplaceBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <Button x:Name="ReplaceOneBtn" Style="{StaticResource EdTextBtn}" Content="{services:Loc edt.replaceOne}" Click="OnReplaceOne"
+                                ToolTip="{services:Loc edt.replaceOneTip}"/>
+                        <Button x:Name="ReplaceAllBtn" Style="{StaticResource EdTextBtn}" Content="{services:Loc edt.replaceAll}" Click="OnReplaceAll"
+                                ToolTip="{services:Loc edt.replaceAllTip}"/>
+                    </StackPanel>
+                    <StackPanel x:Name="GoToRow" Orientation="Horizontal" Visibility="Collapsed">
+                        <TextBlock Text="{services:Loc edt.goToLabel}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="{DynamicResource Text.Secondary}"/>
+                        <Border Width="120" CornerRadius="4" BorderThickness="1" Background="{DynamicResource Input.Background}"
+                                BorderBrush="{DynamicResource Input.Border}">
+                            <TextBox x:Name="GoToBox" Style="{StaticResource EdFindInput}" PreviewKeyDown="OnGoToBoxKeyDown"/>
+                        </Border>
+                        <TextBlock x:Name="GoToHint" Margin="8,0" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Text.Muted}"/>
+                        <Button x:Name="GoToBtn" Style="{StaticResource EdTextBtn}" Content="{services:Loc edt.go}" Click="OnGoToApply"/>
+                        <Button Style="{StaticResource EdToolBtn}" Content="&#xE711;" FontSize="10" Margin="6,0,0,0" Click="OnCloseFindBar"
+                                ToolTip="{services:Loc edt.closeBar}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <!-- Code area + minimap -->
-            <Grid Grid.Row="2">
+            <Grid Grid.Row="4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="80"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- Editor (line gutter + TextBox) -->
-                <Grid Grid.Column="0" Background="#06071A">
+                <Grid Grid.Column="0" Background="{DynamicResource Bg.Window}">
                     <!-- Empty state when no tab open -->
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
                                 Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                         <TextBlock Text="&#xE8E5;" FontFamily="Segoe MDL2 Assets" FontSize="56"
                                    HorizontalAlignment="Center"
-                                   Foreground="{StaticResource NeonInk3Brush}" Opacity="0.5"/>
+                                   Foreground="{DynamicResource Text.Faint}" Opacity="0.5"/>
                         <TextBlock Text="{services:Loc editor.openFileHint}"
                                    Margin="0,18,0,0" HorizontalAlignment="Center" FontSize="13"
-                                   Foreground="{StaticResource NeonInk2Brush}"/>
+                                   Foreground="{DynamicResource Text.Muted}"/>
                         <TextBlock Text="{services:Loc editor.askAiHint}"
                                    Margin="0,6,0,0" HorizontalAlignment="Center" FontSize="11"
-                                   Foreground="{StaticResource NeonInk3Brush}" FontStyle="Italic"/>
+                                   Foreground="{DynamicResource Text.Faint}" FontStyle="Italic"/>
                     </StackPanel>
 
                     <!-- Editor surface — AvalonEdit (real syntax highlighting + built-in gutter).
@@ -1617,10 +2080,10 @@
                          are wired in code-behind (CodeEditorView.xaml.cs). -->
                     <avalonedit:TextEditor x:Name="Editor"
                                            Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}"
-                                           FontFamily="{StaticResource NeonMonoFont}" FontSize="13"
-                                           Background="Transparent"
-                                           Foreground="{StaticResource NeonInk0Brush}"
-                                           LineNumbersForeground="{StaticResource NeonInk3Brush}"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" FontSize="13"
+                                           Background="{DynamicResource Editor.Background}"
+                                           Foreground="{DynamicResource Editor.Foreground}"
+                                           LineNumbersForeground="{DynamicResource Editor.LineNumber}"
                                            ShowLineNumbers="True"
                                            WordWrap="False"
                                            BorderThickness="0"
@@ -1630,8 +2093,8 @@
                 </Grid>
 
                 <!-- Minimap — real document overview: line bars + draggable viewport (MinimapControl) -->
-                <Border Grid.Column="1" Background="#7011152E"
-                        BorderThickness="1,0,0,0" BorderBrush="{StaticResource NeonLineBrush}"
+                <Border Grid.Column="1" Background="{DynamicResource Editor.Minimap.Background}"
+                        BorderThickness="1,0,0,0" BorderBrush="{DynamicResource Border.Subtle}"
                         Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
                     <editor:MinimapControl x:Name="Minimap" Margin="0,4"/>
                 </Border>
@@ -1640,9 +2103,11 @@
             <!-- ══════════ SIDE-BY-SIDE DIFF editor ══════════
                  Covers the code area while active. One virtualized list with four columns rather than
                  two synced editors: alignment is then structural and cannot drift apart on scroll. -->
-            <Border Grid.Row="2" Background="#06071A"
+            <!-- Bg.Window makes the overlay opaque over the editor; Editor.Background on top gives it the same
+                 code surface as the editor (transparent in Midnight, a light page in Classic). -->
+            <Border Grid.Row="4" Background="{DynamicResource Bg.Window}"
                     Visibility="{Binding IsDiffViewActive, Converter={StaticResource BoolVis}}">
-                <Grid>
+                <Grid Background="{DynamicResource Editor.Background}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -1650,8 +2115,8 @@
                     </Grid.RowDefinitions>
 
                     <!-- Header -->
-                    <Border Grid.Row="0" Padding="12,8" Background="#7011152E"
-                            BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
+                    <Border Grid.Row="0" Padding="12,8" Background="{DynamicResource Bg.Panel}"
+                            BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -1660,15 +2125,15 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="&#xE8AB;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                       Foreground="{StaticResource NeonCyanBrush}"
+                                       Foreground="{DynamicResource Accent.1}"
                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <TextBlock Grid.Column="1" Text="{Binding DiffTitle}" FontSize="11" FontWeight="SemiBold"
-                                       FontFamily="{StaticResource NeonMonoFont}"
-                                       Foreground="{StaticResource NeonInk0Brush}"
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Text.Primary}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                             <TextBlock Grid.Column="2" Text="{Binding DiffSummary}" FontSize="10" Margin="12,0,10,0"
-                                       FontFamily="{StaticResource NeonMonoFont}"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                                       FontFamily="{DynamicResource Font.Mono.Display}"
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                             <Button Grid.Column="3" Width="22" Height="22" Cursor="Hand"
                                     Background="Transparent" BorderThickness="0"
                                     Command="{Binding CloseDiffCommand}"
@@ -1677,12 +2142,12 @@
                                     <ControlTemplate TargetType="Button">
                                         <Border x:Name="bd" Background="Transparent" CornerRadius="11">
                                             <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                       Foreground="{StaticResource NeonInk2Brush}"
+                                                       Foreground="{DynamicResource Text.Muted}"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -1692,7 +2157,7 @@
                     </Border>
 
                     <!-- Column captions -->
-                    <Grid Grid.Row="1" Background="#4011152E">
+                    <Grid Grid.Row="1" Background="{DynamicResource Surface.Sunken}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="46"/>
                             <ColumnDefinition Width="*"/>
@@ -1700,11 +2165,11 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="1" Text="{services:Loc editor.diffHead}" FontSize="9" Padding="6,3"
-                                   FontFamily="{StaticResource NeonMonoFont}"
-                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Faint}"/>
                         <TextBlock Grid.Column="3" Text="{services:Loc editor.diffWorking}" FontSize="9" Padding="6,3"
-                                   FontFamily="{StaticResource NeonMonoFont}"
-                                   Foreground="{StaticResource NeonInk3Brush}"/>
+                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                   Foreground="{DynamicResource Text.Faint}"/>
                     </Grid>
 
                     <!-- Rows -->
@@ -1742,36 +2207,36 @@
 
                                     <TextBlock Grid.Column="0" Text="{Binding LeftLine}" FontSize="10"
                                                HorizontalAlignment="Right" Padding="0,1,8,1"
-                                               FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonInk3Brush}"/>
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Faint}"/>
                                     <Border x:Name="leftCell" Grid.Column="1" Background="Transparent">
                                         <TextBlock Text="{Binding LeftText}" FontSize="11" Padding="6,1"
-                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                   Foreground="{StaticResource NeonInk1Brush}"
+                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   Foreground="{DynamicResource Text.Secondary}"
                                                    TextWrapping="NoWrap"/>
                                     </Border>
 
                                     <TextBlock Grid.Column="2" Text="{Binding RightLine}" FontSize="10"
                                                HorizontalAlignment="Right" Padding="0,1,8,1"
-                                               FontFamily="{StaticResource NeonMonoFont}"
-                                               Foreground="{StaticResource NeonInk3Brush}"/>
+                                               FontFamily="{DynamicResource Font.Mono.Display}"
+                                               Foreground="{DynamicResource Text.Faint}"/>
                                     <Border x:Name="rightCell" Grid.Column="3" Background="Transparent">
                                         <TextBlock Text="{Binding RightText}" FontSize="11" Padding="6,1"
-                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                   Foreground="{StaticResource NeonInk1Brush}"
+                                                   FontFamily="{DynamicResource Font.Mono.Display}"
+                                                   Foreground="{DynamicResource Text.Secondary}"
                                                    TextWrapping="NoWrap"/>
                                     </Border>
                                 </Grid>
                                 <DataTemplate.Triggers>
                                     <DataTrigger Binding="{Binding Kind}" Value="Removed">
-                                        <Setter TargetName="leftCell" Property="Background" Value="#3AFF4D6D"/>
+                                        <Setter TargetName="leftCell" Property="Background" Value="{DynamicResource Editor.Diff.Removed.Background}"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Kind}" Value="Added">
-                                        <Setter TargetName="rightCell" Property="Background" Value="#3A2ECC71"/>
+                                        <Setter TargetName="rightCell" Property="Background" Value="{DynamicResource Editor.Diff.Added.Background}"/>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Kind}" Value="Modified">
-                                        <Setter TargetName="leftCell" Property="Background" Value="#33FF4D6D"/>
-                                        <Setter TargetName="rightCell" Property="Background" Value="#332ECC71"/>
+                                        <Setter TargetName="leftCell" Property="Background" Value="{DynamicResource Editor.Diff.Removed.Background}"/>
+                                        <Setter TargetName="rightCell" Property="Background" Value="{DynamicResource Editor.Diff.Added.Background}"/>
                                     </DataTrigger>
                                 </DataTemplate.Triggers>
                             </DataTemplate>
@@ -1781,8 +2246,30 @@
             </Border>
 
             <!-- Terminal drawer — a REAL persistent PowerShell in the project folder -->
-            <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{StaticResource NeonLineBrush}"
-                    Background="#7011152E">
+            <!-- ══════════ EDITOR STATUS BAR — where you are, what the file is ══════════
+                 Line ending and encoding are menus: CRLF ↔ LF, UTF-8 / UTF-8 BOM / UTF-16 / TIS-620 (Thai). -->
+            <Border x:Name="EditorStatusBar" Grid.Row="5" Background="{DynamicResource Bg.Panel}" BorderThickness="0,1,0,0"
+                    BorderBrush="{DynamicResource Border.Subtle}" Height="24"
+                    Visibility="{Binding HasActiveTab, Converter={StaticResource BoolVis}}">
+                <DockPanel LastChildFill="False">
+                    <TextBlock x:Name="StPosition" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"
+                               Foreground="{DynamicResource Text.Secondary}"/>
+                    <TextBlock x:Name="StSelection" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"/>
+                    <TextBlock x:Name="StLines" DockPanel.Dock="Left" Style="{StaticResource EdStatusText}"/>
+                    <Button x:Name="StZoom" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnZoomReset"
+                            ToolTip="{services:Loc edt.zoomReset}" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="StOverwrite" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"
+                               ToolTip="{services:Loc edt.insTip}"/>
+                    <TextBlock x:Name="StLanguage" DockPanel.Dock="Right" Style="{StaticResource EdStatusText}" Margin="8,0"/>
+                    <Button x:Name="StEncoding" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnEncodingMenu"
+                            Content="{Binding ActiveTab.EncodingLabel}" ToolTip="{services:Loc edt.encodingTip}"/>
+                    <Button x:Name="StEol" DockPanel.Dock="Right" Style="{StaticResource EdStatusBtn}" Click="OnEolMenu"
+                            ToolTip="{services:Loc edt.eolTip}"/>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="6" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Border.Subtle}"
+                    Background="{DynamicResource Bg.Panel}">
                 <StackPanel>
                     <!-- Header row (click to expand/collapse) -->
                     <Button Command="{Binding ToggleTerminalCommand}" Cursor="Hand"
@@ -1795,21 +2282,21 @@
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="bd" Property="Background" Value="#1AFFFFFF"/>
+                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover}"/>
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Button.Template>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE756;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="{services:Loc editor.terminal}" FontSize="11" Foreground="{StaticResource NeonInk2Brush}"
+                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock Text="{services:Loc editor.terminal}" FontSize="11" Foreground="{DynamicResource Text.Muted}"
                                        VerticalAlignment="Center"/>
-                            <TextBlock Text="·" Margin="8,0" FontSize="11" Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
-                            <TextBlock Text="pwsh" FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center"/>
+                            <TextBlock Text="·" Margin="8,0" FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                            <TextBlock Text="pwsh" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center"/>
                             <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="9" Margin="10,0,0,0"
-                                       VerticalAlignment="Center" Foreground="{StaticResource NeonInk3Brush}">
+                                       VerticalAlignment="Center" Foreground="{DynamicResource Text.Faint}">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Text" Value="&#xE70E;"/>
@@ -1822,7 +2309,7 @@
                                 </TextBlock.Style>
                             </TextBlock>
                             <TextBlock Text="{Binding StatusMessage}" Margin="20,0,0,0" FontSize="11"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                     </Button>
@@ -1836,9 +2323,9 @@
                         <TextBox x:Name="TerminalOut" Grid.Row="0"
                                  Text="{Binding TerminalOutput, Mode=OneWay}"
                                  IsReadOnly="True" TextWrapping="NoWrap"
-                                 Background="#0A06071A" BorderThickness="0"
-                                 Foreground="{StaticResource NeonInk1Brush}"
-                                 FontFamily="{StaticResource NeonMonoFont}" FontSize="11"
+                                 Background="{DynamicResource Editor.Background}" BorderThickness="0"
+                                 Foreground="{DynamicResource Text.Secondary}"
+                                 FontFamily="{DynamicResource Font.Mono.Display}" FontSize="11"
                                  Padding="12,6"
                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                  TextChanged="OnTerminalOutputChanged"/>
@@ -1846,18 +2333,42 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="&gt;" FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
-                                       Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center" Margin="4,0,6,0"/>
-                            <Border Grid.Column="1" Background="#3311132E" CornerRadius="4"
-                                    BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1">
+                            <TextBlock Text="&gt;" FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
+                                       Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="4,0,6,0"/>
+                            <Border Grid.Column="1" Background="{DynamicResource Surface.Input}" CornerRadius="4"
+                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
                                 <TextBox Text="{Binding TerminalInput, UpdateSourceTrigger=PropertyChanged}"
                                          Background="Transparent" BorderThickness="0" Padding="8,4"
-                                         Foreground="{StaticResource NeonInk0Brush}"
-                                         CaretBrush="{StaticResource NeonAmberBrush}"
-                                         FontFamily="{StaticResource NeonMonoFont}" FontSize="12"
-                                         KeyDown="OnTerminalInputKeyDown"/>
+                                         Foreground="{DynamicResource Text.Primary}"
+                                         CaretBrush="{DynamicResource Status.Warning}"
+                                         FontFamily="{DynamicResource Font.Mono.Display}" FontSize="12"
+                                         KeyDown="OnTerminalInputKeyDown"
+                                         PreviewKeyDown="OnTerminalInputPreviewKeyDown"/>
                             </Border>
+                            <Button Grid.Column="2" Command="{Binding InterruptTerminalCommand}" Cursor="Hand"
+                                    Margin="6,0,0,0" Padding="8,3" Background="Transparent" BorderThickness="1"
+                                    BorderBrush="{DynamicResource Border.Default}"
+                                    ToolTip="{services:Loc ide.stopTerminalTip}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Danger}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{DynamicResource Accent.3}"/>
+                            </Button>
                         </Grid>
                     </Grid>
                 </StackPanel>
@@ -1865,9 +2376,18 @@
         </Grid>
 
         <!-- ═════════════ CHAT PANEL (right) ═════════════ -->
-        <Border Grid.Column="2" BorderThickness="1,0,0,0" BorderBrush="{StaticResource NeonLineBrush}"
-                Background="#A60A0C22">
+        <Border x:Name="EditorChatPanel" Grid.Column="2" Width="400" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource Border.Subtle}"
+                Background="{DynamicResource Sidebar.Background}">
             <ContentControl Content="{Binding ChatVM}"/>
         </Border>
+
+        <!-- Drag a panel's edge to resize it (remembered); double-click puts it back. Each grip straddles the edge
+             (negative margin) so it never covers a whole scroll bar or the breakpoint gutter. -->
+        <views:ResizeGrip Grid.Column="0" HorizontalAlignment="Right" Margin="0,0,-3,0"
+                          Key="editor.explorer" MinSize="160" MaxSize="640"
+                          Target="{Binding ElementName=ExplorerPanel}"/>
+        <views:ResizeGrip Grid.Column="2" HorizontalAlignment="Left" Margin="-3,0,0,0" OnLeftEdge="True"
+                          Key="editor.chat" MinSize="280" MaxSize="1200"
+                          Target="{Binding ElementName=EditorChatPanel}"/>
     </Grid>
 </UserControl>

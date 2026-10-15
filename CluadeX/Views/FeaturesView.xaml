@@ -6,40 +6,11 @@
              xmlns:services="clr-namespace:CluadeX.Services">
 
     <UserControl.Resources>
-        <!-- ── Neon retheme — local override of Catppuccin keys ── -->
-        <SolidColorBrush x:Key="CrustBrush"    Color="#06071A"/>
-        <SolidColorBrush x:Key="MantleBrush"   Color="#0A0C22"/>
-        <SolidColorBrush x:Key="BaseBrush"     Color="#0F1230"/>
-        <SolidColorBrush x:Key="Surface0Brush" Color="#1A11152E"/>
-        <SolidColorBrush x:Key="Surface1Brush" Color="#2828326E"/>
-        <SolidColorBrush x:Key="Surface2Brush" Color="#3828326E"/>
-        <SolidColorBrush x:Key="Overlay0Brush" Color="#8388BD"/>
-        <SolidColorBrush x:Key="Overlay1Brush" Color="#A0A6CC"/>
-        <SolidColorBrush x:Key="Subtext0Brush" Color="#C0C6EE"/>
-        <SolidColorBrush x:Key="Subtext1Brush" Color="#D8DCF5"/>
-        <SolidColorBrush x:Key="TextBrush"     Color="#E8ECFF"/>
-        <SolidColorBrush x:Key="BlueBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="LavenderBrush" Color="#A672FF"/>
-        <SolidColorBrush x:Key="SapphireBrush" Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="SkyBrush"      Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="TealBrush"     Color="#4CDFFF"/>
-        <SolidColorBrush x:Key="GreenBrush"    Color="#5CFFB0"/>
-        <SolidColorBrush x:Key="YellowBrush"   Color="#FFD166"/>
-        <SolidColorBrush x:Key="PeachBrush"    Color="#FFD166"/>
-        <SolidColorBrush x:Key="MaroonBrush"   Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RedBrush"      Color="#FF6E6E"/>
-        <SolidColorBrush x:Key="MauveBrush"    Color="#A672FF"/>
-        <SolidColorBrush x:Key="PinkBrush"     Color="#FF8AA6"/>
-        <SolidColorBrush x:Key="RosewaterBrush" Color="#FFD166"/>
-        <SolidColorBrush x:Key="FlamBrush"     Color="#FF8AA6"/>
-        <FontFamily x:Key="MainFont">Space Grotesk, Segoe UI, Arial</FontFamily>
-        <FontFamily x:Key="MonoFont">JetBrains Mono, Cascadia Code, Consolas</FontFamily>
-
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
 
         <!-- Feature Card Style -->
         <Style x:Key="FeatureCard" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource Surface0Brush}"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Sunken}"/>
             <Setter Property="CornerRadius" Value="10"/>
             <Setter Property="Padding" Value="14,12"/>
             <Setter Property="Margin" Value="0,0,0,6"/>
@@ -54,13 +25,13 @@
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="FontSize" Value="17"/>
             <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="FontFamily" Value="{StaticResource MainFont}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui.Display}"/>
             <Setter Property="Margin" Value="0,20,0,4"/>
         </Style>
         <Style x:Key="SectionDesc" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="{StaticResource Overlay0Brush}"/>
-            <Setter Property="FontFamily" Value="{StaticResource MainFont}"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+            <Setter Property="FontFamily" Value="{DynamicResource Font.Ui.Display}"/>
             <Setter Property="Margin" Value="0,0,0,12"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
@@ -72,15 +43,15 @@
                     <ControlTemplate TargetType="CheckBox">
                         <Grid Cursor="Hand">
                             <Border x:Name="Track" Width="40" Height="22" CornerRadius="11"
-                                    Background="{StaticResource Surface1Brush}"
+                                    Background="{DynamicResource Surface.Raised}"
                                     HorizontalAlignment="Left">
-                                <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="White"
+                                <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="{DynamicResource Text.OnAccent}"
                                          HorizontalAlignment="Left" Margin="3,0,0,0"/>
                             </Border>
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background" Value="{StaticResource GreenBrush}"/>
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource Status.Success}"/>
                                 <Setter TargetName="Thumb" Property="Margin" Value="21,0,0,0"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
@@ -98,13 +69,13 @@
 
             <!-- Page Title -->
             <TextBlock Text="{Binding PageTitle}" FontSize="24" FontWeight="Bold"
-                       Foreground="{StaticResource TextBrush}"
-                       FontFamily="{StaticResource MainFont}" Margin="0,0,0,4"/>
+                       Foreground="{DynamicResource Text.Primary}"
+                       FontFamily="{DynamicResource Font.Ui.Display}" Margin="0,0,0,4"/>
             <TextBlock Text="{Binding PageSubtitle}"
-                       Foreground="{StaticResource Subtext0Brush}" FontSize="13" Margin="0,0,0,4"/>
+                       Foreground="{DynamicResource Text.Secondary}" FontSize="13" Margin="0,0,0,4"/>
 
             <!-- ═══════ ACTIVATION KEY SECTION ═══════ -->
-            <Border Background="{StaticResource Surface0Brush}" CornerRadius="12" Padding="18,14" Margin="0,8,0,4">
+            <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="12" Padding="18,14" Margin="0,8,0,4">
                 <StackPanel>
                     <!-- Header row -->
                     <Grid Margin="0,0,0,8">
@@ -115,20 +86,15 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🔑" FontSize="18" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <TextBlock Text="{services:Loc activation.key}" FontSize="15" FontWeight="Bold"
-                                       Foreground="{StaticResource TextBrush}"
-                                       FontFamily="{StaticResource MainFont}" VerticalAlignment="Center"/>
+                                       Foreground="{DynamicResource Text.Primary}"
+                                       FontFamily="{DynamicResource Font.Ui.Display}" VerticalAlignment="Center"/>
                         </StackPanel>
                         <!-- Tier badge (when activated) -->
                         <Border Grid.Column="1" CornerRadius="10" Padding="10,4"
-                                Visibility="{Binding IsActivated, Converter={StaticResource BoolVis}}">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#A6E3A1" Offset="0"/>
-                                    <GradientStop Color="#94E2D5" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <TextBlock FontSize="11" FontWeight="Bold" Foreground="#1E1E2E"
-                                       FontFamily="{StaticResource MainFont}">
+                                Visibility="{Binding IsActivated, Converter={StaticResource BoolVis}}"
+                                Background="{DynamicResource License.Tier.Background}">
+                            <TextBlock FontSize="11" FontWeight="Bold" Foreground="{DynamicResource License.Tier.Foreground}"
+                                       FontFamily="{DynamicResource Font.Ui.Display}">
                                 <Run Text="✅ "/>
                                 <Run Text="{Binding ActivationTier, Mode=OneWay}"/>
                             </TextBlock>
@@ -140,50 +106,62 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <Border Background="{StaticResource Surface1Brush}" CornerRadius="8" Padding="10,0">
+                        <Border Background="{DynamicResource Surface.Raised}" CornerRadius="8" Padding="10,0">
                             <TextBox Text="{Binding ActivationKeyInput, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0"
-                                     Foreground="{StaticResource TextBrush}"
-                                     FontFamily="{StaticResource MainFont}" FontSize="13"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     FontFamily="{DynamicResource Font.Ui.Display}" FontSize="13"
                                      Padding="0,8" VerticalAlignment="Center"
-                                     CaretBrush="{StaticResource MauveBrush}"/>
+                                     CaretBrush="{DynamicResource Accent.2}"/>
                         </Border>
                         <Button Grid.Column="1" Content="{services:Loc activation.activate}" Margin="8,0,0,0"
                                 Style="{StaticResource PrimaryButton}" Padding="16,8"
                                 Command="{Binding ActivateCommand}"/>
+                        <!-- No key yet: plans, purchase link and the free trial live in the license dialog -->
+                        <Button Grid.Column="2" Margin="8,0,0,0" Padding="14,8"
+                                Command="{Binding DataContext.OpenLicenseCommand, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
+                                </Style>
+                            </Button.Style>
+                            <TextBlock Text="{services:Loc settings.licenseOpen}" FontWeight="SemiBold"/>
+                        </Button>
                     </Grid>
 
-                    <!-- Deactivate button (when activated) -->
+                    <!-- Deactivate button — paid keys only: deactivating a trial released the demo key for good -->
                     <Button Content="{services:Loc activation.deactivate}" Margin="0,4,0,0" HorizontalAlignment="Left"
                             Style="{StaticResource SecondaryButton}" Padding="12,6"
                             Command="{Binding DeactivateCommand}"
-                            Visibility="{Binding IsActivated, Converter={StaticResource BoolVis}}"/>
+                            Visibility="{Binding CanDeactivate, Converter={StaticResource BoolVis}}"/>
 
                     <!-- Force transfer button (when device conflict) -->
                     <Button Content="{services:Loc activation.transfer}" Margin="0,6,0,0"
                             HorizontalAlignment="Left" Padding="12,6" FontSize="12"
-                            FontFamily="{StaticResource MainFont}"
+                            FontFamily="{DynamicResource Font.Ui.Display}"
                             Command="{Binding ForceActivateCommand}"
                             Visibility="{Binding ShowForceActivate, Converter={StaticResource BoolVis}}">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-                                <Setter Property="Background" Value="#44fab387"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                <Setter Property="Background" Value="{DynamicResource Status.Caution.Tint}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                             </Style>
                         </Button.Style>
                     </Button>
 
                     <!-- Status message -->
                     <TextBlock Text="{Binding ActivationMessage}" FontSize="12" Margin="0,6,0,0"
-                               FontFamily="{StaticResource MainFont}" TextWrapping="Wrap"
+                               FontFamily="{DynamicResource Font.Ui.Display}" TextWrapping="Wrap"
                                Visibility="{Binding ActivationMessage, Converter={StaticResource BoolVis}}">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="{StaticResource RedBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding ActivationSuccess}" Value="True">
-                                        <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -191,15 +169,15 @@
                     </TextBlock>
 
                     <TextBlock Text="{services:Loc activation.hint}"
-                               FontSize="10.5" Foreground="{StaticResource Overlay0Brush}"
-                               FontFamily="{StaticResource MainFont}" Margin="0,6,0,0" TextWrapping="Wrap"
+                               FontSize="10.5" Foreground="{DynamicResource Text.Muted}"
+                               FontFamily="{DynamicResource Font.Ui.Display}" Margin="0,6,0,0" TextWrapping="Wrap"
                                Visibility="{Binding IsActivated, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                 </StackPanel>
             </Border>
 
             <!-- ═══════ CORE FEATURES ═══════ -->
             <TextBlock Text="{Binding CoreLabel}" Style="{StaticResource SectionHeader}"
-                       Foreground="{StaticResource GreenBrush}"/>
+                       Foreground="{DynamicResource Status.Success}"/>
             <TextBlock Text="{Binding CoreDesc}" Style="{StaticResource SectionDesc}"/>
 
             <ItemsControl ItemsSource="{Binding CoreFeatures}">
@@ -216,11 +194,11 @@
                                            HorizontalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Margin="8,0,12,0">
                                     <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}"/>
+                                               Foreground="{DynamicResource Text.Primary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"/>
                                     <TextBlock Text="{Binding Description}" FontSize="11"
-                                               Foreground="{StaticResource Overlay0Brush}"
-                                               FontFamily="{StaticResource MainFont}"
+                                               Foreground="{DynamicResource Text.Muted}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"
                                                TextWrapping="Wrap" Margin="0,3,0,0"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
@@ -230,7 +208,7 @@
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
-                                               Foreground="{StaticResource Overlay0Brush}"
+                                               Foreground="{DynamicResource Text.Muted}"
                                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Grid>
@@ -241,7 +219,7 @@
 
             <!-- ═══════ ADVANCED FEATURES ═══════ -->
             <TextBlock Text="{Binding AdvancedLabel}" Style="{StaticResource SectionHeader}"
-                       Foreground="{StaticResource MauveBrush}"/>
+                       Foreground="{DynamicResource Accent.2}"/>
             <TextBlock Text="{Binding AdvancedDesc}" Style="{StaticResource SectionDesc}"/>
 
             <ItemsControl ItemsSource="{Binding AdvancedFeatures}">
@@ -258,19 +236,19 @@
                                            HorizontalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Margin="8,0,12,0">
                                     <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}"/>
+                                               Foreground="{DynamicResource Text.Primary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"/>
                                     <TextBlock Text="{Binding Description}" FontSize="11"
-                                               Foreground="{StaticResource Overlay0Brush}"
-                                               FontFamily="{StaticResource MainFont}"
+                                               Foreground="{DynamicResource Text.Muted}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"
                                                TextWrapping="Wrap" Margin="0,3,0,0"/>
                                 </StackPanel>
                                 <Border Grid.Column="2" VerticalAlignment="Center"
-                                        Background="{StaticResource Surface1Brush}"
+                                        Background="{DynamicResource Surface.Raised}"
                                         CornerRadius="8" Padding="8,4">
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="10"
-                                               Foreground="{StaticResource YellowBrush}"
-                                               FontFamily="{StaticResource MainFont}"
+                                               Foreground="{DynamicResource Status.Warning}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"
                                                FontWeight="SemiBold"/>
                                 </Border>
                             </Grid>
@@ -281,7 +259,7 @@
 
             <!-- ═══════ AGENT TOOLS ═══════ -->
             <TextBlock Text="{Binding ToolsLabel}" Style="{StaticResource SectionHeader}"
-                       Foreground="{StaticResource TealBrush}"/>
+                       Foreground="{DynamicResource Accent.1}"/>
             <TextBlock Text="{Binding ToolsDesc}" Style="{StaticResource SectionDesc}"/>
 
             <ItemsControl ItemsSource="{Binding ToolFeatures}">
@@ -298,12 +276,27 @@
                                            HorizontalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Margin="8,0,12,0">
                                     <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}"/>
+                                               Foreground="{DynamicResource Text.Primary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"/>
                                     <TextBlock Text="{Binding Description}" FontSize="11"
-                                               Foreground="{StaticResource Overlay0Brush}"
-                                               FontFamily="{StaticResource MainFont}"
+                                               Foreground="{DynamicResource Text.Muted}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"
                                                TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                    <!-- Dev Preview: the engine found, or the command that installs it (selectable) -->
+                                    <TextBox Text="{Binding Detail, Mode=OneWay}" IsReadOnly="True" FontSize="10"
+                                             Background="Transparent" BorderThickness="0" Padding="0"
+                                             Foreground="{DynamicResource Accent.1}" FontFamily="Consolas"
+                                             TextWrapping="Wrap" Margin="0,3,0,0"
+                                             Visibility="{Binding Detail, Converter={StaticResource BoolVis}}"/>
+                                    <!-- Dev Preview: sites outside this PC — ask / allow / block -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,5,0,0" ToolTip="{Binding ChoiceTip}"
+                                                Visibility="{Binding HasChoices, Converter={StaticResource BoolVis}}">
+                                        <TextBlock Text="{Binding ChoiceLabel}" FontSize="10" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource Text.Muted}" FontFamily="{DynamicResource Font.Ui.Display}"/>
+                                        <ComboBox ItemsSource="{Binding Choices}" DisplayMemberPath="Label" SelectedValuePath="Value"
+                                                  SelectedValue="{Binding SelectedChoice, Mode=TwoWay}" FontSize="10"
+                                                  MinWidth="90" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
                                     <CheckBox Style="{StaticResource ToggleSwitch}"
@@ -312,7 +305,7 @@
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
-                                               Foreground="{StaticResource Overlay0Brush}"
+                                               Foreground="{DynamicResource Text.Muted}"
                                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Grid>
@@ -323,7 +316,7 @@
 
             <!-- ═══════ SECURITY ═══════ -->
             <TextBlock Text="{Binding SecurityLabel}" Style="{StaticResource SectionHeader}"
-                       Foreground="{StaticResource RedBrush}"/>
+                       Foreground="{DynamicResource Status.Danger}"/>
             <TextBlock Text="{Binding SecurityDesc}" Style="{StaticResource SectionDesc}"/>
 
             <ItemsControl ItemsSource="{Binding SecurityFeatures}">
@@ -340,11 +333,11 @@
                                            HorizontalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Margin="8,0,12,0">
                                     <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}"/>
+                                               Foreground="{DynamicResource Text.Primary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"/>
                                     <TextBlock Text="{Binding Description}" FontSize="11"
-                                               Foreground="{StaticResource Overlay0Brush}"
-                                               FontFamily="{StaticResource MainFont}"
+                                               Foreground="{DynamicResource Text.Muted}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"
                                                TextWrapping="Wrap" Margin="0,3,0,0"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
@@ -354,7 +347,7 @@
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
-                                               Foreground="{StaticResource Overlay0Brush}"
+                                               Foreground="{DynamicResource Text.Muted}"
                                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Grid>
@@ -365,7 +358,7 @@
 
             <!-- ═══════ FUN & EXTRAS ═══════ -->
             <TextBlock Text="{Binding FunLabel}" Style="{StaticResource SectionHeader}"
-                       Foreground="{StaticResource PinkBrush}"/>
+                       Foreground="{DynamicResource Accent.4}"/>
             <TextBlock Text="{Binding FunDesc}" Style="{StaticResource SectionDesc}"/>
 
             <ItemsControl ItemsSource="{Binding FunFeatures}">
@@ -382,11 +375,11 @@
                                            HorizontalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Margin="8,0,12,0">
                                     <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextBrush}"
-                                               FontFamily="{StaticResource MainFont}"/>
+                                               Foreground="{DynamicResource Text.Primary}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"/>
                                     <TextBlock Text="{Binding Description}" FontSize="11"
-                                               Foreground="{StaticResource Overlay0Brush}"
-                                               FontFamily="{StaticResource MainFont}"
+                                               Foreground="{DynamicResource Text.Muted}"
+                                               FontFamily="{DynamicResource Font.Ui.Display}"
                                                TextWrapping="Wrap" Margin="0,3,0,0"/>
                                 </StackPanel>
                                 <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
@@ -396,7 +389,7 @@
                                               Command="{Binding DataContext.ToggleFeatureCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                               CommandParameter="{Binding}"/>
                                     <TextBlock Text="{Binding StatusLabel}" FontSize="9"
-                                               Foreground="{StaticResource Overlay0Brush}"
+                                               Foreground="{DynamicResource Text.Muted}"
                                                HorizontalAlignment="Center" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Grid>

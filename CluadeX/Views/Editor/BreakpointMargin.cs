@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using CluadeX.Services;
 using ICSharpCode.AvalonEdit.Editing;
 using ICSharpCode.AvalonEdit.Rendering;
 
@@ -13,11 +14,13 @@ namespace CluadeX.Views.Editor;
 /// </summary>
 public sealed class BreakpointMargin : AbstractMargin
 {
-    private static readonly Brush BreakpointFill = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x53, 0x70)));
-    private static readonly Brush BreakpointHalo = Freeze(new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x53, 0x70)));
-    private static readonly Brush HoverFill = Freeze(new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x53, 0x70)));
-    private static readonly Brush ExecutionFill = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0xD3, 0x7E)));
-    private static readonly Brush Background = Freeze(new SolidColorBrush(Color.FromArgb(0x30, 0x11, 0x15, 0x2E)));
+    // Midnight's values, only for when no theme answers. The real colours are theme tokens read on every
+    // paint (Editor.Breakpoint / .Breakpoint.Halo / .ExecutionLine / .Gutter) — the editor view repaints this
+    // margin when the theme changes. The hover ghost dot is the halo colour (it always was the same value).
+    private static readonly Brush BreakpointFallback = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0x53, 0x70)));
+    private static readonly Brush HaloFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0x53, 0x70)));
+    private static readonly Brush ExecutionFallback = Freeze(new SolidColorBrush(Color.FromRgb(0xFF, 0xD3, 0x7E)));
+    private static readonly Brush GutterFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x30, 0x11, 0x15, 0x2E)));
 
     private const double MarginWidth = 18;
 
@@ -66,7 +69,10 @@ public sealed class BreakpointMargin : AbstractMargin
 
     protected override void OnRender(DrawingContext dc)
     {
-        dc.DrawRectangle(Background, null, new Rect(0, 0, ActualWidth, ActualHeight));
+        var breakpointFill = ThemeService.BrushOf("Editor.Breakpoint", BreakpointFallback);
+        var breakpointHalo = ThemeService.BrushOf("Editor.Breakpoint.Halo", HaloFallback);
+        var executionFill = ThemeService.BrushOf("Editor.ExecutionLine", ExecutionFallback);
+        dc.DrawRectangle(ThemeService.BrushOf("Editor.Gutter", GutterFallback), null, new Rect(0, 0, ActualWidth, ActualHeight));
 
         var view = TextView;
         if (view == null || !view.VisualLinesValid) return;
@@ -89,19 +95,19 @@ public sealed class BreakpointMargin : AbstractMargin
                     ctx.LineTo(new Point(4, centre + 5), true, false);
                 }
                 arrow.Freeze();
-                dc.DrawGeometry(ExecutionFill, null, arrow);
+                dc.DrawGeometry(executionFill, null, arrow);
                 continue;   // the pointer wins the slot when both land on one line
             }
 
             if (IsBreakpoint?.Invoke(lineNumber) == true)
             {
-                dc.DrawEllipse(BreakpointHalo, null, new Point(9, centre), 7, 7);
-                dc.DrawEllipse(BreakpointFill, null, new Point(9, centre), 4.5, 4.5);
+                dc.DrawEllipse(breakpointHalo, null, new Point(9, centre), 7, 7);
+                dc.DrawEllipse(breakpointFill, null, new Point(9, centre), 4.5, 4.5);
             }
             else if (lineNumber == _hoverLine)
             {
                 // Ghost dot on hover, so the gutter advertises that it is clickable.
-                dc.DrawEllipse(HoverFill, null, new Point(9, centre), 4.5, 4.5);
+                dc.DrawEllipse(breakpointHalo, null, new Point(9, centre), 4.5, 4.5);
             }
         }
     }
@@ -158,11 +164,29 @@ public sealed class BreakpointMargin : AbstractMargin
 /// </summary>
 public sealed class ExecutionLineRenderer : IBackgroundRenderer
 {
-    private static readonly Brush Fill = Freeze(new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xD3, 0x7E)));
-    private static readonly Pen Edge = FreezePen(new Pen(new SolidColorBrush(Color.FromArgb(0x80, 0xFF, 0xD3, 0x7E)), 1));
+    // Midnight's values, only for when no theme answers; the band reads Editor.ExecutionLine.Fill / .Border
+    // when it draws, so a redraw after a theme switch picks the new colours up.
+    private static readonly Brush FillFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xD3, 0x7E)));
+    private static readonly Brush EdgeFallback = Freeze(new SolidColorBrush(Color.FromArgb(0x80, 0xFF, 0xD3, 0x7E)));
 
     private static Brush Freeze(Brush b) { b.Freeze(); return b; }
-    private static Pen FreezePen(Pen p) { p.Freeze(); return p; }
+
+    private Brush? _edgeBrush;
+    private Pen? _edge;
+
+    /// <summary>The 1 px edge pen in the current theme's colour — rebuilt only when that brush changed.</summary>
+    private Pen EdgePen()
+    {
+        var brush = ThemeService.BrushOf("Editor.ExecutionLine.Border", EdgeFallback);
+        if (_edge == null || !ReferenceEquals(brush, _edgeBrush))
+        {
+            var pen = new Pen(brush, 1);
+            pen.Freeze();
+            _edge = pen;
+            _edgeBrush = brush;
+        }
+        return _edge;
+    }
 
     /// <summary>1-based; 0 clears the highlight.</summary>
     public int Line { get; set; }
@@ -176,12 +200,14 @@ public sealed class ExecutionLineRenderer : IBackgroundRenderer
 
         textView.EnsureVisualLines();
         var documentLine = textView.Document.GetLineByNumber(Line);
+        var fill = ThemeService.BrushOf("Editor.ExecutionLine.Fill", FillFallback);
+        var edge = EdgePen();
 
         foreach (var rect in ICSharpCode.AvalonEdit.Rendering.BackgroundGeometryBuilder
                      .GetRectsForSegment(textView, documentLine))
         {
             var full = new Rect(0, rect.Top, Math.Max(textView.ActualWidth, rect.Right), rect.Height);
-            drawingContext.DrawRectangle(Fill, Edge, full);
+            drawingContext.DrawRectangle(fill, edge, full);
         }
     }
 }

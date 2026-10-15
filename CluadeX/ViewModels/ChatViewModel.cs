@@ -8,10 +8,11 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using CluadeX.Models;
 using CluadeX.Services;
+using CluadeX.Services.Providers;
 
 namespace CluadeX.ViewModels;
 
-public class ChatViewModel : ViewModelBase
+public partial class ChatViewModel : ViewModelBase
 {
     private readonly AiProviderManager _providerManager;
     private readonly CodeAgentService _agentService;
@@ -31,45 +32,54 @@ public class ChatViewModel : ViewModelBase
     private readonly SkillService _skillService;
     private readonly CostTrackingService _costTracker;
     private readonly SessionMemoryService? _sessionMemoryService;
-    private CancellationTokenSource? _cts;
+    private readonly DebugLogService? _debugLog;
+    private readonly PermissionService? _permissionService;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _autoSaveTimer;
 
+    // ─── Running turns ───
+    // Each turn is a ChatRun (ChatViewModel.Runs.cs) that writes into its own chat's live list, so switching chats
+    // never stops it and never moves its output into another chat.
+
     private string _userInput = string.Empty;
-    private bool _isGenerating;
     private bool _autoExecute;
     private bool _agenticMode;
     private bool _autonomousMode;
-    private string _statusText = "Ready";
+    private string _statusText = "";
     private ChatSession? _currentSession;
-    private bool _canSend = true;
     private string _workingDirectory = string.Empty;
     private bool _hasProject;
     private string _gitBranch = string.Empty;
     private double _contextUsagePercent;
-    private string _contextUsageText = "0 / 4,096 tokens";
-    private string _memoryUsageText = "RAM: --";
+    private string _contextUsageText = "";
     private string _costText = "";
     private bool _isDirty; // track unsaved changes
     private string _historySearchQuery = string.Empty;
     private bool _isSearchingHistory;
-    private string _dbStatsText = "";
     private ModelInfo? _selectedLocalModel;
-    private string _loadedModelName = "No model loaded";
+    private string _loadedModelName = "";
     private bool _isLoadingModel;
     private bool _showContextWarning;
     private string _contextWarningText = "";
-    private readonly Stopwatch _generationStopwatch = new();
     private DispatcherTimer? _elapsedTimer;
-    private string _lastStatusBase = "";  // status without elapsed time suffix
-    private ChatMessage? _activeAgentStatusMsg;  // tracks the inline agent status for OnToolExecuted cleanup
-    private ChatMessage? _todoListMsg;           // the live plan-checklist bubble (updated in place)
-    private int _streamingTokenCount;
-    private int _retryCount;
     private string _chatSearchQuery = "";
     private bool _isChatSearchVisible;
 
-    public ObservableCollection<ChatMessage> Messages { get; } = new();
+    /// <summary>The chat on screen. A running turn keeps writing into its own chat's list (ChatRun.Messages) — when
+    /// that chat is opened again its live list is put back on screen, so nothing is lost or duplicated.</summary>
+    public ObservableCollection<ChatMessage> Messages
+    {
+        get => _messages;
+        private set
+        {
+            if (ReferenceEquals(_messages, value)) return;
+            _messages.CollectionChanged -= OnMessagesChanged;
+            _messages = value;
+            _messages.CollectionChanged += OnMessagesChanged;
+            OnPropertyChanged();
+        }
+    }
+    private ObservableCollection<ChatMessage> _messages = new();
     public ObservableCollection<ChatSession> Sessions { get; } = new();
     /// <summary>Sessions filtered by the currently-open project folder. Bound by the sidebar.
     /// When no folder is open, mirrors Sessions in full; otherwise only sessions whose
@@ -78,17 +88,92 @@ public class ChatViewModel : ViewModelBase
     public ObservableCollection<SearchResult> SearchResults { get; } = new();
     public ObservableCollection<ModelInfo> LocalModels { get; } = new();
 
-    public string UserInput { get => _userInput; set => SetProperty(ref _userInput, value); }
-    public bool IsGenerating { get => _isGenerating; set => SetProperty(ref _isGenerating, value); }
+    public string UserInput
+    {
+        get => _userInput;
+        set { if (SetProperty(ref _userInput, value) && string.IsNullOrEmpty(value)) OnInputCleared(); }
+    }
+
+    /// <summary>Run code blocks the AI writes, on this PC, without asking. Security-relevant: off by default and
+    /// confirmed every time it is switched on. (It shared the label "Auto" with the autonomous fix loop, so a
+    /// user ticking "Auto" could not tell which of the two they had enabled.)</summary>
     public bool AutoExecute
     {
         get => _autoExecute;
         set
         {
+            if (value && !_autoExecute && !Confirm(Loc("chat.autoRun.confirm"), Loc("chat.autoRun.confirmTitle")))
+            {
+                // Declined: the CheckBox already shows a tick — re-raise after the binding update so it clears.
+                App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AutoExecute)));
+                return;
+            }
             if (SetProperty(ref _autoExecute, value))
                 _settingsService.UpdateSettings(s => s.AutoExecuteCode = value);
         }
     }
+
+    /// <summary>
+    /// "Accept edits" for this session: write_file / edit_file / multi_edit / create_directory INSIDE the open
+    /// project run without a prompt. Never commands, MCP tools, browsing, background processes, paths outside the
+    /// project, nor files that run code later (.git, .cluadex, .husky, .vscode, .claude, CI workflows, build files —
+    /// PermissionService.IsCodeRunningConfig); and the automatic build check after such an edit asks first. Off by
+    /// default (Settings ▸ AcceptEditsDefault), confirmed when switched on, never for a drive root, the user folder or
+    /// a system folder, and it ends on a project switch and on restart — it is bound to the folder it was switched on for.
+    /// </summary>
+    public bool AcceptEdits
+    {
+        get => _permissionService?.AcceptsEditsIn(_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null) == true;
+        set
+        {
+            if (_permissionService == null) return;
+            if (value == AcceptEdits) return;
+            if (value)
+            {
+                string folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                bool unsafeFolder = folder.Length > 0 && PermissionService.IsUnsafeAcceptEditsRoot(folder, _settingsService.DataRoot);
+                if (unsafeFolder) PostAcceptEditsRefusal(folder);
+                if (folder.Length == 0 || unsafeFolder
+                    || !Confirm(Loc("chat.acceptEdits.confirm"), Loc("chat.acceptEdits.confirmTitle"))
+                    || !_permissionService.SetAcceptEdits(folder))
+                {
+                    // Declined, no project, or a folder it must not cover: the CheckBox already shows a tick — re-raise so it clears.
+                    App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
+                    return;
+                }
+            }
+            else
+            {
+                _permissionService.SetAcceptEdits(null);
+            }
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>"Accept edits can't be used on X: it is a drive, your user folder or a system folder."</summary>
+    private void PostAcceptEditsRefusal(string folder)
+    {
+        Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "⚠ " + LocF("chat.acceptEdits.unsafeFolder", folder) });
+        StatusText = LocF("chat.acceptEdits.unsafeFolder", folder);
+        ScrollToBottom?.Invoke();
+    }
+
+    /// <summary>Folders a pipe caller's "acceptEdits": true was approved for by the user in this app session.</summary>
+    private readonly HashSet<string> _pipeAcceptEditsApproved = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A project switch ends Accept edits; it starts on again only when the user made that the default.</summary>
+    private void ResetAcceptEditsForProject(string? projectRoot)
+    {
+        if (_permissionService == null) return;
+        bool on = _settingsService.Settings.AcceptEditsDefault && !string.IsNullOrWhiteSpace(projectRoot);
+        _permissionService.SetAcceptEdits(on ? projectRoot : null);
+        OnPropertyChanged(nameof(AcceptEdits));
+    }
+
+    /// <summary>Yes/No confirmation for destructive or risky actions (title, text). A seam so the chat harness
+    /// can answer without a modal dialog; the app always uses the real MessageBox.</summary>
+    public Func<string, string, bool> Confirm { get; set; } = (text, title) =>
+        MessageBox.Show(text, title, MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
     public bool AgenticMode
     {
         get => _agenticMode;
@@ -98,11 +183,15 @@ public class ChatViewModel : ViewModelBase
     public bool AutonomousMode
     {
         get => _autonomousMode;
-        set => SetProperty(ref _autonomousMode, value);
+        // Persisted like Think / Auto-run: this switch is the only control for it (Settings has none).
+        set { if (SetProperty(ref _autonomousMode, value)) _settingsService.UpdateSettings(s => s.AutonomousLoopEnabled = value); }
     }
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
-    public ChatSession? CurrentSession { get => _currentSession; set => SetProperty(ref _currentSession, value); }
-    public bool CanSend { get => _canSend; set => SetProperty(ref _canSend, value); }
+    public ChatSession? CurrentSession
+    {
+        get => _currentSession;
+        set { if (SetProperty(ref _currentSession, value)) RaiseRunStateChanged(); }
+    }
     public string WorkingDirectory
     {
         get => _workingDirectory;
@@ -166,9 +255,14 @@ public class ChatViewModel : ViewModelBase
     public string GitBranch { get => _gitBranch; set => SetProperty(ref _gitBranch, value); }
 
     // Context tracking
-    public double ContextUsagePercent { get => _contextUsagePercent; set => SetProperty(ref _contextUsagePercent, value); }
+    public double ContextUsagePercent
+    {
+        get => _contextUsagePercent;
+        set { if (SetProperty(ref _contextUsagePercent, value)) OnPropertyChanged(nameof(ContextFraction)); }
+    }
+    /// <summary>0–1 of the context window used (drives the status bar's bar).</summary>
+    public double ContextFraction => Math.Clamp(_contextUsagePercent / 100.0, 0, 1);
     public string ContextUsageText { get => _contextUsageText; set => SetProperty(ref _contextUsageText, value); }
-    public string MemoryUsageText { get => _memoryUsageText; set => SetProperty(ref _memoryUsageText, value); }
 
     // ─── API Cost Tracking ───
     public string CostText { get => _costText; set => SetProperty(ref _costText, value); }
@@ -189,14 +283,6 @@ public class ChatViewModel : ViewModelBase
     private string _contextLevelColor = "Green";
     public string ContextLevelColor { get => _contextLevelColor; set => SetProperty(ref _contextLevelColor, value); }
 
-    // ─── GPU Live Stats ───
-    private string _gpuStatsText = "";
-    public string GpuStatsText { get => _gpuStatsText; set => SetProperty(ref _gpuStatsText, value); }
-    private int _gpuTempC;
-    public int GpuTempC { get => _gpuTempC; set => SetProperty(ref _gpuTempC, value); }
-    private int _gpuUsagePercent;
-    public int GpuUsagePercent { get => _gpuUsagePercent; set => SetProperty(ref _gpuUsagePercent, value); }
-
     // ─── Plan Mode ───
     private bool _isPlanMode;
     public bool IsPlanMode { get => _isPlanMode; set => SetProperty(ref _isPlanMode, value); }
@@ -211,6 +297,137 @@ public class ChatViewModel : ViewModelBase
             if (SetProperty(ref _extendedThinkingEnabled, value))
                 _settingsService.UpdateSettings(s => s.ExtendedThinkingEnabled = value);
         }
+    }
+
+    // ─── Effort (how hard the model works per reply — see EffortLevels) ───
+    public IReadOnlyList<string> EffortOptions { get; } = EffortLevels.All;
+    private string _reasoningEffort = EffortLevels.Auto;
+    public string ReasoningEffort
+    {
+        get => _reasoningEffort;
+        set
+        {
+            string v = EffortLevels.Normalize(value);
+            if (SetProperty(ref _reasoningEffort, v))
+                _settingsService.UpdateSettings(s => s.ReasoningEffort = v);
+        }
+    }
+
+    // ─── Usage strip (top of the chat): what is answering, rate limit left, what it cost ───
+    private string _activeProviderLabel = "", _activeModelLabel = "", _rateLimitText = "", _rateLimitTip = "";
+    private string _sessionCostText = "$0.00";
+    private double _rateLimitFraction, _rateLimitUsedPercent;
+    private bool _hasRateLimit;
+    public string ActiveProviderLabel { get => _activeProviderLabel; set => SetProperty(ref _activeProviderLabel, value); }
+    public string ActiveModelLabel { get => _activeModelLabel; set => SetProperty(ref _activeModelLabel, value); }
+    /// <summary>0–1 of the rate limit still available this minute (drives the gauge's fill).</summary>
+    public double RateLimitFraction { get => _rateLimitFraction; set => SetProperty(ref _rateLimitFraction, value); }
+    /// <summary>100 − percent left: feeds the same green→red brush the context bar uses.</summary>
+    public double RateLimitUsedPercent { get => _rateLimitUsedPercent; set => SetProperty(ref _rateLimitUsedPercent, value); }
+    public bool HasRateLimit { get => _hasRateLimit; set => SetProperty(ref _hasRateLimit, value); }
+    public string RateLimitText { get => _rateLimitText; set => SetProperty(ref _rateLimitText, value); }
+    public string RateLimitTip { get => _rateLimitTip; set => SetProperty(ref _rateLimitTip, value); }
+    public string SessionCostText { get => _sessionCostText; set => SetProperty(ref _sessionCostText, value); }
+    /// <summary>The provider's billing / usage page — the only place an account's credit balance is shown.</summary>
+    public string? BillingUrl => _providerManager.ActiveProviderType switch
+    {
+        AiProviderType.Anthropic => "https://platform.claude.com/settings/billing",
+        AiProviderType.OpenAI => "https://platform.openai.com/settings/organization/billing",
+        AiProviderType.Gemini => "https://aistudio.google.com/usage",
+        AiProviderType.ClaudeDev => "https://claude.ai/settings/usage",
+        _ => null,
+    };
+    public bool HasBillingPage => BillingUrl != null;
+    public ICommand OpenBillingCommand { get; private set; } = null!;
+
+    private static string Loc(string key) => LocalizedResources.Instance[key];
+    private static string LocF(string key, params object[] args) => string.Format(Loc(key), args);
+
+    /// <summary>True when the chat is answered by a model on this PC (GGUF / llama-server). The chat's model
+    /// picker is only shown then: picking a GGUF while on Claude used to silently switch the provider to Local
+    /// and start loading weights nobody asked for.</summary>
+    public bool ShowLocalModelPicker => _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer;
+
+    /// <summary>The model label the status bar shows (MainWindow binds LoadedModelName). It used to show the
+    /// local GGUF — or "Ready: …" from the in-process engine — even while Claude was answering.</summary>
+    private void RefreshLoadedModelName()
+    {
+        OnPropertyChanged(nameof(ShowLocalModelPicker));
+        if (!ShowLocalModelPicker)
+        {
+            LoadedModelName = ActiveModelLabel;
+            return;
+        }
+        if (IsLoadingModel) return;   // the load's progress text owns the slot until it finishes
+        string name = _settingsService.Settings.SelectedModelName ?? "";
+        if (_providerManager.ActiveProvider.IsReady)
+            LoadedModelName = LocF("chat.model.ready", string.IsNullOrEmpty(name) ? _llamaService.LoadedModelName ?? "" : name);
+        else if (_llamaService.IsModelLoaded)
+            LoadedModelName = LocF("chat.model.ready", _llamaService.LoadedModelName ?? name);
+        else
+            LoadedModelName = string.IsNullOrEmpty(name) ? Loc("chat.usage.noModel") : LocF("chat.model.notLoaded", name);
+    }
+
+    /// <summary>Recompute the usage strip from the active provider, its saved model, the latest
+    /// rate-limit snapshot and the session's cost. Cheap; called on every change and every 5 s.</summary>
+    private void RefreshUsageStrip()
+    {
+        var type = _providerManager.ActiveProviderType;
+        var s = _settingsService.Settings;
+        string? configured = s.ProviderConfigs.TryGetValue(type.ToString(), out var cfg) && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId)
+            ? cfg.EffectiveModelId!.Trim() : null;
+        ActiveProviderLabel = _providerManager.ActiveProvider.DisplayName;
+        ActiveModelLabel = type switch
+        {
+            AiProviderType.Local or AiProviderType.LlamaServer =>
+                string.IsNullOrWhiteSpace(s.SelectedModelName) ? Loc("chat.usage.noModel") : s.SelectedModelName,
+            AiProviderType.Anthropic => configured ?? AnthropicProvider.DefaultModel,
+            AiProviderType.OpenAI => configured ?? OpenAiProvider.DefaultModel,
+            AiProviderType.Gemini => configured ?? GeminiProvider.DefaultModel,
+            AiProviderType.ClaudeDev => configured is null or "default" or "auto" ? Loc("chat.usage.cliDefault") : configured,
+            _ => configured ?? Loc("chat.usage.noModel"),
+        };
+        OnPropertyChanged(nameof(BillingUrl));
+        OnPropertyChanged(nameof(HasBillingPage));
+        RefreshChatModelChoices();
+        RefreshSpend();
+        RefreshStatusBarFacts();
+
+        SessionCostText = _costTracker.TotalRequests == 0 ? "$0.00" : $"${_costTracker.TotalCostUsd:0.00}";
+
+        bool local = type is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama;
+        var snap = UsageMeter.Latest;
+        if (snap != null && snap.Provider == type.ToString() && snap.PercentLeft is { } left)
+        {
+            HasRateLimit = true;
+            RateLimitFraction = left / 100.0;
+            RateLimitUsedPercent = 100 - left;
+            RateLimitText = $"{left:0}%";
+            var lines = new List<string>();
+            void Line(string label, long? rem, long? lim)
+            {
+                if (rem is { } r && lim is { } l) lines.Add($"  {label}: {r:N0} / {l:N0}");
+            }
+            Line(Loc("chat.usage.tokens"), snap.TokensRemaining, snap.TokensLimit);
+            Line(Loc("chat.usage.inputTokens"), snap.InputTokensRemaining, snap.InputTokensLimit);
+            Line(Loc("chat.usage.outputTokens"), snap.OutputTokensRemaining, snap.OutputTokensLimit);
+            Line(Loc("chat.usage.requests"), snap.RequestsRemaining, snap.RequestsLimit);
+            string reset = snap.Reset is { } r2 ? r2.ToLocalTime().ToString("HH:mm:ss") : "—";
+            RateLimitTip = string.Format(Loc("chat.usage.tip"), snap.Provider, snap.Model,
+                string.Join("\n", lines), reset, snap.At.ToString("HH:mm:ss"));
+        }
+        else
+        {
+            HasRateLimit = false;
+            RateLimitFraction = 0;
+            RateLimitUsedPercent = 0;
+            RateLimitText = local ? Loc("chat.usage.local") : Loc("chat.usage.unknown");
+            RateLimitTip = local ? Loc("chat.usage.localTip")
+                : type == AiProviderType.ClaudeDev ? Loc("chat.usage.cliTip")
+                : Loc("chat.usage.unknownTip");
+        }
+
+        RefreshLoadedModelName();
     }
 
     // ─── Thinking Display ───
@@ -239,12 +456,6 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
-    // ─── TODO List ───
-    private string _todoListText = "";
-    public string TodoListText { get => _todoListText; set => SetProperty(ref _todoListText, value); }
-    private bool _showTodoPanel;
-    public bool ShowTodoPanel { get => _showTodoPanel; set => SetProperty(ref _showTodoPanel, value); }
-
     /// <summary>Short display name for the project folder.</summary>
     public string ProjectName => HasProject ? Path.GetFileName(WorkingDirectory) : "";
 
@@ -259,16 +470,19 @@ public class ChatViewModel : ViewModelBase
         }
     }
     public bool IsSearchingHistory { get => _isSearchingHistory; set => SetProperty(ref _isSearchingHistory, value); }
-    public string DbStatsText { get => _dbStatsText; set => SetProperty(ref _dbStatsText, value); }
 
     // ─── Model Selector ───
+    /// <summary>Picking a model here loads it — after a confirmation that shows its size against free VRAM
+    /// (loading a 7B next to ~3 GB of desktop VRAM use once restarted the owner's PC). Declining puts the
+    /// previous selection back.</summary>
     public ModelInfo? SelectedLocalModel
     {
         get => _selectedLocalModel;
         set
         {
+            var previous = _selectedLocalModel;
             if (SetProperty(ref _selectedLocalModel, value) && value != null)
-                _ = LoadModelFromChat(value.LocalPath);
+                _ = LoadModelFromChat(value, previous);
         }
     }
     public string LoadedModelName { get => _loadedModelName; set => SetProperty(ref _loadedModelName, value); }
@@ -296,6 +510,25 @@ public class ChatViewModel : ViewModelBase
 
     /// <summary>"info" → cyan, "warn" → amber, "critical" → red. Used by XAML data triggers.</summary>
     public string CompactionToastSeverity { get => _compactionToastSeverity; set => SetProperty(ref _compactionToastSeverity, value); }
+
+    /// <summary>The toast's "compact by itself from now on" tick (Settings ▸ AutoCompactWhenSuggested). Ticking it on an
+    /// open toast answers that toast too: it closes, and the compact runs now — or when the turn in progress ends.</summary>
+    public bool AutoCompactWhenSuggested
+    {
+        get => _settingsService.Settings.AutoCompactWhenSuggested;
+        set
+        {
+            if (value == AutoCompactWhenSuggested) return;
+            _settingsService.UpdateSettings(s => s.AutoCompactWhenSuggested = value);
+            OnPropertyChanged();
+            if (value && _showCompactionToast)
+            {
+                ShowCompactionToast = false;
+                if (!IsGenerating) CompactConversation();
+                else _lastFiredTrigger = "";   // mid-reply: the check after the turn ends fires again and compacts then
+            }
+        }
+    }
 
     public ICommand AcceptCompactionToastCommand { get; private set; } = null!;
     public ICommand SnoozeCompactionToastCommand { get; private set; } = null!;
@@ -325,6 +558,9 @@ public class ChatViewModel : ViewModelBase
     public ICommand StopGenerationCommand { get; }
     public ICommand ClearChatCommand { get; }
     public ICommand NewSessionCommand { get; }
+    /// <summary>New chat AND bring the Chat page forward — for callers outside the chat page (title bar, Ctrl+N,
+    /// command palette). NewSessionCommand stays put: the Code page hosts the chat docked.</summary>
+    public ICommand NewChatAndShowCommand { get; }
     public ICommand CompactCommand { get; }
     public ICommand CopyCodeCommand { get; }
     public ICommand ExecuteCodeBlockCommand { get; }
@@ -336,6 +572,8 @@ public class ChatViewModel : ViewModelBase
     public ICommand ClearSearchCommand { get; }
     public ICommand LoadSearchResultCommand { get; }
     public ICommand ReviewCodeCommand { get; }
+    /// <summary>Hover "Retry" on an error bubble — parameter is that bubble.</summary>
+    public ICommand RetryMessageCommand { get; }
 
     public event Action? ScrollToBottom;
     /// <summary>Raised when ChatVM needs to be the active view (e.g. user clicked chat history from another page).</summary>
@@ -362,8 +600,27 @@ public class ChatViewModel : ViewModelBase
         CostTrackingService costTracker,
         SessionMemoryService? sessionMemoryService = null,
         Services.Providers.LocalGgufProvider? localGgufProvider = null,
-        AutonomousCodingService? autonomousService = null)
+        AutonomousCodingService? autonomousService = null,
+        DebugLogService? debugLog = null,
+        PermissionService? permissionService = null,
+        Services.Batch.BatchService? batchService = null,
+        Services.Pet.PetService? pet = null,
+        ActivationService? activation = null,
+        SessionCleanupService? cleanup = null)
     {
+        _cleanup = cleanup;
+        _debugLog = debugLog;
+        _pet = pet;
+        _permissionService = permissionService;
+        if (_permissionService != null)
+        {
+            _permissionService.AcceptEditsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
+            // The switch shows the truth for the folder that is open now, whoever changed it.
+            fileSystemService.OnWorkingDirectoryChanged += () => App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(AcceptEdits)));
+        }
+        // The agent opened a project itself (open_project): show it and remember it on that chat.
+        Services.Tools.ProjectToolModule.ProjectOpened += (scope, path) =>
+            App.Current?.Dispatcher.BeginInvoke(() => OnAgentOpenedProject(scope, path));
         _providerManager = providerManager;
         _agentService = agentService;
         _codeExecutionService = codeExecutionService;
@@ -384,23 +641,36 @@ public class ChatViewModel : ViewModelBase
         _autonomousService = autonomousService;
         _autonomousMode = settingsService.Settings.AutonomousLoopEnabled;
         if (_autonomousService != null)
-            _autonomousService.OnPhase += msg => App.Current?.Dispatcher.Invoke(() =>
+            _autonomousService.OnPhase += msg =>
             {
-                Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = msg });
+                var phaseRun = Cur;   // the run raising it (captured before hopping to the UI thread)
+                App.Current?.Dispatcher.Invoke(() =>
+            {
+                // A phase banner is the agent's own status, not something the model said: as Assistant it was
+                // saved and sent back to the model as a turn, and the Steps switch could not hide it.
+                (phaseRun?.Messages ?? Messages).Add(new ChatMessage { Role = MessageRole.AgentStatus, Content = msg });
                 ScrollToBottom?.Invoke();
             });
+            };
 
-        AutoExecute = settingsService.Settings.AutoExecuteCode;
+        // Backing field, not the property: the property asks for confirmation when switched ON.
+        _autoExecute = settingsService.Settings.AutoExecuteCode;
         _extendedThinkingEnabled = settingsService.Settings.ExtendedThinkingEnabled;
+        _reasoningEffort = EffortLevels.Normalize(settingsService.Settings.ReasoningEffort);
         _showThinking = settingsService.Settings.ShowThinkingSteps;
         _showAgentInternals = settingsService.Settings.ShowAgentInternals;
+        _statusText = Loc("chat.status.ready");
 
         RefreshModelsCommand = new RelayCommand(RefreshLocalModelsList);
-        SendMessageCommand = new AsyncRelayCommand(SendMessage);
+        // Started, not awaited: a run lasts as long as it lasts, and an awaited command stays "executing" — which
+        // blocked Send in every other chat until it finished (several chats can run at once now).
+        SendMessageCommand = new RelayCommand(() => Detached(SendMessage));
         StopGenerationCommand = new RelayCommand(StopGeneration);
-        ClearChatCommand = new RelayCommand(ClearChat);
-        NewSessionCommand = new RelayCommand(NewSession);
+        ClearChatCommand = new AsyncRelayCommand(ClearChatAsync);
+        NewSessionCommand = new AsyncRelayCommand(NewSessionFromUserAsync);
+        NewChatAndShowCommand = new AsyncRelayCommand(NewChatAndShowAsync);
         CompactCommand = new RelayCommand(CompactConversation);
+        RetryMessageCommand = new RelayCommand<ChatMessage>(m => Detached(() => RetryFromAsync(m)));
         AcceptCompactionToastCommand = new RelayCommand(() =>
         {
             CompactConversation();
@@ -415,40 +685,63 @@ public class ChatViewModel : ViewModelBase
         ToggleChatSearchCommand = new RelayCommand(() => { IsChatSearchVisible = !IsChatSearchVisible; if (!IsChatSearchVisible) ChatSearchQuery = ""; });
         CloseChatSearchCommand = new RelayCommand(() => { IsChatSearchVisible = false; ChatSearchQuery = ""; });
         CopyCodeCommand = new RelayCommand<string>(CopyCode);
-        ExecuteCodeBlockCommand = new AsyncRelayCommand<CodeBlock>(ExecuteCodeBlock);
-        OpenFolderCommand = new RelayCommand(OpenFolder);
-        CloseFolderCommand = new RelayCommand(CloseFolder);
+        ExecuteCodeBlockCommand = new RelayCommand<CodeBlock>(b => Detached(() => ExecuteCodeBlock(b)));
+        OpenFolderCommand = new AsyncRelayCommand(OpenFolderAsync);
+        CloseFolderCommand = new AsyncRelayCommand(CloseFolderAsync);
         CloneRepoCommand = new AsyncRelayCommand(CloneRepo);
-        LoadSessionCommand = new RelayCommand<string>(LoadSession);
-        DeleteSessionCommand = new RelayCommand<string>(DeleteSession);
+        LoadSessionCommand = new AsyncRelayCommand<string>(LoadSessionAsync);
+        DeleteSessionCommand = new AsyncRelayCommand<string>(DeleteSessionAsync);
         ClearSearchCommand = new RelayCommand(ClearHistorySearch);
-        LoadSearchResultCommand = new RelayCommand<string>(LoadSession);
-        ReviewCodeCommand = new AsyncRelayCommand(RunCodeReview);
+        LoadSearchResultCommand = new AsyncRelayCommand<string>(LoadSessionAsync);
+        ReviewCodeCommand = new RelayCommand(() => Detached(RunCodeReview));
 
         // Listen for tool execution events
         _agentService.OnToolExecuted += OnToolExecuted;
+        if (_pet != null) _agentService.OnToolExecuted += r => _pet.NoteTool(r.ToolName ?? r.Type.ToString(), r.Success);
         _agentService.OnToolStarting += OnToolStarting;
 
         // Surface provider errors that are raised mid-stream (Ollama down, llama-server not running,
         // API auth/rate errors). These used to be raised into the void — NOTHING subscribed — so the
         // user just saw "no response" with no clue why. Show a clean, sanitized message and clear any
         // dangling thinking indicator.
+        OpenBillingCommand = new RelayCommand(() =>
+        {
+            if (BillingUrl is { } url)
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+                catch { /* no browser registered */ }
+        });
+        UsageMeter.Updated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
+        // A provider/model change changes the context window: re-measure now, not on the next 5-s tick.
+        _providerManager.OnProviderChanged += _ => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); });
+        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); });
+        RefreshUsageStrip();
+        InitBatch(batchService);
+
         _providerManager.OnError += msg =>
         {
+            var errRun = Cur;   // the run whose provider call failed (captured before hopping to the UI thread)
             App.Current?.Dispatcher.Invoke(() =>
             {
-                string safe = SanitizeErrorMessage(msg ?? "Unknown error");
-                if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+                string safe = SanitizeErrorMessage(string.IsNullOrWhiteSpace(msg) ? Loc("chat.err.generic") : msg);
+                var list = errRun?.Messages ?? Messages;
+                if (errRun?.ActiveStatus is { } st) { list.Remove(st); errRun.ActiveStatus = null; }
                 // De-dupe: don't stack the identical error twice in a row.
-                if (Messages.LastOrDefault() is { HasError: true } last && last.Content?.Contains(safe) == true)
+                if (list.LastOrDefault() is { HasError: true } last && last.Content?.Contains(safe) == true)
                 {
                     StatusText = safe;
                     return;
                 }
-                Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = $"**⚠ {safe}**", HasError = true });
+                list.Add(new ChatMessage { Role = MessageRole.Assistant, Content = $"**⚠ {safe}**", HasError = true });
                 StatusText = safe;
                 ScrollToBottom?.Invoke();
             });
+        };
+
+        // Agent map: every sub-agent this command started, live, as one tree card per command.
+        _agentService.OnSubAgentEvent += e =>
+        {
+            var mapRun = Cur;   // the spawning run, read in its flow
+            App.Current?.Dispatcher.BeginInvoke(() => OnSubAgentEvent(mapRun, e));
         };
 
         // Live plan checklist (Claude Code-style TodoWrite pills). TodoChanged had ZERO subscribers —
@@ -456,15 +749,19 @@ public class ChatViewModel : ViewModelBase
         // checklist bubble that updates in place as items are added/completed.
         _agentToolService.TodoChanged += () =>
         {
+            // The run's own plan, read in its flow (each run has one) before hopping to the UI thread.
+            var todoRun = Cur;
+            var items = _agentToolService.TodoItems.ToList();
             App.Current?.Dispatcher.BeginInvoke(() =>
             {
-                var items = _agentToolService.TodoItems;
+                var Messages = todoRun?.Messages ?? this.Messages;
+                ChatMessage? _todoListMsg = todoRun?.TodoMsg;
                 if (items.Count == 0)
                 {
-                    if (_todoListMsg != null) { Messages.Remove(_todoListMsg); _todoListMsg = null; }
+                    if (_todoListMsg != null) { Messages.Remove(_todoListMsg); if (todoRun != null) todoRun.TodoMsg = null; }
                     return;
                 }
-                var sb = new System.Text.StringBuilder("📋 **Plan**\n");
+                var sb = new System.Text.StringBuilder($"📋 **{Loc("chat.plan")}**\n");
                 foreach (var t in items)
                 {
                     string mark = t.Status?.ToLowerInvariant() switch
@@ -475,14 +772,32 @@ public class ChatViewModel : ViewModelBase
                     };
                     sb.Append(mark).Append(' ').Append(t.Content).Append('\n');
                 }
+                var planItems = items.Select((t, i) => new PlanItemView(i + 1, t.Content, t.Status?.ToLowerInvariant() switch
+                {
+                    "completed" or "done" => "done",
+                    "in_progress" or "active" => "active",
+                    _ => "pending",
+                })).ToList();
+                int planDone = planItems.Count(p => p.IsDone);
+                string planHeader = planDone == planItems.Count
+                    ? LocF("chat.plan.done", planDone, planItems.Count)
+                    : LocF("chat.plan.working", planDone, planItems.Count);
+                var planElapsedSpan = todoRun?.Stopwatch.Elapsed ?? TimeSpan.Zero;
+                string planElapsed = planElapsedSpan.TotalSeconds < 1 ? ""
+                    : planElapsedSpan.TotalMinutes >= 1 ? $"{(int)planElapsedSpan.TotalMinutes}m {planElapsedSpan.Seconds}s" : $"{planElapsedSpan.Seconds}s";
                 if (_todoListMsg == null || !Messages.Contains(_todoListMsg))
                 {
-                    _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd() };
+                    _todoListMsg = new ChatMessage { Role = MessageRole.System, Content = sb.ToString().TrimEnd(),
+                                                     PlanItems = planItems, PlanHeader = planHeader, PlanElapsed = planElapsed };
+                    if (todoRun != null) todoRun.TodoMsg = _todoListMsg;
                     Messages.Add(_todoListMsg);
                 }
                 else
                 {
                     _todoListMsg.Content = sb.ToString().TrimEnd();
+                    _todoListMsg.PlanItems = planItems;
+                    _todoListMsg.PlanHeader = planHeader;
+                    _todoListMsg.PlanElapsed = planElapsed;
                     // Keep the plan near the action: if newer messages buried it, move it to the bottom.
                     if (Messages.IndexOf(_todoListMsg) < Messages.Count - 3)
                     {
@@ -493,6 +808,11 @@ public class ChatViewModel : ViewModelBase
                 ScrollToBottom?.Invoke();
             });
         };
+
+        // ask_user: the question appears in the asking run's chat with its options and an answer box. Nothing
+        // subscribed to OnAskUserQuestion before, so the tool failed every time ("no UI handler connected") while the
+        // model was told it could ask.
+        _agentToolService.OnAskUserQuestion += AskUserAsync;
 
         // Wire the human-in-the-loop permission prompt. Without this, PermAction.Ask resolved against a
         // null handler → silently DENIED → users were funneled into blanket-allowing "*" (which then
@@ -505,36 +825,46 @@ public class ChatViewModel : ViewModelBase
             // Inline, non-blocking prompt: render the request (with a preview diff for file edits) right in
             // the conversation, and resolve when the user clicks Allow/Deny. Replaces the old modal MessageBox
             // so the user can SEE exactly what's about to change before approving.
+            var askRun = Cur;   // the run asking — its chat gets the prompt, its Stop cancels it
+            // This chat allows everything (the approvals box): go ahead without a prompt — unless the request is one
+            // that always asks.
+            if (AutoApproves(info, askRun?.Session ?? CurrentSession)) return Task.FromResult(true);
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var token = _cts?.Token ?? CancellationToken.None;
+            var token = askRun?.Cts?.Token ?? CancellationToken.None;
             CancellationTokenRegistration reg = default;
 
             var prompt = new ChatMessage
             {
                 Role = MessageRole.PermissionRequest,
-                Content = $"Allow {info.ToolName} to {info.Detail}?",
+                Content = LocF("chat.perm.prompt", info.ToolName, info.Detail),
                 DiffLines = info.Diff?.Lines,
                 DiffStat = info.Diff?.Stat,
-                PermissionCallback = allow => { tcs.TrySetResult(allow); reg.Dispose(); },
+                PermissionAlwaysAsk = info.AlwaysAsk,
+                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk,
+            };
+            prompt.PermissionCallback = allow =>
+            {
+                if (allow && prompt.PermissionAllowedForChat) info.AllowedForChat = true;   // read by the asking tool
+                tcs.TrySetResult(allow);
+                reg.Dispose();
             };
 
             // If the user hits Stop (cancels the turn) while this prompt is still open, resolve it as DENIED so
             // the agent loop unwinds immediately — otherwise it parks forever on an unanswered prompt, leaving
             // IsGenerating stuck on (and a late "Allow" could even apply an edit after the turn was cancelled).
+            // The task is resolved right here (the dispatcher may be busy); the prompt's buttons are retired on
+            // the UI thread, where ResolvePermission's second resolve of the task is a no-op.
             reg = token.Register(() =>
             {
                 if (tcs.TrySetResult(false))
-                    dispatcher.InvokeAsync(() =>
-                    {
-                        prompt.PermissionAnswered = true;
-                        if (!prompt.Content.Contains("(cancelled)")) prompt.Content += "  — (cancelled)";
-                    });
+                    dispatcher.InvokeAsync(() => prompt.ResolvePermission(PermissionOutcome.Cancelled));
                 reg.Dispose();
             });
 
             dispatcher.InvokeAsync(() =>
             {
-                Messages.Add(prompt);
+                (askRun?.Messages ?? Messages).Add(prompt);
+                RaiseRunStateChanged();   // "waiting for you" on the other-chats bar
                 ScrollToBottom?.Invoke();
             });
             return tcs.Task;
@@ -546,20 +876,27 @@ public class ChatViewModel : ViewModelBase
         // Keep the sidebar-filtered VisibleSessions list in sync with Sessions automatically.
         // Any Add/Remove/Replace/Reset on Sessions triggers a rebuild filtered by current project.
         Sessions.CollectionChanged += (_, _) => RebuildVisibleSessions();
+        // The sidebar groups the list by day (today / yesterday / this week / earlier), newest first.
+        System.Windows.Data.CollectionViewSource.GetDefaultView(VisibleSessions)?.GroupDescriptions
+            .Add(new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)));
 
-        // Periodic RAM/context/GPU refresh every 5 seconds
+        // Periodic context / cost refresh every 5 seconds. (It also ran nvidia-smi here — on the UI thread,
+        // blocking up to 3 s every 5 s — to fill GPU properties nothing bound; MainViewModel already polls the GPU.)
         _memoryTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         _memoryTimer.Tick += (_, _) =>
         {
             UpdateContextInfo();
-            UpdateGpuStats();
             CostText = _costTracker.FormatCost();
+            RefreshUsageStrip();
         };
         _memoryTimer.Start();
+        InitControls(activation);
+        InitSidePanel();
+        HookPendingImages();
 
         // Auto-save every 10 seconds if dirty
         _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
-        _autoSaveTimer.Tick += (_, _) => AutoSave();
+        _autoSaveTimer.Tick += (_, _) => { AutoSave(); SaveBackgroundRuns(); };
         _autoSaveTimer.Start();
 
         // Reusable debounce timer for history search
@@ -570,24 +907,34 @@ public class ChatViewModel : ViewModelBase
             ExecuteHistorySearch(_pendingSearchQuery);
         };
 
-        // Listen for model status changes
+        // Listen for model status changes — they describe the in-process engine, so they only own the model
+        // label while a local provider is answering.
         _llamaService.OnStatusChanged += status =>
-            App.Current?.Dispatcher.Invoke(() => LoadedModelName = status);
+            App.Current?.Dispatcher.Invoke(() => { if (ShowLocalModelPicker) LoadedModelName = status; });
         _llamaService.OnLoadingChanged += loading =>
             App.Current?.Dispatcher.Invoke(() => IsLoadingModel = loading);
 
-        // Sync model selection when settings change (e.g. model loaded from Models tab)
+        // Sync model selection when settings change (e.g. model loaded from Models tab). Only a changed model
+        // path rescans the model folders: every UpdateSettings (any checkbox) used to rescan them on the UI thread.
         _settingsService.SettingsChanged += () =>
-            App.Current?.Dispatcher.Invoke(() => SyncModelSelectionFromSettings());
+            App.Current?.Dispatcher.Invoke(() =>
+            {
+                if (!string.Equals(_syncedModelPath, _settingsService.Settings.SelectedModelPath, StringComparison.OrdinalIgnoreCase))
+                    SyncModelSelectionFromSettings();
+            });
 
         // Defer heavy I/O work to background — keep UI thread free during startup
-        StatusText = "Loading...";
-        _ = Task.Run(() =>
+        StatusText = Loc("chat.loading");
+        _ = Task.Run(async () =>
         {
             // 1. Scan model directories (file I/O — can be slow on HDD/network drives)
             var models = _huggingFaceService.GetLocalModels();
 
-            // 2. Load sessions from SQLite
+            // 2. Load sessions from SQLite — first dropping chats that never got a message. Older builds
+            //    saved every "New Chat" the moment it was opened, and those piled up in the sidebar.
+            _persistenceService.DeleteEmptySessions();   // no-op when the DB fails its integrity check
+            bool dbHealthy = _persistenceService.IsDatabaseHealthy;
+            if (!dbHealthy) Debug.WriteLine("codex.db failed PRAGMA quick_check — empty-chat cleanup disabled");
             List<ChatSession> savedSessions;
             try { savedSessions = _persistenceService.LoadSessionList(); }
             catch { savedSessions = new(); }
@@ -598,11 +945,6 @@ public class ChatViewModel : ViewModelBase
                 try { lastSession = _persistenceService.LoadSession(savedSessions.First().Id); }
                 catch { }
             }
-
-            // 3. DB stats
-            (int sessions, int messages, long sizeBytes) stats = (0, 0, 0);
-            try { stats = _persistenceService.GetStats(); }
-            catch { }
 
             // Push everything to UI thread in one batch
             App.Current?.Dispatcher.Invoke(() =>
@@ -621,6 +963,9 @@ public class ChatViewModel : ViewModelBase
                 // Sessions
                 foreach (var session in savedSessions)
                     Sessions.Add(session);
+                // Projects the saved chats worked in join the project list (the agent opens them by name).
+                foreach (var session in savedSessions)
+                    ProjectRegistryService.Current?.Seed(session.ProjectPath, session.UpdatedAt);
 
                 if (lastSession != null && lastSession.Messages.Count > 0)
                 {
@@ -640,42 +985,41 @@ public class ChatViewModel : ViewModelBase
                         var recoveryMsg = new ChatMessage
                         {
                             Role = MessageRole.System,
-                            Content = "*Session resumed — previous generation was interrupted. You can resend your last message or continue.*",
+                            Content = $"*{Loc("chat.resume.note")}*",
                             IsInterrupted = true,
                         };
                         Messages.Add(recoveryMsg);
-                        StatusText = "Session resumed (previous generation was interrupted)";
+                        StatusText = Loc("chat.resume.status");
                     }
                     else
                     {
-                        StatusText = $"Restored session: {lastSession.Title}";
+                        StatusText = LocF("chat.status.restored", lastSession.Title);
                     }
-                }
-                else if (savedSessions.Count > 0)
-                {
-                    CurrentSession = lastSession ?? savedSessions.First();
-                    StatusText = "Ready";
                 }
                 else
                 {
+                    // Nothing to restore, or the last session failed to load. Never adopt that session
+                    // as the open chat: its messages are still in the DB but not on screen, and the next
+                    // save would overwrite them with whatever the user types now.
                     NewSession();
                 }
                 _isDirty = false;
-
-                // DB stats
-                string sizeText = stats.sizeBytes < 1024 * 1024
-                    ? $"{stats.sizeBytes / 1024.0:F1} KB"
-                    : $"{stats.sizeBytes / (1024.0 * 1024.0):F1} MB";
-                DbStatsText = $"{stats.sessions} sessions  |  {stats.messages} messages  |  {sizeText}";
+                if (!dbHealthy) StatusText = Loc("chat.dbDamaged");
 
                 UpdateContextInfo();
             });
+
+            // 3. Bring the persisted provider up. Nothing did this at startup, so after every restart an API
+            //    provider sat "not configured" until the user re-picked it in Settings. Runs after the batch
+            //    above: by then the main window exists and MainViewModel hears the result (IsModelLoaded).
+            await _providerManager.InitializeActiveOnceAsync();
+            App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
         });
 
         // Set initial loaded model name & auto-load if previously selected
         if (_llamaService.IsModelLoaded)
         {
-            LoadedModelName = $"Ready: {_llamaService.LoadedModelName}";
+            RefreshLoadedModelName();
         }
         else if (_settingsService.Settings.ActiveProvider == AiProviderType.Local
                  && !string.IsNullOrEmpty(_settingsService.Settings.SelectedModelPath)
@@ -688,7 +1032,7 @@ public class ChatViewModel : ViewModelBase
             // persisted ClaudeDev/Ollama/Anthropic choice never survived a restart.
             // If the user picked a non-local provider, we also should NOT spend 5 GB
             // of VRAM loading weights nobody asked for.
-            LoadedModelName = $"Loading: {_settingsService.Settings.SelectedModelName}...";
+            LoadedModelName = LocF("chat.model.loadingName", _settingsService.Settings.SelectedModelName ?? "");
             string autoLoadPath = _settingsService.Settings.SelectedModelPath!;
 
             // Auto-load routes through LocalGgufProvider so architecture detection kicks in —
@@ -726,84 +1070,30 @@ public class ChatViewModel : ViewModelBase
 
                     App.Current?.Dispatcher.Invoke(() =>
                     {
-                        StatusText = $"Ready: {_settingsService.Settings.SelectedModelName}";
+                        StatusText = LocF("chat.model.ready", _settingsService.Settings.SelectedModelName ?? "");
                         SyncModelSelectionFromSettings();
                     });
                 }
                 catch (Exception ex)
                 {
+                    // The model slot is a 160-px label in the status bar: it gets a short sentence, the reason
+                    // goes to the debug log (it used to print "Failed to auto-load: <raw exception>" there).
+                    _debugLog?.Error("Chat", $"Auto-load of {autoLoadPath} failed", ex);
                     App.Current?.Dispatcher.Invoke(() =>
                     {
-                        LoadedModelName = $"Failed to auto-load: {SanitizeErrorMessage(ex.Message)}";
-                        StatusText = "Model failed to load — go to Models tab";
+                        LoadedModelName = Loc("chat.model.autoLoadFailedShort");
+                        StatusText = Loc("chat.model.autoLoadFailed");
                     });
                 }
             });
         }
-        else if (!string.IsNullOrEmpty(_settingsService.Settings.SelectedModelName))
+        else
         {
-            LoadedModelName = _settingsService.Settings.SelectedModelName;
+            RefreshLoadedModelName();
         }
     }
 
     // ─── Persistence ───
-
-    private void RestoreSessions()
-    {
-        try
-        {
-            var savedSessions = _persistenceService.LoadSessionList();
-            foreach (var session in savedSessions)
-            {
-                Sessions.Add(session);
-            }
-
-            // Restore the most recent session, or create new
-            if (savedSessions.Count > 0)
-            {
-                // LoadSessionList returns metadata only — load the full session with messages
-                var lastId = savedSessions.First().Id;
-                var lastSession = _persistenceService.LoadSession(lastId);
-
-                if (lastSession != null && lastSession.Messages.Count > 0)
-                {
-                    CurrentSession = lastSession;
-
-                    // Replace the metadata-only entry in Sessions with the full one
-                    for (int i = 0; i < Sessions.Count; i++)
-                    {
-                        if (Sessions[i].Id == lastId)
-                        {
-                            Sessions[i] = lastSession;
-                            break;
-                        }
-                    }
-
-                    foreach (var msg in lastSession.Messages)
-                        Messages.Add(msg);
-
-                    StatusText = $"Restored session: {lastSession.Title}";
-                }
-                else
-                {
-                    // Most recent session has no messages — use it as empty current session
-                    CurrentSession = lastSession ?? savedSessions.First();
-                    StatusText = "Ready";
-                }
-
-                _isDirty = false;
-            }
-            else
-            {
-                NewSession();
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"RestoreSessions failed: {ex.Message}");
-            NewSession();
-        }
-    }
 
     private void AutoSave()
     {
@@ -841,14 +1131,15 @@ public class ChatViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Force save the current session immediately.</summary>
+    /// <summary>Force save the current session immediately (and the chat of the run calling it, if not on screen).</summary>
     public void SaveNow()
     {
         _isDirty = true;
         AutoSave();
+        if (FlowRun is { } run && !ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
     }
 
-    private void LoadSession(string? sessionId)
+    private async Task LoadSessionAsync(string? sessionId)
     {
         if (string.IsNullOrEmpty(sessionId))
         {
@@ -861,11 +1152,39 @@ public class ChatViewModel : ViewModelBase
         // Navigate to Chat page if we're on a different page
         NavigateToChatRequested?.Invoke();
 
+        // A reply running in the chat being left keeps running there (it writes into its own chat's list).
+        bool leavingRun = RunOf(CurrentSession) != null;
+
         // Force save current session before switching
         if (CurrentSession != null && Messages.Count > 0)
         {
             _isDirty = true;
             AutoSave();
+        }
+        // Leaving an untouched chat: drop it from the sidebar (and the DB, if a cleared chat was saved
+        // empty) instead of leaving a stray "New Chat". The DB check keeps a session whose messages
+        // exist but aren't on screen.
+        else if (CurrentSession != null && !_persistenceService.SessionHasMessages(CurrentSession.Id))
+        {
+            string emptyId = CurrentSession.Id;
+            _persistenceService.DeleteEmptySessions(emptyId);
+            for (int i = Sessions.Count - 1; i >= 0; i--)
+                if (Sessions[i].Id == emptyId) Sessions.RemoveAt(i);
+        }
+
+        // A chat with a run in progress: its live list IS the chat — never reload it from the database.
+        if (_runs.FirstOrDefault(r => r.Session.Id == sessionId) is { } running)
+        {
+            CurrentSession = running.Session;
+            Messages = running.Messages;
+            _isDirty = false;
+            for (int i = 0; i < Sessions.Count; i++)
+                if (Sessions[i].Id == sessionId) { Sessions[i] = running.Session; break; }
+            StatusText = Loc("chat.status.working");
+            FollowChatProject(running.Session);
+            UpdateContextInfo();
+            ScrollToBottom?.Invoke();
+            return;
         }
 
         // Load from database (full session with messages)
@@ -873,28 +1192,32 @@ public class ChatViewModel : ViewModelBase
 
         if (session == null)
         {
-            // Fallback: find in-memory session and try to reload from DB one more time
+            // Fallback: the in-memory entry — a chat that was opened but never saved has no DB row yet.
             var inMemory = Sessions.FirstOrDefault(s => s.Id == sessionId);
             if (inMemory == null)
             {
-                StatusText = "Session not found";
+                StatusText = Loc("chat.status.sessionNotFound");
                 return;
             }
 
-            // Use the in-memory session but warn if it has no messages
+            // The sidebar's entries are metadata only. If the DB HAS messages for this chat, the load failed
+            // (busy/damaged file): opening the empty copy would let the next autosave — which rewrites the
+            // stored chat to what is on screen — erase them.
+            if (inMemory.Messages.Count == 0 && _persistenceService.SessionHasMessages(sessionId))
+            {
+                StatusText = Loc("chat.status.sessionLoadFailed");
+                return;
+            }
             session = inMemory;
         }
 
         // Switch — set CurrentSession BEFORE clearing Messages to avoid dirty flag issues
         CurrentSession = session;
 
-        // Temporarily stop dirty tracking during load
-        Messages.CollectionChanged -= OnMessagesChanged;
-        ResolvePendingPermissionPrompts();
-        Messages.Clear();
-        foreach (var msg in session.Messages)
-            Messages.Add(msg);
-        Messages.CollectionChanged += OnMessagesChanged;
+        // The chat being left: its open prompts are answered "dismissed" — unless a run there is waiting on them.
+        if (!leavingRun) ResolvePendingPermissionPrompts();
+        // A list of its own (the one being left may be a running turn's live list — it must not be emptied).
+        Messages = new ObservableCollection<ChatMessage>(session.Messages);
 
         // Sync CurrentSession.Messages to point to the same data as what's displayed
         CurrentSession.Messages = Messages.ToList();
@@ -912,57 +1235,124 @@ public class ChatViewModel : ViewModelBase
         }
 
         StatusText = session.Messages.Count > 0
-            ? $"Loaded: {session.Title} ({session.Messages.Count} messages)"
-            : $"Empty session: {session.Title}";
+            ? LocF("chat.status.loaded", session.Title, session.Messages.Count)
+            : LocF("chat.status.loadedEmpty", session.Title);
+        FollowChatProject(session);
 
         UpdateContextInfo();
         ScrollToBottom?.Invoke();
     }
 
-    private void DeleteSession(string? sessionId)
+    /// <summary>
+    /// Opening a chat opens its project. A chat belongs to the folder it was started in (ChatSession.ProjectPath).
+    /// After a restart — or coming from another project's chat — the app had no folder or the wrong one open, so a
+    /// "carry on" in an old chat ran with no file or shell tools at all: the agent answered that it could not work
+    /// and handed the job off (owner 2026-10-11: "ฉันสั่งงานต่อในแชทเก่า ทำไม มันไม่รู้เรื่อง"). A folder that no
+    /// longer exists is left alone.
+    /// </summary>
+    private void FollowChatProject(ChatSession? session)
+    {
+        string? path = session?.ProjectPath;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        if (HasProject && PathEquals(WorkingDirectory, path)) return;
+        ApplyWorkingDirectory(path, announce: false, showEditor: false);
+        StatusText = LocF("chat.status.projectFollowed", Path.GetFileName(path.TrimEnd('\\', '/')));
+    }
+
+    private readonly SessionCleanupService? _cleanup;
+
+    /// <summary>Clean up what chat <paramref name="sessionId"/>'s agent left open (dev servers, the preview, and with
+    /// <paramref name="deleteImages"/> its screenshots) and say what was closed in the status bar.</summary>
+    private async Task CleanUpSessionAsync(string? sessionId, bool deleteImages)
+    {
+        if (_cleanup == null || string.IsNullOrEmpty(sessionId)) return;
+        var r = await _cleanup.CleanAsync(sessionId, deleteImages);
+        if (!r.Any) return;
+        _debugLog?.Info("Chat", $"session cleanup {sessionId} · processes={r.ProcessesStopped} preview={r.PreviewClosed} images={r.ImagesDeleted}");
+        StatusText = LocF("chat.cleanup.done", r.ProcessesStopped, r.PreviewClosed ? Loc("chat.cleanup.previewClosed") : "", r.ImagesDeleted);
+    }
+
+    private async Task DeleteSessionAsync(string? sessionId)
     {
         if (string.IsNullOrEmpty(sessionId)) return;
 
         // Confirmation dialog for destructive operation
-        var result = System.Windows.MessageBox.Show(
-            "Are you sure you want to delete this session? This cannot be undone.",
-            "Delete Session",
-            System.Windows.MessageBoxButton.YesNo,
-            System.Windows.MessageBoxImage.Warning);
-        if (result != System.Windows.MessageBoxResult.Yes) return;
+        if (!Confirm(Loc("chat.delete.confirm"), Loc("chat.delete.title"))) return;
+
+        // Deleting a chat a reply is being written into (on screen or not): stop that reply first.
+        if (!await StopRunOfAsync(sessionId)) return;
 
         // Delete from DB
         _persistenceService.DeleteSession(sessionId);
+        await CleanUpSessionAsync(sessionId, deleteImages: false);   // DeleteSession already removed its screenshots
 
-        // Remove from UI list immediately
-        App.Current?.Dispatcher.Invoke(() =>
+        for (int i = Sessions.Count - 1; i >= 0; i--)
         {
-            for (int i = Sessions.Count - 1; i >= 0; i--)
+            if (Sessions[i].Id == sessionId)
             {
-                if (Sessions[i].Id == sessionId)
-                {
-                    Sessions.RemoveAt(i);
-                    break;
-                }
+                Sessions.RemoveAt(i);
+                break;
             }
+        }
 
-            // If we deleted the current session, create a new one
-            if (CurrentSession?.Id == sessionId)
-            {
-                CurrentSession = null;
-                ResolvePendingPermissionPrompts();
-                Messages.Clear();
-                NewSession();
-            }
+        // If we deleted the current session, create a new one
+        if (CurrentSession?.Id == sessionId)
+        {
+            CurrentSession = null;
+            ResolvePendingPermissionPrompts();
+            Messages = new ObservableCollection<ChatMessage>();
+            NewSession();
+        }
 
-            StatusText = "Session deleted";
-        });
+        StatusText = Loc("chat.status.deleted");
+    }
+
+    // ─── Turn ownership (L2: a reply must land in the chat that asked for it) ───
+
+
+    /// <summary>True when nothing is generating — or the user agreed to stop the running reply and it has
+    /// unwound. Called before anything that swaps or empties the open chat.</summary>
+    private async Task<bool> EnsureIdleAsync()
+    {
+        if (!IsGenerating) return true;
+        if (!Confirm(Loc("chat.busy.stopFirst"), Loc("chat.busy.title"))) return false;
+
+        StopGeneration();
+        var done = _turnDone?.Task;
+        if (done != null && await Task.WhenAny(done, Task.Delay(TimeSpan.FromSeconds(20))) != done)
+        {
+            StatusText = Loc("chat.busy.stillStopping");
+            return false;
+        }
+        return !IsGenerating;
+    }
+
+    /// <summary>Add a message produced by the running turn to the chat that started it. If that chat is no
+    /// longer on screen (a callback queued before a switch), the message goes into that chat's own list and is
+    /// saved there, instead of into whatever chat is open now.</summary>
+    private void PostTurnMessage(ChatSession? target, ChatMessage msg)
+    {
+        // A running turn's chat has a live list (on screen or not): straight in.
+        if ((target == null ? Cur : RunOf(target)) is { } run)
+        {
+            run.Messages.Add(msg);
+            return;
+        }
+        if (target == null || ReferenceEquals(target, CurrentSession))
+        {
+            Messages.Add(msg);
+            return;
+        }
+        if (msg.Role is MessageRole.AgentStatus or MessageRole.PermissionRequest) return;   // transient rows
+        target.Messages.Add(msg);
+        _persistenceService.SaveSession(target);
     }
 
     private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         UpdateContextInfo();
         _isDirty = true;
+        RefreshSidePanelFacts();
     }
 
     // ─── Context Tracking ───
@@ -971,11 +1361,13 @@ public class ChatViewModel : ViewModelBase
         try
         {
             var messages = Messages.ToList();
-            int used = _contextMemoryService.CalculateTotalTokens(messages);
+            // Measure what the MODEL is sent (after the last compaction marker, minus status/UI rows) against
+            // the window of the model actually answering — not every row on screen against a local setting.
+            var modelView = BuildModelHistory(messages);
+            int used = _contextMemoryService.CalculateTotalTokens(modelView);
             int max = _contextMemoryService.MaxContextTokens;
             ContextUsagePercent = max > 0 ? Math.Min(100.0, (double)used / max * 100.0) : 0;
             ContextUsageText = $"{used:N0} / {max:N0}";
-            MemoryUsageText = _contextMemoryService.GetMemoryUsageDisplay();
 
             // Session stats
             SessionTurnCount = messages.Count(m => m.Role == MessageRole.Assistant);
@@ -984,38 +1376,38 @@ public class ChatViewModel : ViewModelBase
             // LED-style context level — 5 levels with labels
             if (ContextUsagePercent < 25)
             {
-                ContextLevelLabel = "FRESH";
+                ContextLevelLabel = Loc("chat.ctx.fresh");
                 ContextLevelColor = "Green";
                 ShowContextWarning = false;
                 ContextWarningText = "";
             }
             else if (ContextUsagePercent < 50)
             {
-                ContextLevelLabel = "OK";
+                ContextLevelLabel = Loc("chat.ctx.ok");
                 ContextLevelColor = "Teal";
                 ShowContextWarning = false;
                 ContextWarningText = "";
             }
             else if (ContextUsagePercent < 75)
             {
-                ContextLevelLabel = "WARM";
+                ContextLevelLabel = Loc("chat.ctx.warm");
                 ContextLevelColor = "Yellow";
                 ShowContextWarning = false;
                 ContextWarningText = "";
             }
             else if (ContextUsagePercent < 90)
             {
-                ContextLevelLabel = "HOT";
+                ContextLevelLabel = Loc("chat.ctx.hot");
                 ContextLevelColor = "Peach";
                 ShowContextWarning = true;
-                ContextWarningText = "⚠ Context getting full — responses may lose quality. Consider starting a New Chat soon.";
+                ContextWarningText = Loc("chat.ctx.hotWarning");
             }
             else
             {
-                ContextLevelLabel = "FULL";
+                ContextLevelLabel = Loc("chat.ctx.full");
                 ContextLevelColor = "Red";
                 ShowContextWarning = true;
-                ContextWarningText = "🔴 Context almost full! Start a New Chat NOW for best results. The AI is losing earlier context.";
+                ContextWarningText = Loc("chat.ctx.fullWarning");
             }
 
             // Sprint 2 #2 — Strategic Compaction Toast trigger check.
@@ -1036,12 +1428,15 @@ public class ChatViewModel : ViewModelBase
     {
         // Honor snooze
         if (SessionTurnCount < _toastSnoozeUntilTurn) return;
-        // Honor user setting (default true)
-        if (!_settingsService.Settings.EnableStrategicCompactionToast) return;
+        bool auto = _settingsService.Settings.AutoCompactWhenSuggested;
+        // Honor user setting (default true) — the auto tick works even with the toast itself switched off
+        if (!_settingsService.Settings.EnableStrategicCompactionToast && !auto) return;
         // Don't fire while a toast is already showing
         if (_showCompactionToast) return;
+        // Auto: never cut a turn in progress — this runs again when it ends (UpdateContextInfo).
+        if (auto && IsGenerating) return;
 
-        int toolActionsTotal = messages.Count(m => m.Role == MessageRole.ToolAction);
+        int toolActionsTotal = CountToolActionsSinceMarker(messages);
         int toolActionsSince = Math.Max(0, toolActionsTotal - _toolActionsAtLastCompact);
 
         // Trigger priority (highest fires first):
@@ -1052,23 +1447,17 @@ public class ChatViewModel : ViewModelBase
         if (ContextUsagePercent >= 75 && _lastFiredTrigger != "ctx75")
         {
             trigger = "ctx75";
-            ShowToast("critical",
-                "Context is getting hot",
-                $"{ContextUsagePercent:F0}% used. Compact now to keep the next response sharp.");
+            ShowToast("critical", Loc("chat.toast.hotTitle"), LocF("chat.toast.hotReason", ContextUsagePercent.ToString("F0")));
         }
         else if (ContextUsagePercent >= 60 && _lastFiredTrigger != "ctx60" && _lastFiredTrigger != "ctx75")
         {
             trigger = "ctx60";
-            ShowToast("warn",
-                "Good moment to compact",
-                $"You've crossed {ContextUsagePercent:F0}% — quick compact will reset the headroom.");
+            ShowToast("warn", Loc("chat.toast.warmTitle"), LocF("chat.toast.warmReason", ContextUsagePercent.ToString("F0")));
         }
         else if (toolActionsSince >= 50 && _lastFiredTrigger != "tools50")
         {
             trigger = "tools50";
-            ShowToast("info",
-                "Lots of tool calls this session",
-                $"{toolActionsSince} tool calls since last compact. A compact will trim the noise.");
+            ShowToast("info", Loc("chat.toast.toolsTitle"), LocF("chat.toast.toolsReason", toolActionsSince));
         }
 
         if (!string.IsNullOrEmpty(trigger))
@@ -1085,6 +1474,13 @@ public class ChatViewModel : ViewModelBase
 
     private void ShowToast(string severity, string title, string reason)
     {
+        if (_settingsService.Settings.AutoCompactWhenSuggested)
+        {
+            // Where the toast would ask: compact instead. A conversation with nothing to compact keeps the trigger
+            // marked (EvaluateCompactionTrigger sets it), so the 5-second refresh does not retry it every tick.
+            CompactConversation();
+            return;
+        }
         CompactionToastSeverity = severity;
         CompactionToastTitle = title;
         CompactionToastReason = reason;
@@ -1096,49 +1492,43 @@ public class ChatViewModel : ViewModelBase
         ShowCompactionToast = false;
         // Reset baseline so the next 50-tool-call cycle starts fresh
         // (whether the user accepted, snoozed, or dismissed)
-        _toolActionsAtLastCompact = Messages.Count(m => m.Role == MessageRole.ToolAction);
+        _toolActionsAtLastCompact = CountToolActionsSinceMarker(Messages);
     }
 
-    // ─── GPU Live Stats ───
-    private void UpdateGpuStats()
+    private static int CountToolActionsSinceMarker(IList<ChatMessage> messages)
     {
-        try
-        {
-            var stats = _gpuDetection.GetLiveStats();
-            if (stats != null)
-            {
-                GpuStatsText = stats.StatusBarDisplay;
-                GpuTempC = stats.TemperatureC;
-                GpuUsagePercent = stats.GpuUtilization;
-            }
-            else
-            {
-                var info = _gpuDetection.DetectGpu();
-                GpuStatsText = info.VramTotalBytes > 0
-                    ? $"💾 {info.VramDisplay} ({info.GpuBrand})"
-                    : "CPU Mode";
-            }
-        }
-        catch
-        {
-            GpuStatsText = "";
-        }
+        int count = 0;
+        for (int i = messages.Count - 1; i >= 0 && messages[i].Role != MessageRole.ContextSummary; i--)
+            if (messages[i].Role == MessageRole.ToolAction) count++;
+        return count;
     }
 
     // ─── Open / Close Project Folder ───
-    private void OpenFolder()
+    private async Task OpenFolderAsync()
     {
+        // A reply running in the chat on screen keeps its own folder (its run pinned it); the new project gets
+        // a new chat so the two never mix.
+        if (IsGenerating) NewSession();
+
         // Use the owner-aware COM picker (it passes the MainWindow hwnd). A plain
         // Microsoft.Win32.OpenFolderDialog with NO owner opened its modal BEHIND our borderless
         // (WindowStyle=None) main window — the dialog was invisible and the app looked frozen, so
         // "Open Folder did nothing". FolderPicker is already what ModelManager/PluginManager use.
-        string? folder = CluadeX.Services.Helpers.FolderPicker.ShowDialog("Open Project Folder", WorkingDirectory);
+        string? folder = CluadeX.Services.Helpers.FolderPicker.ShowDialog(Loc("chat.folder.pickTitle"), WorkingDirectory);
         if (!string.IsNullOrEmpty(folder))
             SetWorkingDirectory(folder);
     }
 
-    public void SetWorkingDirectory(string path)
+    public void SetWorkingDirectory(string path) => ApplyWorkingDirectory(path, announce: true, showEditor: true);
+
+    /// <summary>
+    /// Switch the open project. <paramref name="announce"/> posts the "📁 Opened project" line in the open chat;
+    /// <paramref name="showEditor"/> brings the workbench forward. A pipe run switches with announce only (the run
+    /// shows in the chat, not the editor) and switches BACK with neither. An empty path closes the project.
+    /// </summary>
+    private void ApplyWorkingDirectory(string path, bool announce, bool showEditor)
     {
+        path ??= "";
         _fileSystemService.WorkingDirectory = path;
         WorkingDirectory = path;
         OnPropertyChanged(nameof(ProjectName));
@@ -1151,24 +1541,37 @@ public class ChatViewModel : ViewModelBase
         // previous project's skills stayed advertised).
         _skillService.ReloadSkills();
 
+        // "Accept edits" was given for the previous folder: it ends here.
+        ResetAcceptEditsForProject(path.Length > 0 ? path : null);
+
+        if (path.Length == 0)
+        {
+            AgenticMode = false;
+            GitBranch = "";
+            StatusText = Loc("chat.status.ready");
+            return;
+        }
+
         // Auto-enable agentic mode when a project is open
         AgenticMode = true;
 
-        StatusText = $"Project: {ProjectName}";
+        StatusText = LocF("chat.status.project", ProjectName);
 
         // Detect git info
         _ = DetectGitInfoAsync();
 
-        // Add system message
-        Messages.Add(new ChatMessage
+        if (announce)
         {
-            Role = MessageRole.System,
-            Content = $"\U0001F4C1 Opened project: {path}\nAgent mode enabled \u2014 I can now read, edit, create files and use Git in this project.",
-        });
-        ScrollToBottom?.Invoke();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = "\U0001F4C1 " + LocF("chat.folder.opened", path),
+            });
+            ScrollToBottom?.Invoke();
+        }
 
         // Land the user in the workbench: opening a project in an IDE should show the project.
-        NavigateToEditorRequested?.Invoke();
+        if (showEditor) NavigateToEditorRequested?.Invoke();
     }
 
     private async Task DetectGitInfoAsync()
@@ -1196,23 +1599,24 @@ public class ChatViewModel : ViewModelBase
 
     private async Task CloneRepo()
     {
+        // Cloning ends by switching the project: a reply running here keeps its folder; the clone gets a new chat.
+        if (IsGenerating) NewSession();
+
         // 1) Ask for the repo URL.
         string? url = CluadeX.Services.Helpers.InputDialog.Show(
-            "Connect GitHub repo",
-            "Paste a repository URL (https://github.com/owner/repo, or a git@ / .git URL). It will be cloned and opened as your project.",
+            Loc("chat.clone.title"),
+            Loc("chat.clone.prompt"),
             placeholder: "https://github.com/owner/repo");
         if (string.IsNullOrWhiteSpace(url)) return;
         url = url.Trim();
+        // A URL can carry a token (https://user:TOKEN@github.com/…): never echo it into the transcript.
+        string shownUrl = RedactUrlCredentials(url);
 
         // Reject anything that isn't a plain repo URL — a quote/newline could break the
         // quoting in `git clone -- "<url>"`, and a leading '-' is an arg-injection smell.
         if (url.Contains('"') || url.Contains('\n') || url.Contains('\r') || url.StartsWith("-"))
         {
-            Messages.Add(new ChatMessage
-            {
-                Role = MessageRole.System,
-                Content = $"⚠ That doesn't look like a valid repository URL: \"{url}\"",
-            });
+            Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "⚠ " + LocF("chat.clone.badUrl", shownUrl) });
             ScrollToBottom?.Invoke();
             return;
         }
@@ -1220,11 +1624,7 @@ public class ChatViewModel : ViewModelBase
         string repoName = DeriveRepoFolderName(url);
         if (string.IsNullOrWhiteSpace(repoName))
         {
-            Messages.Add(new ChatMessage
-            {
-                Role = MessageRole.System,
-                Content = $"⚠ Couldn't read a repository name from \"{url}\". Expected something like https://github.com/owner/repo.",
-            });
+            Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "⚠ " + LocF("chat.clone.noName", shownUrl) });
             ScrollToBottom?.Invoke();
             return;
         }
@@ -1233,17 +1633,14 @@ public class ChatViewModel : ViewModelBase
         string? initial = !string.IsNullOrEmpty(WorkingDirectory)
             ? (Path.GetDirectoryName(WorkingDirectory) ?? WorkingDirectory)
             : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        string? parent = CluadeX.Services.Helpers.FolderPicker.ShowDialog(
-            $"Choose where to clone \"{repoName}\"", initial);
+        string? parent = CluadeX.Services.Helpers.FolderPicker.ShowDialog(LocF("chat.clone.pickParent", repoName), initial);
         if (string.IsNullOrWhiteSpace(parent)) return;
 
         string targetDir = Path.Combine(parent, repoName);
         if (Directory.Exists(targetDir) && Directory.EnumerateFileSystemEntries(targetDir).Any())
         {
-            var res = MessageBox.Show(
-                $"\"{targetDir}\" already exists and isn't empty.\n\nOpen it as the project instead of cloning?",
-                "Folder exists", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (res == MessageBoxResult.Yes) SetWorkingDirectory(targetDir);
+            if (Confirm(LocF("chat.clone.exists", targetDir), Loc("chat.clone.existsTitle")))
+                SetWorkingDirectory(targetDir);
             return;
         }
 
@@ -1251,10 +1648,10 @@ public class ChatViewModel : ViewModelBase
         Messages.Add(new ChatMessage
         {
             Role = MessageRole.System,
-            Content = $"⬇ Cloning {url}\n→ {targetDir}",
+            Content = "⬇ " + LocF("chat.clone.cloning", shownUrl, targetDir),
         });
         ScrollToBottom?.Invoke();
-        StatusText = $"Cloning {repoName}…";
+        StatusText = LocF("chat.clone.status", repoName);
 
         GitResult result;
         try
@@ -1263,27 +1660,39 @@ public class ChatViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            result = new GitResult { Success = false, Error = ex.Message };
+            _debugLog?.Error("Chat", "git clone threw", ex);
+            result = new GitResult { Success = false, Error = "" };
         }
 
         if (result.Success)
         {
-            StatusText = $"Cloned {repoName}";
+            StatusText = LocF("chat.clone.done", repoName);
             // Opening the folder emits its own "Opened project" system message + enables agent mode.
             SetWorkingDirectory(targetDir);
         }
         else
         {
-            string err = (result.Error ?? result.Output ?? "unknown error").Trim();
+            // git's own last line ("Repository not found.", "Authentication failed …") is the useful part; the
+            // full stderr goes to the log. Both are redacted — git echoes the URL, token included.
+            string raw = (result.Error ?? result.Output ?? "").Trim();
+            _debugLog?.Warn("Chat", "git clone failed: " + RedactUrlCredentials(raw));
+            string reason = RedactUrlCredentials(raw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .LastOrDefault() ?? "");
+            if (reason.Length > 300) reason = reason[..300] + "…";
             Messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,
-                Content = $"❌ Clone failed: {err}",
+                Content = "❌ " + Loc("chat.clone.failed") + (reason.Length > 0 ? $"\n`{reason}`" : ""),
             });
             ScrollToBottom?.Invoke();
-            StatusText = "Clone failed";
+            StatusText = Loc("chat.clone.failedStatus");
         }
     }
+
+    /// <summary>"https://user:TOKEN@host/…" → "https://***@host/…" (anywhere in the text).</summary>
+    public static string RedactUrlCredentials(string text)
+        => string.IsNullOrEmpty(text) ? text
+            : System.Text.RegularExpressions.Regex.Replace(text, @"(?<=[a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s""']+@", "***@");
 
     /// <summary>
     /// Pull the repo folder name out of a git URL. Handles https://host/owner/repo(.git),
@@ -1303,51 +1712,84 @@ public class ChatViewModel : ViewModelBase
         return last.Trim();
     }
 
-    private void CloseFolder()
+    private async Task CloseFolderAsync()
     {
-        _fileSystemService.WorkingDirectory = string.Empty;
-        WorkingDirectory = string.Empty;
-        AgenticMode = false;
-        OnPropertyChanged(nameof(ProjectName));
-        StatusText = "Ready";
+        await Task.CompletedTask;
+        if (IsGenerating) NewSession();   // the running reply keeps its folder
+
+        // Mirror SetWorkingDirectory: the closed project's branch badge, its skills, the system prompt that
+        // described it and its "Accept edits" all go with it.
+        ApplyWorkingDirectory(string.Empty, announce: false, showEditor: false);
+    }
+
+    /// <summary>New chat from the chat's own buttons: stops a running reply first. Stays on the current page —
+    /// the Code page hosts this same chat docked beside the editor.</summary>
+    private Task NewSessionFromUserAsync()
+    {
+        NewSession();   // a reply running in the chat on screen carries on in the background
+        return Task.CompletedTask;
+    }
+
+    /// <summary>New chat from OUTSIDE the chat (title bar, Ctrl+N, palette): as above, then brings the Chat page
+    /// forward — from another page the title-bar button created the chat out of sight, so it looked like it
+    /// did nothing.</summary>
+    private Task NewChatAndShowAsync()
+    {
+        NewSession();
+        NavigateToChatRequested?.Invoke();
+        return Task.CompletedTask;
     }
 
     /// <summary>
     /// Promoted from private to public so the McpHostService can spawn a
     /// fresh visible session each time ObsidianX delegates a task. UI-thread
     /// only — callers from background threads must Dispatcher.Invoke.
+    /// Does not stop a running turn: UI paths go through NewSessionFromUserAsync, MCP waits for idle.
     /// </summary>
     public void NewSession()
     {
+        string projectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+
+        // Already on an untouched chat → reuse it instead of stacking another empty "New Chat".
+        if (CurrentSession != null && Messages.Count == 0
+            && !_persistenceService.SessionHasMessages(CurrentSession.Id))
+        {
+            CurrentSession.ProjectPath = projectPath;
+            int at = -1;
+            for (int i = 0; i < Sessions.Count; i++)
+                if (Sessions[i].Id == CurrentSession.Id) { at = i; break; }
+            if (at < 0) Sessions.Insert(0, CurrentSession);
+            else if (at > 0) Sessions.Move(at, 0);
+            RebuildVisibleSessions();   // the project tag may have changed
+            StatusText = Loc("chat.status.ready");
+            return;
+        }
+
         // Save current session before creating new
-        if (CurrentSession != null && CurrentSession.Messages.Count > 0)
+        bool leavingRun = RunOf(CurrentSession) != null;
+        if (CurrentSession != null && Messages.Count > 0)
         {
             _isDirty = true;
             AutoSave();
 
-            // Extract durable memories from the finishing session (fire-and-forget).
+            // Extract durable memories from the finishing session (fire-and-forget) — not from one still running.
             // Disabled by default — user opts in via settings.
-            _sessionMemoryService?.ExtractInBackground(CurrentSession.Messages);
+            if (!leavingRun) _sessionMemoryService?.ExtractInBackground(CurrentSession.Messages);
         }
 
         // Create new session — tag with the current project path so the sidebar can
         // filter to "just this project" instead of mixing every project's sessions together.
-        var session = new ChatSession
-        {
-            ProjectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "",
-        };
+        var session = new ChatSession { ProjectPath = projectPath };
+        if (!leavingRun) ResolvePendingPermissionPrompts();
         CurrentSession = session;
-        ResolvePendingPermissionPrompts();
-        Messages.Clear();
+        Messages = new ObservableCollection<ChatMessage>();
         Sessions.Insert(0, session);
         _isDirty = false;
         RebuildVisibleSessions();
 
-        // Persist immediately so LoadSession can find it later
-        try { _persistenceService.SaveSession(session); }
-        catch { /* ignore */ }
-
-        StatusText = "Ready";
+        // Not written to the DB yet: AutoSave stores it once it has a message, so a chat that is opened
+        // and never used leaves nothing behind (LoadSession falls back to the in-memory entry).
+        StatusText = Loc("chat.status.ready");
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1355,46 +1797,44 @@ public class ChatViewModel : ViewModelBase
     // ════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Run a coding task that arrived over the named-pipe MCP host. Spawns
-    /// a NEW visible chat session tagged with the caller's task id, posts
-    /// the spec as the user message, runs the agentic loop, and posts the
-    /// agent's reply. The transcript persists in codex.db like any normal
-    /// session — user can scroll back to it anytime.
+    /// Run a coding task that arrived over the named-pipe MCP host, VISIBLY: a new chat for the task (the Chat page
+    /// is brought forward), the spec as its user message, then the same agent loop, tools, hooks and permission
+    /// prompts as a typed turn — with the reply, thinking and the harness's notices streaming in live (they were
+    /// wired only for typed turns, so a pipe run showed its tool rows and then the whole answer at once).
     ///
-    /// All UI-touching work happens on the dispatcher thread. Network/agent
-    /// work is awaited so the caller (the named-pipe handler) can serialise
-    /// the final response back to ObsidianX.
+    /// <paramref name="workingDirectory"/>: the run switches the app to that project and BACK afterwards (it used to
+    /// leave the app on the caller's folder), and the chat is tagged with it so the project-filtered sidebar keeps
+    /// showing it. A folder that does not exist is refused rather than silently running in whatever is open.
+    /// <paramref name="maxSteps"/>: a step limit for this run. <paramref name="acceptEdits"/>: explicit opt-in to
+    /// "Accept edits" for this run (default: the user's AcceptEditsDefault); the user's own setting comes back after.
+    ///
+    /// The outcome is an error when the run failed, ended without finishing (step limit, error stop), was stopped in
+    /// CluadeX, or its caller went away — those all came back as success before. UI work happens on the dispatcher;
+    /// the agent loop runs on the thread pool.
     /// </summary>
-    public async Task<string> RunMcpTaskAsync(
+    public async Task<McpTaskOutcome> RunMcpTaskAsync(
         string taskId,
         string spec,
         IReadOnlyList<string>? lessons,
         IReadOnlyList<string>? contextFiles,
         string? workingDirectory,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? maxSteps = null,
+        bool? acceptEdits = null)
     {
         if (string.IsNullOrWhiteSpace(spec))
-            return "(empty spec — nothing to do)";
+            return new McpTaskOutcome("(empty spec — nothing to do)", IsError: true);
 
-        // 1. Switch to a fresh visible session so the user's current chat
-        //    isn't disturbed. Tag with the caller's id so the sidebar
-        //    filter and history are easy to find later.
-        await Application.Current.Dispatcher.InvokeAsync(() =>
+        string? runDir = null;
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
-            NewSession();
-            if (CurrentSession != null)
-            {
-                CurrentSession.Title = $"[ObsidianX] {taskId}";
-                CurrentSession.ProjectPath = $"obsidianx-task::{taskId}";
-            }
-            // If the caller pinned a working directory, switch to it so all
-            // file ops in this session are scoped correctly.
-            if (!string.IsNullOrWhiteSpace(workingDirectory) && Directory.Exists(workingDirectory))
-                SetWorkingDirectory(workingDirectory!);
-        });
+            try { runDir = Path.GetFullPath(workingDirectory); } catch { runDir = null; }
+            if (runDir == null || !Directory.Exists(runDir))
+                return new McpTaskOutcome($"workingDirectory does not exist: {workingDirectory}", IsError: true);
+        }
 
-        // 2. Compose the prompt. Inject "lessons learned" verbatim so the
-        //    agent sees them as system-level guidance from the orchestrator.
+        // Compose the prompt. Inject "lessons learned" verbatim so the
+        // agent sees them as guidance from the orchestrator.
         var sb = new StringBuilder();
         sb.AppendLine(spec);
         if (lessons is { Count: > 0 })
@@ -1413,109 +1853,631 @@ public class ChatViewModel : ViewModelBase
                 sb.AppendLine($"- `{f}`");
         }
         string prompt = sb.ToString();
+        var dispatcher = Application.Current.Dispatcher;
 
-        // 3. Post the spec as a user message so it's visible in the chat
-        //    transcript exactly like a human-typed prompt.
-        await Application.Current.Dispatcher.InvokeAsync(() =>
+        // "acceptEdits": true comes from a PROGRAM — a BrainX peer or an orchestrator's intern, i.e. possibly an AI that
+        // read untrusted text — so it is the user's decision, not the caller's: never for a drive root, the user folder
+        // or a system folder, and confirmed here in CluadeX once per folder per app session. (It used to switch the
+        // prompts off for any folder that exists, with nothing in the chat saying who did it.)
+        var notes = new List<string>();      // told to the caller with the result
+        string? acceptLine = null;           // a system line in the task's chat
+        string? acceptTarget = null;         // the folder the caller's acceptEdits was approved for
+        if (acceptEdits == true && _permissionService != null)
         {
-            var userMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
-            Messages.Add(userMsg);
-            CurrentSession?.Messages.Add(userMsg);
-            _isDirty = true;
-            ScrollToBottom?.Invoke();
-        });
+            string target = runDir ?? await dispatcher.InvokeAsync(CurrentProjectFolder);
+            if (target.Length == 0)
+                notes.Add("acceptEdits was ignored: no project folder is open, so every edit asks.");
+            else if (PermissionService.IsUnsafeAcceptEditsRoot(target, _settingsService.DataRoot))
+            {
+                acceptLine = "⚠ " + LocF("chat.acceptEdits.unsafeFolder", target);
+                notes.Add($"acceptEdits was refused: {target} is a drive root, the user folder, a system folder or CluadeX's own data — every edit asks.");
+            }
+            else
+            {
+                string key = target.TrimEnd('\\', '/');
+                // Already approved for this folder in this session: no second question. The user has Accept edits on
+                // there themselves: on for THIS task only — remembering the folder would let a later pipe task switch
+                // it on unasked after the user turned it off. Otherwise the user is asked, in CluadeX.
+                int decision = await dispatcher.InvokeAsync(() =>
+                    _pipeAcceptEditsApproved.Contains(key) ? 1
+                    : _permissionService.AcceptsEditsIn(target) ? 2
+                    : Confirm(LocF("chat.acceptEdits.pipeConfirm", taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
+                        && _pipeAcceptEditsApproved.Add(key) ? 1 : 0);
+                if (decision != 0)
+                {
+                    acceptTarget = target;
+                    acceptLine = "✏️ " + LocF(decision == 2 ? "chat.acceptEdits.pipeUserOn" : "chat.acceptEdits.pipeOn", target);
+                }
+                else
+                {
+                    acceptLine = "✋ " + LocF("chat.acceptEdits.pipeDeclined", target);
+                    notes.Add("acceptEdits was declined by the user in CluadeX — every edit asks.");
+                }
+            }
+        }
+        // A step limit this build can't apply is said, not swallowed.
+        if (maxSteps is int askedSteps && FindStepLimitedAgentLoop() == null)
+            notes.Add($"maxSteps={Math.Clamp(askedSteps, 1, 200)} was not applied: this CluadeX build has no per-run step limit, "
+                + $"so the 'Max agent steps' setting ({_settingsService.Settings.MaxAgentIterations}) applied.");
+        string WithNotes(string text) => notes.Count == 0 ? text : $"{text}\n\n({string.Join(" ", notes)})";
 
-        // 4. Run the agentic loop. Use the same CodeAgentService instance
-        //    the interactive chat uses — same provider, same tool budget,
-        //    same hooks/permissions/skills.
-        //
-        //    IsGenerating is set up-front and ALWAYS reset in finally so the
-        //    Send button never gets stuck disabled if a downstream dispatcher
-        //    InvokeAsync fails (e.g. window closing mid-call).
+        // Claim the chat. If the user's own reply is still running, WAIT for it: this used to switch to a new
+        // session underneath it, and that reply's tool rows and answer then landed in the MCP task's chat.
+        // Check-and-claim happens in ONE dispatcher call, so the user (or a second pipe call) can't start a turn in between.
+        TaskCompletionSource? turn = null;
+        ChatSession? taskSession = null;
+        AgentRunScope? taskScope = null;
+        CancellationTokenSource? linked = null;
         List<ChatMessage> historySnapshot = new();
-        await Application.Current.Dispatcher.InvokeAsync(() =>
+        string previousDir = "";       // the project to come back to ("" = none was open)
+        string? switchedTo = null;     // the folder this run opened (null = it ran in the open project)
+        string? previousAccept = null; // the user's own Accept-edits state, restored afterwards
+        while (true)
         {
-            IsGenerating = true;
-            // SkipLast(1): the spec was just added as the last user message above; passing it again as
-            // `prompt` would duplicate the turn (mirrors RunAgentic). Marshaled to the UI thread — this
-            // method runs on the named-pipe background thread, and Messages is UI-bound.
-            historySnapshot = Messages.SkipLast(1).ToList();
-        });
+            Task? busy = await dispatcher.InvokeAsync<Task?>(() =>
+            {
+                // No waiting for a reply running in another chat: this task gets its own chat and runs beside it.
+
+                previousDir = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                previousAccept = _permissionService?.AcceptEditsProject;
+
+                // 1. A fresh visible session so the user's current chat isn't disturbed (NewSession saves it).
+                NewSession();
+                // 2. The caller's project, announced in the task's chat — not the editor (the run is watched here).
+                if (runDir != null && !PathEquals(runDir, previousDir))
+                {
+                    ApplyWorkingDirectory(runDir, announce: true, showEditor: false);
+                    switchedTo = runDir;
+                }
+                string project = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+                if (CurrentSession != null)
+                {
+                    CurrentSession.Title = $"[ObsidianX] {taskId}";
+                    // Tagged with the run's real project: an "obsidianx-task::" tag hid it from the sidebar's
+                    // project filter, so the run the user was meant to watch was nowhere in the list.
+                    CurrentSession.ProjectPath = project;
+                    RebuildVisibleSessions();
+                }
+                // "Accept edits" for this run: the caller's request as approved above (for exactly that folder), else
+                // the user's own default. SetAcceptEdits refuses a drive / user / system folder by itself.
+                if (_permissionService != null)
+                {
+                    bool want = project.Length > 0 && (acceptEdits == true
+                        ? acceptTarget != null && PathEquals(project, acceptTarget)
+                        : acceptEdits ?? _settingsService.Settings.AcceptEditsDefault);
+                    if (!_permissionService.SetAcceptEdits(want ? project : null) && acceptLine == null)
+                        acceptLine = "⚠ " + LocF("chat.acceptEdits.unsafeFolder", project);
+                    OnPropertyChanged(nameof(AcceptEdits));
+                }
+
+                // 3. The spec as a user message, visible exactly like a human-typed prompt — then, when the caller
+                //    asked for Accept edits, who turned it on (or why it stayed off).
+                var userMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
+                Messages.Add(userMsg);
+                if (acceptLine != null) Messages.Add(new ChatMessage { Role = MessageRole.System, Content = acceptLine });
+                _isDirty = true;
+                ScrollToBottom?.Invoke();
+
+                // 4. Own the chat for the run. Stop works on it, and IsGenerating blocks a concurrent turn.
+                turn = BeginTurn();
+                taskSession = CurrentSession;
+                taskScope = AgentRunScope.Current;   // entered by BeginTurn inside this UI call — re-entered below
+                linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                _cts = linked;
+                historySnapshot = BuildModelHistory(Messages, before: userMsg, includeTools: true);
+                StatusText = Loc("chat.status.working");
+
+                // 5. Bring the Chat page forward: the run is there to be watched.
+                NavigateToChatRequested?.Invoke();
+                return null;
+            });
+            if (busy == null) break;
+            await Task.WhenAny(busy, Task.Delay(Timeout.Infinite, ct));
+            ct.ThrowIfCancellationRequested();
+        }
+
+        // The run's scope for THIS flow too (BeginTurn entered it inside the dispatcher call above, which does not
+        // carry back here): the agent loop below and every event it raises then belong to this task's run.
+        AgentRunScope.Enter(taskScope);
+
+        // 6. Run the agentic loop — the same CodeAgentService the interactive chat uses — and show it live.
+        var live = new LiveRunView(this, taskSession, taskScope);
+        live.Attach(_agentService);
         try
         {
-            AgentLoopResult agentResult;
+            AgentLoopResult? agentResult = null;
+            Exception? failure = null;
             try
             {
-                agentResult = await _agentService.ExecuteAgenticAsync(historySnapshot, prompt, ct: ct);
+                agentResult = await Task.Run(() => RunAgentLoopAsync(historySnapshot, prompt, maxSteps, linked!.Token), CancellationToken.None);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) { /* decided below from the tokens */ }
+            catch (Exception ex) { failure = ex; }
+
+            if (linked!.IsCancellationRequested || (agentResult == null && failure == null))
             {
-                string err = $"❌ Agent loop failed: {SanitizeErrorMessage(ex.Message)}";
-                await Application.Current.Dispatcher.InvokeAsync(() =>
+                bool callerGone = ct.IsCancellationRequested;
+                await dispatcher.InvokeAsync(() =>
                 {
-                    var errMsg = new ChatMessage { Role = MessageRole.Assistant, Content = err, HasError = true };
-                    Messages.Add(errMsg);
-                    CurrentSession?.Messages.Add(errMsg);
+                    live.Close();
+                    PostTurnMessage(taskSession, new ChatMessage
+                    {
+                        Role = MessageRole.System,
+                        Content = $"*{Loc(callerGone ? "chat.pipe.callerGone" : "chat.interruptedNote")}*",
+                        IsInterrupted = true,
+                    });
+                    _isDirty = true;
+                    SaveNow();
+                    StatusText = Loc("chat.status.cancelled");
                 });
-                return err;
+                return new McpTaskOutcome(WithNotes(callerGone
+                    ? "Cancelled: the caller disconnected or cancelled the request before the task finished."
+                    : "Stopped by the user in CluadeX before the task finished."), IsError: true);
             }
 
-            // 5. Post the agent's final response to the chat so the user sees
-            //    what was returned to ObsidianX, then persist + return.
-            string finalText = agentResult.FinalResponse ?? "(agent loop returned no text)";
-            await Application.Current.Dispatcher.InvokeAsync(() =>
+            if (failure != null)
             {
-                var aMsg = new ChatMessage { Role = MessageRole.Assistant, Content = finalText };
-                Messages.Add(aMsg);
-                CurrentSession?.Messages.Add(aMsg);
+                _debugLog?.Error("Chat", $"MCP task {taskId}: agent loop failed", failure);
+                await dispatcher.InvokeAsync(() =>
+                {
+                    live.Close();
+                    PostTurnMessage(taskSession, new ChatMessage { Role = MessageRole.Assistant, Content = $"❌ {Loc("chat.err.agentLoop")}", HasError = true });
+                    _isDirty = true;
+                    SaveNow();
+                    StatusText = Loc("chat.status.error");
+                });
+                // The caller gets the kind of failure only: the message can hold paths, keys or a stack — those stay
+                // in the Debug Log (as App.HandleMcpToolAsync does for a tool that throws).
+                return new McpTaskOutcome(WithNotes(
+                    $"Agent loop failed ({failure.GetType().Name}) — details are in CluadeX's Debug Log."), IsError: true);
+            }
+
+            // 7. The agent's final reply: the streamed bubble is finalized in place (no duplicate), persisted, returned.
+            string? finalText = string.IsNullOrWhiteSpace(agentResult!.FinalResponse)
+                ? null
+                : StripThinkingSpans(_agentToolService.StripToolCalls(agentResult.FinalResponse));
+            if (string.IsNullOrWhiteSpace(finalText)) finalText = null;
+            bool unfinished = !agentResult.Success;
+            int toolsRun = agentResult.Steps?.Sum(s => s.ToolResults?.Count ?? 0) ?? 0;
+            await dispatcher.InvokeAsync(() =>
+            {
+                live.Finish(finalText, toolsRun);
                 _isDirty = true;
                 SaveNow();
+                StatusText = unfinished ? Loc("chat.status.agentDone") : Loc("chat.status.ready");
             });
-            return finalText;
+            string text = finalText ?? (toolsRun > 0
+                ? $"(The agent ran {toolsRun} tool call(s) and ended without a written summary.)"
+                : "(agent loop returned no text)");
+            return unfinished
+                ? new McpTaskOutcome(WithNotes($"{text}\n\n(The run did not finish: {agentResult.StopReason}.)"), IsError: true)
+                : new McpTaskOutcome(WithNotes(text), IsError: false);
         }
         finally
         {
-            // Marshal the reset to the UI thread; SetProperty raises
-            // PropertyChanged which any binding consumers expect on the
-            // dispatcher.
+            live.Detach(_agentService);
+            // The clean-up below is the app's (restore the user's project and Accept edits), not the run's: leave the
+            // run's scope first, or "the project open now" would read as the run's folder.
+            AgentRunScope.Enter(null);
+            // Marshal the reset to the UI thread; SetProperty raises PropertyChanged, which bindings expect there.
+            void Release()
+            {
+                live.Close();
+                // Back to the project the user had open — unless they opened another one meanwhile.
+                if (switchedTo != null && PathEquals(CurrentProjectFolder(), switchedTo))
+                {
+                    ApplyWorkingDirectory(previousDir, announce: false, showEditor: false);
+                    // The task's chat may still be on screen, tagged with the task's folder: say which project is open
+                    // NOW, or a message typed here would quietly work in the user's project while the chat talks
+                    // about the task's.
+                    if (taskSession != null && ReferenceEquals(CurrentSession, taskSession))
+                    {
+                        PostTurnMessage(taskSession, new ChatMessage
+                        {
+                            Role = MessageRole.System,
+                            Content = "📁 " + (previousDir.Length > 0
+                                ? LocF("chat.pipe.backToProject", previousDir, switchedTo)
+                                : LocF("chat.pipe.backToNoProject", switchedTo)),
+                        });
+                        _isDirty = true;
+                        ScrollToBottom?.Invoke();
+                    }
+                }
+                // The user's own Accept-edits state comes back with their project (never onto another folder).
+                if (_permissionService != null && PathEquals(CurrentProjectFolder(), previousDir))
+                {
+                    _permissionService.SetAcceptEdits(previousAccept);
+                    OnPropertyChanged(nameof(AcceptEdits));
+                }
+                if (_runs.FirstOrDefault(r => ReferenceEquals(r.Done, turn)) is { } taskRun && ReferenceEquals(taskRun.Cts, linked))
+                    taskRun.Cts = null;
+                linked?.Dispose();
+                EndTurn(turn!);
+            }
             try
             {
-                if (Application.Current.Dispatcher.CheckAccess()) IsGenerating = false;
-                else await Application.Current.Dispatcher.InvokeAsync(() => IsGenerating = false);
+                if (dispatcher.CheckAccess()) Release();
+                else await dispatcher.InvokeAsync(Release);
             }
             catch { /* app closing — nothing to do */ }
         }
     }
 
-    private void CompactConversation()
+    private string CurrentProjectFolder() => _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+
+    // ── A per-run step limit ──
+    // CodeAgentService gains ExecuteAgenticAsync(history, userMessage, progress, ct, int? maxIterations) in the vision
+    // work (team T1, merged before this one). Until it is in the build, the overload is looked up by its EXACT shape —
+    // (List<ChatMessage>, string, …, CancellationToken, int? maxIterations), every other parameter optional — so this
+    // compiles before and after; when the build has none, the caller is told maxSteps was not applied (never silent).
+    // TODO(merge after T1): replace with _agentService.ExecuteAgenticAsync(history, prompt, ct: ct, maxIterations: limit).
+    private static System.Reflection.MethodInfo? _stepLimitedLoop;
+    private static bool _stepLimitedLoopProbed;
+
+    /// <summary>The agent loop overload that takes a per-run step limit, or null when this build has none.</summary>
+    internal static System.Reflection.MethodInfo? FindStepLimitedAgentLoop()
     {
-        // Keep only the last 10 messages to free context window
-        if (Messages.Count <= 10) return;
-
-        var toKeep = Messages.Skip(Messages.Count - 10).ToList();
-        var summaryMsg = new ChatMessage
+        if (_stepLimitedLoopProbed) return _stepLimitedLoop;
+        try
         {
-            Role = MessageRole.System,
-            Content = $"*[Conversation compacted — {Messages.Count - 10} older messages removed to free context]*",
-        };
+            _stepLimitedLoop = typeof(CodeAgentService).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .FirstOrDefault(m => m.Name == nameof(CodeAgentService.ExecuteAgenticAsync)
+                                     && m.ReturnType == typeof(Task<AgentLoopResult>) && IsStepLimitedShape(m.GetParameters()));
+        }
+        catch { _stepLimitedLoop = null; }
+        _stepLimitedLoopProbed = true;
+        return _stepLimitedLoop;
+    }
 
-        Messages.Clear();
-        Messages.Add(summaryMsg);
-        foreach (var msg in toKeep)
-            Messages.Add(msg);
+    private static bool IsStepLimitParameter(System.Reflection.ParameterInfo p) =>
+        p.ParameterType == typeof(int?) && p.Name == "maxIterations";
 
-        // Update session
-        if (CurrentSession != null)
+    /// <summary>(List&lt;ChatMessage&gt; history, string message, …) with exactly one CancellationToken and one
+    /// "int? maxIterations", and nothing else that has to be supplied.</summary>
+    private static bool IsStepLimitedShape(System.Reflection.ParameterInfo[] ps) =>
+        ps.Length >= 4
+        && ps[0].ParameterType == typeof(List<ChatMessage>) && ps[1].ParameterType == typeof(string)
+        && ps.Count(p => p.ParameterType == typeof(CancellationToken)) == 1
+        && ps.Count(IsStepLimitParameter) == 1
+        && ps.Skip(2).All(p => p.ParameterType == typeof(CancellationToken) || IsStepLimitParameter(p) || p.HasDefaultValue);
+
+    /// <summary>The agent loop for a pipe run, with the caller's step limit when this build supports one (when it
+    /// does not, RunMcpTaskAsync has already put that in the caller's result).</summary>
+    private Task<AgentLoopResult> RunAgentLoopAsync(List<ChatMessage> history, string prompt, int? maxSteps, CancellationToken ct)
+    {
+        if (maxSteps is int steps)
         {
-            CurrentSession.Messages.Clear();
-            CurrentSession.Messages.AddRange(Messages);
+            int limit = Math.Clamp(steps, 1, 200);
+            if (FindStepLimitedAgentLoop() is { } method)
+            {
+                var ps = method.GetParameters();
+                var args = new object?[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    var p = ps[i];
+                    args[i] = i == 0 ? history
+                        : i == 1 ? prompt
+                        : p.ParameterType == typeof(CancellationToken) ? ct
+                        : IsStepLimitParameter(p) ? (int?)limit
+                        : p.DefaultValue;
+                }
+                return (Task<AgentLoopResult>)method.Invoke(_agentService, args)!;
+            }
+            _debugLog?.Warn("Chat", $"pipe run asked for maxSteps={limit}, but this build's agent loop has no per-run limit — the Max agent steps setting applies (the caller is told)");
+        }
+        return _agentService.ExecuteAgenticAsync(history, prompt, ct: ct);
+    }
+
+    /// <summary>
+    /// Shows a pipe run in its chat as it happens: the reply streams into a bubble per step, thinking goes into that
+    /// bubble's Thinking block, the harness's notices (auto-verify, compaction, recovered calls) appear inline — the
+    /// same rules as a typed turn. Agent events arrive on the pool; the chat is touched on the dispatcher only.
+    /// </summary>
+    private sealed class LiveRunView
+    {
+        private readonly ChatViewModel _vm;
+        private readonly ChatSession? _target;
+        private readonly AgentRunScope? _scope;
+        private readonly object _lock = new();
+        private readonly StringBuilder _text = new();   // the current step's streamed text (agent thread, under _lock)
+        private int _step = int.MinValue;
+        private int _tokens;
+        // UI thread only:
+        private ChatMessage? _bubble;
+        private int _bubbleStep = int.MinValue;
+        private string _pendingThinking = "";
+
+        public LiveRunView(ChatViewModel vm, ChatSession? target, AgentRunScope? scope) { _vm = vm; _target = target; _scope = scope; }
+
+        /// <summary>Events of other runs (another chat working at the same time) are not this view's.</summary>
+        private bool Mine => _scope == null || ReferenceEquals(AgentRunScope.Current, _scope);
+        private ChatRun? Run => _scope?.Owner as ChatRun;
+
+        public void Attach(CodeAgentService agent)
+        {
+            agent.OnAgenticStreamingToken += OnToken;
+            agent.OnThinkingUpdate += OnThinking;
+            agent.OnAgentStatus += OnStatus;
         }
 
-        StatusText = "Conversation compacted";
+        public void Detach(CodeAgentService agent)
+        {
+            agent.OnAgenticStreamingToken -= OnToken;
+            agent.OnThinkingUpdate -= OnThinking;
+            agent.OnAgentStatus -= OnStatus;
+        }
+
+        private static void Ui(Action action, bool wait = false)
+        {
+            var d = App.Current?.Dispatcher;
+            if (d == null) return;
+            if (wait && !d.CheckAccess()) d.Invoke(action);
+            else if (d.CheckAccess()) action();
+            else d.BeginInvoke(action);
+        }
+
+        private void OnToken(string token, int step)
+        {
+            if (!Mine) return;
+            if (TryUnwrapThinking(token, out var thought))
+            {
+                if (thought.Length > 0) Ui(() => AddThinking(thought, step, replace: false));
+                return;
+            }
+            string snapshot, previousText = "";
+            bool newStep;
+            int count;
+            lock (_lock)
+            {
+                newStep = step != _step;
+                // The previous step's last 1-2 tokens were never shown (updates go every 3): its bubble gets them now.
+                if (newStep) { previousText = _text.ToString(); _text.Clear(); _step = step; }
+                _text.Append(token);
+                snapshot = _text.ToString();
+                count = ++_tokens;
+            }
+            if (Run is { } r) r.StreamingTokenCount++;
+            if (newStep) Ui(() => OpenBubble(snapshot, step, previousText), wait: true);
+            else if (count % 3 == 0) Ui(() => { if (_bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
+        }
+
+        private void OpenBubble(string text, int step, string previousText)
+        {
+            if (Run is { ActiveStatus: { } st } run)
+            {
+                st.IsStreaming = false;
+                run.Messages.Remove(st);
+                run.ActiveStatus = null;
+            }
+            if (_bubble != null)
+            {
+                if (previousText.Length > 0) _bubble.Content = previousText;
+                _bubble.IsStreaming = false;
+            }
+            _bubble = new ChatMessage { Role = MessageRole.Assistant, Content = text, IsStreaming = true, ThinkingContent = _pendingThinking };
+            _bubbleStep = step;
+            _pendingThinking = "";
+            _vm.PostTurnMessage(_target, _bubble);
+            _vm.ScrollToBottom?.Invoke();
+        }
+
+        /// <summary>CodeAgentService raises OnThinkingUpdate with real thinking AND with the step's visible text,
+        /// which has already streamed into the bubble — that one is skipped.</summary>
+        private void OnThinking(string text, int step)
+        {
+            if (!Mine || string.IsNullOrWhiteSpace(text)) return;
+            string streamed;
+            lock (_lock) streamed = _text.ToString();
+            if (LooksAlreadyStreamed(text, streamed)) { Ui(() => { if (_bubble != null) _bubble.IsStreaming = false; }); return; }
+            Ui(() => AddThinking(text, step, replace: true));
+        }
+
+        private void AddThinking(string text, int step, bool replace)
+        {
+            if (!_vm.ShowThinking) return;
+            if (_bubble != null && _bubbleStep == step)
+                _bubble.ThinkingContent = replace ? JoinThinking(_bubble.ThinkingContent, text) : _bubble.ThinkingContent + text;
+            else
+                _pendingThinking = replace ? JoinThinking(_pendingThinking, text) : _pendingThinking + text;
+        }
+
+        private void OnStatus(string status)
+        {
+            if (!Mine) return;
+            bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
+                || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
+                || status.Contains("compacting") || status.Contains("บีบอัด")
+                || status.Contains("truncated") || status.Contains("ถูกตัด");
+            if (notable) _vm.OnToolStarting("agent", status);
+        }
+
+        /// <summary>UI thread: the run ended with <paramref name="finalText"/> (null = none). The last streamed bubble
+        /// is finalized in place; with no bubble, the reply is added once; with neither, an honest note — the same
+        /// safety net as a typed turn: tools ran but no summary is not an error (noSummary), nothing at all is.</summary>
+        public void Finish(string? finalText, int toolsRun)
+        {
+            string streamed;
+            lock (_lock) streamed = _text.ToString();
+            ChatMessage final;
+            if (_bubble != null)
+            {
+                if (finalText != null)
+                {
+                    _bubble.Content = finalText;
+                    _bubble.CodeBlocks = _vm._codeExecutionService.ExtractCodeBlocks(finalText);
+                }
+                else if (_bubbleStep == _step && streamed.Length > 0 && _bubble.Content != streamed)
+                {
+                    _bubble.Content = streamed;
+                }
+                _bubble.IsStreaming = false;
+                final = _bubble;
+            }
+            else
+            {
+                bool nothing = finalText == null && toolsRun == 0;
+                final = new ChatMessage
+                {
+                    Role = MessageRole.Assistant,
+                    Content = finalText
+                        ?? (toolsRun > 0 ? $"*{LocF("chat.agent.noSummary", toolsRun)}*" : $"*{Loc("chat.agent.noReply")}*"),
+                    HasError = nothing,
+                    CodeBlocks = finalText != null ? _vm._codeExecutionService.ExtractCodeBlocks(finalText) : new(),
+                };
+                _vm.PostTurnMessage(_target, final);
+            }
+            if (_pendingThinking.Length > 0)
+            {
+                final.ThinkingContent = JoinThinking(final.ThinkingContent, _pendingThinking);
+                _pendingThinking = "";
+            }
+            Close();
+            _vm.ScrollToBottom?.Invoke();
+        }
+
+        /// <summary>UI thread: stop every streaming cursor this run left open.</summary>
+        public void Close()
+        {
+            if (_bubble != null) _bubble.IsStreaming = false;
+            if (Run is { ActiveStatus: { } st } run)
+            {
+                st.IsStreaming = false;
+                run.ActiveStatus = null;
+            }
+        }
+    }
+
+    // ─── Compaction ───
+
+    /// <summary>What the model is told in place of the messages above a compaction marker.</summary>
+    private const string CompactionPreamble =
+        "[Summary of the earlier part of this conversation — those messages were compacted out of your context. "
+        + "Treat it as background; the conversation continues below.]\n";
+
+    /// <summary>
+    /// The conversation as the MODEL should receive it — never the raw transcript:
+    /// starts after the last <see cref="MessageRole.ContextSummary"/> marker (whose summary is sent first, as a
+    /// user turn so every provider and both agent paths keep it), stops before <paramref name="before"/> (the
+    /// message being answered, which travels separately), and keeps only User, Assistant and — for tool-using
+    /// modes — ToolAction rows. Status lines, permission prompts, UI notices and error bubbles are dropped:
+    /// they are things the app said, not the model, and sending them back made the model answer them.
+    /// </summary>
+    public static List<ChatMessage> BuildModelHistory(IEnumerable<ChatMessage> transcript, ChatMessage? before = null, bool includeTools = true)
+    {
+        var all = transcript as IList<ChatMessage> ?? transcript.ToList();
+        int end = all.Count;
+        if (before != null)
+        {
+            for (int i = 0; i < all.Count; i++)
+                if (ReferenceEquals(all[i], before)) { end = i; break; }
+        }
+
+        int start = 0;
+        ChatMessage? marker = null;
+        for (int i = end - 1; i >= 0; i--)
+        {
+            if (all[i].Role == MessageRole.ContextSummary) { marker = all[i]; start = i + 1; break; }
+        }
+
+        var result = new List<ChatMessage>();
+        if (marker != null && !string.IsNullOrWhiteSpace(marker.Content))
+            result.Add(new ChatMessage { Role = MessageRole.User, Content = CompactionPreamble + marker.Content, Timestamp = marker.Timestamp });
+
+        for (int i = start; i < end; i++)
+        {
+            var m = all[i];
+            switch (m.Role)
+            {
+                case MessageRole.User when m.HasAttachedImages:
+                    // An earlier message's pictures are not resent (each costs tokens on every request): the model
+                    // is told they were there and where, and can open one with read_file.
+                    result.Add(new ChatMessage
+                    {
+                        Role = MessageRole.User, Timestamp = m.Timestamp,
+                        Content = (m.Content.Length > 0 ? m.Content + "\n" : "")
+                                  + string.Join("\n", m.AttachedImages.Select(p => $"[the user attached an image: {p}]")),
+                    });
+                    break;
+                case MessageRole.User:
+                    result.Add(m);
+                    break;
+                case MessageRole.Assistant when !m.HasError && !ChatMessage.IsLegacyStatusLine(m.Content):
+                    // Replies saved by older builds can still carry <thinking> spans inline.
+                    result.Add(m.Content.Contains("<thinking>", StringComparison.Ordinal)
+                        ? new ChatMessage { Role = MessageRole.Assistant, Content = StripThinkingSpans(m.Content), Timestamp = m.Timestamp }
+                        : m);
+                    break;
+                case MessageRole.ToolAction when includeTools:
+                    result.Add(m);
+                    break;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// "Compact now" (button, toast, /compact): shrink what the MODEL is sent, never the transcript. A
+    /// ContextSummary marker is inserted before the last ~10 model-visible messages; everything above it is
+    /// replaced, in the requests, by the marker's summary. It used to delete every message but the last 10 —
+    /// from the screen AND (via the next save) from the database — with no confirmation and no summary.
+    /// Nothing is deleted now, so there is nothing to confirm.
+    /// </summary>
+    private void CompactConversation()
+    {
+        const int keepRecent = 10;
+
+        int lastMarker = -1;
+        for (int i = Messages.Count - 1; i >= 0; i--)
+            if (Messages[i].Role == MessageRole.ContextSummary) { lastMarker = i; break; }
+
+        var visible = new List<int>();
+        for (int i = lastMarker + 1; i < Messages.Count; i++)
+            if (Messages[i].Role is MessageRole.User or MessageRole.Assistant or MessageRole.ToolAction)
+                visible.Add(i);
+
+        if (visible.Count <= keepRecent)
+        {
+            StatusText = Loc("chat.compact.nothing");
+            ShowCompactionToast = false;
+            return;
+        }
+
+        // Cut before the last keepRecent model-visible messages — moved back to the user message that
+        // started that exchange, so a kept tool row is never separated from the request that caused it.
+        int cut = visible[visible.Count - keepRecent];
+        for (int i = cut; i > lastMarker + 1; i--)
+        {
+            if (Messages[i].Role == MessageRole.User) { cut = i; break; }
+        }
+        if (cut <= lastMarker + 1)
+        {
+            StatusText = Loc("chat.compact.nothing");
+            ShowCompactionToast = false;
+            return;
+        }
+
+        var toSummarize = BuildModelHistory(Messages.Take(cut).ToList());
+        string? previousSummary = lastMarker >= 0 ? Messages[lastMarker].Content : null;
+        // The previous summary is already the first entry of toSummarize (as a user turn) — summarise the rest
+        // and carry the old summary forward verbatim.
+        if (previousSummary != null && toSummarize.Count > 0 && toSummarize[0].Content.StartsWith(CompactionPreamble, StringComparison.Ordinal))
+            toSummarize.RemoveAt(0);
+
+        var marker = new ChatMessage
+        {
+            Role = MessageRole.ContextSummary,
+            Content = _contextMemoryService.BuildCompactionSummary(toSummarize, previousSummary),
+            Timestamp = DateTime.Now,
+        };
+        Messages.Insert(cut, marker);
+        _isDirty = true;
+        SaveNow();
+
+        StatusText = LocF("chat.compact.done", toSummarize.Count);
 
         // Reset Sprint 2 #2 trigger state so the strategic toast can fire
         // again the next time the conversation grows past a threshold.
-        _toolActionsAtLastCompact = Messages.Count(m => m.Role == MessageRole.ToolAction);
+        _toolActionsAtLastCompact = CountToolActionsSinceMarker(Messages);
         _lastFiredTrigger = "";
         ShowCompactionToast = false;
 
@@ -1545,29 +2507,19 @@ public class ChatViewModel : ViewModelBase
     private async Task SendMessage()
     {
         string input = UserInput?.Trim() ?? "";
-        if (string.IsNullOrEmpty(input) || IsGenerating) return;
-
-        if (!_providerManager.ActiveProvider.IsReady)
+        if (string.IsNullOrEmpty(input) && PendingImages.Count == 0) return;
+        // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
+        // to do nothing at all (the box was even disabled) until the run ended. Attached images wait for the next turn.
+        if (IsGenerating)
         {
-            string errorText = _providerManager.ActiveProviderType == AiProviderType.Local
-                ? "⚠ **No model loaded.** Please go to the **Models** tab and load a GGUF model first."
-                : $"⚠ **{_providerManager.ActiveProvider.DisplayName} not configured.** Please add your API key in **Settings**.";
-            StatusText = _providerManager.ActiveProviderType == AiProviderType.Local
-                ? "No model loaded"
-                : $"{_providerManager.ActiveProvider.DisplayName} not configured";
-            var errorMsg = new ChatMessage
-            {
-                Role = MessageRole.Assistant,
-                Content = errorText,
-                HasError = true,
-            };
-            Messages.Add(errorMsg);
-            CurrentSession?.Messages.Add(errorMsg);
-            ScrollToBottom?.Invoke();
+            if (input.Length > 0) SendIntoRunningReply(input);
+            if (PendingImages.Count > 0) StatusText = Loc("chat.attach.waitForReply");
             return;
         }
 
         // ─── Built-in slash commands ───
+        // Handled BEFORE the provider check: they act on the chat itself and need no model. Behind the check,
+        // /compact, /clear and /new were refused with "not configured" whenever the provider wasn't up.
         if (input.Equals("/compact", StringComparison.OrdinalIgnoreCase))
         {
             UserInput = string.Empty;
@@ -1577,7 +2529,17 @@ public class ChatViewModel : ViewModelBase
         if (input.Equals("/clear", StringComparison.OrdinalIgnoreCase))
         {
             UserInput = string.Empty;
-            ClearChat();
+            await ClearChatAsync();
+            return;
+        }
+        if (input.Equals("/close", StringComparison.OrdinalIgnoreCase) || input.Equals("/exit", StringComparison.OrdinalIgnoreCase))
+        {
+            // Close this chat's session: stop what its agent left running, then start a fresh chat (this one is kept).
+            UserInput = string.Empty;
+            if (!await EnsureIdleAsync()) return;
+            string? closing = CurrentSession?.Id;
+            NewSession();
+            await CleanUpSessionAsync(closing, deleteImages: false);
             return;
         }
         if (input.Equals("/new", StringComparison.OrdinalIgnoreCase))
@@ -1586,6 +2548,11 @@ public class ChatViewModel : ViewModelBase
             NewSession();
             return;
         }
+
+        if (!await EnsureProviderReadyAsync()) return;
+
+        // The chat on screen since startup was never opened through LoadSessionAsync: its folder comes back here.
+        FollowChatProject(CurrentSession);
 
         // ─── Slash Command / Skill Interception ───
         string skillPromptOverride = "";
@@ -1609,7 +2576,7 @@ public class ChatViewModel : ViewModelBase
             else if (skill != null && !skill.UserInvocable)
             {
                 // Skill exists but not user-invocable — give feedback
-                StatusText = $"Skill '/{skillName}' is not available for direct invocation.";
+                StatusText = LocF("chat.skill.notInvocable", skillName);
                 return;
             }
             else if (skill == null && skillName.Length > 0)
@@ -1619,26 +2586,163 @@ public class ChatViewModel : ViewModelBase
                     .Where(s => s.UserInvocable)
                     .Select(s => $"/{s.Name}")
                     .ToList();
-                string skillList = available.Count > 0
-                    ? $"Available: {string.Join(", ", available)}"
-                    : "No skills available.";
-                StatusText = $"Unknown skill '/{skillName}'. {skillList}";
+                StatusText = available.Count > 0
+                    ? LocF("chat.skill.unknown", skillName, string.Join(", ", available))
+                    : LocF("chat.skill.unknownNone", skillName);
                 return;
             }
         }
 
-        _retryCount = 0; // reset retry counter on new user message
+        // Batch switch on: a plain question goes out at half price and its answer arrives later (no tools).
+        // Skills stay live — they are instructions for the agent loop.
+        if (BatchMode && activeSkill == null && CurrentSession != null)
+        {
+            await SendAsBatchAsync(input);
+            return;
+        }
 
-        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input };
+        _pet?.NoteMessage(input);
+        _pet?.NoteTurnStarted();
+        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input, AttachedImages = PendingImages.ToList() };
+        PendingImages.Clear();
         Messages.Add(userMsg);
-        CurrentSession?.Messages.Add(userMsg);
         UserInput = string.Empty;
-        CanSend = false;
-        IsGenerating = true;
+        // Only pictures: the model still needs a line of text with them.
+        string modelInput = input.Length > 0 ? input : "Look at the attached image(s).";
+        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride));
+    }
+
+    /// <summary>
+    /// Typed while the chat's reply is running: shown at once as the user's bubble and handed to the run, which reads
+    /// it at its next step (AgentRunScope.AddUserNote). A slash command needs the chat idle — it stays in the box.
+    /// </summary>
+    private void SendIntoRunningReply(string text)
+    {
+        var run = RunOf(CurrentSession);
+        if (run?.Scope == null) return;
+        if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
+        run.Messages.Add(bubble);
+        run.Scope.AddUserNote(text, bubble);
+        UserInput = string.Empty;
+        StatusText = Loc("chat.steer.queued");
+        _pet?.NoteMessage(text);
+    }
+
+    /// <summary>A run ended with something typed that its agent never read (it finished first, or the provider answers
+    /// in one call): moved after the answer and sent as the next turn — or, after Stop, put back in the box. Nothing
+    /// typed is lost either way.</summary>
+    private void SendLeftoverNotes(ChatRun run, List<(string Text, object? Tag)> notes)
+    {
+        string text = string.Join("\n\n", notes.Select(n => n.Text));
+        foreach (var n in notes) if (n.Tag is ChatMessage b) run.Messages.Remove(b);
+        if (!ReferenceEquals(run.Session, CurrentSession) || run.Cts?.IsCancellationRequested == true)
+        {
+            if (ReferenceEquals(run.Session, CurrentSession))
+                UserInput = string.IsNullOrWhiteSpace(UserInput) ? text : UserInput + "\n" + text;
+            else
+                _debugLog?.Warn("Chat", "a message typed during a run that is no longer on screen was not sent");
+            return;
+        }
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
+        Messages.Add(bubble);
+        Detached(() => RunTurnAsync(bubble, text, null, false));
+    }
+
+    /// <summary>True when the active provider can answer. Waits for (or retries) its initialise — after a
+    /// restart an API provider was never initialised and every first message failed. When it still can't,
+    /// posts one honest bubble: no model loaded, or the provider's own reason (bad key, no credit, …).</summary>
+    private async Task<bool> EnsureProviderReadyAsync()
+    {
+        var provider = _providerManager.ActiveProvider;
+        if (provider.IsReady) return true;
+
+        StatusText = LocF("chat.status.connecting", provider.DisplayName);
+        bool ready;
+        try { ready = await _providerManager.EnsureActiveReadyAsync(); }
+        catch (Exception ex)
+        {
+            _debugLog?.Warn("Chat", $"{provider.DisplayName}: readiness check failed", ex);
+            ready = false;
+        }
+        if (ready)
+        {
+            StatusText = Loc("chat.status.ready");
+            RefreshUsageStrip();
+            return true;
+        }
+
+        provider = _providerManager.ActiveProvider;
+        bool local = _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer;
+        string reason = SanitizeErrorMessage(string.IsNullOrWhiteSpace(provider.StatusMessage) ? "" : provider.StatusMessage);
+        Messages.Add(new ChatMessage
+        {
+            Role = MessageRole.Assistant,
+            Content = local ? Loc("chat.err.noModel") : LocF("chat.err.providerNotReady", provider.DisplayName, reason),
+            HasError = true,
+        });
+        StatusText = local ? Loc("chat.status.noModel") : LocF("chat.status.providerNotReady", provider.DisplayName);
+        ScrollToBottom?.Invoke();
+        return false;
+    }
+
+    private const int MaxAutoRetries = 3;
+
+    /// <summary>
+    /// Run one turn for <paramref name="userMsg"/> (already in the transcript). Auto-retries a TRANSIENT failure
+    /// (429/5xx/timeout/dropped connection — decided from the status code and exception type) up to 3 times
+    /// inside the same turn: same user message, same history snapshot. The old retry re-sent the message
+    /// through SendMessage, adding the user bubble (and history entry) again on every attempt, chose retries
+    /// by substring — so "prompt is too long: 215000 tokens" matched "500" and was resent 3× with a growing
+    /// prompt — and kept counting down after Stop.
+    /// </summary>
+    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill)
+    {
+        var turn = BeginTurn();
+        if (userMsg.HasAttachedImages && AgentRunScope.Current is { } imageScope)
+            imageScope.UserImages = await LoadAttachedImagesAsync(userMsg.AttachedImages);
+        var session = CurrentSession;
 
         // ─── Session resume: persist transcript BEFORE API call ───
         // If the app crashes mid-generation, the conversation up to this point is saved.
         SaveNow();
+
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        // Tools are worth running the agentic loop for in TWO cases: a project
+        // is open (file/build tools, gated by the user's AgenticMode switch),
+        // or an MCP server is connected — those need no project at all.
+        //
+        // Only the first case used to route here, so a plain chat with the
+        // brain connected got ZERO tools while the system prompt still told
+        // the model it had them. That contradiction is what makes a weak model
+        // narrate ("I will use agent_inbox — go ahead") instead of calling, and
+        // it is why the agent bus sat at calls: 0. There is also no switch to
+        // flip in this case: AgenticMode is auto-enabled by opening a project,
+        // so with no project it is always false.
+        bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
+        // Attached images reach a model only through the native tool loop (the plain chat path is text-only); a
+        // provider without it gets their file paths in words.
+        bool nativeProvider = _providerManager.ActiveProvider.SupportsNativeToolUse;
+        bool imagesNeedLoop = userMsg.HasAttachedImages && nativeProvider;
+        if (userMsg.HasAttachedImages && !nativeProvider)
+            input += "\n\n" + CodeAgentService.AttachedImagesNote(userMsg.AttachedImages);
+        Func<List<ChatMessage>, CancellationToken, Task> run;
+        bool withTools = true;
+        if (isSkill && HasProject)                                            // skills always run in agentic mode
+            run = (h, c) => RunAgentic(input, h, c);
+        else if (AutonomousMode && HasProject && _autonomousService != null)
+            run = (h, c) => RunAutonomous(input, h, c);
+        else if ((AgenticMode && HasProject) || mcpOnlyTools || imagesNeedLoop)
+            run = (h, c) => RunAgentic(input, h, c);
+        else if (AutoExecute)
+        { run = (h, c) => RunWithAutoExecution(input, h, c); withTools = false; }
+        else
+        { run = (h, c) => RunStreaming(input, h, c); withTools = false; }
+
+        // Snapshot taken once, before the user message: every retry sends the same history.
+        var history = BuildModelHistory(Messages, before: userMsg, includeTools: withTools);
 
         string initVerb = _agentService.GetRandomSpinnerVerb();
         StatusText = $"{initVerb}...";
@@ -1646,138 +2750,99 @@ public class ChatViewModel : ViewModelBase
         _generationStopwatch.Restart();
         StartElapsedTimer();
 
-        // ─── Inline thinking indicator (Claude Code-style) ───
-        // Shows in the chat area while the model is thinking/generating.
-        // Works in ALL modes (streaming, agentic, auto-execute).
-        // Uses MessageRole.Assistant so it renders with the PROVEN chat bubble template.
-        var thinkingMsg = new ChatMessage
-        {
-            Role = MessageRole.Assistant,
-            Content = $"⏳ *{initVerb}...*",
-            IsStreaming = true,
-        };
-        Messages.Add(thinkingMsg);
-        _activeAgentStatusMsg = thinkingMsg;
-        ScrollToBottom?.Invoke();
-
-        _cts = new CancellationTokenSource();
-
         try
         {
-            // Set AllowedTools constraint for skill execution
-            if (activeSkill?.AllowedTools is { Count: > 0 })
-                _agentToolService.ActiveSkillAllowedTools = activeSkill.AllowedTools;
-
-            // Tools are worth running the agentic loop for in TWO cases: a project
-            // is open (file/build tools, gated by the user's AgenticMode switch),
-            // or an MCP server is connected — those need no project at all.
-            //
-            // Only the first case used to route here, so a plain chat with the
-            // brain connected got ZERO tools while the system prompt still told
-            // the model it had them. That contradiction is what makes a weak model
-            // narrate ("I will use agent_inbox — go ahead") instead of calling, and
-            // it is why the agent bus sat at calls: 0. There is also no switch to
-            // flip in this case: AgenticMode is auto-enabled by opening a project,
-            // so with no project it is always false.
-            bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
-
-            // Skills always run in agentic mode
-            if (!string.IsNullOrEmpty(skillPromptOverride) && HasProject)
-                await RunAgentic(input, _cts.Token);
-            else if (AutonomousMode && HasProject && _autonomousService != null)
-                await RunAutonomous(input, _cts.Token);
-            else if ((AgenticMode && HasProject) || mcpOnlyTools)
-                await RunAgentic(input, _cts.Token);
-            else if (AutoExecute)
-                await RunWithAutoExecution(input, _cts.Token);
-            else
-                await RunStreaming(input, _cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            StatusText = "Generation cancelled.";
-            if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
-
-            // Mark the last assistant message as interrupted (don't delete it)
-            var lastAssistant = Messages.LastOrDefault(m => m.Role == MessageRole.Assistant && m.IsStreaming);
-            if (lastAssistant != null)
+            for (int attempt = 1; ; attempt++)
             {
-                lastAssistant.IsStreaming = false;
-                lastAssistant.IsInterrupted = true;
-                if (string.IsNullOrWhiteSpace(lastAssistant.Content))
-                    lastAssistant.Content = "*Generation was interrupted.*";
-            }
-            else
-            {
-                // No streaming msg — add explicit interrupted message
-                var interruptMsg = new ChatMessage
+                // Inline "working" indicator (Claude Code-style). An AgentStatus row: it is not something the
+                // model said, so it is never saved or sent back — and it stays visible while it is live even
+                // with Steps off (only finished status rows are hidden).
+                ShowWaitingIndicator(initVerb);
+                try
                 {
-                    Role = MessageRole.Assistant,
-                    Content = "*Generation was interrupted.*",
-                    IsInterrupted = true,
-                };
-                Messages.Add(interruptMsg);
-            }
-        }
-        catch (Exception ex)
-        {
-            string safeMsg = SanitizeErrorMessage(ex.Message);
-            StatusText = $"Error: {safeMsg}";
-            if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+                    // Set AllowedTools constraint for skill execution
+                    if (activeSkill?.AllowedTools is { Count: > 0 })
+                        _agentToolService.ActiveSkillAllowedTools = activeSkill.AllowedTools;
 
-            // Auto-retry logic for retryable errors (rate limit, 5xx, network)
-            bool isRetryable = ex.Message.Contains("429") || ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
-                || ex.Message.Contains("500") || ex.Message.Contains("502") || ex.Message.Contains("503")
-                || ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase);
-
-            var errorMsg = new ChatMessage
-            {
-                Role = MessageRole.Assistant,
-                Content = $"**Error:** {safeMsg}",
-                HasError = true,
-            };
-
-            if (isRetryable && _retryCount < 3)
-            {
-                _retryCount++;
-                int delaySec = _retryCount * 3; // 3s, 6s, 9s
-                errorMsg.RetryCountdown = $"Retrying in {delaySec}s... (attempt {_retryCount}/3)";
-                Messages.Add(errorMsg);
-
-                // Countdown timer
-                for (int i = delaySec; i > 0; i--)
-                {
-                    errorMsg.RetryCountdown = $"Retrying in {i}s... (attempt {_retryCount}/3)";
-                    await Task.Delay(1000);
+                    await run(history, ct);
+                    break;
                 }
-                errorMsg.RetryCountdown = null;
-                errorMsg.Content += "\n*Retrying...*";
-
-                // Schedule retry after finally block completes (avoids CTS race)
-                var lastUserMsg = Messages.LastOrDefault(m => m.Role == MessageRole.User);
-                if (lastUserMsg != null)
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    string retryInput = lastUserMsg.Content;
-                    App.Current?.Dispatcher.BeginInvoke(async () =>
+                    StatusText = Loc("chat.status.cancelled");
+                    RemoveActiveStatus();
+
+                    // Mark the last assistant message as interrupted (don't delete what it said)
+                    var lastAssistant = TurnMessages.LastOrDefault(m => m.Role == MessageRole.Assistant && m.IsStreaming);
+                    if (lastAssistant != null)
                     {
-                        UserInput = retryInput;
-                        await SendMessage();
-                    }, System.Windows.Threading.DispatcherPriority.Background);
+                        lastAssistant.IsStreaming = false;
+                        lastAssistant.IsInterrupted = true;
+                        if (string.IsNullOrWhiteSpace(lastAssistant.Content))
+                        {
+                            TurnMessages.Remove(lastAssistant);
+                            lastAssistant = null;
+                        }
+                    }
+                    if (lastAssistant == null)
+                    {
+                        // A notice, not an assistant turn — it must not be sent back to the model.
+                        PostTurnMessage(session, new ChatMessage
+                        {
+                            Role = MessageRole.System,
+                            Content = $"*{Loc("chat.interruptedNote")}*",
+                            IsInterrupted = true,
+                        });
+                    }
+                    break;
                 }
-                return;
-            }
+                catch (Exception ex)
+                {
+                    RemoveActiveStatus();
+                    FinalizeDanglingBubbles();
 
-            _retryCount = 0;
-            Messages.Add(errorMsg);
-            CurrentSession?.Messages.Add(errorMsg);
+                    var errorMsg = new ChatMessage
+                    {
+                        Role = MessageRole.Assistant,
+                        Content = DescribeTurnError(ex),
+                        HasError = true,
+                        CanRetry = true,
+                    };
+                    PostTurnMessage(session, errorMsg);
+
+                    if (attempt <= MaxAutoRetries && IsTransientError(ex) && !ct.IsCancellationRequested)
+                    {
+                        int delaySec = attempt * 3; // 3s, 6s, 9s
+                        bool stopped = false;
+                        for (int i = delaySec; i > 0 && !stopped; i--)
+                        {
+                            errorMsg.RetryCountdown = LocF("chat.retry.countdown", i, attempt, MaxAutoRetries);
+                            try { await Task.Delay(1000, ct); }
+                            catch (OperationCanceledException) { stopped = true; }
+                        }
+                        errorMsg.RetryCountdown = null;
+                        if (stopped)
+                        {
+                            StatusText = Loc("chat.status.cancelled");
+                            break;
+                        }
+                        errorMsg.CanRetry = false;   // this attempt is being retried right now
+                        errorMsg.Content += "\n" + Loc("chat.retry.retrying");
+                        continue;
+                    }
+
+                    StatusText = Loc("chat.status.error");
+                    break;
+                }
+                finally
+                {
+                    // Clear skill AllowedTools constraint
+                    _agentToolService.ActiveSkillAllowedTools = null;
+                }
+            }
         }
         finally
         {
-            // Clear skill AllowedTools constraint
-            _agentToolService.ActiveSkillAllowedTools = null;
-
-            IsGenerating = false;
-            CanSend = true;
             _generationStopwatch.Stop();
             StopElapsedTimer();
             _cts?.Dispose();
@@ -1786,7 +2851,140 @@ public class ChatViewModel : ViewModelBase
 
             // Save immediately after each completed interaction
             SaveNow();
+            bool turnOk = TurnMessages.LastOrDefault(m => m.Role == MessageRole.Assistant)?.HasError != true;
+            EndTurn(turn);
+            _pet?.NoteTurnDone(_providerManager.ActiveProviderType.ToString(),
+                _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer, turnOk);
         }
+    }
+
+    /// <summary>Hover "Retry" on a failed reply: re-run the question THAT reply answered. The button used to
+    /// resend whatever the latest user message was — from any bubble, tool rows included — and add it as a
+    /// duplicate. For the latest exchange the turn runs again in place; an older one is asked again at the end.</summary>
+    private async Task RetryFromAsync(ChatMessage? failed)
+    {
+        if (failed == null || IsGenerating) return;
+        int idx = Messages.IndexOf(failed);
+        if (idx < 0) return;
+
+        ChatMessage? user = null;
+        for (int i = idx - 1; i >= 0; i--)
+        {
+            if (Messages[i].Role == MessageRole.User) { user = Messages[i]; break; }
+        }
+        if (user == null)
+        {
+            StatusText = Loc("chat.retry.nothing");
+            return;
+        }
+        if (!await EnsureProviderReadyAsync()) return;
+
+        bool latestExchange = !Messages.Skip(idx + 1).Any(m => m.Role == MessageRole.User);
+        if (latestExchange)
+        {
+            Messages.Remove(failed);
+            await RunTurnAsync(user, user.Content, activeSkill: null, isSkill: false);
+        }
+        else
+        {
+            var again = new ChatMessage { Role = MessageRole.User, Content = user.Content };
+            Messages.Add(again);
+            await RunTurnAsync(again, again.Content, activeSkill: null, isSkill: false);
+        }
+    }
+
+    /// <summary>
+    /// Worth retrying automatically? Decided from the HTTP status code and the exception TYPE — never from
+    /// message text, where "215000 tokens" contains "500". Retries: 408/429/500/502/503/504/529, a dropped or
+    /// refused connection, a timeout. Not: 4xx request errors (prompt too long, bad key, no credit), local
+    /// engine failures, missing files.
+    /// </summary>
+    public static bool IsTransientError(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+        {
+            switch (e)
+            {
+                case TimeoutException:
+                case TaskCanceledException:   // HttpClient's own timeout — a user Stop never reaches this check
+                    return true;
+                case System.Net.Http.HttpRequestException { StatusCode: { } code }:
+                    return (int)code is 408 or 429 or 500 or 502 or 503 or 504 or 529;
+                case System.Net.Http.HttpRequestException h:
+                    // No status: the connection failed, or the provider sent an error event mid-stream.
+                    if (h.InnerException is System.Net.Sockets.SocketException or IOException) return true;
+                    return h.Message.Contains("overloaded", StringComparison.OrdinalIgnoreCase)
+                        || h.Message.Contains("rate_limit", StringComparison.OrdinalIgnoreCase);
+                case System.Net.Sockets.SocketException:
+                    return true;
+                case IOException io when io is not (FileNotFoundException or DirectoryNotFoundException
+                                                    or PathTooLongException or DriveNotFoundException or FileLoadException):
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The error bubble's text: a localized headline the user can act on. A provider's own HTTP
+    /// explanation (written for users — "credit balance too low", "workspace ID missing") is kept, redacted;
+    /// anything else — a raw .NET exception message — goes to the debug log only.</summary>
+    private string DescribeTurnError(Exception ex)
+    {
+        _debugLog?.Error("Chat", "Turn failed", ex);
+        string headline = ex switch
+        {
+            TimeoutException or TaskCanceledException => Loc("chat.err.timeout"),
+            System.Net.Http.HttpRequestException { StatusCode: (System.Net.HttpStatusCode)429 } => Loc("chat.err.rateLimited"),
+            System.Net.Http.HttpRequestException { StatusCode: { } c } when (int)c >= 500 => Loc("chat.err.serverDown"),
+            System.Net.Http.HttpRequestException { StatusCode: { } } => Loc("chat.err.rejected"),
+            System.Net.Http.HttpRequestException => Loc("chat.err.network"),
+            _ => Loc("chat.err.generic"),
+        };
+        string detail = ex is System.Net.Http.HttpRequestException ? SanitizeErrorMessage(ex.Message).Trim() : "";
+        if (detail.Length > 600) detail = detail[..600] + "…";
+        return detail.Length > 0 ? $"**{headline}**\n{detail}" : $"**{headline}**";
+    }
+
+    private void ShowWaitingIndicator(string verb)
+    {
+        RemoveActiveStatus();
+        var msg = new ChatMessage { Role = MessageRole.AgentStatus, Content = $"⏳ {verb}...", IsStreaming = true };
+        TurnMessages.Add(msg);
+        _activeAgentStatusMsg = msg;
+        ScrollToBottom?.Invoke();
+    }
+
+    private void RemoveActiveStatus()
+    {
+        if (_activeAgentStatusMsg == null) return;
+        TurnMessages.Remove(_activeAgentStatusMsg);
+        _activeAgentStatusMsg = null;
+    }
+
+    /// <summary>After a failed attempt: a reply bubble that was mid-stream keeps what it said but stops
+    /// "typing"; an empty one is removed.</summary>
+    private void FinalizeDanglingBubbles()
+    {
+        foreach (var m in TurnMessages.Where(m => m.Role == MessageRole.Assistant && m.IsStreaming).ToList())
+        {
+            m.IsStreaming = false;
+            if (string.IsNullOrWhiteSpace(m.Content)) TurnMessages.Remove(m);
+            else m.IsInterrupted = true;
+        }
+    }
+
+    /// <summary>Per-turn numbers for the status bar (MainWindow binds LastTurnStats). Output tokens come from
+    /// the provider's usage when it reports them (API), else from the streamed chunk count (local).</summary>
+    private void SetTurnStats(int tokens, double secs)
+    {
+        double tps = secs > 0 ? tokens / secs : 0;
+        LastTurnStats = LocF("chat.stats.turn", tokens, secs, tps);
+    }
+
+    private int OutputTokensSince(int outputTokensAtStart, int fallback)
+    {
+        int delta = _costTracker.TotalOutputTokens - outputTokensAtStart;
+        return delta > 0 ? delta : fallback;
     }
 
     // ─── Agentic Mode (tool use loop) ───
@@ -1795,16 +2993,15 @@ public class ChatViewModel : ViewModelBase
     /// AutonomousCodingService. Tool activity streams to the chat through the existing agent events;
     /// phase banners arrive via OnPhase (wired in the ctor); the final response is posted + saved here.
     /// </summary>
-    private async Task RunAutonomous(string input, CancellationToken ct)
+    private async Task RunAutonomous(string input, List<ChatMessage> history, CancellationToken ct)
     {
-        if (_autonomousService == null) { await RunAgentic(input, ct); return; }
+        if (_autonomousService == null) { await RunAgentic(input, history, ct); return; }
+        var target = _turnSession;
+        int outAtStart = _costTracker.TotalOutputTokens;
+        _streamingTokenCount = 0;
 
         // Clear the generic "thinking" placeholder — the autonomous loop posts its own phase banners.
-        if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
-
-        // Working history = the session so far, minus the user message we just added (passed as the goal).
-        var source = (IEnumerable<ChatMessage>?)CurrentSession?.Messages ?? Messages;
-        var history = source.SkipLast(1).ToList();
+        RemoveActiveStatus();
 
         var result = await _autonomousService.RunAsync(history, input, ct);
 
@@ -1813,34 +3010,41 @@ public class ChatViewModel : ViewModelBase
             Role = MessageRole.Assistant,
             Content = string.IsNullOrWhiteSpace(result.FinalResponse) ? result.Summary : result.FinalResponse,
         };
-        Messages.Add(final);
-        CurrentSession?.Messages.Add(final);
+        PostTurnMessage(target, final);
+        // The build/test was not run (unseen edits, not approved): said in a line that stays with the chat — the phase
+        // banner is transient, and the model's reply above may read as if the work were verified.
+        if (result.VerifyDeclined && !final.Content.Contains(result.LastVerifyOutput))
+            PostTurnMessage(target, new ChatMessage { Role = MessageRole.System, Content = "✋ " + result.LastVerifyOutput });
         _isDirty = true;
         ScrollToBottom?.Invoke();
         SaveNow();
+
+        double secs = _generationStopwatch.Elapsed.TotalSeconds;
+        SetTurnStats(OutputTokensSince(outAtStart, _streamingTokenCount), secs);
+        StatusText = LocF("chat.stats.ready", secs);
     }
 
-    private async Task RunAgentic(string input, CancellationToken ct)
+    private async Task RunAgentic(string input, List<ChatMessage> history, CancellationToken ct)
     {
-        // Stopwatch & timer already started in SendMessage
+        // Stopwatch & timer already started in RunTurnAsync
         _streamingTokenCount = 0;
+        var target = _turnSession;
+        var run = Cur!;   // this turn's run: its list, status row, counters — whichever chat is on screen
+        bool Mine() => ReferenceEquals(AgentRunScope.Current, run.Scope);   // events of other runs are not ours
+        int outAtStart = _costTracker.TotalOutputTokens;
 
         // ─── Status bar — minimal (inline chat handles detail) ───
         var progress = new Progress<string>(status =>
         {
-            _lastStatusBase = status;
-            int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+            run.StatusBase = status;
+            if (!ReferenceEquals(run.Session, CurrentSession)) return;   // the status bar belongs to the chat on screen
+            int elapsed = (int)run.Stopwatch.Elapsed.TotalSeconds;
             // Keep status bar minimal — tool details shown inline in chat
             if (status is "Done" or "Ready")
-                StatusText = status;
+                StatusText = Loc("chat.status.ready");
             else
-                StatusText = elapsed > 0 ? $"Working... ({elapsed}s)" : "Working...";
+                StatusText = elapsed > 0 ? LocF("chat.status.workingSecs", elapsed) : Loc("chat.status.working");
         });
-
-        var history = CurrentSession?.Messages
-            .Where(m => m.Role is MessageRole.User or MessageRole.Assistant or MessageRole.ToolAction)
-            .SkipLast(1)  // Skip the user message just added — it's passed separately as `input`
-            .ToList() ?? new();
 
         // ─── Real-time streaming message for agentic loop ───
         ChatMessage? streamingMsg = null;
@@ -1848,65 +3052,97 @@ public class ChatViewModel : ViewModelBase
         int lastStreamStep = -1;
         int scrollThrottle = 0;
         int agenticTokenCount = 0;
+        // Thinking that arrived while no reply bubble of its step was open (a tool-only step): shown on the
+        // next bubble. Touched on the UI thread only.
+        string pendingThinking = "";
+        // Bubbles whose text is final (their step ended, or the turn did). A batched update queued earlier can run
+        // after that — Invoke outranks BeginInvoke — and must not put a shorter snapshot back. UI thread only.
+        var closedBubbles = new HashSet<ChatMessage>();
 
         void OnStreamToken(string token, int step)
         {
+            if (!Mine()) return;
+            // A thinking chunk from a plain-streaming provider (the [ACTION:] path): into the thinking block, not
+            // the reply text.
+            if (TryUnwrapThinking(token, out var thought))
+            {
+                if (thought.Length > 0)
+                    App.Current?.Dispatcher.BeginInvoke(() =>
+                    {
+                        if (!ShowThinking) return;
+                        if (streamingMsg != null && step == lastStreamStep) streamingMsg.ThinkingContent += thought;
+                        else pendingThinking += thought;
+                    });
+                return;
+            }
+
             agenticTokenCount++;
             bool needsNewBubble = step != lastStreamStep;
 
             // First token or new step: use sync Invoke to create the bubble
             if (needsNewBubble)
             {
+                // The previous step's bubble gets ALL its text: the screen is only updated every 3 tokens, so its
+                // last 1-2 tokens were never shown — a reply cut off when the next step began (a message typed
+                // while it worked, a tool call after the text).
+                string previousText = streamSb.ToString();
                 streamSb.Clear();
                 streamSb.Append(token);
                 lastStreamStep = step;
 
                 App.Current?.Dispatcher.Invoke(() =>
                 {
-                    if (_activeAgentStatusMsg != null)
+                    if (run.ActiveStatus != null)
                     {
-                        _activeAgentStatusMsg.IsStreaming = false;
-                        Messages.Remove(_activeAgentStatusMsg);
-                        _activeAgentStatusMsg = null;
+                        run.ActiveStatus.IsStreaming = false;
+                        run.Messages.Remove(run.ActiveStatus);
+                        run.ActiveStatus = null;
                     }
 
                     if (streamingMsg != null)
+                    {
+                        if (previousText.Length > 0) streamingMsg.Content = previousText;
                         streamingMsg.IsStreaming = false;
+                        closedBubbles.Add(streamingMsg);
+                    }
 
                     streamingMsg = new ChatMessage
                     {
                         Role = MessageRole.Assistant,
                         Content = token,
                         IsStreaming = true,
+                        ThinkingContent = pendingThinking,
                     };
-                    Messages.Add(streamingMsg);
+                    pendingThinking = "";
+                    run.Messages.Add(streamingMsg);
                     ScrollToBottom?.Invoke();
                 });
-                _streamingTokenCount++;
+                run.StreamingTokenCount++;
                 return;
             }
 
             streamSb.Append(token);
-            _streamingTokenCount++;
+            run.StreamingTokenCount++;
 
             // Batch UI updates every 3 tokens (non-blocking BeginInvoke)
             if (agenticTokenCount % 3 == 0)
             {
                 string snapshot = streamSb.ToString();
-                int capturedCount = _streamingTokenCount;
+                int capturedCount = run.StreamingTokenCount;
+                var bubble = streamingMsg;   // this step's bubble — by the time the update runs, a new step may own the field
                 App.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    if (streamingMsg != null)
-                        streamingMsg.Content = snapshot;
+                    if (bubble != null && !closedBubbles.Contains(bubble))
+                        bubble.Content = snapshot;
 
-                    // Status update every 15 tokens
-                    if (capturedCount % 15 == 0)
+                    // Status update every 15 tokens (for the chat on screen only)
+                    if (capturedCount % 15 == 0 && ReferenceEquals(run.Session, CurrentSession))
                     {
-                        int elapsed = (int)_generationStopwatch.Elapsed.TotalSeconds;
+                        int elapsed = (int)run.Stopwatch.Elapsed.TotalSeconds;
                         double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
                         StatusText = tps > 0
-                            ? $"Generating... · {capturedCount} tokens · {tps:F0} tok/s"
-                            : $"Generating... · {capturedCount} tokens";
+                            ? LocF("chat.status.generatingRate", capturedCount, tps)
+                            : LocF("chat.status.generatingCount", capturedCount);
                     }
                 });
             }
@@ -1916,12 +3152,15 @@ public class ChatViewModel : ViewModelBase
                 App.Current?.Dispatcher.BeginInvoke(() => ScrollToBottom?.Invoke());
         }
 
-        // Listen for real-time thinking updates during agent execution
+        // The model's thinking, shown as the collapsed "Thinking" block above its reply. ThinkingContent used
+        // to be assigned nowhere, so a user who ticked "Think" paid for extended thinking and never saw it.
+        // OnThinkingUpdate carries two different things — CodeAgentService also raises it with the step's
+        // VISIBLE text, which has already streamed into the bubble — so text the bubble already holds is skipped.
         void OnThinking(string text, int step)
         {
-            // Thinking text now comes via streaming — only add if no streaming msg
-            if (string.IsNullOrWhiteSpace(text) || !ShowThinking) return;
-
+            if (!Mine() || string.IsNullOrWhiteSpace(text)) return;
+            string streamedNow = streamSb.ToString();   // same thread as the token appends
+            bool alreadyShown = LooksAlreadyStreamed(text, streamedNow);
             App.Current?.Dispatcher.Invoke(() =>
             {
                 // Stop the streaming cursor on the current text bubble, but KEEP the reference so the
@@ -1930,6 +3169,12 @@ public class ChatViewModel : ViewModelBase
                 // thinking fired an OnThinkingUpdate after the text had already streamed.)
                 if (streamingMsg != null)
                     streamingMsg.IsStreaming = false;
+
+                if (alreadyShown || !ShowThinking) return;
+                if (streamingMsg != null && step == lastStreamStep)
+                    streamingMsg.ThinkingContent = JoinThinking(streamingMsg.ThinkingContent, text);
+                else
+                    pendingThinking = JoinThinking(pendingThinking, text);
             });
         }
 
@@ -1939,6 +3184,7 @@ public class ChatViewModel : ViewModelBase
         // Tool statuses are excluded: OnToolStarting already renders those (avoids double bubbles).
         void OnAgentStatusNotice(string status)
         {
+            if (!Mine()) return;
             bool notable = status.Contains('⤴') || status.Contains("Auto-verifying") || status.Contains("ตรวจ build")
                 || status.Contains("Recovered tool call") || status.Contains("กู้คืน")
                 || status.Contains("compacting") || status.Contains("บีบอัด")
@@ -1960,10 +3206,10 @@ public class ChatViewModel : ViewModelBase
         // Finalize any remaining inline status
         App.Current?.Dispatcher.Invoke(() =>
         {
-            if (_activeAgentStatusMsg != null)
+            if (run.ActiveStatus != null)
             {
-                _activeAgentStatusMsg.IsStreaming = false;
-                _activeAgentStatusMsg = null;
+                run.ActiveStatus.IsStreaming = false;
+                run.ActiveStatus = null;
             }
         });
 
@@ -1973,9 +3219,11 @@ public class ChatViewModel : ViewModelBase
         App.Current?.Dispatcher.Invoke(() =>
         {
             string? finalText = !string.IsNullOrWhiteSpace(result.FinalResponse)
-                ? _agentToolService.StripToolCalls(result.FinalResponse)
+                ? StripThinkingSpans(_agentToolService.StripToolCalls(result.FinalResponse))
                 : null;
+            if (string.IsNullOrWhiteSpace(finalText)) finalText = null;
 
+            ChatMessage? finalBubble;
             if (streamingMsg != null)
             {
                 // A streamed text bubble is open — it already holds the reply. Finalize it in place:
@@ -1991,21 +3239,20 @@ public class ChatViewModel : ViewModelBase
                     streamingMsg.Content = buffered;
                 }
                 streamingMsg.IsStreaming = false;
-                if (!CurrentSession?.Messages.Contains(streamingMsg) ?? false)
-                    CurrentSession?.Messages.Add(streamingMsg);
+                closedBubbles.Add(streamingMsg);
+                finalBubble = streamingMsg;
                 streamingMsg = null;
             }
             else if (!string.IsNullOrWhiteSpace(finalText))
             {
                 // No open bubble (answer arrived whole / wasn't streamed) — add it once.
-                var assistantMsg = new ChatMessage
+                finalBubble = new ChatMessage
                 {
                     Role = MessageRole.Assistant,
                     Content = finalText,
                     CodeBlocks = _codeExecutionService.ExtractCodeBlocks(finalText),
                 };
-                Messages.Add(assistantMsg);
-                CurrentSession?.Messages.Add(assistantMsg);
+                PostTurnMessage(target, finalBubble);
             }
             else
             {
@@ -2014,23 +3261,30 @@ public class ChatViewModel : ViewModelBase
                 // iteration cap). Never leave the user staring at a vanished spinner — surface an honest,
                 // actionable note. Also clear any lingering "⏳ thinking" placeholder that never got
                 // replaced by streamed text.
-                var placeholder = Messages.LastOrDefault(m =>
-                    m.Role == MessageRole.Assistant && (m.Content?.StartsWith("⏳") ?? false));
-                if (placeholder != null) Messages.Remove(placeholder);
+                var placeholder = run.Messages.LastOrDefault(m =>
+                    m.Role == MessageRole.AgentStatus && (m.Content?.StartsWith("⏳") ?? false));
+                if (placeholder != null) run.Messages.Remove(placeholder);
 
                 int toolsRun = result.Steps?.Sum(s => s.ToolResults?.Count ?? 0) ?? 0;
                 string note = toolsRun > 0
-                    ? $"*(ทำงานเสร็จ {toolsRun} ขั้นแล้ว แต่โมเดลไม่ได้ส่งข้อความสรุป — พิมพ์ “สรุปให้หน่อย” หรือถามต่อได้เลยครับ)*"
-                    : "*(โมเดลไม่ได้ส่งข้อความตอบกลับ — ลองส่งใหม่อีกครั้ง หรือปรับคำถามดูครับ)*";
+                    ? $"*{LocF("chat.agent.noSummary", toolsRun)}*"
+                    : $"*{Loc("chat.agent.noReply")}*";
 
-                var assistantMsg = new ChatMessage
+                finalBubble = new ChatMessage
                 {
                     Role = MessageRole.Assistant,
                     Content = note,
                     HasError = toolsRun == 0,
+                    CanRetry = toolsRun == 0,
                 };
-                Messages.Add(assistantMsg);
-                CurrentSession?.Messages.Add(assistantMsg);
+                PostTurnMessage(target, finalBubble);
+            }
+
+            // Thinking from a final tool-only step has no later bubble to sit on — put it on the answer.
+            if (!string.IsNullOrEmpty(pendingThinking) && finalBubble != null)
+            {
+                finalBubble.ThinkingContent = JoinThinking(finalBubble.ThinkingContent, pendingThinking);
+                pendingThinking = "";
             }
         });
 
@@ -2040,11 +3294,13 @@ public class ChatViewModel : ViewModelBase
         double totalSecs = _generationStopwatch.Elapsed.TotalSeconds;
         int turns = result.TurnCount;
         int toolCount = result.Steps.Sum(s => s.ToolResults?.Count ?? 0);
-        string statsLine = $"Ready · {totalSecs:F1}s";
-        if (toolCount > 0) statsLine += $" · {toolCount} tools";
-        if (turns > 1) statsLine += $" · {turns} steps";
-        if (_streamingTokenCount > 0) statsLine += $" · {_streamingTokenCount} tokens";
-        StatusText = result.Success ? statsLine : "Agent loop complete";
+        int tokens = OutputTokensSince(outAtStart, _streamingTokenCount);
+        string statsLine = LocF("chat.stats.ready", totalSecs);
+        if (toolCount > 0) statsLine += LocF("chat.stats.tools", toolCount);
+        if (turns > 1) statsLine += LocF("chat.stats.steps", turns);
+        if (tokens > 0) statsLine += LocF("chat.stats.tokens", tokens);
+        StatusText = result.Success ? statsLine : Loc("chat.status.agentDone");
+        SetTurnStats(tokens, totalSecs);
         ScrollToBottom?.Invoke();
         }
         finally
@@ -2066,6 +3322,53 @@ public class ChatViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// The plain streaming calls of Anthropic and Gemini (ChatAsync) interleave the model's thinking with the
+    /// reply as chunks wrapped in &lt;thinking&gt;…&lt;/thinking&gt;. They were appended to the reply verbatim: raw tags
+    /// on screen, and the thinking saved and sent back to the model as part of its own answer.
+    /// </summary>
+    public static bool TryUnwrapThinking(string token, out string thought)
+    {
+        const string open = "<thinking>", close = "</thinking>";
+        if (token.Length >= open.Length + close.Length
+            && token.StartsWith(open, StringComparison.Ordinal) && token.EndsWith(close, StringComparison.Ordinal))
+        {
+            thought = token[open.Length..^close.Length];
+            return true;
+        }
+        thought = "";
+        return false;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ThinkingSpan =
+        new(@"<thinking>.*?</thinking>", System.Text.RegularExpressions.RegexOptions.Singleline);
+
+    /// <summary>The reply without any &lt;thinking&gt; spans a provider left in it.</summary>
+    public static string StripThinkingSpans(string text) =>
+        string.IsNullOrEmpty(text) || !text.Contains("<thinking>", StringComparison.Ordinal) ? text : ThinkingSpan.Replace(text, "").Trim();
+
+    private static string JoinThinking(string existing, string more)
+    {
+        more = more.Trim();
+        if (string.IsNullOrEmpty(existing)) return more;
+        if (existing.Contains(more, StringComparison.Ordinal)) return existing;
+        return existing + "\n\n" + more;
+    }
+
+    /// <summary>Is <paramref name="candidate"/> text that already streamed into the reply bubble (as opposed to
+    /// thinking)? Whitespace-insensitive; matching the first 60 characters is enough — the legacy path reports
+    /// the reply with its tool-call markup stripped, so the whole string need not appear verbatim.</summary>
+    public static bool LooksAlreadyStreamed(string candidate, string streamed)
+    {
+        static string Norm(string s) => System.Text.RegularExpressions.Regex.Replace(s ?? "", @"\s+", " ").Trim();
+        string c = Norm(candidate);
+        if (c.Length == 0) return true;
+        string st = Norm(streamed);
+        if (st.Length == 0) return false;
+        if (st.Contains(c, StringComparison.Ordinal)) return true;
+        return st.Contains(c.Length > 60 ? c[..60] : c, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Called when a tool is ABOUT to execute. Shows inline status in chat.
     /// Claude Code-style: "⏵ Reading src/main.ts" stays visible as breadcrumb.
     /// </summary>
@@ -2073,28 +3376,34 @@ public class ChatViewModel : ViewModelBase
 
     private void OnToolStarting(string toolName, string statusMessage)
     {
+        var run = Cur;   // the run whose tool is starting, captured at event time (its chat may not be on screen)
+        if (run == null) return;
+        if (toolName != "agent") run.ToolStarts.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
         App.Current?.Dispatcher.BeginInvoke(async () =>
         {
-            if (_activeAgentStatusMsg?.Content == $"⏵ {statusMessage}")
+            if (run.ActiveStatus?.Content == $"⏵ {statusMessage}")
                 return;
 
             // Min display time 700ms — ensure previous status was visible long enough
             var elapsed = DateTime.UtcNow - _lastToolStatusTime;
-            if (elapsed < TimeSpan.FromMilliseconds(700) && _activeAgentStatusMsg != null)
+            if (elapsed < TimeSpan.FromMilliseconds(700) && run.ActiveStatus != null)
                 await Task.Delay(TimeSpan.FromMilliseconds(700) - elapsed);
 
             // Previous tool status stays visible (breadcrumb trail)
-            if (_activeAgentStatusMsg != null)
-                _activeAgentStatusMsg.IsStreaming = false;
+            if (run.ActiveStatus != null)
+                run.ActiveStatus.IsStreaming = false;
 
+            // AgentStatus, not Assistant: as an Assistant row this breadcrumb was saved, reloaded and sent to the
+            // model as a turn it never wrote, and the Steps switch could not hide it.
             var statusMsg = new ChatMessage
             {
-                Role = MessageRole.Assistant,
+                Role = MessageRole.AgentStatus,
                 Content = $"⏵ {statusMessage}",
                 IsStreaming = true,
+                ToolKind = toolName == "agent" ? null : toolName,   // a tool's line folds away once its row arrives
             };
-            Messages.Add(statusMsg);
-            _activeAgentStatusMsg = statusMsg;
+            run.Messages.Add(statusMsg);
+            run.ActiveStatus = statusMsg;
             _lastToolStatusTime = DateTime.UtcNow;
             ScrollToBottom?.Invoke();
         });
@@ -2113,18 +3422,25 @@ public class ChatViewModel : ViewModelBase
         return toolName; // unique category = no grouping
     }
 
-    /// <summary>Raised (on the UI thread) when the agent mutates a file: (relativePath, firstChangedLine).
-    /// The Code Editor subscribes to open/refresh that file live and scroll to the change.</summary>
-    public event Action<string, int>? FileMutatedByAgent;
+    /// <summary>Raised (on the UI thread) when the agent mutates a file: (relativePath, firstChangedLine, diff — null
+    /// when none was computed). The Code Editor subscribes to open/refresh that file live, scroll to the change and
+    /// type the new lines in.</summary>
+    public event Action<string, int, EditDiffResult?>? FileMutatedByAgent;
 
     private void OnToolExecuted(ToolResult toolResult)
     {
+        // The run whose tool finished, captured at event time: the row goes into ITS chat's live list whether or not
+        // that chat is on screen. Without a run (a callback after the run ended, a tool run by hand) it goes on screen.
+        var run = Cur;
+        ChatSession? target = run?.Session;
         App.Current?.Dispatcher.BeginInvoke(() =>
         {
-            if (_activeAgentStatusMsg != null)
+            var list = run?.Messages ?? (target == null || ReferenceEquals(target, CurrentSession) ? Messages : null);
+            bool onScreen = list != null;
+            if (run?.ActiveStatus != null)
             {
-                _activeAgentStatusMsg.IsStreaming = false;
-                _activeAgentStatusMsg = null;
+                run.ActiveStatus.IsStreaming = false;
+                run.ActiveStatus = null;
             }
 
             // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit.
@@ -2132,7 +3448,7 @@ public class ChatViewModel : ViewModelBase
                 && _settingsService.Settings.LiveEditFollow
                 && !string.IsNullOrEmpty(toolResult.FilePath))
             {
-                FileMutatedByAgent?.Invoke(toolResult.FilePath!, toolResult.Diff?.FirstChangedLine ?? 1);
+                FileMutatedByAgent?.Invoke(toolResult.FilePath!, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
             }
 
             // Format arguments for display
@@ -2160,12 +3476,23 @@ public class ChatViewModel : ViewModelBase
             int outputLines = string.IsNullOrEmpty(toolResult.Output)
                 ? 0
                 : toolResult.Output.Split('\n').Length;
+            string? toolElapsed = null;
+            if (run != null && run.ToolStarts.TryDequeue(out long started))
+            {
+                double sec = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds;
+                toolElapsed = sec < 10 ? $"{sec:0.0}s" : $"{sec:0}s";
+            }
 
             string displayName = FormatToolDisplayName(toolResult.ToolName, toolResult.Arguments);
 
+            // A screenshot (or any image a tool returned) shows on its own row as a thumbnail — by its saved file
+            // path only; the image bytes never reach the chat or codex.db. Such a row is never merged into a group.
+            string? thumbnail = ToolThumbnailPath(toolResult);
+
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);
-            var lastMsg = Messages.LastOrDefault();
+            var lastMsg = onScreen && thumbnail == null ? list!.LastOrDefault() : null;
+            if (lastMsg?.ThumbnailPath != null) lastMsg = null;   // nor is anything merged into one
 
             if (lastMsg is { Role: MessageRole.ToolAction, IsCollapsedGroup: true }
                 && GetToolCategory(lastMsg.CollapsedToolNames.LastOrDefault() ?? "") == category
@@ -2174,8 +3501,9 @@ public class ChatViewModel : ViewModelBase
                 // Merge into existing group
                 lastMsg.CollapsedCount++;
                 lastMsg.CollapsedToolNames.Add(toolResult.ToolName);
-                lastMsg.Content = $"{lastMsg.CollapsedCount} operations ({string.Join(", ", lastMsg.CollapsedToolNames.Distinct())})";
-                lastMsg.ToolName = $"{lastMsg.CollapsedCount} tools";
+                lastMsg.Content = LocF("chat.tools.groupContent", lastMsg.CollapsedCount, string.Join(", ", lastMsg.CollapsedToolNames.Distinct()));
+                lastMsg.ToolName = LocF("chat.tools.groupName", lastMsg.CollapsedCount);
+                lastMsg.ToolTarget = $"{lastMsg.ToolTarget}, {ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory)}";
                 lastMsg.ToolOutput = (lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? "");
                 lastMsg.ToolOutputLines += outputLines;
                 // Don't add new message — just updated existing
@@ -2195,8 +3523,9 @@ public class ChatViewModel : ViewModelBase
                 lastMsg.IsCollapsedGroup = true;
                 lastMsg.CollapsedCount = 2;
                 lastMsg.CollapsedToolNames = new List<string> { prevToolRaw, toolResult.ToolName };
-                lastMsg.Content = $"2 operations ({string.Join(", ", lastMsg.CollapsedToolNames.Distinct())})";
-                lastMsg.ToolName = "2 tools";
+                lastMsg.Content = LocF("chat.tools.groupContent", 2, string.Join(", ", lastMsg.CollapsedToolNames.Distinct()));
+                lastMsg.ToolTarget = $"{lastMsg.ToolTarget}, {ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory)}";
+                lastMsg.ToolName = LocF("chat.tools.groupName", 2);
                 lastMsg.ToolOutput = (lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? "");
                 lastMsg.ToolOutputLines += outputLines;
                 ScrollToBottom?.Invoke();
@@ -2204,8 +3533,16 @@ public class ChatViewModel : ViewModelBase
             }
 
             // Normal: add as individual ToolAction message
+            var (_, verbKey) = ToolLook.Of(toolResult.ToolName);
+            string toolVerb = verbKey == "tool.verb.mcp" ? (ToolLook.McpServer(toolResult.ToolName) ?? Loc(verbKey)) : Loc(verbKey);
             var msg = new ChatMessage
             {
+                ToolKind = toolResult.ToolName,
+                ToolVerb = toolVerb,
+                ToolTarget = ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory),
+                ToolElapsedTime = toolElapsed,
+                DiffAdded = toolResult.Diff?.Added ?? 0,
+                DiffRemoved = toolResult.Diff?.Removed ?? 0,
                 Role = MessageRole.ToolAction,
                 Content = !string.IsNullOrEmpty(toolResult.Summary) ? toolResult.Summary : displayName,
                 ToolName = displayName,
@@ -2219,11 +3556,38 @@ public class ChatViewModel : ViewModelBase
                 CollapsedToolNames = new List<string> { toolResult.ToolName },
                 DiffLines = toolResult.Diff?.Lines,
                 DiffStat = toolResult.Diff?.Stat,
+                ThumbnailPath = thumbnail,
+                ImageCount = toolResult.Images?.Count ?? 0,
             };
-            Messages.Add(msg);
-            CurrentSession?.Messages.Add(msg);
+            PostTurnMessage(target, msg);
             ScrollToBottom?.Invoke();
         });
+    }
+
+    /// <summary>The first image a tool saved to disk, if any (a JPEG/PNG that exists) — what its row shows.</summary>
+    internal static string? ToolThumbnailPath(ToolResult result)
+    {
+        if (result.Images is not { Count: > 0 } images) return null;
+        foreach (var image in images)
+        {
+            string? path = image?.FilePath;
+            if (IsOpenableImage(path)) return path;
+        }
+        return null;
+    }
+
+    /// <summary>A local image file that exists — the only thing a thumbnail click hands to the shell.</summary>
+    public static bool IsOpenableImage(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            if (!Path.IsPathRooted(path) || path.StartsWith(@"\\", StringComparison.Ordinal)) return false;
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp" or ".gif")) return false;
+            return File.Exists(path);
+        }
+        catch { return false; }
     }
 
     // ─── Tool Display Name Formatting ───
@@ -2267,6 +3631,71 @@ public class ChatViewModel : ViewModelBase
         ["agent_spawn"] = "Spawned agent",
     };
 
+    /// <summary>What a tool acted on, for its row: the path relative to the project, the command, the URL, the query —
+    /// or the MCP tool's own name.</summary>
+    private static string ToolTargetOf(string toolName, Dictionary<string, string>? args, string? root)
+    {
+        string? target = null;
+        if (args != null)
+        {
+            target = args.GetValueOrDefault("path") ?? args.GetValueOrDefault("file_path") ?? args.GetValueOrDefault("notebook_path")
+                  ?? args.GetValueOrDefault("command") ?? args.GetValueOrDefault("url") ?? args.GetValueOrDefault("pattern")
+                  ?? args.GetValueOrDefault("query") ?? args.GetValueOrDefault("skill") ?? args.GetValueOrDefault("branch")
+                  ?? args.GetValueOrDefault("task") ?? args.GetValueOrDefault("question");
+        }
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            if (ToolLook.McpServer(toolName) is { } server)
+                return toolName[("mcp__" + server + "__").Length..];
+            return toolName;
+        }
+        target = target.Replace('\n', ' ').Trim();
+        // A shell command is the long one (ssh -i … -o … admin@… 'bash …' ran past 300 characters): the row names the
+        // programs it ran; the full command is in the row's tooltip and in its expanded details.
+        if (args != null && args.ContainsKey("command") && !args.ContainsKey("path") && !args.ContainsKey("file_path")
+            && !args.ContainsKey("notebook_path"))
+            return ShortCommand(target);
+        if (!string.IsNullOrEmpty(root) && Path.IsPathRooted(target))
+        {
+            try
+            {
+                string full = Path.GetFullPath(target), r = Path.GetFullPath(root).TrimEnd('\\', '/');
+                if (full.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    target = Path.GetRelativePath(r, full).Replace('\\', '/');
+            }
+            catch { /* not a path after all */ }
+        }
+        return target.Length > 90 ? target[..90] + "…" : target;
+    }
+
+    /// <summary>"cd web &amp;&amp; npm run build 2&gt;&amp;1 | tail -25; ls ../site" → "npm run build · ls": each step's program, with
+    /// its subcommand for tools that have one (npm run x, git push, dotnet build). cd / echo / sleep / export and what
+    /// a pipe feeds into are left out. At most 3 steps, 60 characters.</summary>
+    internal static string ShortCommand(string command)
+    {
+        var steps = new List<string>();
+        foreach (var raw in System.Text.RegularExpressions.Regex.Split(command, @"&&|\|\||;"))
+        {
+            var words = raw.Split('|')[0].Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .SkipWhile(w => w.Contains('=') && !w.StartsWith('-'))   // FOO=1 cmd …
+                .ToList();
+            if (words.Count == 0) continue;
+            string prog = Path.GetFileName(words[0].Trim('"', '\'', '('));
+            if (prog is "" or "cd" or "echo" or "sleep" or "true" or "set" or "export" or "pushd" or "popd") continue;
+            string step = prog;
+            if (words.Count > 1 && !words[1].StartsWith('-') && prog is "npm" or "npx" or "pnpm" or "yarn" or "git" or "dotnet"
+                    or "cargo" or "go" or "docker" or "pip" or "composer" or "flutter" or "gh" or "bun")
+            {
+                step += " " + words[1];
+                if (words[1] == "run" && words.Count > 2) step += " " + words[2];
+            }
+            if (!steps.Contains(step)) steps.Add(step);
+            if (steps.Count == 3) break;
+        }
+        string s = steps.Count == 0 ? command.Trim() : string.Join(" · ", steps);
+        return s.Length > 60 ? s[..60] + "…" : s;
+    }
+
     private static string FormatToolDisplayName(string toolName, Dictionary<string, string>? args)
     {
         string verb = ToolDisplayVerbs.GetValueOrDefault(toolName, toolName);
@@ -2302,10 +3731,12 @@ public class ChatViewModel : ViewModelBase
     // ─── Elapsed Time Timer ───
     private void StartElapsedTimer()
     {
-        StopElapsedTimer();
+        if (_elapsedTimer != null) return;   // already ticking for another run
         _elapsedTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _elapsedTimer.Tick += (_, _) =>
         {
+            if (_runs.Count == 0) { _elapsedTimer?.Stop(); _elapsedTimer = null; return; }
+            // The status bar describes the chat on screen (its run, if it has one).
             if (!_generationStopwatch.IsRunning || !IsGenerating) return;
             double elapsed = _generationStopwatch.Elapsed.TotalSeconds;
             string elapsedText = elapsed < 10 ? $"{elapsed:F1}s" : $"{(int)elapsed}s";
@@ -2315,12 +3746,12 @@ public class ChatViewModel : ViewModelBase
             // users killed the app during a perfectly healthy 1-2 minute first prefill.
             string stage = elapsed switch
             {
-                < 1.0 => "Building context",
-                < 3.0 => "Sending request",
-                < 8.0 => "Waiting for response",
-                < 15.0 => "Still waiting",
-                < 45.0 => "Taking longer than usual",
-                _ => "Model is reading the prompt — the first local turn can take 1-2 minutes",
+                < 1.0 => Loc("chat.stage.building"),
+                < 3.0 => Loc("chat.stage.sending"),
+                < 8.0 => Loc("chat.stage.waiting"),
+                < 15.0 => Loc("chat.stage.stillWaiting"),
+                < 45.0 => Loc("chat.stage.slow"),
+                _ => ShowLocalModelPicker ? Loc("chat.stage.localPrefill") : Loc("chat.stage.slowApi"),
             };
 
             // If we already got tokens, show token count instead of stages
@@ -2328,32 +3759,35 @@ public class ChatViewModel : ViewModelBase
             {
                 double tps = elapsed > 0 ? _streamingTokenCount / elapsed : 0;
                 StatusText = tps > 1
-                    ? $"Generating · {_streamingTokenCount} tokens · {tps:F0} tok/s · {elapsedText}"
-                    : $"Generating · {_streamingTokenCount} tokens · {elapsedText}";
+                    ? LocF("chat.status.generatingRateTime", _streamingTokenCount, tps, elapsedText)
+                    : LocF("chat.status.generatingCountTime", _streamingTokenCount, elapsedText);
             }
             else
             {
                 StatusText = $"{stage}... ({elapsedText})";
             }
 
-            // Update inline thinking indicator in chat
+            // Update inline thinking indicator in chat (an AgentStatus row: plain text, no markdown)
             if (_activeAgentStatusMsg is { IsStreaming: true } msg && msg.Content.StartsWith("⏳"))
-                _activeAgentStatusMsg.Content = $"⏳ *{stage}... ({elapsedText})*";
+                _activeAgentStatusMsg.Content = $"⏳ {stage}... ({elapsedText})";
         };
         _elapsedTimer.Start();
     }
 
     private void StopElapsedTimer()
     {
+        // Another run still going: it keeps the ticker (it stops by itself once no run is left).
+        if (_runs.Any(r => !ReferenceEquals(r, FlowRun))) return;
         _elapsedTimer?.Stop();
         _elapsedTimer = null;
     }
 
     // ─── Streaming Mode ───
-    private async Task RunStreaming(string input, CancellationToken ct)
+    private async Task RunStreaming(string input, List<ChatMessage> history, CancellationToken ct)
     {
         // DON'T remove thinking indicator here — it's sync and runs before UI renders.
         // Instead, remove it when the first token arrives (after async await).
+        var target = _turnSession;
 
         var assistantMsg = new ChatMessage
         {
@@ -2364,30 +3798,43 @@ public class ChatViewModel : ViewModelBase
         // Don't add assistant msg yet — wait for first token so thinking indicator stays visible
 
         var sb = new StringBuilder();
+        var thinkSb = new StringBuilder();
         int tokenCount = 0;
         bool firstToken = true;
+        bool replyComplete = false;   // UI thread only
         var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        var history = CurrentSession?.Messages
-            .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
-            .SkipLast(1)
-            .ToList() ?? new();
 
         await foreach (var token in _agentService.ChatStreamAsync(history, input, ct))
         {
+            // Thinking chunks go to the reply's collapsed Thinking block — never into the reply text.
+            if (TryUnwrapThinking(token, out var thought))
+            {
+                if (thought.Length == 0 || !ShowThinking) continue;
+                bool firstThought = thinkSb.Length == 0;
+                thinkSb.Append(thought);
+                string thinkSnap = thinkSb.ToString();
+                App.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    assistantMsg.ThinkingContent = thinkSnap;
+                    if (firstThought && firstToken && _activeAgentStatusMsg != null)
+                        _activeAgentStatusMsg.Content = "💭 " + Loc("chat.thinkingInline").Trim();
+                });
+                continue;
+            }
+
             sb.Append(token);
             tokenCount++;
+            _streamingTokenCount = tokenCount;
 
             // First token: sync update to guarantee bubble visible before more tokens arrive
             if (firstToken)
             {
                 firstToken = false;
-                int capturedCount = tokenCount;
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     if (_activeAgentStatusMsg != null)
-                        _activeAgentStatusMsg.Content = "⚡ Generating...";
-                    Messages.Add(assistantMsg);
+                        _activeAgentStatusMsg.Content = "⚡ " + Loc("chat.status.generating");
+                    PostTurnMessage(target, assistantMsg);
                     assistantMsg.Content = sb.ToString();
                     ScrollToBottom?.Invoke();
                 });
@@ -2402,21 +3849,27 @@ public class ChatViewModel : ViewModelBase
                 string snapshot = sb.ToString();
                 App.Current?.Dispatcher.BeginInvoke(() =>
                 {
-                    assistantMsg.Content = snapshot;
+                    if (!replyComplete) assistantMsg.Content = snapshot;
                     if (capturedCount % 15 == 0 && _activeAgentStatusMsg != null)
                     {
                         int elapsed = (int)sw.Elapsed.TotalSeconds;
                         double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
-                        _activeAgentStatusMsg.Content = tps > 0
-                            ? $"⚡ Generating · {capturedCount} tokens · {tps:F0} tok/s"
-                            : $"⚡ Generating · {capturedCount} tokens";
+                        _activeAgentStatusMsg.Content = "⚡ " + (tps > 0
+                            ? LocF("chat.status.generatingRate", capturedCount, tps)
+                            : LocF("chat.status.generatingCount", capturedCount));
                     }
                 });
             }
         }
 
-        // Final content flush — ensure last tokens are shown
-        App.Current?.Dispatcher.Invoke(() => assistantMsg.Content = sb.ToString());
+        // Final content flush — ensure last tokens are shown. A batched update still queued runs after this (Invoke
+        // outranks BeginInvoke) and must not cut the reply back to an older snapshot.
+        App.Current?.Dispatcher.Invoke(() =>
+        {
+            replyComplete = true;
+            assistantMsg.Content = sb.ToString();
+            if (thinkSb.Length > 0) assistantMsg.ThinkingContent = thinkSb.ToString();
+        });
 
         sw.Stop();
 
@@ -2427,12 +3880,8 @@ public class ChatViewModel : ViewModelBase
             if (firstToken)
             {
                 // Remove thinking indicator, replace with assistant message
-                if (_activeAgentStatusMsg != null)
-                {
-                    Messages.Remove(_activeAgentStatusMsg);
-                    _activeAgentStatusMsg = null;
-                }
-                Messages.Add(assistantMsg);
+                RemoveActiveStatus();
+                PostTurnMessage(target, assistantMsg);
             }
 
             assistantMsg.IsStreaming = false;
@@ -2451,11 +3900,12 @@ public class ChatViewModel : ViewModelBase
 
             if (string.IsNullOrWhiteSpace(responseText))
             {
-                assistantMsg.Content = "(The model did not generate a response. Try reloading the model or using a different one.)";
+                assistantMsg.Content = Loc("chat.err.emptyReply");
                 assistantMsg.HasError = true;
-                StatusText = "No response generated";
+                assistantMsg.CanRetry = true;
+                StatusText = Loc("chat.status.noReply");
                 // Remove inline status on error
-                if (_activeAgentStatusMsg != null) { Messages.Remove(_activeAgentStatusMsg); _activeAgentStatusMsg = null; }
+                RemoveActiveStatus();
             }
             else
             {
@@ -2465,33 +3915,28 @@ public class ChatViewModel : ViewModelBase
                 // Show per-turn stats
                 double tps = assistantMsg.TokensPerSecond;
                 double secs = sw.ElapsedMilliseconds / 1000.0;
-                string statsLine = $"✓ {finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
-                StatusText = $"Ready · {finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
-                LastTurnStats = $"{finalTokenCount} tokens · {secs:F1}s · {tps:F1} tok/s";
+                StatusText = LocF("chat.stats.ready", secs) + LocF("chat.stats.tokens", finalTokenCount);
+                SetTurnStats(finalTokenCount, secs);
 
-                // Finalize inline status with completion stats
+                // Finalize inline status with completion stats (an AgentStatus row: shown with Steps on)
                 if (_activeAgentStatusMsg != null)
                 {
-                    _activeAgentStatusMsg.Content = statsLine;
+                    _activeAgentStatusMsg.Content = "✓ " + LocF("chat.stats.turn", finalTokenCount, secs, tps);
                     _activeAgentStatusMsg.IsStreaming = false;
                     _activeAgentStatusMsg = null;
                 }
             }
         });
 
-        CurrentSession?.Messages.Add(assistantMsg);
         ScrollToBottom?.Invoke();
     }
 
     // ─── Auto-Execute Mode ───
-    private async Task RunWithAutoExecution(string input, CancellationToken ct)
+    private async Task RunWithAutoExecution(string input, List<ChatMessage> history, CancellationToken ct)
     {
         // Don't remove thinking indicator here (sync) — remove after async completes
-
-        var history = CurrentSession?.Messages
-            .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
-            .SkipLast(1)
-            .ToList() ?? new();
+        var target = _turnSession;
+        int outAtStart = _costTracker.TotalOutputTokens;
 
         var progress = new Progress<string>(status =>
             App.Current?.Dispatcher.Invoke(() => StatusText = status));
@@ -2499,49 +3944,42 @@ public class ChatViewModel : ViewModelBase
         var result = await _agentService.ExecuteWithAutoFixAsync(history, input, progress, ct);
 
         // Remove thinking indicator after async completes
-        if (_activeAgentStatusMsg != null)
-        {
-            Messages.Remove(_activeAgentStatusMsg);
-            _activeAgentStatusMsg = null;
-        }
+        RemoveActiveStatus();
 
-        var assistantMsg = new ChatMessage
+        PostTurnMessage(target, new ChatMessage
         {
             Role = MessageRole.Assistant,
             Content = result.Response,
             CodeBlocks = result.CodeBlocks,
-        };
-        Messages.Add(assistantMsg);
-        CurrentSession?.Messages.Add(assistantMsg);
+        });
 
         if (result.ExecutionResult != null)
         {
-            var execMsg = new ChatMessage
+            PostTurnMessage(target, new ChatMessage
             {
                 Role = MessageRole.CodeExecution,
                 Content = FormatExecutionResult(result),
                 HasError = !result.ExecutionResult.Success,
-            };
-            Messages.Add(execMsg);
-            CurrentSession?.Messages.Add(execMsg);
+            });
         }
 
-        StatusText = result.Success ? "Ready" : "Code execution had issues";
+        StatusText = result.Success ? Loc("chat.status.ready") : Loc("chat.exec.hadIssues");
+        SetTurnStats(OutputTokensSince(outAtStart, 0), _generationStopwatch.Elapsed.TotalSeconds);
         ScrollToBottom?.Invoke();
     }
 
     private static string FormatExecutionResult(AgentResult result)
     {
         var sb = new StringBuilder();
-        sb.AppendLine(result.Success ? "**Execution Successful**" : "**Execution Failed**");
-        sb.AppendLine($"Attempts: {result.Attempts}");
+        sb.AppendLine(result.Success ? $"**{Loc("chat.exec.succeeded")}**" : $"**{Loc("chat.exec.failed")}**");
+        sb.AppendLine(LocF("chat.exec.attempts", result.Attempts));
 
         if (result.ExecutionResult != null)
         {
             if (!string.IsNullOrWhiteSpace(result.ExecutionResult.Output))
-                sb.AppendLine($"\n**Output:**\n```\n{result.ExecutionResult.Output}\n```");
+                sb.AppendLine($"\n**{Loc("chat.exec.output")}:**\n```\n{result.ExecutionResult.Output}\n```");
             if (!string.IsNullOrWhiteSpace(result.ExecutionResult.Error))
-                sb.AppendLine($"\n**Errors:**\n```\n{result.ExecutionResult.Error}\n```");
+                sb.AppendLine($"\n**{Loc("chat.exec.errors")}:**\n```\n{result.ExecutionResult.Error}\n```");
         }
         return sb.ToString();
     }
@@ -2552,31 +3990,53 @@ public class ChatViewModel : ViewModelBase
         catch (ObjectDisposedException) { /* CTS already disposed */ }
     }
 
+    /// <summary>Run a code block from a reply. Stop cancels it (there was no token, so Stop did nothing), and
+    /// an error stays in the status bar — the finally block used to overwrite it with "Ready" at once.</summary>
     private async Task ExecuteCodeBlock(CodeBlock? block)
     {
-        if (block == null) return;
-        StatusText = $"Executing {block.Language} code...";
-        IsGenerating = true;
+        if (block == null || IsGenerating) return;
+        var turn = BeginTurn();
+        var target = _turnSession;
+        StatusText = LocF("chat.exec.running", block.Language);
+        _cts = new CancellationTokenSource();
+        string? outcome = null;
         try
         {
-            var result = await _codeExecutionService.ExecuteAsync(block.Code, block.Language);
-            Messages.Add(new ChatMessage
+            var token = _cts.Token;
+            var result = await _codeExecutionService.ExecuteAsync(block.Code, block.Language, token);
+            // CodeExecutionService kills the process on cancel and RETURNS a failed result rather than throwing.
+            token.ThrowIfCancellationRequested();
+            PostTurnMessage(target, new ChatMessage
             {
                 Role = MessageRole.CodeExecution,
-                Content = $"**{(result.Success ? "Output" : "Error")}:**\n```\n{result.FullOutput}\n```",
+                Content = $"**{(result.Success ? Loc("chat.exec.output") : Loc("chat.exec.error"))}:**\n```\n{result.FullOutput}\n```",
                 HasError = !result.Success,
             });
-            CurrentSession?.Messages.Add(Messages.Last());
             ScrollToBottom?.Invoke();
+            outcome = result.Success ? Loc("chat.status.ready") : Loc("chat.exec.failed");
         }
-        catch (Exception ex) { StatusText = $"Execution error: {SanitizeErrorMessage(ex.Message)}"; }
-        finally { IsGenerating = false; StatusText = "Ready"; }
+        catch (OperationCanceledException)
+        {
+            outcome = Loc("chat.exec.cancelled");
+        }
+        catch (Exception ex)
+        {
+            _debugLog?.Error("Chat", $"Running a {block.Language} block failed", ex);
+            outcome = Loc("chat.exec.couldNotRun");
+        }
+        finally
+        {
+            _cts?.Dispose();
+            _cts = null;
+            StatusText = outcome ?? Loc("chat.status.ready");
+            EndTurn(turn);
+        }
     }
 
     private void CopyCode(string? code)
     {
         if (string.IsNullOrEmpty(code)) return;
-        try { System.Windows.Clipboard.SetText(code); StatusText = "Copied!"; } catch { }
+        try { System.Windows.Clipboard.SetText(code); StatusText = Loc("chat.status.copied"); } catch { }
     }
 
     // ─── Model Selector ───
@@ -2587,17 +4047,16 @@ public class ChatViewModel : ViewModelBase
     /// </summary>
     public void SyncModelSelectionFromSettings()
     {
+        _syncedModelPath = _settingsService.Settings.SelectedModelPath;
+
         // Refresh model list to pick up newly downloaded models
         RefreshLocalModelsList();
-
-        // Update loaded model display name
-        if (_llamaService.IsModelLoaded)
-            LoadedModelName = $"Ready: {_llamaService.LoadedModelName}";
-        else if (!string.IsNullOrEmpty(_settingsService.Settings.SelectedModelName))
-            LoadedModelName = _settingsService.Settings.SelectedModelName;
-        else
-            LoadedModelName = "No model loaded";
+        RefreshLoadedModelName();
     }
+
+    /// <summary>The SelectedModelPath the picker was last synced to — a settings change only rescans the model
+    /// folders when this differs.</summary>
+    private string? _syncedModelPath;
 
     public void RefreshLocalModelsList()
     {
@@ -2606,59 +4065,110 @@ public class ChatViewModel : ViewModelBase
         foreach (var m in models)
             LocalModels.Add(m);
 
-        // Pre-select the currently loaded model
-        if (_llamaService.LoadedModelPath != null)
-        {
-            var loaded = LocalModels.FirstOrDefault(m =>
-                string.Equals(m.LocalPath, _llamaService.LoadedModelPath, StringComparison.OrdinalIgnoreCase));
-            if (loaded != null)
-                _selectedLocalModel = loaded; // set backing field directly to avoid triggering load
-        }
-        else
-        {
-            _selectedLocalModel = null; // clear selection if no model loaded
-        }
-        OnPropertyChanged(nameof(SelectedLocalModel));
+        // Pre-select the currently loaded model. With the llama-server backend (Gemma 4 / Llama 4 / Qwen 3) the
+        // in-process engine has no path, so a ready local provider means the saved model is the loaded one.
+        string? loadedPath = _llamaService.LoadedModelPath
+            ?? (ShowLocalModelPicker && _providerManager.ActiveProvider.IsReady ? _settingsService.Settings.SelectedModelPath : null);
+        _selectedLocalModel = loadedPath == null
+            ? null
+            : LocalModels.FirstOrDefault(m => string.Equals(m.LocalPath, loadedPath, StringComparison.OrdinalIgnoreCase));
+        OnPropertyChanged(nameof(SelectedLocalModel));   // backing field set directly: must not trigger a load
     }
 
-    private async Task LoadModelFromChat(string? path)
+    /// <summary>
+    /// Load the GGUF picked in the chat's model box. Routed through LocalGgufProvider (it picks LLamaSharp or
+    /// llama-server by architecture — the direct LLamaSharp call this used made Gemma 4 / Llama 4 / Qwen 3 fail),
+    /// only while a local provider is answering (it used to switch a Claude chat to Local silently), and only
+    /// after the user confirmed the size against free VRAM.
+    /// </summary>
+    private async Task LoadModelFromChat(ModelInfo model, ModelInfo? previous)
     {
-        if (string.IsNullOrEmpty(path) || _llamaService.IsLoading) return;
-        if (_llamaService.LoadedModelPath == path)
+        void Revert()
         {
-            // Model already loaded, just ensure provider is set to Local
-            if (_providerManager.ActiveProviderType != AiProviderType.Local)
-                await _providerManager.SwitchProviderAsync(AiProviderType.Local);
+            _selectedLocalModel = previous;
+            App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(SelectedLocalModel)));
+        }
+
+        string? path = model.LocalPath;
+        if (string.IsNullOrEmpty(path) || !ShowLocalModelPicker) { Revert(); return; }
+
+        string? loadedPath = _llamaService.LoadedModelPath
+            ?? (_providerManager.ActiveProvider.IsReady ? _settingsService.Settings.SelectedModelPath : null);
+        if (_providerManager.ActiveProvider.IsReady && string.Equals(loadedPath, path, StringComparison.OrdinalIgnoreCase))
+            return;   // already the loaded model
+
+        if (IsLoadingModel || _llamaService.IsLoading || (_localGgufProvider?.IsLoading ?? false))
+        {
+            StatusText = Loc("chat.model.busy");
+            Revert();
+            return;
+        }
+        if (IsGenerating)
+        {
+            StatusText = Loc("chat.model.busyTurn");
+            Revert();
+            return;
+        }
+
+        // How much VRAM is free right now (nvidia-smi can take seconds — never on the UI thread).
+        GpuLiveStats? gpu = null;
+        try { gpu = await Task.Run(() => _gpuDetection.GetLiveStats()); }
+        catch { /* no NVIDIA GPU / no nvidia-smi */ }
+
+        long sizeBytes = model.FileSize > 0 ? model.FileSize : FileLengthOrZero(path);
+        string text = gpu is { VramTotalMB: > 0 }
+            ? LocF("chat.model.confirmVram", model.Name, FormatGb(sizeBytes),
+                   FormatGb(gpu.VramFreeMB * 1024L * 1024L), FormatGb(gpu.VramTotalMB * 1024L * 1024L))
+            : LocF("chat.model.confirmNoGpu", model.Name, FormatGb(sizeBytes));
+        if (gpu is { VramTotalMB: > 0 } && sizeBytes > gpu.VramFreeMB * 1024L * 1024L)
+            text += "\n\n" + Loc("chat.model.confirmTight");
+        if (!Confirm(text, Loc("chat.model.confirmTitle")))
+        {
+            Revert();
             return;
         }
 
         IsLoadingModel = true;
-        StatusText = "Loading model...";
+        StatusText = Loc("chat.model.loading");
         try
         {
-            // Ensure active provider is Local
+            // Llama-server → Local: both run on this PC; LocalGgufProvider is the router over the two.
             if (_providerManager.ActiveProviderType != AiProviderType.Local)
                 await _providerManager.SwitchProviderAsync(AiProviderType.Local);
 
-            var progress = new Progress<string>(s =>
-                App.Current?.Dispatcher.Invoke(() => StatusText = s));
-            await _llamaService.LoadModelAsync(path, progress);
+            var progress = new Progress<string>(s => App.Current?.Dispatcher.BeginInvoke(() => StatusText = s));
+            if (_localGgufProvider != null)
+                await _localGgufProvider.LoadModelAsync(path, progress);
+            else
+                await _llamaService.LoadModelAsync(path, progress);
+
+            string name = Path.GetFileNameWithoutExtension(path);
             _settingsService.UpdateSettings(s =>
             {
                 s.SelectedModelPath = path;
-                s.SelectedModelName = Path.GetFileNameWithoutExtension(path);
+                s.SelectedModelName = name;
             });
-            StatusText = "Ready";
+            StatusText = LocF("chat.model.ready", name);
         }
         catch (Exception ex)
         {
-            StatusText = $"Failed to load: {SanitizeErrorMessage(ex.Message)}";
+            _debugLog?.Error("Chat", $"Loading {path} from the chat picker failed", ex);
+            StatusText = Loc("chat.model.loadFailed");
+            Revert();
         }
         finally
         {
             IsLoadingModel = false;
+            RefreshLoadedModelName();
         }
     }
+
+    private static long FileLengthOrZero(string path)
+    {
+        try { return new FileInfo(path).Length; } catch { return 0; }
+    }
+
+    private static string FormatGb(long bytes) => $"{bytes / (1024.0 * 1024 * 1024):0.0} GB";
 
     // ─── History Search ───
 
@@ -2705,38 +4215,21 @@ public class ChatViewModel : ViewModelBase
         SearchResults.Clear();
     }
 
-    /// <summary>Refresh database stats display.</summary>
-    public void RefreshDbStats()
+    private async Task ClearChatAsync()
     {
-        try
-        {
-            var stats = _persistenceService.GetStats();
-            string sizeText = stats.SizeBytes < 1024 * 1024
-                ? $"{stats.SizeBytes / 1024.0:F1} KB"
-                : $"{stats.SizeBytes / (1024.0 * 1024.0):F1} MB";
-            DbStatsText = $"{stats.Sessions} sessions  |  {stats.Messages} messages  |  {sizeText}";
-        }
-        catch { DbStatsText = ""; }
-    }
+        // A reply still running would keep adding to the chat being cleared.
+        if (!await EnsureIdleAsync()) return;
 
-    private void ClearChat()
-    {
         // Destructive action — confirm unless already empty.
-        if (Messages.Count > 0)
-        {
-            var result = System.Windows.MessageBox.Show(
-                $"Clear all {Messages.Count} messages from this chat?\nThis cannot be undone.",
-                "Clear Chat",
-                System.Windows.MessageBoxButton.YesNo,
-                System.Windows.MessageBoxImage.Warning);
-            if (result != System.Windows.MessageBoxResult.Yes) return;
-        }
+        if (Messages.Count > 0 && !Confirm(LocF("chat.clear.confirm", Messages.Count), Loc("chat.clear.title")))
+            return;
 
         ResolvePendingPermissionPrompts();
         Messages.Clear();
         CurrentSession?.Messages.Clear();
         _isDirty = true;
-        StatusText = "Chat cleared.";
+        StatusText = Loc("chat.status.cleared");
+        await CleanUpSessionAsync(CurrentSession?.Id, deleteImages: true);   // the rows that showed them are gone
     }
 
     /// <summary>Auto-deny any still-unanswered permission prompts before the message list is cleared
@@ -2747,12 +4240,8 @@ public class ChatViewModel : ViewModelBase
     {
         foreach (var m in Messages)
         {
-            if (m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered && m.PermissionCallback != null)
-            {
-                m.PermissionAnswered = true;
-                if (!m.Content.Contains("(dismissed)")) m.Content += "  — (dismissed)";
-                try { m.PermissionCallback(false); } catch { /* resolving twice is a no-op */ }
-            }
+            if (m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered)
+                m.ResolvePermission(PermissionOutcome.Dismissed);
         }
     }
 
@@ -2761,22 +4250,20 @@ public class ChatViewModel : ViewModelBase
     {
         if (!HasProject)
         {
-            StatusText = "Open a project folder first to review code.";
+            StatusText = Loc("chat.review.needProject");
             return;
         }
         if (IsGenerating) return;
 
-        IsGenerating = true;
-        CanSend = false;
-        StatusText = "Reviewing code...";
+        var turn = BeginTurn();
+        var target = _turnSession;
+        StatusText = Loc("chat.review.running");
 
         try
         {
             _cts = new CancellationTokenSource();
 
-            var history = CurrentSession?.Messages
-                .Where(m => m.Role is MessageRole.User or MessageRole.Assistant)
-                .ToList() ?? new();
+            var history = BuildModelHistory(Messages, includeTools: false);
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var review = await _agentService.ReviewCodeAsync(history, null, _cts.Token);
@@ -2791,27 +4278,26 @@ public class ChatViewModel : ViewModelBase
                 GenerationTimeMs = sw.ElapsedMilliseconds,
             };
 
-            Messages.Add(reviewMsg);
-            CurrentSession?.Messages.Add(reviewMsg);
-            StatusText = $"Review complete · {tokenEst} tokens · {sw.ElapsedMilliseconds / 1000.0:F1}s";
-            LastTurnStats = $"{tokenEst} tokens · {sw.ElapsedMilliseconds / 1000.0:F1}s";
+            PostTurnMessage(target, reviewMsg);
+            StatusText = LocF("chat.review.done", tokenEst, sw.ElapsedMilliseconds / 1000.0);
+            SetTurnStats(tokenEst, sw.ElapsedMilliseconds / 1000.0);
         }
         catch (OperationCanceledException)
         {
-            StatusText = "Review cancelled.";
+            StatusText = Loc("chat.review.cancelled");
         }
         catch (Exception ex)
         {
-            StatusText = $"Review failed: {SanitizeErrorMessage(ex.Message)}";
+            _debugLog?.Error("Chat", "Code review failed", ex);
+            StatusText = Loc("chat.review.failed");
         }
         finally
         {
-            IsGenerating = false;
-            CanSend = true;
             _cts?.Dispose();
             _cts = null;
             UpdateContextInfo();
             SaveNow();
+            EndTurn(turn);
         }
     }
 
@@ -2833,3 +4319,7 @@ public class ChatViewModel : ViewModelBase
         return message;
     }
 }
+
+/// <summary>What a pipe run hands back to its caller: the final reply text, and whether the run failed, was
+/// stopped, did not finish, or lost its caller (then the MCP result carries isError=true).</summary>
+public sealed record McpTaskOutcome(string Text, bool IsError);

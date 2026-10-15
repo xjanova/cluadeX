@@ -1,6 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using CluadeX.Models;
@@ -12,18 +12,35 @@ namespace CluadeX.Services;
 /// fetch diffs, and perform safe rewind with auto-stash + snapshot branch.
 /// Wraps the git CLI directly (does not depend on GitService) so it can
 /// run parallel commands without serializing through GitService's queue.
+///
+/// Every git call passes its arguments as a list (no hand-built command line) and runs with
+/// core.quotepath=false: git used to print a Thai path as "\340\270\201…" and a rename as
+/// "src/{a => b}.cs", neither of which is a real path, so the diff for those files came back empty.
 /// </summary>
 public class TimeMachineService
 {
     private readonly FileSystemService _fileSystem;
+    private readonly LocalizationService? _loc;
+    private readonly DebugLogService? _log;
 
-    public TimeMachineService(FileSystemService fileSystem)
+    /// <summary>(sha, new path) → old path, for renames seen by <see cref="GetCommitFilesAsync"/>.</summary>
+    private readonly ConcurrentDictionary<(string Sha, string Path), string> _renameSources = new();
+
+    public TimeMachineService(FileSystemService fileSystem, LocalizationService? loc = null, DebugLogService? log = null)
     {
         _fileSystem = fileSystem;
+        _loc = loc;
+        _log = log;
     }
 
     public string WorkingDirectory => _fileSystem.WorkingDirectory;
     public bool HasWorkingDirectory => _fileSystem.HasWorkingDirectory;
+
+    private string T(string key, params object[] args)
+    {
+        if (_loc == null) return args.Length == 0 ? key : $"{key} {string.Join(" ", args)}";
+        return args.Length == 0 ? _loc.T(key) : _loc.T(key, args);
+    }
 
     // ═══════════════════════════════════════════
     // Repository state
@@ -32,25 +49,25 @@ public class TimeMachineService
     public async Task<bool> IsGitRepoAsync(CancellationToken ct = default)
     {
         if (!HasWorkingDirectory) return false;
-        var r = await RunGitAsync("rev-parse --is-inside-work-tree", ct);
+        var r = await RunGitAsync(ct, "rev-parse", "--is-inside-work-tree");
         return r.ExitCode == 0 && r.StdOut.Trim() == "true";
     }
 
     public async Task<string> GetHeadShaAsync(CancellationToken ct = default)
     {
-        var r = await RunGitAsync("rev-parse HEAD", ct);
+        var r = await RunGitAsync(ct, "rev-parse", "HEAD");
         return r.ExitCode == 0 ? r.StdOut.Trim() : "";
     }
 
     public async Task<string> GetCurrentBranchAsync(CancellationToken ct = default)
     {
-        var r = await RunGitAsync("branch --show-current", ct);
+        var r = await RunGitAsync(ct, "branch", "--show-current");
         return r.ExitCode == 0 ? r.StdOut.Trim() : "";
     }
 
     public async Task<bool> HasUncommittedChangesAsync(CancellationToken ct = default)
     {
-        var r = await RunGitAsync("status --porcelain", ct);
+        var r = await RunGitAsync(ct, "status", "--porcelain");
         return r.ExitCode == 0 && !string.IsNullOrWhiteSpace(r.StdOut);
     }
 
@@ -72,8 +89,12 @@ public class TimeMachineService
         if (!await IsGitRepoAsync(ct)) return result;
 
         // 1) commit metadata
-        var meta = await RunGitAsync($"log -n {maxCount} --pretty=format:\"{CommitFormat}\"", ct);
-        if (meta.ExitCode != 0) return result;
+        var meta = await RunGitAsync(ct, "log", "-n", maxCount.ToString(CultureInfo.InvariantCulture), $"--pretty=format:{CommitFormat}");
+        if (meta.ExitCode != 0)
+        {
+            _log?.Warn("TimeMachine", $"git log failed: {meta.StdErr.Trim()}");
+            return result;
+        }
 
         string headSha = await GetHeadShaAsync(ct);
 
@@ -128,7 +149,8 @@ public class TimeMachineService
         }
 
         // 2) numstat — get +/- per commit (in same order as log)
-        var stat = await RunGitAsync($"log -n {maxCount} --numstat --pretty=format:\"COMMIT %H\"", ct);
+        var bySha = result.GroupBy(c => c.Sha).ToDictionary(g => g.Key, g => g.First());
+        var stat = await RunGitAsync(ct, "log", "-n", maxCount.ToString(CultureInfo.InvariantCulture), "--numstat", "--pretty=format:COMMIT %H");
         if (stat.ExitCode == 0)
         {
             CommitInfo? current = null;
@@ -145,8 +167,7 @@ public class TimeMachineService
                         current.Deletions = dels;
                         current.FilesChanged = files;
                     }
-                    string sha = line[7..].Trim();
-                    current = result.FirstOrDefault(c => c.Sha == sha);
+                    bySha.TryGetValue(line[7..].Trim(), out current);
                     adds = dels = files = 0;
                 }
                 else if (current != null)
@@ -176,43 +197,87 @@ public class TimeMachineService
     // Diff
     // ═══════════════════════════════════════════
 
-    /// <summary>List files changed in a single commit.</summary>
+    /// <summary>List files changed in a single commit (renames under their new path).</summary>
     public async Task<List<CommitFileChange>> GetCommitFilesAsync(string sha, CancellationToken ct = default)
     {
         var list = new List<CommitFileChange>();
         if (!IsValidSha(sha)) return list;
 
-        // --numstat gives +/-; --name-status gives A/M/D/R; combine both
-        var r = await RunGitAsync($"show {sha} --numstat --format=", ct);
-        if (r.ExitCode != 0) return list;
-
-        var statuses = new Dictionary<string, char>();
-        var rs = await RunGitAsync($"show {sha} --name-status --format=", ct);
-        if (rs.ExitCode == 0)
+        // -z: NUL-separated, paths verbatim (no C-quoting, no "{a => b}" rename shorthand).
+        var r = await RunGitAsync(ct, "show", sha, "--numstat", "-z", "-M", "--format=");
+        if (r.ExitCode != 0)
         {
-            foreach (var raw in rs.StdOut.Split('\n'))
-            {
-                var line = raw.Trim('\r');
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                var parts = line.Split('\t');
-                if (parts.Length >= 2 && parts[0].Length > 0)
-                    statuses[parts[parts.Length - 1]] = parts[0][0];
-            }
+            _log?.Warn("TimeMachine", $"git show --numstat {sha} failed: {r.StdErr.Trim()}");
+            return list;
         }
+        var rs = await RunGitAsync(ct, "show", sha, "--name-status", "-z", "-M", "--format=");
+        var statuses = rs.ExitCode == 0 ? ParseNameStatusZ(rs.StdOut) : new Dictionary<string, (char Status, string? OldPath)>();
 
-        foreach (var raw in r.StdOut.Split('\n'))
+        foreach (var (path, oldPath, adds, dels) in ParseNumstatZ(r.StdOut))
         {
-            var line = raw.Trim('\r');
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var parts = line.Split('\t');
-            if (parts.Length < 3) continue;
-            var change = new CommitFileChange { Path = parts[2] };
-            if (int.TryParse(parts[0], out int a)) change.Additions = a;
-            if (int.TryParse(parts[1], out int d)) change.Deletions = d;
-            if (statuses.TryGetValue(change.Path, out char s)) change.Status = s;
+            var change = new CommitFileChange { Path = path, Additions = adds, Deletions = dels };
+            if (statuses.TryGetValue(path, out var st)) change.Status = st.Status;
+            else if (oldPath != null) change.Status = 'R';
+            string? from = oldPath ?? (statuses.TryGetValue(path, out var s2) ? s2.OldPath : null);
+            if (from != null) _renameSources[(sha, path)] = from;
             list.Add(change);
         }
         return list;
+    }
+
+    /// <summary>
+    /// Parse <c>git show --numstat -z</c>: "A\tD\tpath\0" per file, or for a rename "A\tD\t\0old\0new\0".
+    /// Public static for the harness.
+    /// </summary>
+    public static List<(string Path, string? OldPath, int Additions, int Deletions)> ParseNumstatZ(string output)
+    {
+        var result = new List<(string, string?, int, int)>();
+        var tokens = output.Split('\0');
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            string tok = tokens[i].TrimStart('\r', '\n');
+            if (tok.Length == 0) continue;
+            var parts = tok.Split('\t');
+            if (parts.Length < 3) continue;
+            int.TryParse(parts[0], out int a);
+            int.TryParse(parts[1], out int d);
+            if (parts[2].Length > 0)
+            {
+                result.Add((parts[2], null, a, d));
+            }
+            else if (i + 2 < tokens.Length)
+            {
+                // rename / copy: the next two NUL-separated tokens are old and new path
+                string oldPath = tokens[++i];
+                string newPath = tokens[++i];
+                result.Add((newPath, oldPath, a, d));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Parse <c>git show --name-status -z</c>: "M\0path\0", or "R100\0old\0new\0" for renames/copies.</summary>
+    public static Dictionary<string, (char Status, string? OldPath)> ParseNameStatusZ(string output)
+    {
+        var map = new Dictionary<string, (char, string?)>(StringComparer.Ordinal);
+        var tokens = output.Split('\0');
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            string code = tokens[i].Trim('\r', '\n');
+            if (code.Length == 0) continue;
+            char kind = code[0];
+            if ((kind == 'R' || kind == 'C') && i + 2 < tokens.Length)
+            {
+                string oldPath = tokens[++i];
+                string newPath = tokens[++i];
+                map[newPath] = (kind, oldPath);
+            }
+            else if (i + 1 < tokens.Length)
+            {
+                map[tokens[++i]] = (kind, null);
+            }
+        }
+        return map;
     }
 
     /// <summary>Get the unified diff of a single file in a commit, parsed line-by-line.</summary>
@@ -222,9 +287,18 @@ public class TimeMachineService
         if (!IsValidSha(sha)) return lines;
         if (string.IsNullOrWhiteSpace(filePath)) return lines;
 
-        // Use show with -- to safely pass file path
-        var r = await RunGitAsync($"show {sha} -- \"{EscapePath(filePath)}\"", ct);
-        if (r.ExitCode != 0) return lines;
+        // The path goes after "--" as its own argument: no quoting, no character stripping (the old
+        // EscapePath removed & $ ; | from the name, so such files never showed a diff). A renamed file is
+        // shown together with its old path so git renders the rename instead of a whole-file add.
+        var args = new List<string> { "show", sha, "-M", "--format=", "--" };
+        if (_renameSources.TryGetValue((sha, filePath), out var oldPath)) args.Add(oldPath);
+        args.Add(filePath);
+        var r = await RunGitAsync(ct, args.ToArray());
+        if (r.ExitCode != 0)
+        {
+            _log?.Warn("TimeMachine", $"git show {sha} -- {filePath} failed: {r.StdErr.Trim()}");
+            return lines;
+        }
 
         int oldNo = 0, newNo = 0;
         bool inHunk = false;
@@ -244,6 +318,7 @@ public class TimeMachineService
                 lines.Add(new DiffLine { Kind = '@', Content = line });
                 continue;
             }
+            if (line.StartsWith("diff --git")) { inHunk = false; continue; }
             if (!inHunk) continue;
             if (line.StartsWith("+++") || line.StartsWith("---")) continue;
 
@@ -267,11 +342,13 @@ public class TimeMachineService
     // Mutations — REWIND, BRANCH, CHERRY-PICK
     // ═══════════════════════════════════════════
 
+    private static string Stamp() => DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+
     /// <summary>
     /// Rewind the working tree + HEAD to a specific commit.
-    /// Safety: optionally creates a snapshot branch first, and ALWAYS
-    /// stashes any uncommitted changes (with a recognisable message)
-    /// before resetting hard.
+    /// Safety: optionally creates a snapshot branch FIRST — if that fails nothing else happens (it used to be
+    /// "best-effort", and reset --hard ran anyway with no way back) — then stashes any uncommitted changes
+    /// (with a recognisable message) before resetting hard.
     /// </summary>
     public async Task<TimeMachineActionResult> RewindToCommitAsync(
         string sha, bool createSnapshot = true, CancellationToken ct = default)
@@ -279,52 +356,61 @@ public class TimeMachineService
         var result = new TimeMachineActionResult();
         if (!IsValidSha(sha))
         {
-            result.Message = "Invalid commit SHA.";
+            result.Message = T("tm.invalidSha");
             return result;
         }
         if (!await IsGitRepoAsync(ct))
         {
-            result.Message = "Not a git repository.";
+            result.Message = T("tm.notRepo");
             return result;
         }
+        string shortSha = sha[..Math.Min(7, sha.Length)];
 
-        // 1) auto-stash if dirty
+        // 1) snapshot branch from current HEAD — before anything is changed
+        if (createSnapshot)
+        {
+            string currentBranch = await GetCurrentBranchAsync(ct);
+            string snap = SanitizeBranchName($"snapshot/{(string.IsNullOrEmpty(currentBranch) ? "detached" : currentBranch)}-{Stamp()}");
+            var br = await RunGitAsync(ct, "branch", snap);
+            if (br.ExitCode != 0)
+            {
+                _log?.Error("TimeMachine", $"git branch {snap} failed: {br.StdErr.Trim()}");
+                result.Message = T("tm.snapshotFailed");
+                return result;
+            }
+            result.SnapshotBranch = snap;
+        }
+
+        // 2) auto-stash if dirty
         if (await HasUncommittedChangesAsync(ct))
         {
-            string stashMsg = $"wip/before-rewind-to-{sha[..Math.Min(7, sha.Length)]}-{DateTime.Now:yyyyMMdd-HHmmss}";
-            var stash = await RunGitAsync($"stash push --include-untracked -m \"{EscapeArg(stashMsg)}\"", ct);
+            string stashMsg = $"wip/before-rewind-to-{shortSha}-{Stamp()}";
+            var stash = await RunGitAsync(ct, "stash", "push", "--include-untracked", "-m", stashMsg);
             if (stash.ExitCode != 0)
             {
-                result.Message = $"Auto-stash failed: {stash.StdErr}";
+                _log?.Error("TimeMachine", $"git stash failed: {stash.StdErr.Trim()}");
+                result.Message = T("tm.stashFailed");
+                if (result.SnapshotBranch != null) result.Message += T("tm.snapshotKept", result.SnapshotBranch);
                 return result;
             }
             result.StashRef = stashMsg;
         }
 
-        // 2) optional snapshot branch from current HEAD
-        if (createSnapshot)
-        {
-            string currentBranch = await GetCurrentBranchAsync(ct);
-            string snap = $"snapshot/{(string.IsNullOrEmpty(currentBranch) ? "detached" : currentBranch)}-{DateTime.Now:yyyyMMdd-HHmmss}";
-            // sanitize
-            snap = SanitizeBranchName(snap);
-            var br = await RunGitAsync($"branch {snap}", ct);
-            if (br.ExitCode == 0) result.SnapshotBranch = snap;
-            // best-effort — failure shouldn't block the rewind
-        }
-
         // 3) reset --hard to target
-        var reset = await RunGitAsync($"reset --hard {sha}", ct);
+        var reset = await RunGitAsync(ct, "reset", "--hard", sha);
         if (reset.ExitCode != 0)
         {
-            result.Message = $"Reset failed: {reset.StdErr}";
+            _log?.Error("TimeMachine", $"git reset --hard {sha} failed: {reset.StdErr.Trim()}");
+            result.Message = T("tm.resetFailed");
+            if (result.SnapshotBranch != null) result.Message += T("tm.snapshotKept", result.SnapshotBranch);
+            if (result.StashRef != null) result.Message += T("tm.stashKept", result.StashRef);
             return result;
         }
 
         result.Success = true;
-        result.Message = $"Rewound to {sha[..Math.Min(7, sha.Length)]}";
-        if (result.SnapshotBranch != null) result.Message += $" · snapshot at {result.SnapshotBranch}";
-        if (result.StashRef != null) result.Message += $" · stash: {result.StashRef}";
+        result.Message = T("tm.rewound", shortSha);
+        if (result.SnapshotBranch != null) result.Message += T("tm.snapshotAt", result.SnapshotBranch);
+        if (result.StashRef != null) result.Message += T("tm.stashAt", result.StashRef);
         return result;
     }
 
@@ -335,30 +421,31 @@ public class TimeMachineService
         var result = new TimeMachineActionResult();
         if (!IsValidSha(sha))
         {
-            result.Message = "Invalid commit SHA.";
+            result.Message = T("tm.invalidSha");
             return result;
         }
         newBranch = SanitizeBranchName(newBranch);
         if (string.IsNullOrEmpty(newBranch))
         {
-            result.Message = "Invalid branch name.";
+            result.Message = T("tm.invalidBranch");
             return result;
         }
 
         if (await HasUncommittedChangesAsync(ct))
         {
-            result.Message = "You have uncommitted changes. Stash or commit first.";
+            result.Message = T("tm.dirty");
             return result;
         }
 
-        var r = await RunGitAsync($"checkout -b {newBranch} {sha}", ct);
+        var r = await RunGitAsync(ct, "checkout", "-b", newBranch, sha);
         if (r.ExitCode != 0)
         {
-            result.Message = $"checkout -b failed: {r.StdErr}";
+            _log?.Error("TimeMachine", $"git checkout -b {newBranch} {sha} failed: {r.StdErr.Trim()}");
+            result.Message = T("tm.branchFailed", newBranch);
             return result;
         }
         result.Success = true;
-        result.Message = $"Branched to {newBranch} at {sha[..Math.Min(7, sha.Length)]}";
+        result.Message = T("tm.branched", newBranch, sha[..Math.Min(7, sha.Length)]);
         return result;
     }
 
@@ -368,24 +455,27 @@ public class TimeMachineService
         var result = new TimeMachineActionResult();
         if (!IsValidSha(sha))
         {
-            result.Message = "Invalid commit SHA.";
+            result.Message = T("tm.invalidSha");
             return result;
         }
         if (await HasUncommittedChangesAsync(ct))
         {
-            result.Message = "You have uncommitted changes. Stash or commit first.";
+            result.Message = T("tm.dirty");
             return result;
         }
-        var r = await RunGitAsync($"cherry-pick {sha}", ct);
+        var r = await RunGitAsync(ct, "cherry-pick", sha);
         if (r.ExitCode != 0)
         {
             // Abort half-applied cherry-pick to avoid leaving repo in a weird state
-            await RunGitAsync("cherry-pick --abort", ct);
-            result.Message = $"cherry-pick failed: {r.StdErr.Trim()}";
+            await RunGitAsync(ct, "cherry-pick", "--abort");
+            _log?.Error("TimeMachine", $"git cherry-pick {sha} failed: {r.StdErr.Trim()}");
+            bool conflict = r.StdErr.Contains("conflict", StringComparison.OrdinalIgnoreCase)
+                            || r.StdOut.Contains("CONFLICT", StringComparison.Ordinal);
+            result.Message = conflict ? T("tm.cherryConflict", sha[..Math.Min(7, sha.Length)]) : T("tm.cherryFailed");
             return result;
         }
         result.Success = true;
-        result.Message = $"Cherry-picked {sha[..Math.Min(7, sha.Length)]}";
+        result.Message = T("tm.cherryPicked", sha[..Math.Min(7, sha.Length)]);
         return result;
     }
 
@@ -395,9 +485,9 @@ public class TimeMachineService
 
     private record GitOutput(int ExitCode, string StdOut, string StdErr);
 
-    private async Task<GitOutput> RunGitAsync(string args, CancellationToken ct)
+    private async Task<GitOutput> RunGitAsync(CancellationToken ct, params string[] args)
     {
-        var psi = new ProcessStartInfo("git", args)
+        var psi = new ProcessStartInfo("git")
         {
             WorkingDirectory = HasWorkingDirectory ? WorkingDirectory : Environment.CurrentDirectory,
             RedirectStandardOutput = true,
@@ -407,10 +497,16 @@ public class TimeMachineService
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("core.quotepath=false");
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("i18n.logOutputEncoding=UTF-8");
+        foreach (var a in args) psi.ArgumentList.Add(a);
 
+        Process? proc = null;
         try
         {
-            using var proc = Process.Start(psi);
+            proc = Process.Start(psi);
             if (proc == null) return new GitOutput(-1, "", "git failed to start");
 
             // Concurrent reads — avoid the classic dead-lock when both streams fill
@@ -423,11 +519,16 @@ public class TimeMachineService
         }
         catch (OperationCanceledException)
         {
-            return new GitOutput(-1, "", "cancelled");
+            try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
+            throw;
         }
         catch (Exception ex)
         {
             return new GitOutput(-1, "", ex.Message);
+        }
+        finally
+        {
+            proc?.Dispose();
         }
     }
 
@@ -436,7 +537,6 @@ public class TimeMachineService
     // ═══════════════════════════════════════════
 
     private static readonly Regex ShaRegex = new(@"^[a-f0-9]{4,40}$", RegexOptions.Compiled);
-    private static readonly Regex BranchRegex = new(@"^[a-zA-Z0-9_\-/.]+$", RegexOptions.Compiled);
 
     private static bool IsValidSha(string sha) => !string.IsNullOrWhiteSpace(sha) && ShaRegex.IsMatch(sha);
 
@@ -455,10 +555,4 @@ public class TimeMachineService
         if (result.Length > 255) result = result[..255];
         return result;
     }
-
-    private static string EscapePath(string path) =>
-        path.Replace("\"", "").Replace("`", "").Replace("$", "").Replace(";", "").Replace("&", "").Replace("|", "");
-
-    private static string EscapeArg(string arg) =>
-        arg.Replace("\"", "'").Replace("`", "").Replace("$", "").Replace(";", "").Replace("&", "").Replace("|", "");
 }

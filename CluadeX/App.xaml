@@ -6,6 +6,11 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
+                <!-- [0] THE THEME SLOT: colours, brushes, effects, fonts. Midnight is the default and the
+                     look before themes existed; ThemeService.Apply swaps this entry at runtime (live, no
+                     restart) for Resources/Themes/Classic.xaml or NeonCyber.xaml. Keep it FIRST. -->
+                <ResourceDictionary Source="Resources/Themes/Midnight.xaml"/>
+                <!-- [1] Shared control styles. Colour-free: every brush is a {DynamicResource token}. -->
                 <ResourceDictionary Source="Resources/Theme.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 

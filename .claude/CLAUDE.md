@@ -133,13 +133,22 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - [ ] The 7B two-file ceiling: a weak local model reliably does single-file+build, but a coordinated
       two-file change is at its limit. Options: escalate-to-API on stall (`EscalationEnabled` has UI)
       or plan → per-file subtask decomposition in the agent loop.
-- [ ] Run full integration test with Anthropic API (real keys, multi-turn agentic session)
+- [x] Anthropic API live: 4 models × chat / tools / thinking / effort pass (`tests/apitest`, 2026-10-09).
+      The owner's key is not workspace-scoped — Settings ▸ AI Provider ▸ Workspace ID must stay filled.
+- [ ] A full multi-turn agentic session with the Anthropic API in the running app
+- [ ] OpenAI (Responses API) and Gemini (function calling + thoughtSignature echo) native tool loops are
+      built from the documented wire formats and pass the localhost mock in `tests/apitest`, but have
+      never met the live APIs (no keys on the dev machine). If the API rejects the first tool request the
+      provider switches itself to the [ACTION:] text protocol — run `tests/apitest` live once a key exists.
+- [ ] Re-verify a real local-model coding task on BOTH local backends — llama-server (native tool_use)
+      and in-process LLamaSharp ([ACTION:] loop) — since the prompt now follows the loaded backend's
+      real tool protocol. Before this fix the LLamaSharp path made zero tool calls. Ask + check VRAM first.
 
 ## Build & Run
 ```bash
 cd E:\Code\ClaudeClient
 dotnet build CluadeX/CluadeX.csproj
-# Output: CluadeX\bin\Debug\net8.0-windows\CluadeX.exe
+# Output: CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe
 ```
 **Building while CluadeX is running fails with MSB3027** (the .exe is locked). Either kill it, or
 build somewhere else — which is also how to compile-check without disturbing a running instance:
@@ -149,14 +158,37 @@ dotnet build CluadeX/CluadeX.csproj -p:OutDir=/some/scratch/bld/
 
 ## Proving a feature actually works
 The house standard is a console harness that `<Reference>`s the **built `CluadeX.dll`** and asserts
-against real inputs — not mocks. See `scratchpad/navtest` (132 assertions covering search,
-navigation, rename, completion, diff, merge conflicts, and a live debugpy session).
-It has repeatedly caught bugs the compiler could not: loose subsequence matching in completion,
-a phantom deleted line when diffing a new file, a debugpy launch rejected for sending two spellings
-of the same field.
+against real inputs — not mocks. The coding-tool contract lives in the repo at `tests/tooltest`
+(96 checks: read/edit/write/glob/grep/shell/build/tests, editor Save, IDE rename, and that the tool
+descriptions match the behaviour). It drives the real `AgentToolService` through the same name
+resolver the native tool loop uses, phrasing every call the way a model does, in a throwaway git repo;
+`portable.txt` keeps it off the real `~/.cluadex`. Run: `dotnet build CluadeX/CluadeX.csproj`, then
+`cd tests/tooltest && dotnet run` (report: `bin/Debug/net8.0-windows/tool-report.md`).
+The provider contract lives in `tests/apitest`. Offline (free, no key): per-model request rules for
+Claude / OpenAI / Gemini (thinking, sampling, effort, forced tool_choice), error explanations, the
+assistant-turn rebuild that carries thinking blocks, rate-limit header parsing, and the OpenAI + Gemini
+wire format against a localhost mock. Live (costs cents, key + Workspace ID read from settings):
+Test Connection, chat, tool round trips with/without thinking, edited history, effort levels, model
+listing. `dotnet run -- --offline` · `dotnet run -- claude-opus-5-5,claude-haiku-5-5` · and
+`dotnet run -- --offline --db-health <copy of codex.db>` proves the empty-chat cleanup refuses to touch
+a damaged chat database. Run it whenever a model list or request shape changes.
+The license flow (register PC → check-machine → one free `/demo` key → expiry → restore after reinstall,
+rate-limit/5xx never wiping a key) runs in the same `--offline` pass against a localhost copy of the
+xmanstudio `ProductLicenseController` rules (`tests/apitest/MockLicense.cs`) — never against xman4289.com:
+**a PC that calls `/demo` again after its trial gets flagged as trial abuse on the real server.** The client
+reads the mock's URL from `CLUADEX_LICENSE_API`, which only Debug builds honour.
+The older IDE harness `navtest` (132 assertions: search, navigation, rename, completion, diff, merge
+conflicts, live debugpy) lived in a session scratchpad and its source is gone — **harnesses belong in
+`tests/`, never in a scratchpad.** These harnesses have repeatedly caught bugs the compiler could not:
+loose subsequence matching in completion, a phantom deleted line when diffing a new file, grep that
+only ever searched the first 100 files, write_file adding a BOM to every file it touched.
 
-**`navtest` links the DLL and does NOT rebuild it — always rebuild CluadeX first**, or you will
+**The harness links the DLL and does NOT rebuild it — always rebuild CluadeX first**, or you will
 test a stale binary and believe a fix that isn't in it.
+
+**Never load a local model for a test without asking the owner first and checking free VRAM**
+(`nvidia-smi`): an E2E load of a 7B at ctx 12288 next to ~3.2 GB of desktop VRAM use restarted the
+whole PC (2026-09-24). The contract harness needs no model.
 
 Static checkers worth re-running after any XAML change (they catch what compiles but renders blank):
 every `{Binding}` path resolves to a real member, every `{StaticResource}` key exists, every

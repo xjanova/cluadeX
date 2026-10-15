@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- POSIX shell / bash / zsh scripts.
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, PropertyName -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="Shell" extensions=".sh;.bash;.zsh" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="# comment" />
+  <Color name="String" foreground="#CE9178" exampleText="&quot;$HOME/out&quot;" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="2" />
+  <Color name="Keyword" foreground="#569CD6" exampleText="local" />
+  <Color name="ControlKeyword" foreground="#C586C0" exampleText="fi" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="true" />
+  <Color name="Function" foreground="#DCDCAA" exampleText="echo" />
+  <Color name="Variable" foreground="#9CDCFE" exampleText="$OUT_DIR" />
+
+  <RuleSet>
+    <!-- # starts a comment only at a word start: $#, ${#var} and a#b are not comments. -->
+    <Span color="Comment" begin="(?&lt;![^\s;|&amp;(])#" />
+    <!-- "..." expands $vars; '...' is literal. -->
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet>
+        <Span begin="\\" end="." />
+        <Rule color="Variable">\$\{[^}]*\}|\$[A-Za-z_]\w*|\$[0-9@#?$!*\-]</Rule>
+      </RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>'</Begin>
+      <End>'</End>
+    </Span>
+
+    <Rule color="Variable">\$\{[^}]*\}|\$[A-Za-z_]\w*|\$[0-9@#?$!*\-]</Rule>
+    <!-- NAME=value / NAME+=value, but not the value of an option such as -o=value -->
+    <Rule color="Variable">(?&lt;![\w\-$./])[A-Za-z_]\w*(?=\+?=)</Rule>
+    <Keywords color="ControlKeyword">
+      <Word>if</Word><Word>then</Word><Word>else</Word><Word>elif</Word><Word>fi</Word><Word>for</Word>
+      <Word>while</Word><Word>until</Word><Word>do</Word><Word>done</Word><Word>case</Word><Word>esac</Word>
+      <Word>in</Word><Word>select</Word><Word>break</Word><Word>continue</Word><Word>return</Word>
+    </Keywords>
+    <Keywords color="Keyword">
+      <Word>function</Word><Word>local</Word><Word>export</Word><Word>readonly</Word><Word>declare</Word>
+      <Word>typeset</Word><Word>unset</Word><Word>alias</Word><Word>unalias</Word><Word>source</Word><Word>time</Word>
+      <Word>coproc</Word>
+    </Keywords>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word>
+    </Keywords>
+    <!-- builtins read like calls (VS Code colours them as functions) -->
+    <Keywords color="Function">
+      <Word>echo</Word><Word>printf</Word><Word>read</Word><Word>cd</Word><Word>pwd</Word><Word>pushd</Word>
+      <Word>popd</Word><Word>dirs</Word><Word>test</Word><Word>eval</Word><Word>exec</Word><Word>exit</Word>
+      <Word>shift</Word><Word>trap</Word><Word>wait</Word><Word>kill</Word><Word>set</Word><Word>shopt</Word>
+      <Word>getopts</Word><Word>let</Word><Word>ulimit</Word><Word>umask</Word><Word>type</Word><Word>hash</Word>
+      <Word>command</Word><Word>builtin</Word><Word>enable</Word><Word>logout</Word><Word>mapfile</Word>
+      <Word>readarray</Word><Word>jobs</Word><Word>bg</Word><Word>fg</Word><Word>disown</Word>
+    </Keywords>
+    <!-- name() { ... } -->
+    <Rule color="Function">\b[A-Za-z_][\w\-]*(?=\s*\(\s*\))</Rule>
+    <Rule color="Number">(?&lt;![\w\-.$/])\d+(?![\w./])</Rule>
+  </RuleSet>
+</SyntaxDefinition>

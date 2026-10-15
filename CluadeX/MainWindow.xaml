@@ -11,8 +11,8 @@
         MinHeight="600" MinWidth="900"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
-        Background="{StaticResource NeonBg0Brush}"
-        FontFamily="{StaticResource NeonUiFont}">
+        Background="{DynamicResource Bg.Window}"
+        FontFamily="{DynamicResource Font.Ui.Display}">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="42"
@@ -27,7 +27,7 @@
         <KeyBinding Modifiers="Control" Key="L"
                     Command="{Binding ChatVM.ClearChatCommand}"/>
         <KeyBinding Modifiers="Control" Key="N"
-                    Command="{Binding ChatVM.NewSessionCommand}"/>
+                    Command="{Binding ChatVM.NewChatAndShowCommand}"/>
         <KeyBinding Modifiers="Control" Key="OemComma"
                     Command="{Binding NavigateToCommand}" CommandParameter="Settings"/>
         <KeyBinding Modifiers="Control" Key="D1"
@@ -53,6 +53,7 @@
     </Window.InputBindings>
 
     <Window.Resources>
+        <conv:EqualsMultiConverter x:Key="EqualsMulti"/>
         <DataTemplate DataType="{x:Type vm:ChatViewModel}">
             <views:ChatView/>
         </DataTemplate>
@@ -109,55 +110,28 @@
     <Border x:Name="RootBorder">
         <Grid x:Name="RootGrid">
             <!-- Nebula background — same physics as TimeMachine but app-wide -->
-            <Rectangle IsHitTestVisible="False">
-                <Rectangle.Fill>
-                    <RadialGradientBrush Center="0.5,0" RadiusX="0.8" RadiusY="0.55">
-                        <GradientStop Color="#22A672FF" Offset="0"/>
-                        <GradientStop Color="#06071A" Offset="1"/>
-                    </RadialGradientBrush>
-                </Rectangle.Fill>
-            </Rectangle>
+            <Rectangle IsHitTestVisible="False" Fill="{DynamicResource Backdrop.Nebula}"/>
 
             <!-- 4 ambient depth orbs (subtle parallax) -->
             <Grid IsHitTestVisible="False" ClipToBounds="True" Panel.ZIndex="0">
                 <Ellipse Width="220" Height="220" Margin="-40,80,0,0"
-                         HorizontalAlignment="Left" VerticalAlignment="Top" Opacity="0.16">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#A672FF" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Left" VerticalAlignment="Top" Opacity="0.16"
+                         Fill="{DynamicResource Backdrop.Orb.1}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
                 <Ellipse Width="180" Height="180" Margin="0,80,80,0"
-                         HorizontalAlignment="Right" VerticalAlignment="Top" Opacity="0.14">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#4CDFFF" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Right" VerticalAlignment="Top" Opacity="0.14"
+                         Fill="{DynamicResource Backdrop.Orb.2}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
                 <Ellipse Width="240" Height="240" Margin="0,0,180,40"
-                         HorizontalAlignment="Right" VerticalAlignment="Bottom" Opacity="0.13">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#FF5EC4" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Right" VerticalAlignment="Bottom" Opacity="0.13"
+                         Fill="{DynamicResource Backdrop.Orb.3}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
                 <Ellipse Width="160" Height="160" Margin="180,0,0,40"
-                         HorizontalAlignment="Left" VerticalAlignment="Bottom" Opacity="0.12">
-                    <Ellipse.Fill>
-                        <RadialGradientBrush>
-                            <GradientStop Color="#5CFFB0" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.65"/>
-                        </RadialGradientBrush>
-                    </Ellipse.Fill>
+                         HorizontalAlignment="Left" VerticalAlignment="Bottom" Opacity="0.12"
+                         Fill="{DynamicResource Backdrop.Orb.4}">
                     <Ellipse.Effect><BlurEffect Radius="22"/></Ellipse.Effect>
                 </Ellipse>
             </Grid>
@@ -172,20 +146,18 @@
                 <!-- ════════════════════════════════════════════════════════ -->
                 <!--                       TITLE BAR (42)                     -->
                 <!-- ════════════════════════════════════════════════════════ -->
-                <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{StaticResource NeonLineBrush}">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#EB141838" Offset="0"/>
-                            <GradientStop Color="#D90A0C22" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
+                <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource TitleBar.Border}"
+                        Background="{DynamicResource TitleBar.Background}">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>  <!-- Traffic lights -->
+                            <ColumnDefinition Width="Auto"/>  <!-- (unused: the cosmetic mac traffic lights were removed) -->
                             <ColumnDefinition Width="Auto"/>  <!-- Project / branch -->
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>  <!-- Cmd palette pill -->
+                            <!-- The palette pill is the one thing that gives way on a narrow window: star-sized, so the
+                                 caption buttons on the right are never pushed off-screen (they were at 1280 px). -->
+                            <ColumnDefinition Width="6*"/>    <!-- Cmd palette pill -->
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>  <!-- License chip -->
                             <ColumnDefinition Width="Auto"/>  <!-- New Chat -->
                             <ColumnDefinition Width="Auto"/>  <!-- Open folder -->
                             <ColumnDefinition Width="Auto"/>  <!-- Bell -->
@@ -193,76 +165,58 @@
                             <ColumnDefinition Width="Auto"/>  <!-- Caption buttons -->
                         </Grid.ColumnDefinitions>
 
-                        <!-- Traffic lights (cosmetic) — actual window controls are on the right -->
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,12,0">
-                            <Ellipse Width="12" Height="12" Margin="0,0,7,0">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                        <GradientStop Color="#FFB8B8" Offset="0"/>
-                                        <GradientStop Color="#FF6E6E" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                                <Ellipse.Effect><DropShadowEffect Color="#FF6E6E" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/></Ellipse.Effect>
-                            </Ellipse>
-                            <Ellipse Width="12" Height="12" Margin="0,0,7,0">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                        <GradientStop Color="#FFE6B0" Offset="0"/>
-                                        <GradientStop Color="#FFD166" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                                <Ellipse.Effect><DropShadowEffect Color="#FFD166" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/></Ellipse.Effect>
-                            </Ellipse>
-                            <Ellipse Width="12" Height="12">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                        <GradientStop Color="#BFFFE0" Offset="0"/>
-                                        <GradientStop Color="#5CFFB0" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                                <Ellipse.Effect><DropShadowEffect Color="#5CFFB0" BlurRadius="8" ShadowDepth="0" Opacity="0.7"/></Ellipse.Effect>
-                            </Ellipse>
-                        </StackPanel>
-
-                        <Border Grid.Column="0" Width="1" Margin="106,8,0,8" HorizontalAlignment="Left"
-                                Background="{StaticResource NeonLineBrush}"/>
 
                         <!-- Project + branch -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                            <TextBlock Text="CluadeX" FontFamily="{StaticResource NeonMonoFont}"
+                            <TextBlock Text="CluadeX" FontFamily="{DynamicResource Font.Mono.Display}"
                                        FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{StaticResource NeonInk1Brush}" VerticalAlignment="Center"/>
+                                       Foreground="{DynamicResource TitleBar.Foreground}" VerticalAlignment="Center"/>
                             <!-- Version chip: vX.Y.Z · commit · build time — set in code-behind from the
                                  assembly InformationalVersion, so which build is running is never a guess. -->
                             <Border Margin="8,0,0,0" Padding="6,2" CornerRadius="4" VerticalAlignment="Center"
-                                    Background="#3311152E" BorderThickness="1"
-                                    BorderBrush="{StaticResource NeonLineBrush}">
+                                    Background="{DynamicResource TitleBar.Chip.Background}" BorderThickness="1"
+                                    BorderBrush="{DynamicResource Border.Subtle}">
                                 <TextBlock x:Name="VersionChip" Text="v?"
-                                           FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                           Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                           Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center"
                                            ToolTip="{services:Loc nav.versionTip}"/>
                             </Border>
                             <TextBlock Text="›" Margin="8,0" FontSize="11"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
                                         Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}}">
                                 <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
-                                           FontSize="11" Foreground="{StaticResource NeonCyanBrush}"
-                                           VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{StaticResource NeonMonoFont}"
-                                           FontSize="11" Foreground="{StaticResource NeonCyanBrush}"
-                                           VerticalAlignment="Center" MaxWidth="140" TextTrimming="CharacterEllipsis"
+                                           FontSize="13" Foreground="{DynamicResource Accent.1}"
+                                           VerticalAlignment="Center" Margin="0,0,7,0"/>
+                                <TextBlock Text="{Binding ChatVM.ProjectName}" FontFamily="{DynamicResource Font.Ui}"
+                                           FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                           VerticalAlignment="Center" MaxWidth="180" TextTrimming="CharacterEllipsis"
                                            ToolTip="{Binding ChatVM.WorkingDirectory}"/>
+                                <TextBlock Text="{Binding ChatVM.WorkingDirectory}" FontFamily="{DynamicResource Font.Mono}"
+                                           FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="8,0,0,0"
+                                           VerticalAlignment="Center" MaxWidth="240" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding ChatVM.WorkingDirectory}"/>
+                                <Border CornerRadius="9" Padding="7,1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                        Background="{DynamicResource Status.Success.Tint}"
+                                        Visibility="{Binding ChatVM.GitBranch, Converter={StaticResource BoolVis}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE8AD;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                   Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{Binding ChatVM.GitBranch}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                   Foreground="{DynamicResource Status.Success}" VerticalAlignment="Center"
+                                                   MaxWidth="160" TextTrimming="CharacterEllipsis" ToolTip="{Binding ChatVM.GitBranch}"/>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
-                            <TextBlock Text="{services:Loc nav.noProject}" FontFamily="{StaticResource NeonMonoFont}"
-                                       FontSize="11" Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"
+                            <TextBlock Text="{services:Loc nav.noProject}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                       FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"
                                        FontStyle="Italic"
                                        Visibility="{Binding ChatVM.HasProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                         </StackPanel>
 
                         <!-- Command palette pill — opens the real Ctrl+K palette -->
                         <Button Grid.Column="3" Style="{StaticResource CommandPalettePill}"
-                                MinWidth="340" Margin="20,8"
+                                MaxWidth="440" Margin="12,8"
                                 Command="{Binding OpenPaletteCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 ToolTip="{services:Loc nav.paletteTip}">
@@ -271,34 +225,174 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
+                                <!-- DockPanel, not StackPanel: the pill shrinks on a narrow window and the text must
+                                     trim instead of running under the Ctrl K badge -->
+                                <DockPanel LastChildFill="True" Margin="0,0,8,0">
+                                    <TextBlock DockPanel.Dock="Left" Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
                                                FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{services:Loc nav.searchPlaceholder}" VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="3" Padding="6,1">
-                                    <TextBlock Text="Ctrl K" FontFamily="{StaticResource NeonMonoFont}"
-                                               FontSize="9" Foreground="{StaticResource NeonInk2Brush}"/>
+                                    <TextBlock Text="{services:Loc nav.searchPlaceholder}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </DockPanel>
+                                <Border Grid.Column="1" Background="{DynamicResource TitleBar.Search.Kbd.Background}" CornerRadius="3" Padding="6,1">
+                                    <TextBlock Text="Ctrl K" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" Foreground="{DynamicResource Text.Muted}"/>
                                 </Border>
                             </Grid>
                         </Button>
 
+                        <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
+                             during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
+                        <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- The model answering the chat: pick another here or in the composer (a model on this PC shows by name) -->
+                        <ComboBox x:Name="TitleModelBox" ItemsSource="{Binding ChatVM.ChatModelChoices}" SelectedItem="{Binding ChatVM.SelectedChatModel}"
+                                  Style="{StaticResource ModernComboBox}" Padding="10,3" FontSize="12" MinWidth="170" Height="28"
+                                  Margin="0,0,8,0" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True"
+                                  ToolTip="{services:Loc chat.model.pickTip}"
+                                  Visibility="{Binding ChatVM.HasChatModelChoices, Converter={StaticResource BoolVis}}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Accent.2}"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding PriceLabel}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                   Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+
+                        <!-- Today: what CluadeX spent on paid APIs, against the daily budget when one is set. Click: set it. -->
+                        <Button Margin="0,0,8,0" Cursor="Hand" Click="TodayChip_Click" VerticalAlignment="Center"
+                                WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{services:Loc chat.today.tip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" CornerRadius="6" Padding="8,3" Background="Transparent">
+                                        <ContentPresenter/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding ChatVM.TodayBudgetText}" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding ChatVM.TodayBudgetPercent}" FontSize="11" Margin="10,0,0,0"
+                                               FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
+                                </Grid>
+                                <Grid Height="3" Margin="0,3,0,0" MinWidth="120"
+                                      Visibility="{Binding ChatVM.HasDailyBudget, Converter={StaticResource BoolVis}}">
+                                    <Border Background="{DynamicResource Surface.Raised}" CornerRadius="2"/>
+                                    <Border CornerRadius="2" HorizontalAlignment="Left" RenderTransformOrigin="0,0.5" Background="{DynamicResource Accent.1}">
+                                        <Border.RenderTransform><ScaleTransform ScaleX="{Binding ChatVM.TodayBudgetFraction}"/></Border.RenderTransform>
+                                        <Border.Width><Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType=Grid}"/></Border.Width>
+                                    </Border>
+                                </Grid>
+                            </StackPanel>
+                        </Button>
+                        <!-- DGX Spark chip — opens the Spark window; solid green while CluadeX runs on a Spark -->
+                        <Button Height="26" Margin="4,0,2,0" Cursor="Hand"
+                                Command="{Binding OpenDgxSparkCommand}"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{services:Loc spark.chipTip}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" CornerRadius="13" Padding="10,0" BorderThickness="1"
+                                            Background="{DynamicResource Spark.Chip.Background}" BorderBrush="{DynamicResource Spark.Chip.Border}">
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Ellipse x:Name="dot" Width="7" Height="7" Margin="0,0,6,0" Fill="{DynamicResource Spark.Chip.Dot}"
+                                                     VerticalAlignment="Center"/>
+                                            <TextBlock x:Name="txt" Text="{services:Loc spark.chip}" FontSize="11.5" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Spark.Chip.Foreground}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource Spark.Chip.Hover.Background}"/>
+                                        </Trigger>
+                                        <DataTrigger Binding="{Binding IsSparkActive}" Value="True">
+                                            <Setter TargetName="dot" Property="Fill" Value="{DynamicResource Spark.Chip.Dot.Active}"/>
+                                            <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.Spark.Active}"/>
+                                        </DataTrigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button Height="26" Margin="4,0,2,0"
+                                Command="{Binding OpenLicenseCommand}" Cursor="Hand"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{Binding LicenseChipTip}">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Foreground" Value="{DynamicResource License.Chip.Foreground}"/>
+                                    <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Border}"/>
+                                    <Setter Property="Background" Value="{DynamicResource License.Chip.Background}"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="13" Padding="12,0"
+                                                        Effect="{DynamicResource Glow.License.Chip}">
+                                                    <ContentPresenter VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                                    </Trigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{DynamicResource Glow.License.Trial}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                                        <Setter TargetName="bd" Property="Effect" Value="{x:Null}"/>
+                                                    </DataTrigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="trial">
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Trial.Foreground}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Trial.Background}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding LicenseChipState}" Value="active">
+                                            <Setter Property="Foreground" Value="{DynamicResource License.Chip.Active.Foreground}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource License.Chip.Active.Border}"/>
+                                            <Setter Property="Background" Value="{DynamicResource License.Chip.Active.Background}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding LicenseChipText}" FontSize="11.5" FontWeight="SemiBold"
+                                           FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        </StackPanel>
+
                         <!-- New Chat (icon button) -->
-                        <Button Grid.Column="5" Width="32" Height="32" Margin="6,0,0,0"
+                        <Button Grid.Column="6" Width="32" Height="32" Margin="6,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                Command="{Binding ChatVM.NewSessionCommand}"
+                                Command="{Binding ChatVM.NewChatAndShowCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 ToolTip="{services:Loc nav.newChatTip}">
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
                                         <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{StaticResource NeonCyanBrush}"
+                                                   FontSize="13" Foreground="{DynamicResource Accent.1}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -306,7 +400,7 @@
                         </Button>
 
                         <!-- Open folder (icon button) -->
-                        <Button Grid.Column="6" Width="32" Height="32" Margin="2,0,0,0"
+                        <Button Grid.Column="7" Width="32" Height="32" Margin="2,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding ChatVM.OpenFolderCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -315,12 +409,12 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
                                         <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{StaticResource NeonMintBrush}"
+                                                   FontSize="13" Foreground="{DynamicResource Status.Success}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -328,7 +422,29 @@
                         </Button>
 
                         <!-- Notification bell -->
-                        <Button Grid.Column="7" Width="32" Height="32" Margin="6,0,0,0"
+                        <StackPanel Grid.Column="8" Orientation="Horizontal">
+                        <!-- Theme: one click to the list of themes, applied on the spot -->
+                        <Button x:Name="ThemeButton" Width="32" Height="32" Margin="6,0,0,0"
+                                Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                Click="ThemeButton_Click"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="{services:Loc nav.themeTip}" AutomationProperties.Name="Theme">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="bd" Background="Transparent" CornerRadius="6">
+                                        <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14" Foreground="{DynamicResource Text.Muted}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button Width="32" Height="32" Margin="2,0,0,0"
                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
                                 Command="{Binding CheckUpdateCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -337,58 +453,45 @@
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="Transparent" CornerRadius="6">
                                         <TextBlock Text="&#xEA8F;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{StaticResource NeonInk2Brush}"
+                                                   FontSize="13" Foreground="{DynamicResource Text.Muted}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
                             </Button.Template>
                         </Button>
+                        </StackPanel>
 
                         <!-- Buddy chip -->
-                        <Border Grid.Column="8" Margin="10,6,12,6" Padding="4,0,12,0"
+                        <Border Grid.Column="9" Margin="10,6,12,6" Padding="4,0,12,0"
                                 CornerRadius="14"
-                                Background="#7028326E"
-                                BorderBrush="#665CFFB0" BorderThickness="1"
-                                Cursor="Hand" MouseLeftButtonDown="Buddy_Pet"
+                                Background="{DynamicResource Buddy.Chip.Background}"
+                                BorderBrush="{DynamicResource Buddy.Chip.Border}" BorderThickness="1"
+                                Cursor="Hand" MouseLeftButtonDown="Buddy_Pet" MouseRightButtonUp="Buddy_Menu" ToolTip="{Binding PetDetails}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
+                                Effect="{DynamicResource Glow.Buddy.Chip}"
                                 Visibility="{Binding IsBuddyEnabled, Converter={StaticResource BoolVis}}">
-                            <Border.Effect>
-                                <DropShadowEffect Color="#5CFFB0" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
-                            </Border.Effect>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border Width="22" Height="22" CornerRadius="11" Margin="0,0,8,0">
-                                    <Border.Background>
-                                        <RadialGradientBrush Center="0.3,0.3" RadiusX="0.9" RadiusY="0.9">
-                                            <GradientStop Color="#5CFFB0" Offset="0"/>
-                                            <GradientStop Color="#1F8C5C" Offset="1"/>
-                                        </RadialGradientBrush>
-                                    </Border.Background>
-                                    <TextBlock Text="{Binding BuddyService.CurrentBuddy.DisplayEmoji, FallbackValue=🦎}"
-                                               FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border Width="24" Height="24" CornerRadius="12" Margin="0,0,8,0"
+                                        Background="{DynamicResource Buddy.Avatar}">
+                                    <Image Source="{Binding PetAvatar}" Width="22" Height="22"
+                                           RenderOptions.BitmapScalingMode="NearestNeighbor"/>
                                 </Border>
                                 <StackPanel VerticalAlignment="Center">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.Soul.Name, FallbackValue=Buddy}"
-                                                   FontSize="11" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource NeonInk0Brush}"/>
-                                        <TextBlock Text="{Binding BuddyService.CurrentBuddy.ShinyBadge, FallbackValue=''}"
-                                                   FontSize="10" Margin="2,0,0,0"/>
-                                    </StackPanel>
-                                    <TextBlock FontFamily="{StaticResource NeonMonoFont}"
-                                               FontSize="9" Foreground="{StaticResource NeonMintBrush}">
-                                        <Run Text="{Binding BuddyService.CurrentBuddy.Bones.Rarity, Mode=OneWay, FallbackValue=COMMON}"/>
-                                    </TextBlock>
+                                    <TextBlock Text="{Binding PetTitle}" FontSize="11" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Text.Primary}"/>
+                                    <TextBlock Text="{Binding PetSubtitle}" FontFamily="{DynamicResource Font.Mono.Display}"
+                                               FontSize="9" Foreground="{DynamicResource Status.Success}"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>
 
                         <!-- Caption buttons (min/max/close) -->
-                        <StackPanel Grid.Column="9" Orientation="Horizontal"
+                        <StackPanel Grid.Column="10" Orientation="Horizontal"
                                     WindowChrome.IsHitTestVisibleInChrome="True">
                             <Button x:Name="BtnMinimize" Style="{StaticResource NeonCaptionButton}"
                                     Content="&#xE921;" Click="BtnMinimize_Click"/>
@@ -411,13 +514,8 @@
                     </Grid.ColumnDefinitions>
 
                     <!-- ░░░ ACTIVITY BAR (60px) ░░░ -->
-                    <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{StaticResource NeonLineBrush}">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                <GradientStop Color="#D90C0E26" Offset="0"/>
-                                <GradientStop Color="#D906071A" Offset="1"/>
-                            </LinearGradientBrush>
-                        </Border.Background>
+                    <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource ActivityBar.Border}"
+                            Background="{DynamicResource ActivityBar.Background}">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>  <!-- Logo + divider -->
@@ -429,20 +527,17 @@
                             <StackPanel Grid.Row="0" Margin="0,12,0,8" HorizontalAlignment="Center">
                                 <Grid Width="36" Height="36">
                                     <!-- Halo with conic-gradient feel via radial -->
-                                    <Ellipse Width="48" Height="48" Margin="-6" Opacity="0.55">
-                                        <Ellipse.Fill>
-                                            <RadialGradientBrush>
-                                                <GradientStop Color="#A672FF" Offset="0"/>
-                                                <GradientStop Color="Transparent" Offset="0.7"/>
-                                            </RadialGradientBrush>
-                                        </Ellipse.Fill>
+                                    <Ellipse Width="48" Height="48" Margin="-6" Opacity="0.55"
+                                             Fill="{DynamicResource ActivityBar.Logo.Halo}">
                                         <Ellipse.Effect><BlurEffect Radius="8"/></Ellipse.Effect>
                                         <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
                                         <Ellipse.RenderTransform><RotateTransform x:Name="LogoHalo"/></Ellipse.RenderTransform>
                                         <Ellipse.Triggers>
                                             <EventTrigger RoutedEvent="Ellipse.Loaded">
                                                 <BeginStoryboard>
-                                                    <Storyboard RepeatBehavior="Forever">
+                                                    <!-- 15 fps: a blurred ellipse redrawn at 60 fps kept the render thread
+                                                         at ~30% of a core with the app idle (2026-10-14). -->
+                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
                                                         <DoubleAnimation Storyboard.TargetName="LogoHalo"
                                                                          Storyboard.TargetProperty="Angle"
                                                                          From="0" To="360" Duration="0:0:8"/>
@@ -452,16 +547,24 @@
                                         </Ellipse.Triggers>
                                     </Ellipse>
                                     <Border Width="36" Height="36" CornerRadius="18"
-                                            Background="{StaticResource NeonBg2Brush}">
+                                            Background="{DynamicResource ActivityBar.Logo.Background}">
                                         <Image Source="Assets/logo.png" Width="32" Height="32"
                                                RenderOptions.BitmapScalingMode="HighQuality"/>
                                     </Border>
                                 </Grid>
-                                <Border Width="28" Height="1" Margin="0,10,0,0" Background="{StaticResource NeonLineHiBrush}"/>
+                                <Border Width="28" Height="1" Margin="0,10,0,0" Background="{DynamicResource ActivityBar.Logo.Divider}"/>
                             </StackPanel>
 
                             <!-- Activity icons -->
-                            <StackPanel Grid.Row="1" Margin="0,8,0,8">
+                            <!-- In a short window the list scrolls (wheel) instead of sliding under the Settings button, which
+                                 covered the last items and took their clicks. -->
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                                          Focusable="False" PanningMode="VerticalOnly">
+                            <!-- Only the places you work in (owner 2026-10-11: "อันไหนใช้ไม่ได้จริงบ้างหรือไม่จำเป็นต้องมี ให้เอาออกเลย").
+                                 Skills, Subagents, Instincts, Hooks, Plugins, Permissions, Features, Security Shield,
+                                 Hex Editor and Debug Log live under Settings › General › More tools, Ctrl+K and their
+                                 Ctrl+number keys; the agent still opens Hex Editor itself. -->
+                            <StackPanel Margin="0,8,0,8">
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8BD;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Chat"
@@ -472,40 +575,6 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Code"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.codeTip}" AutomationProperties.Name="Code Editor"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE99A;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=SubAgents, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="SubAgents"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.subagentsTip}" AutomationProperties.Name="Subagents"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE945;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Skills, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Skills"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.skillsTip}" AutomationProperties.Name="Skills"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE82D;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Instincts, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Instincts"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.instinctsTip}"
-                                             AutomationProperties.Name="Instincts"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xEBE8;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=DebugLog, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="DebugLog"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.debugLogTip}"
-                                             AutomationProperties.Name="Debug Log"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE72E;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=SecurityShield, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="SecurityShield"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.shieldTip}"
-                                             AutomationProperties.Name="SecurityShield"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE9F5;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=HookLibrary, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="HookLibrary"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.hooksTip}"
-                                             AutomationProperties.Name="Hook Library"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8F1;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Models"
@@ -516,19 +585,9 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="TimeMachine"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.timeMachineTip}" AutomationProperties.Name="Time Machine"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE943;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=HexEditor, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="HexEditor"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.hexTip}" AutomationProperties.Name="Hex Editor"/>
 
-                                <Border Width="28" Height="1" Margin="16,8" Background="{StaticResource NeonLineBrush}"/>
+                                <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
 
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE74C;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Plugins, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Plugins"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.pluginsTip}" AutomationProperties.Name="Plugins"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xECAA;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=McpServers, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
@@ -539,17 +598,8 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.tasksTip}" AutomationProperties.Name="Tasks"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE72E;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Permissions, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Permissions"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.permissionsTip}" AutomationProperties.Name="Permissions"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE734;"
-                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Features, Mode=OneWay}"
-                                             Command="{Binding NavigateToCommand}" CommandParameter="Features"
-                                             GroupName="Activity"
-                                             ToolTip="{services:Loc nav.featuresTip}" AutomationProperties.Name="Features"/>
                             </StackPanel>
+                            </ScrollViewer>
 
                             <!-- Bottom: Settings -->
                             <StackPanel Grid.Row="2" Margin="0,4,0,12">
@@ -563,14 +613,15 @@
                     </Border>
 
                     <!-- ░░░ CONTEXTUAL PANEL (240px when Chat is selected) ░░░ -->
-                    <Border Grid.Column="1" BorderThickness="0,0,1,0" BorderBrush="{StaticResource NeonLineBrush}"
-                            Background="#A60A0C22">
+                    <Border x:Name="ChatSidebar" Grid.Column="1" Width="240" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Sidebar.Border}"
+                            Background="{DynamicResource Sidebar.Background}">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Width" Value="0"/>
+                                <!-- Shown on the Chat page only; its width is the user's (ResizeGrip below) -->
+                                <Setter Property="Visibility" Value="Collapsed"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding SelectedNavItem}" Value="Chat">
-                                        <Setter Property="Width" Value="240"/>
+                                        <Setter Property="Visibility" Value="Visible"/>
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
@@ -589,18 +640,29 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE81C;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                                   Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                        <TextBlock Text="{services:Loc sidebar.chatHistory}" FontSize="10" FontWeight="Bold"
-                                                   FontFamily="{StaticResource NeonMonoFont}"
-                                                   Foreground="{StaticResource NeonInk3Brush}"
-                                                   VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                    <ToggleButton Grid.Column="1" Width="22" Height="22"
+                                    <TextBlock Text="{services:Loc sidebar.conversations}" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Button Width="24" Height="24" Margin="0,0,2,0" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                            Command="{Binding ChatVM.NewChatAndShowCommand}" ToolTip="{services:Loc nav.newChatTip}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                                                    <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                    <ToggleButton Width="24" Height="24"
                                                   IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
                                                   Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                  Foreground="{StaticResource NeonInk3Brush}"
+                                                  Foreground="{DynamicResource Text.Faint}"
                                                   ToolTip="{services:Loc nav.allProjectsTip}">
                                         <ToggleButton.Template>
                                             <ControlTemplate TargetType="ToggleButton">
@@ -611,22 +673,23 @@
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Foreground" Value="{StaticResource NeonMagentaBrush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
                                                     </Trigger>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bg" Property="Background" Value="#1AFFFFFF"/>
+                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </ToggleButton.Template>
                                     </ToggleButton>
+                                    </StackPanel>
                                 </Grid>
                             </Border>
 
                             <!-- Search box -->
                             <Border Grid.Row="1" Margin="14,2,14,10" Padding="8,0"
-                                    Background="#7011152E"
-                                    BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
+                                    Background="{DynamicResource Surface.Input}"
+                                    BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
                                     CornerRadius="6">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -635,12 +698,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                               Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                               Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBox Grid.Column="1"
                                              Text="{Binding ChatVM.HistorySearchQuery, UpdateSourceTrigger=PropertyChanged}"
                                              Background="Transparent" BorderThickness="0"
-                                             Foreground="{StaticResource NeonInk0Brush}"
-                                             CaretBrush="{StaticResource NeonCyanBrush}"
+                                             Foreground="{DynamicResource Text.Primary}"
+                                             CaretBrush="{DynamicResource Accent.1}"
                                              FontSize="11" Padding="0,7" VerticalContentAlignment="Center"/>
                                     <Button Grid.Column="2" Width="20" Height="20"
                                             Background="Transparent" BorderThickness="0" Cursor="Hand"
@@ -648,7 +711,7 @@
                                             Visibility="{Binding ChatVM.IsSearchingHistory, Converter={StaticResource BoolVis}}"
                                             ToolTip="{services:Loc sidebar.clearSearch}">
                                         <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                   Foreground="{DynamicResource Text.Faint}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Button>
                                 </Grid>
@@ -659,6 +722,16 @@
                                 <Grid>
                                     <!-- Normal session list -->
                                     <ItemsControl ItemsSource="{Binding ChatVM.VisibleSessions}">
+                                        <ItemsControl.GroupStyle>
+                                            <GroupStyle>
+                                                <GroupStyle.HeaderTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" Margin="8,10,0,4"
+                                                                   Foreground="{DynamicResource Text.Muted}"/>
+                                                    </DataTemplate>
+                                                </GroupStyle.HeaderTemplate>
+                                            </GroupStyle>
+                                        </ItemsControl.GroupStyle>
                                         <ItemsControl.Style>
                                             <Style TargetType="ItemsControl">
                                                 <Setter Property="Visibility" Value="Visible"/>
@@ -674,46 +747,68 @@
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding Id}"
                                                         Background="Transparent" BorderThickness="0"
-                                                        Foreground="{StaticResource NeonInk1Brush}"
+                                                        Foreground="{DynamicResource Text.Secondary}"
                                                         HorizontalContentAlignment="Stretch" Cursor="Hand"
                                                         Margin="0,1" Padding="10,7">
                                                     <Button.Template>
                                                         <ControlTemplate TargetType="Button">
+                                                            <Grid>
                                                             <Border x:Name="bd" Background="{TemplateBinding Background}"
                                                                     Padding="{TemplateBinding Padding}" CornerRadius="6"
                                                                     BorderThickness="1" BorderBrush="Transparent">
                                                                 <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
                                                             </Border>
+                                                            <Border x:Name="strip" Width="3" HorizontalAlignment="Left" Margin="0,6" CornerRadius="2"
+                                                                    Background="{DynamicResource Accent.1}" Visibility="Collapsed"/>
+                                                            </Grid>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="bd" Property="Background" Value="#15FFFFFF"/>
-                                                                    <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource NeonLineHiBrush}"/>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
+                                                                    <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
                                                                 </Trigger>
+                                                                <DataTrigger Value="True">
+                                                                    <DataTrigger.Binding>
+                                                                        <MultiBinding Converter="{StaticResource EqualsMulti}">
+                                                                            <Binding Path="Id"/>
+                                                                            <Binding Path="DataContext.ChatVM.CurrentSession.Id" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                                        </MultiBinding>
+                                                                    </DataTrigger.Binding>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
+                                                                    <Setter TargetName="strip" Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
                                                     </Button.Template>
                                                     <Grid>
                                                         <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="*"/>
                                                             <ColumnDefinition Width="Auto"/>
                                                         </Grid.ColumnDefinitions>
-                                                        <StackPanel>
+                                                        <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="12" Margin="0,2,10,0"
+                                                                   VerticalAlignment="Top" Foreground="{DynamicResource Text.Muted}"/>
+                                                        <StackPanel Grid.Column="1">
                                                             <TextBlock Text="{Binding Title}" FontSize="12"
-                                                                       Foreground="{StaticResource NeonInk1Brush}"
-                                                                       TextTrimming="CharacterEllipsis" MaxWidth="170"/>
-                                                            <TextBlock Text="{Binding UpdatedAt, StringFormat='{}{0:MMM dd · HH:mm}'}"
-                                                                       FontSize="9" Margin="0,2,0,0"
-                                                                       FontFamily="{StaticResource NeonMonoFont}"
-                                                                       Foreground="{StaticResource NeonInk3Brush}"/>
+                                                                       Foreground="{DynamicResource Text.Primary}"
+                                                                       TextTrimming="CharacterEllipsis" MaxWidth="150"/>
+                                                            <TextBlock Text="{Binding ProjectName}" FontSize="11" Margin="0,1,0,0"
+                                                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis" MaxWidth="150"
+                                                                       Visibility="{Binding ProjectName, Converter={StaticResource BoolVis}}"/>
                                                         </StackPanel>
-                                                        <Button Grid.Column="1" Width="20" Height="20"
+                                                        <Grid Grid.Column="2">
+                                                        <TextBlock Text="{Binding ListTimeLabel}" FontSize="11" VerticalAlignment="Top" Margin="6,1,0,0"
+                                                                   FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"
+                                                                   Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                        <Button Width="20" Height="20" VerticalAlignment="Top"
                                                                 Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}"
                                                                 Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                 CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
-                                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="9"
-                                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                       Foreground="{DynamicResource Text.Muted}"
                                                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                         </Button>
+                                                        </Grid>
                                                     </Grid>
                                                 </Button>
                                             </DataTemplate>
@@ -724,7 +819,7 @@
                                     <TextBlock Text="{services:Loc sidebar.noConversations}"
                                                FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
                                                HorizontalAlignment="Center" Margin="20,30"
-                                               Foreground="{StaticResource NeonInk3Brush}">
+                                               Foreground="{DynamicResource Text.Faint}">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
                                                 <Setter Property="Visibility" Value="Collapsed"/>
@@ -767,7 +862,7 @@
                                                             </Border>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="bd" Property="Background" Value="#15FFFFFF"/>
+                                                                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Subtle}"/>
                                                                 </Trigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
@@ -779,16 +874,16 @@
                                                                 <ColumnDefinition Width="Auto"/>
                                                             </Grid.ColumnDefinitions>
                                                             <TextBlock Text="{Binding SessionTitle}" FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{StaticResource NeonVioletBrush}"
+                                                                       Foreground="{DynamicResource Accent.2}"
                                                                        TextTrimming="CharacterEllipsis" MaxWidth="160"/>
-                                                            <Border Grid.Column="1" Background="#22FFFFFF" CornerRadius="8" Padding="6,1">
+                                                            <Border Grid.Column="1" Background="{DynamicResource Surface.Badge}" CornerRadius="8" Padding="6,1">
                                                                 <TextBlock Text="{Binding MatchCount, StringFormat='{}{0} hits'}"
-                                                                           FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                                                           Foreground="{StaticResource NeonInk2Brush}"/>
+                                                                           FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
+                                                                           Foreground="{DynamicResource Text.Muted}"/>
                                                             </Border>
                                                         </Grid>
                                                         <TextBlock Text="{Binding Snippet}" FontSize="10" Margin="0,3,0,0"
-                                                                   Foreground="{StaticResource NeonInk3Brush}"
+                                                                   Foreground="{DynamicResource Text.Faint}"
                                                                    TextTrimming="CharacterEllipsis" MaxHeight="32" TextWrapping="Wrap"/>
                                                     </StackPanel>
                                                 </Button>
@@ -800,6 +895,12 @@
                         </Grid>
                     </Border>
 
+                    <!-- Drag the chat list's right edge to resize it (remembered); double-click puts it back to 240 -->
+                    <views:ResizeGrip Grid.Column="1" HorizontalAlignment="Right" Margin="0,0,-3,0"
+                                      Key="main.chatList" MinSize="180" MaxSize="520"
+                                      Target="{Binding ElementName=ChatSidebar}"
+                                      Visibility="{Binding Visibility, ElementName=ChatSidebar}"/>
+
                     <!-- ░░░ CENTER CONTENT ░░░ -->
                     <Grid Grid.Column="2">
                         <Grid.RowDefinitions>
@@ -809,14 +910,9 @@
 
                         <!-- Update banner -->
                         <Border Grid.Row="0" Padding="14,8" BorderThickness="0,0,0,1"
-                                BorderBrush="{StaticResource NeonLineBrush}"
+                                BorderBrush="{DynamicResource Border.Subtle}"
+                                Background="{DynamicResource Banner.Background}"
                                 Visibility="{Binding ShowUpdateBar, Converter={StaticResource BoolVis}}">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                    <GradientStop Color="#1A6366F1" Offset="0"/>
-                                    <GradientStop Color="#1A06B6D4" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -825,18 +921,19 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="&#xE777;" FontFamily="Segoe MDL2 Assets" FontSize="16"
-                                           Foreground="{StaticResource NeonCyanBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                           Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding UpdateMessage}" FontSize="12"
-                                               Foreground="{StaticResource NeonInk0Brush}"/>
+                                               Foreground="{DynamicResource Text.Primary}"/>
                                     <ProgressBar Value="{Binding UpdateProgress}" Maximum="100" Height="4" Margin="0,4,0,0"
-                                                 Foreground="{StaticResource NeonCyanBrush}"
+                                                 Foreground="{DynamicResource Accent.1}"
                                                  Visibility="{Binding IsUpdating, Converter={StaticResource BoolVis}}"/>
                                 </StackPanel>
                                 <Button Grid.Column="2" Command="{Binding InstallUpdateCommand}"
+                                        Visibility="{Binding CanInstallUpdate, Converter={StaticResource BoolVis}}"
                                         Padding="14,6" Margin="8,0" FontSize="11" Cursor="Hand"
-                                        Background="{StaticResource NeonRewindGradient}" BorderThickness="0"
-                                        Foreground="White">
+                                        Background="{DynamicResource Banner.Button.Background}" BorderThickness="0"
+                                        Foreground="{DynamicResource Text.OnAccent}">
                                     <Button.Template>
                                         <ControlTemplate TargetType="Button">
                                             <Border Background="{TemplateBinding Background}" CornerRadius="6"
@@ -851,152 +948,135 @@
                                         Background="Transparent" BorderThickness="0" Cursor="Hand"
                                         ToolTip="{services:Loc nav.dismissTip}">
                                     <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                               Foreground="{StaticResource NeonInk3Brush}"
+                                               Foreground="{DynamicResource Text.Faint}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Button>
                             </Grid>
                         </Border>
 
-                        <!-- Main content area — hosts the active page -->
-                        <ContentControl Grid.Row="1" Content="{Binding CurrentView}"/>
+                        <!-- Main content area — hosts the active page. The chat and the code editor are built once and
+                             kept (switching between them used to rebuild both); see Views/PageHost. -->
+                        <views:PageHost x:Name="PageArea" Grid.Row="1" Page="{Binding CurrentView}"/>
                     </Grid>
                 </Grid>
 
                 <!-- ════════════════════════════════════════════════════════ -->
                 <!--                     STATUS BAR (34)                      -->
                 <!-- ════════════════════════════════════════════════════════ -->
-                <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{StaticResource NeonLineBrush}">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                            <GradientStop Color="#EB0C0E26" Offset="0"/>
-                            <GradientStop Color="#F206071A" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
+                <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StatusBar.Border}"
+                        Background="{DynamicResource StatusBar.Background}">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>  <!-- Connected -->
                             <ColumnDefinition Width="Auto"/>  <!-- GPU -->
                             <ColumnDefinition Width="Auto"/>  <!-- Model -->
                             <ColumnDefinition Width="Auto"/>  <!-- Tok/s + cost -->
-                            <ColumnDefinition Width="Auto"/>  <!-- BrainX link + ObsidianX bridge chips -->
+                            <ColumnDefinition Width="Auto"/>  <!-- BrainX link chip -->
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>  <!-- LED context -->
-                            <ColumnDefinition Width="Auto"/>  <!-- Time Machine -->
-                            <ColumnDefinition Width="Auto"/>  <!-- Secure -->
                         </Grid.ColumnDefinitions>
 
                         <!-- Connected pip -->
                         <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                            <Ellipse Width="8" Height="8" Margin="0,0,6,0">
+                            <Ellipse Width="8" Height="8" Margin="0,0,6,0" Effect="{DynamicResource Glow.StatusBar.Pip}">
                                 <Ellipse.Style>
                                     <Style TargetType="Ellipse">
-                                        <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
+                                        <Setter Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsModelLoaded}" Value="True">
-                                                <Setter Property="Fill" Value="{StaticResource NeonMintBrush}"/>
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Success}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
-                                                <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
+                                                <Setter Property="Fill" Value="{DynamicResource Status.Warning}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </Ellipse.Style>
-                                <Ellipse.Effect>
-                                    <DropShadowEffect Color="#5CFFB0" BlurRadius="10" ShadowDepth="0" Opacity="0.8"/>
-                                </Ellipse.Effect>
                             </Ellipse>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10" VerticalAlignment="Center">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="{StaticResource NeonRedBrush}"/>
-                                        <Setter Property="Text" Value="OFFLINE"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsModelLoaded}" Value="True">
-                                                <Setter Property="Foreground" Value="{StaticResource NeonMintBrush}"/>
-                                                <Setter Property="Text" Value="CONNECTED"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
-                                                <Setter Property="Foreground" Value="{StaticResource NeonAmberBrush}"/>
-                                                <Setter Property="Text" Value="LOADING…"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
+                            <!-- What the chat is doing now ("พร้อมใช้งาน", "ขั้นที่ 3/200 · กำลังคิด…") -->
+                            <TextBlock Text="{Binding ChatVM.StatusText}" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" MaxWidth="360" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding ChatVM.StatusText}"/>
                         </StackPanel>
 
                         <!-- GPU info — VRAM + sparkline + temp chip -->
+                        <!-- Only while a local model is the brain: with Claude / GPT / Gemini this PC's GPU does no work for the chat -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
-                                    Visibility="{Binding HasLiveGpuStats, Converter={StaticResource BoolVis}}">
+                                    Visibility="{Binding ShowGpuStats, Converter={StaticResource BoolVis}}">
                             <StackPanel.ToolTip>
                                 <StackPanel Margin="4">
                                     <TextBlock Text="{services:Loc nav.gpuMonitor}" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                               Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="{services:Loc nav.utilization}"/><Run Text="{Binding LiveGpuStats.GpuUtilization, Mode=OneWay}"/><Run Text="%"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="{services:Loc nav.temperature}"/><Run Text="{Binding LiveGpuStats.TemperatureC, Mode=OneWay}"/><Run Text="°C"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="VRAM: "/><Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
                                     </TextBlock>
                                 </StackPanel>
                             </StackPanel.ToolTip>
                             <TextBlock Text="&#xE950;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center">
+                                       Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center">
                                 <Run Text="{Binding GpuUsageDisplay, Mode=OneWay}"/>
                             </TextBlock>
                             <!-- Rolling sparkline of last ~48s of GPU utilization -->
                             <Canvas Width="100" Height="18" Margin="8,0,0,0" ClipToBounds="True"
-                                    Background="#221E2056">
+                                    Background="{DynamicResource Chart.Background}">
                                 <Polyline Points="{Binding GpuSparklinePoints}"
-                                          Stroke="{StaticResource NeonVioletBrush}"
+                                          Stroke="{DynamicResource Chart.Line}"
+                                          Effect="{DynamicResource Glow.Chart.Line}"
                                           StrokeThickness="1.4"
                                           StrokeLineJoin="Round"
                                           StrokeStartLineCap="Round"
-                                          StrokeEndLineCap="Round">
-                                    <Polyline.Effect>
-                                        <DropShadowEffect Color="#A672FF" BlurRadius="6" ShadowDepth="0" Opacity="0.7"/>
-                                    </Polyline.Effect>
-                                </Polyline>
+                                          StrokeEndLineCap="Round"/>
                             </Canvas>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"
+                            <TextBlock FontFamily="{DynamicResource Font.Mono.Display}" FontSize="10"
+                                       Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"
                                        Margin="8,0,0,0">
                                 <Run Text="{Binding GpuVramDisplay, Mode=OneWay}"/>
                             </TextBlock>
                             <Border Margin="6,0,0,0" Padding="5,1" CornerRadius="3"
                                     Background="{Binding GpuTempBrush}">
                                 <TextBlock Text="{Binding GpuTempDisplay}" FontSize="9" FontWeight="Bold"
-                                           Foreground="#1E1E2E"/>
+                                           Foreground="{DynamicResource Text.Inverse}"/>
                             </Border>
                         </StackPanel>
 
                         <!-- Model name -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
                             <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonVioletBrush}" VerticalAlignment="Center"
-                                       MaxWidth="160" TextTrimming="CharacterEllipsis"
+                                       Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"
+                                       MaxWidth="200" TextTrimming="CharacterEllipsis"
                                        Text="{Binding ChatVM.LoadedModelName, FallbackValue='no model'}"/>
+                            <TextBlock Text="{Binding ChatVM.ContextWindowText}" FontSize="12" Margin="16,0,0,0"
+                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"/>
                         </StackPanel>
 
-                        <!-- Tokens/sec + Cost -->
-                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
-                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonAmberBrush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock Text="{Binding ChatVM.LastTurnStats, FallbackValue='—'}"
-                                       FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk2Brush}" VerticalAlignment="Center"/>
-                            <TextBlock Text=" · " FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonInk3Brush}" VerticalAlignment="Center"/>
-                            <TextBlock Text="{Binding ChatVM.CostText, FallbackValue='$0.00'}"
-                                       FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center"/>
+                        <!-- How full the context is: tokens used of the window, as a bar -->
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
+                                    ToolTip="{services:Loc chat.ctxTip}">
+                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <TextBlock FontSize="12" Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center">
+                                <Run Text="{Binding ChatVM.ContextUsageText, Mode=OneWay}"/>
+                                <Run Text=" tokens ("/><Run Text="{Binding ChatVM.ContextUsagePercent, Mode=OneWay, StringFormat={}{0:F0}}"/><Run Text="%)"/>
+                            </TextBlock>
+                            <Grid Width="120" Height="5" Margin="10,0,0,0" VerticalAlignment="Center">
+                                <Border Background="{DynamicResource Led.Off}" CornerRadius="3"/>
+                                <Border CornerRadius="3" HorizontalAlignment="Left" RenderTransformOrigin="0,0.5"
+                                        Background="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource CtxBrush}}" Width="120">
+                                    <Border.RenderTransform>
+                                        <ScaleTransform ScaleX="{Binding ChatVM.ContextFraction}"/>
+                                    </Border.RenderTransform>
+                                </Border>
+                            </Grid>
                         </StackPanel>
 
                         <!-- Two MCP chips, opposite directions:
@@ -1004,23 +1084,26 @@
                              🌉 = orchestrators can reach us (inbound named-pipe host) -->
                         <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
 
-                        <!-- BrainX link chip -->
-                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
-                                Background="#1AA672FF" BorderBrush="#55A672FF" BorderThickness="1"
+                        <!-- BrainX link chip — click: the MCP page when connected, the BrainX window (install / connect) otherwise -->
+                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6" Cursor="Hand"
+                                Background="{DynamicResource StatusBar.Brain.Background}" BorderBrush="{DynamicResource StatusBar.Brain.Border}" BorderThickness="1"
                                 Visibility="{Binding McpServers, Converter={StaticResource NullToCollapsed}}">
+                            <Border.InputBindings>
+                                <MouseBinding MouseAction="LeftClick" Command="{Binding OpenBrainCommand}"/>
+                            </Border.InputBindings>
                             <Border.ToolTip>
                                 <StackPanel Margin="4" MaxWidth="420">
                                     <TextBlock Text="BrainX" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                               Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="Server: "/><Run Text="{Binding McpServers.BrainServerName, Mode=OneWay, FallbackValue='(not configured)'}"/>
                                     </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Text.Secondary}">
                                         <Run Text="State: "/><Run Text="{Binding McpServers.BrainState, Mode=OneWay}"/>
                                         <Run Text=" · Tools: "/><Run Text="{Binding McpServers.BrainToolCount, Mode=OneWay}"/>
                                     </TextBlock>
                                     <TextBlock FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0"
-                                               Foreground="{StaticResource NeonRedBrush}"
+                                               Foreground="{DynamicResource Status.Danger}"
                                                Text="{Binding McpServers.BrainLastError, Mode=OneWay}"
                                                Visibility="{Binding McpServers.BrainLastError, Converter={StaticResource NullToCollapsed}}"/>
                                 </StackPanel>
@@ -1031,212 +1114,78 @@
                                         <Style TargetType="Ellipse">
                                             <!-- Default red: anything that is not provably Ready is a
                                                  brain the agent cannot call. -->
-                                            <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
+                                            <Setter Property="Fill" Value="{DynamicResource Status.Danger}"/>
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding McpServers.BrainState}" Value="Starting">
-                                                    <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding McpServers.BrainState}" Value="Reconnecting">
-                                                    <Setter Property="Fill" Value="{StaticResource NeonAmberBrush}"/>
+                                                <!-- Amber while starting OR while the supervisor is between two
+                                                     respawn attempts (an attempt just failed, the next is due): the
+                                                     same IsBrainStarting the BrainX window asks, so the chip no
+                                                     longer goes red in the gap while the window says "starting". -->
+                                                <DataTrigger Binding="{Binding McpServers.IsBrainStarting}" Value="True">
+                                                    <Setter Property="Fill" Value="{DynamicResource Status.Warning}"/>
                                                 </DataTrigger>
                                                 <!-- Last, so it wins: bound to the BOOL, not the enum, because a
                                                      bool trigger is the pattern already proven in this file. If the
                                                      enum triggers above ever failed to match, the dot degrades to
                                                      red — still honest, never a false green. -->
                                                 <DataTrigger Binding="{Binding McpServers.IsBrainConnected}" Value="True">
-                                                    <Setter Property="Fill" Value="#A672FF"/>
+                                                    <Setter Property="Fill" Value="{DynamicResource StatusBar.Brain.Connected}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Ellipse.Style>
                                 </Ellipse>
                                 <TextBlock Text="🧠" FontSize="10" Margin="0,0,4,0"/>
-                                <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk1Brush}"
+                                <TextBlock FontSize="9" FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Secondary}"
                                            Text="{Binding McpServers.BrainStatusText, Mode=OneWay, FallbackValue='brain · —'}"/>
                             </StackPanel>
                         </Border>
 
-                        <!-- ObsidianX bridge chip -->
-                        <Border Margin="14,5,0,5" Padding="8,2" CornerRadius="6"
-                                Background="#1A4FFFE2" BorderBrush="#554FFFE2" BorderThickness="1"
-                                Visibility="{Binding McpHost, Converter={StaticResource NullToCollapsed}}">
-                            <Border.ToolTip>
-                                <StackPanel Margin="4">
-                                    <TextBlock Text="{services:Loc nav.bridge}" FontWeight="Bold"
-                                               Foreground="{StaticResource NeonInk0Brush}" Margin="0,0,0,4"/>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
-                                        <Run Text="Pipe: \\.\pipe\"/><Run Text="{Binding McpHost.PipeName, Mode=OneWay}"/>
-                                    </TextBlock>
-                                    <TextBlock FontSize="10" Foreground="{StaticResource NeonInk1Brush}">
-                                        <Run Text="Active: "/><Run Text="{Binding McpHost.ActiveConnections, Mode=OneWay}"/>
-                                        <Run Text=" · Total: "/><Run Text="{Binding McpHost.TotalRequests, Mode=OneWay}"/>
-                                    </TextBlock>
-                                </StackPanel>
-                            </Border.ToolTip>
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="6" Height="6" Margin="0,0,6,0" VerticalAlignment="Center">
-                                    <Ellipse.Style>
-                                        <Style TargetType="Ellipse">
-                                            <Setter Property="Fill" Value="{StaticResource NeonRedBrush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding McpHost.IsListening}" Value="True">
-                                                    <Setter Property="Fill" Value="#4FFFE2"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Ellipse.Style>
-                                </Ellipse>
-                                <TextBlock Text="🌉" FontSize="10" Margin="0,0,4,0"/>
-                                <TextBlock FontSize="9" FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk1Brush}">
-                                    <Run Text="{Binding McpHost.ActiveConnections, Mode=OneWay, FallbackValue=0}"/>
-                                </TextBlock>
+
+                        </StackPanel>
+
+                        <!-- Right: other chats still running, this run's spend, files changed, the last turn -->
+                        <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
+                            <Button Command="{Binding ChatVM.ShowRunningChatCommand}" Style="{StaticResource IconButton}"
+                                    Width="Auto" Height="Auto" FontFamily="{DynamicResource Font.Ui}" Padding="6,1" Margin="0,0,14,0"
+                                    ToolTip="{services:Loc chat.runs.showTip}"
+                                    Visibility="{Binding ChatVM.HasRunningElsewhere, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{Binding ChatVM.RunningElsewhereText}" FontSize="12" Foreground="{DynamicResource Status.Warning}"/>
+                            </Button>
+                            <TextBlock Text="{Binding ChatVM.RunCostText}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Status.Warning}"
+                                       VerticalAlignment="Center" Margin="0,0,14,0" ToolTip="{services:Loc chat.spend.runTip}"
+                                       Visibility="{Binding ChatVM.RunCostText, Converter={StaticResource BoolVis}}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,14,0"
+                                        Visibility="{Binding ChatVM.FilesChangedText, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding ChatVM.FilesChangedText}" FontSize="12"
+                                           Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"/>
                             </StackPanel>
-                        </Border>
-
-                        </StackPanel>
-
-                        <!-- LED context bar (5 segments) -->
-                        <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
-                            <TextBlock FontFamily="{StaticResource NeonMonoFont}" FontSize="10" VerticalAlignment="Center" Margin="0,0,8,0"
-                                       Foreground="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource CtxBrush}}">
-                                <Run Text="CTX "/>
-                                <Run Text="{Binding ChatVM.ContextUsagePercent, Mode=OneWay, StringFormat={}{0:F0}}"/>
-                                <Run Text="% · "/>
-                                <Run Text="{Binding ChatVM.ContextLevelLabel, Mode=OneWay, FallbackValue='FRESH'}"/>
-                            </TextBlock>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=0}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonMintBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#5CFFB0" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=25}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonCyanBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#4CDFFF" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=50}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonAmberBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#FFD166" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2" Margin="0,0,3,0">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=75}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonPinkBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#FF8AA6" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                            <Border Width="22" Height="8" CornerRadius="2">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Background" Value="#15FFFFFF"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ChatVM.ContextUsagePercent, Converter={StaticResource ContextLedGate}, ConverterParameter=90}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource NeonRedBrush}"/>
-                                                <Setter Property="Effect">
-                                                    <Setter.Value>
-                                                        <DropShadowEffect Color="#FF6E6E" BlurRadius="8" ShadowDepth="0" Opacity="0.8"/>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                            </Border>
-                        </StackPanel>
-
-                        <!-- Time Machine quick button -->
-                        <Button Grid.Column="7" Style="{StaticResource StatusBarChipButton}"
-                                Command="{Binding NavigateToCommand}" CommandParameter="TimeMachine"
-                                VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE823;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,5,0"/>
-                                <TextBlock Text="Time Machine"/>
+                            <StackPanel Orientation="Horizontal" ToolTip="{services:Loc chat.lastTurnTip}">
+                                <TextBlock Text="&#xE916;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                                           Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock Text="{Binding ChatVM.LastTurnStats, FallbackValue='—'}" FontSize="12" FontFamily="{DynamicResource Font.Mono}"
+                                           Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center"/>
                             </StackPanel>
-                        </Button>
-
-                        <!-- Secure badge -->
-                        <StackPanel Grid.Column="8" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,14,0">
-                            <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="11"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                            <TextBlock Text="{services:Loc nav.secure}" FontFamily="{StaticResource NeonMonoFont}" FontSize="10"
-                                       Foreground="{StaticResource NeonMintBrush}" VerticalAlignment="Center"/>
                         </StackPanel>
+
                     </Grid>
                 </Border>
             </Grid>
 
             <!-- ════════ MODEL LOADING OVERLAY ════════ -->
-            <Border Panel.ZIndex="999"
+            <Border Panel.ZIndex="999" Background="{DynamicResource Bg.Overlay}"
                     Visibility="{Binding IsModelLoading, Converter={StaticResource BoolVis}}">
-                <Border.Background>
-                    <SolidColorBrush Color="#06071A" Opacity="0.85"/>
-                </Border.Background>
                 <Border HorizontalAlignment="Center" VerticalAlignment="Center"
-                        Background="{StaticResource NeonPanelFill}"
-                        BorderBrush="{StaticResource NeonLineHiBrush}" BorderThickness="1"
-                        CornerRadius="16" Padding="40,36" MinWidth="380">
-                    <Border.Effect>
-                        <DropShadowEffect Color="#A672FF" BlurRadius="40" ShadowDepth="0" Opacity="0.5"/>
-                    </Border.Effect>
+                        Background="{DynamicResource Surface.Panel}"
+                        BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                        CornerRadius="16" Padding="40,36" MinWidth="380"
+                        Effect="{DynamicResource Glow.Loading.Card}">
                     <StackPanel HorizontalAlignment="Center">
                         <Border Width="64" Height="64" CornerRadius="32" Margin="0,0,0,20"
-                                HorizontalAlignment="Center">
-                            <Border.Background>
-                                <RadialGradientBrush>
-                                    <GradientStop Color="#A672FF" Offset="0"/>
-                                    <GradientStop Color="#4CDFFF" Offset="1"/>
-                                </RadialGradientBrush>
-                            </Border.Background>
-                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="White"
+                                HorizontalAlignment="Center" Background="{DynamicResource Loading.Orb}">
+                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource Text.OnAccent}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
                                        RenderTransformOrigin="0.5,0.5">
                                 <TextBlock.RenderTransform><RotateTransform x:Name="SpinTransform" Angle="0"/></TextBlock.RenderTransform>
@@ -1261,17 +1210,17 @@
                                 </TextBlock.Style>
                             </TextBlock>
                         </Border>
-                        <TextBlock Text="{services:Loc nav.loadingModel}" Foreground="{StaticResource NeonInk0Brush}"
+                        <TextBlock Text="{services:Loc nav.loadingModel}" Foreground="{DynamicResource Text.Primary}"
                                    FontSize="20" FontWeight="Bold"
                                    HorizontalAlignment="Center" Margin="0,0,0,8"/>
-                        <TextBlock Text="{Binding ModelStatus}" Foreground="{StaticResource NeonInk1Brush}"
+                        <TextBlock Text="{Binding ModelStatus}" Foreground="{DynamicResource Text.Secondary}"
                                    FontSize="13" HorizontalAlignment="Center" TextAlignment="Center"
                                    TextWrapping="Wrap" MaxWidth="320" Margin="0,0,0,16"/>
                         <ProgressBar IsIndeterminate="True" Height="4" Width="260"
-                                     Foreground="{StaticResource NeonVioletBrush}"
+                                     Foreground="{DynamicResource Accent.2}"
                                      HorizontalAlignment="Center"/>
                         <TextBlock Text="{services:Loc nav.loadingHint}"
-                                   Foreground="{StaticResource NeonInk2Brush}" FontSize="11"
+                                   Foreground="{DynamicResource Text.Muted}" FontSize="11"
                                    HorizontalAlignment="Center" Margin="0,14,0,0"/>
                     </StackPanel>
                 </Border>
@@ -1280,7 +1229,7 @@
             <!-- ═══ COMMAND PALETTE (Ctrl+K) ═══
                  Overlays everything. Pages + skills + project files, subsequence-matched. -->
             <Grid Grid.RowSpan="99" Grid.ColumnSpan="99" Panel.ZIndex="900"
-                  Background="#B4000000"
+                  Background="{DynamicResource Bg.Scrim}"
                   Visibility="{Binding Palette.IsOpen, Converter={StaticResource BoolVis}}">
                 <!-- click the backdrop to dismiss -->
                 <Button Command="{Binding ClosePaletteCommand}" Background="Transparent"
@@ -1291,11 +1240,9 @@
                 </Button>
 
                 <Border Width="640" MaxHeight="460" VerticalAlignment="Top" Margin="0,90,0,0"
-                        Background="#F00A0C22" CornerRadius="12" BorderThickness="1"
-                        BorderBrush="{StaticResource NeonLineHiBrush}">
-                    <Border.Effect>
-                        <DropShadowEffect Color="Black" BlurRadius="34" ShadowDepth="0" Opacity="0.6"/>
-                    </Border.Effect>
+                        Background="{DynamicResource Palette.Background}" CornerRadius="12" BorderThickness="1"
+                        BorderBrush="{DynamicResource Border.Default}"
+                        Effect="{DynamicResource Shadow.Palette}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -1310,18 +1257,18 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                                       Foreground="{StaticResource NeonCyanBrush}"
+                                       Foreground="{DynamicResource Accent.1}"
                                        VerticalAlignment="Center" Margin="2,0,10,0"/>
                             <TextBox x:Name="PaletteBox" Grid.Column="1"
                                      Text="{Binding Palette.Query, UpdateSourceTrigger=PropertyChanged}"
                                      Background="Transparent" BorderThickness="0"
-                                     Foreground="{StaticResource NeonInk0Brush}"
-                                     CaretBrush="{StaticResource NeonCyanBrush}"
+                                     Foreground="{DynamicResource Text.Primary}"
+                                     CaretBrush="{DynamicResource Accent.1}"
                                      FontSize="16" VerticalContentAlignment="Center"
                                      PreviewKeyDown="PaletteBox_PreviewKeyDown"/>
                         </Grid>
                         <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom"
-                                Background="{StaticResource NeonLineBrush}"/>
+                                Background="{DynamicResource Border.Subtle}"/>
 
                         <!-- Results -->
                         <ListBox Grid.Row="1" x:Name="PaletteList"
@@ -1334,7 +1281,7 @@
                                 <Style TargetType="ListBoxItem">
                                     <Setter Property="Padding" Value="10,7"/>
                                     <Setter Property="Background" Value="Transparent"/>
-                                    <Setter Property="Foreground" Value="{StaticResource NeonInk0Brush}"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="ListBoxItem">
@@ -1345,10 +1292,10 @@
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsSelected" Value="True">
-                                                        <Setter TargetName="bd" Property="Background" Value="#3328326E"/>
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Selected}"/>
                                                     </Trigger>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Hover.Strong}"/>
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -1366,19 +1313,19 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets"
                                                    FontSize="13" VerticalAlignment="Center" Margin="0,0,10,0"
-                                                   Foreground="{StaticResource NeonInk2Brush}"/>
+                                                   Foreground="{DynamicResource Text.Muted}"/>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Title}" FontSize="13"
-                                                       Foreground="{StaticResource NeonInk0Brush}"
+                                                       Foreground="{DynamicResource Text.Primary}"
                                                        TextTrimming="CharacterEllipsis"/>
                                             <TextBlock Text="{Binding Subtitle}" FontSize="10"
-                                                       Foreground="{StaticResource NeonInk3Brush}"
+                                                       Foreground="{DynamicResource Text.Faint}"
                                                        TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
                                         <Border Grid.Column="2" CornerRadius="3" Padding="6,1"
-                                                Background="#22FFFFFF" VerticalAlignment="Center">
+                                                Background="{DynamicResource Surface.Badge}" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Kind}" FontSize="9"
-                                                       FontFamily="{StaticResource NeonMonoFont}">
+                                                       FontFamily="{DynamicResource Font.Mono.Display}">
                                                 <TextBlock.Foreground>
                                                     <SolidColorBrush Color="{Binding KindColor, Converter={StaticResource HexToColor}, FallbackValue=#8388BD}"/>
                                                 </TextBlock.Foreground>
@@ -1391,14 +1338,14 @@
 
                         <!-- Footer -->
                         <Border Grid.Row="2" BorderThickness="0,1,0,0"
-                                BorderBrush="{StaticResource NeonLineBrush}" Padding="16,7">
+                                BorderBrush="{DynamicResource Border.Subtle}" Padding="16,7">
                             <Grid>
                                 <TextBlock Text="{Binding Palette.ResultSummary}" FontSize="10"
-                                           FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk3Brush}"/>
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Faint}"/>
                                 <TextBlock HorizontalAlignment="Right" FontSize="10"
-                                           FontFamily="{StaticResource NeonMonoFont}"
-                                           Foreground="{StaticResource NeonInk3Brush}"
+                                           FontFamily="{DynamicResource Font.Mono.Display}"
+                                           Foreground="{DynamicResource Text.Faint}"
                                            Text="{services:Loc nav.paletteHint}"/>
                             </Grid>
                         </Border>

@@ -1,0 +1,12 @@
+<Window x:Class="CluadeX.Views.Preview.PreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:CluadeX.Services"
+        xmlns:preview="clr-namespace:CluadeX.Views.Preview"
+        Title="{services:Loc preview.windowTitle}"
+        Width="1040" Height="780" MinWidth="420" MinHeight="320"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="True"
+        Background="{DynamicResource Bg.Window}">
+    <preview:PreviewPane x:Name="Pane"/>
+</Window>

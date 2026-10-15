@@ -19,40 +19,42 @@ namespace CluadeX.Helpers;
 /// </summary>
 public static class MarkdownHelper
 {
-    // ─── Frozen Brushes (GC-friendly, allocated once) ───
-    private static readonly SolidColorBrush CrustBrush = Freeze(0x11, 0x11, 0x1B);
-    private static readonly SolidColorBrush Surface0Brush = Freeze(0x31, 0x32, 0x44);
-    private static readonly SolidColorBrush Surface1Brush = Freeze(0x45, 0x47, 0x5A);
-    private static readonly SolidColorBrush Overlay0Brush = Freeze(0x6C, 0x70, 0x86);
-    private static readonly SolidColorBrush TextBrush = Freeze(0xCD, 0xD6, 0xF4);
-    private static readonly SolidColorBrush TealBrush = Freeze(0x94, 0xE2, 0xD5);
-    private static readonly SolidColorBrush GreenBrush = Freeze(0xA6, 0xE3, 0xA1);
-    private static readonly SolidColorBrush BlueBrush = Freeze(0x89, 0xB4, 0xFA);
-    private static readonly SolidColorBrush PeachBrush = Freeze(0xFA, 0xB3, 0x87);
-    private static readonly SolidColorBrush MauveBrush = Freeze(0xCB, 0xA6, 0xF7);
-    private static readonly SolidColorBrush RedBrush = Freeze(0xF3, 0x8B, 0xA8);
-    private static readonly SolidColorBrush YellowBrush = Freeze(0xF9, 0xE2, 0xAF);
-    private static readonly SolidColorBrush RosewaterBrush = Freeze(0xF5, 0xE0, 0xDC);
-    private static readonly SolidColorBrush DiffAddBgBrush = FreezeA(0x30, 0xA6, 0xE3, 0xA1);
-    private static readonly SolidColorBrush DiffDelBgBrush = FreezeA(0x30, 0xF3, 0x8B, 0xA8);
-    private static readonly SolidColorBrush BlockquoteBgBrush = FreezeA(0x18, 0xCB, 0xA6, 0xF7);
+    // ─── Theme tokens (Resources/Themes/Tokens.md › Markdown.*) ───
+    // Every colour and font is a resource REFERENCE (SetResourceReference), not a brush: rendered markdown follows a
+    // theme switch live, and Midnight keeps the exact Catppuccin colours it always had.
+    private const string TextKey = "Markdown.Text";
+    private const string MutedKey = "Markdown.Muted";
+    private const string HeadingKey = "Markdown.Heading";
+    private const string HeadingMinorKey = "Markdown.Heading.Minor";
+    private const string EmphasisKey = "Markdown.Emphasis";
+    private const string LinkKey = "Markdown.Link";
+    private const string RuleKey = "Markdown.Rule";
+    private const string QuoteBgKey = "Markdown.Quote.Background";
+    private const string QuoteBorderKey = "Markdown.Quote.Border";
+    private const string CodeKey = "Markdown.Code";
+    private const string CodeBgKey = "Markdown.Code.Background";
+    private const string BorderKey = "Markdown.Border";
+    private const string CodeBlockBgKey = "Markdown.CodeBlock.Background";
+    private const string MainFontKey = "Font.Ui";
+    private const string MonoFontKey = "Font.Mono";
 
-    private static SolidColorBrush Freeze(byte r, byte g, byte b)
+    /// <summary>Point a property of an element built here at a theme token (follows theme switches by itself).</summary>
+    private static T Tok<T>(T element, DependencyProperty property, string token) where T : DependencyObject
     {
-        var b2 = new SolidColorBrush(Color.FromRgb(r, g, b));
-        b2.Freeze();
-        return b2;
+        switch (element)
+        {
+            case FrameworkElement fe: fe.SetResourceReference(property, token); break;
+            case FrameworkContentElement fce: fce.SetResourceReference(property, token); break;
+        }
+        return element;
     }
 
-    private static SolidColorBrush FreezeA(byte a, byte r, byte g, byte b)
-    {
-        var b2 = new SolidColorBrush(Color.FromArgb(a, r, g, b));
-        b2.Freeze();
-        return b2;
-    }
+    private static T Fg<T>(T element, string token) where T : DependencyObject
+        => Tok(element, TextElement.ForegroundProperty, token);
 
-    private static readonly FontFamily MonoFont = new("Cascadia Code, Consolas, Courier New");
-    private static readonly FontFamily MainFont = new("Segoe UI, Arial");
+    private static TextBlock Font(TextBlock tb, bool mono) => Tok(tb, TextBlock.FontFamilyProperty, mono ? MonoFontKey : MainFontKey);
+
+    private static Run TokRun(string text, string token) => Fg(new Run(text), token);
 
     // ─── Regex Patterns ───
     private static readonly Regex CodeBlockRegex = new(
@@ -330,63 +332,60 @@ public static class MarkdownHelper
             _ => (13.0, FontWeights.Medium),
         };
 
-        var fg = level <= 2 ? MauveBrush : level <= 4 ? BlueBrush : TextBrush;
+        string fg = level <= 2 ? HeadingKey : level <= 4 ? HeadingMinorKey : TextKey;
 
-        var tb = new TextBlock
+        var tb = Fg(Font(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap,
-            FontFamily = MainFont,
             FontSize = fontSize,
             FontWeight = weight,
-            Foreground = fg,
             Margin = new Thickness(0, level <= 2 ? 10 : 6, 0, 4),
-        };
+        }, mono: false), fg);
         ApplyInlineFormatting(tb, text);
 
         if (level <= 2)
         {
             var stack = new StackPanel();
             stack.Children.Add(tb);
-            stack.Children.Add(new Border
+            stack.Children.Add(Tok(new Border
             {
                 Height = 1,
-                Background = Surface0Brush,
                 Margin = new Thickness(0, 2, 0, 4),
-            });
+            }, Border.BackgroundProperty, BorderKey));
             return stack;
         }
 
         return tb;
     }
 
-    private static UIElement CreateHorizontalRule() => new Border
+    private static UIElement CreateHorizontalRule() => Tok(new Border
     {
-        Height = 1, Background = Surface1Brush,
+        Height = 1,
         Margin = new Thickness(0, 8, 0, 8),
-    };
+    }, Border.BackgroundProperty, RuleKey);
 
     // ─── Blockquote ───
 
     private static UIElement CreateBlockquote(string text)
     {
-        var tb = new TextBlock
+        var tb = Fg(Font(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap,
-            FontFamily = MainFont, FontSize = 13,
+            FontSize = 13,
             FontStyle = FontStyles.Italic,
-            Foreground = Overlay0Brush, LineHeight = 22,
-        };
+            LineHeight = 22,
+        }, mono: false), MutedKey);
         ApplyInlineFormatting(tb, text);
 
-        return new Border
+        var quote = new Border
         {
-            BorderBrush = MauveBrush,
             BorderThickness = new Thickness(3, 0, 0, 0),
             Padding = new Thickness(12, 6, 8, 6),
             Margin = new Thickness(0, 4, 0, 4),
-            Background = BlockquoteBgBrush,
             Child = tb,
         };
+        Tok(quote, Border.BorderBrushProperty, QuoteBorderKey);
+        return Tok(quote, Border.BackgroundProperty, QuoteBgKey);
     }
 
     // ─── Unified List (ordered + unordered) ───
@@ -397,21 +396,19 @@ public static class MarkdownHelper
         for (int i = 0; i < items.Count; i++)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
-            row.Children.Add(new TextBlock
+            row.Children.Add(Fg(Font(new TextBlock
             {
                 Text = bulletFn(i),
-                Foreground = MauveBrush,
-                FontSize = 13, FontFamily = MonoFont,
+                FontSize = 13,
                 MinWidth = 24,
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Top,
-            });
-            var tb = new TextBlock
+            }, mono: true), HeadingKey));
+            var tb = Fg(Font(new TextBlock
             {
                 TextWrapping = TextWrapping.Wrap,
-                FontFamily = MainFont, FontSize = 13,
-                Foreground = TextBrush,
-            };
+                FontSize = 13,
+            }, mono: false), TextKey);
             ApplyInlineFormatting(tb, items[i]);
             row.Children.Add(tb);
             stack.Children.Add(row);
@@ -439,21 +436,19 @@ public static class MarkdownHelper
             for (int c = 0; c < cols; c++)
             {
                 string cellText = c < rows[r].Length ? rows[r][c] : "";
-                var cell = new Border
+                var cell = Tok(new Border
                 {
-                    BorderBrush = Surface0Brush,
                     BorderThickness = new Thickness(0, 0, 1, 1),
                     Padding = new Thickness(8, 4, 8, 4),
-                    Background = isHeader ? Surface0Brush : Brushes.Transparent,
-                };
-                var tb = new TextBlock
+                    Background = Brushes.Transparent,
+                }, Border.BorderBrushProperty, BorderKey);
+                if (isHeader) Tok(cell, Border.BackgroundProperty, CodeBgKey);
+                var tb = Fg(Font(new TextBlock
                 {
                     TextWrapping = TextWrapping.Wrap,
-                    FontFamily = isHeader ? MainFont : MonoFont,
                     FontSize = isHeader ? 12 : 11.5,
                     FontWeight = isHeader ? FontWeights.SemiBold : FontWeights.Normal,
-                    Foreground = isHeader ? TealBrush : TextBrush,
-                };
+                }, mono: !isHeader), isHeader ? CodeKey : TextKey);
                 ApplyInlineFormatting(tb, cellText);
                 cell.Child = tb;
                 Grid.SetRow(cell, r);
@@ -462,13 +457,12 @@ public static class MarkdownHelper
             }
         }
 
-        return new Border
+        return Tok(new Border
         {
-            BorderBrush = Surface0Brush,
             BorderThickness = new Thickness(1, 1, 0, 0),
             CornerRadius = new CornerRadius(4),
             Child = grid,
-        };
+        }, Border.BorderBrushProperty, BorderKey);
     }
 
     // ─── Code Block ───
@@ -480,28 +474,27 @@ public static class MarkdownHelper
 
         var outerBorder = new Border
         {
-            Background = CrustBrush,
             CornerRadius = new CornerRadius(8),
             BorderThickness = new Thickness(1),
-            BorderBrush = Surface0Brush,
             Margin = new Thickness(0, 6, 0, 6),
         };
+        Tok(outerBorder, Border.BackgroundProperty, CodeBlockBgKey);
+        Tok(outerBorder, Border.BorderBrushProperty, BorderKey);
 
         var mainStack = new StackPanel();
 
         // Header bar
-        var header = new Grid { Background = Surface0Brush };
+        var header = Tok(new Grid(), Panel.BackgroundProperty, CodeBgKey);
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        header.Children.Add(new TextBlock
+        header.Children.Add(Fg(Font(new TextBlock
         {
             Text = string.IsNullOrEmpty(language) ? "code" : language,
-            FontSize = 11, FontFamily = MonoFont,
-            Foreground = Overlay0Brush,
+            FontSize = 11,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(12, 6, 0, 6),
-        });
+        }, mono: true), MutedKey));
 
         var copyBtn = CreateCopyButton(code);
         Grid.SetColumn(copyBtn, 1);
@@ -514,14 +507,13 @@ public static class MarkdownHelper
         }
         else
         {
-            var codeBlock = new TextBlock
+            var codeBlock = Fg(Font(new TextBlock
             {
-                FontFamily = MonoFont, FontSize = 12.5,
-                Foreground = TextBrush,
+                FontSize = 12.5,
                 TextWrapping = TextWrapping.Wrap,
                 Padding = new Thickness(14, 10, 14, 12),
                 LineHeight = 20,
-            };
+            }, mono: true), "Markdown.Syntax.Text");
             ApplySyntaxHighlighting(codeBlock, code, language);
             mainStack.Children.Add(codeBlock);
         }
@@ -537,25 +529,24 @@ public static class MarkdownHelper
         var stack = new StackPanel();
         foreach (var line in code.Split('\n'))
         {
-            SolidColorBrush? bg = null;
-            var fg = TextBrush;
+            string? bg = null;
+            string fg = "Markdown.Syntax.Text";
 
             if (line.StartsWith('+') && !line.StartsWith("+++"))
-            { bg = DiffAddBgBrush; fg = GreenBrush; }
+            { bg = "Markdown.Diff.Added.Background"; fg = "Markdown.Diff.Added"; }
             else if (line.StartsWith('-') && !line.StartsWith("---"))
-            { bg = DiffDelBgBrush; fg = RedBrush; }
+            { bg = "Markdown.Diff.Deleted.Background"; fg = "Markdown.Diff.Deleted"; }
             else if (line.StartsWith("@@"))
-            { fg = BlueBrush; }
+            { fg = "Markdown.Diff.Hunk"; }
 
-            var tb = new TextBlock
+            var tb = Fg(Font(new TextBlock
             {
                 Text = line,
-                FontFamily = MonoFont, FontSize = 12,
-                Foreground = fg,
+                FontSize = 12,
                 Padding = new Thickness(14, 1, 14, 1),
                 TextWrapping = TextWrapping.Wrap,
-            };
-            if (bg != null) tb.Background = bg;
+            }, mono: true), fg);
+            if (bg != null) Tok(tb, TextBlock.BackgroundProperty, bg);
             stack.Children.Add(tb);
         }
         return stack;
@@ -568,8 +559,7 @@ public static class MarkdownHelper
         var copyBtn = new Button
         {
             Content = "\U0001F4CB Copy",
-            FontSize = 10, FontFamily = MainFont,
-            Foreground = Overlay0Brush,
+            FontSize = 10,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             Cursor = Cursors.Hand,
@@ -584,8 +574,10 @@ public static class MarkdownHelper
             CopyButtonFeedback(copyBtn, "\u2713 Copied!", "\U0001F4CB Copy");
         };
 
-        copyBtn.MouseEnter += (_, _) => copyBtn.Foreground = TextBrush;
-        copyBtn.MouseLeave += (_, _) => copyBtn.Foreground = Overlay0Brush;
+        Tok(copyBtn, Control.FontFamilyProperty, MainFontKey);
+        Fg(copyBtn, MutedKey);
+        copyBtn.MouseEnter += (_, _) => Fg(copyBtn, TextKey);
+        copyBtn.MouseLeave += (_, _) => Fg(copyBtn, MutedKey);
         return copyBtn;
     }
 
@@ -602,13 +594,13 @@ public static class MarkdownHelper
 
     private static TextBlock CreateFormattedTextBlock(string text)
     {
-        var tb = new TextBlock
+        var tb = Fg(Font(new TextBlock
         {
             TextWrapping = TextWrapping.Wrap,
-            LineHeight = 24, FontFamily = MainFont,
-            FontSize = 13, Foreground = TextBrush,
+            LineHeight = 24,
+            FontSize = 13,
             Margin = new Thickness(0, 2, 0, 2),
-        };
+        }, mono: false), TextKey);
         ApplyInlineFormatting(tb, text);
         return tb;
     }
@@ -623,39 +615,36 @@ public static class MarkdownHelper
 
             if (m.Groups[1].Success) // ***bold italic***
             {
-                tb.Inlines.Add(new Bold(new Italic(new Run(m.Groups[1].Value) { Foreground = TextBrush })));
+                tb.Inlines.Add(new Bold(new Italic(TokRun(m.Groups[1].Value, TextKey))));
             }
             else if (m.Groups[2].Success) // **bold**
             {
-                tb.Inlines.Add(new Bold(new Run(m.Groups[2].Value) { Foreground = TextBrush }));
+                tb.Inlines.Add(new Bold(TokRun(m.Groups[2].Value, TextKey)));
             }
             else if (m.Groups[3].Success) // *italic*
             {
-                tb.Inlines.Add(new Italic(new Run(m.Groups[3].Value) { Foreground = RosewaterBrush }));
+                tb.Inlines.Add(new Italic(TokRun(m.Groups[3].Value, EmphasisKey)));
             }
             else if (m.Groups[4].Success) // ~~strikethrough~~
             {
-                tb.Inlines.Add(new Run(m.Groups[4].Value)
+                tb.Inlines.Add(Fg(new Run(m.Groups[4].Value)
                 {
                     TextDecorations = TextDecorations.Strikethrough,
-                    Foreground = Overlay0Brush,
-                });
+                }, MutedKey));
             }
             else if (m.Groups[5].Success) // `inline code`
             {
-                var codeBorder = new Border
+                var codeBorder = Tok(new Border
                 {
-                    Background = Surface0Brush,
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(5, 1, 5, 1),
                     Margin = new Thickness(1, 0, 1, 0),
-                    Child = new TextBlock
+                    Child = Fg(Font(new TextBlock
                     {
                         Text = m.Groups[5].Value,
-                        FontFamily = MonoFont, FontSize = 12,
-                        Foreground = TealBrush,
-                    }
-                };
+                        FontSize = 12,
+                    }, mono: true), CodeKey),
+                }, Border.BackgroundProperty, CodeBgKey);
                 tb.Inlines.Add(new InlineUIContainer(codeBorder) { BaselineAlignment = BaselineAlignment.Center });
             }
             else if (m.Groups[6].Success) // [text](url)
@@ -663,13 +652,12 @@ public static class MarkdownHelper
                 string linkText = m.Groups[6].Value;
                 string url = m.Groups[7].Value;
 
-                var hyperlink = new Hyperlink(new Run(linkText))
+                var hyperlink = Fg(new Hyperlink(new Run(linkText))
                 {
-                    Foreground = BlueBrush,
                     TextDecorations = null,
                     Cursor = Cursors.Hand,
                     ToolTip = url,
-                };
+                }, LinkKey);
                 hyperlink.MouseEnter += (_, _) => hyperlink.TextDecorations = TextDecorations.Underline;
                 hyperlink.MouseLeave += (_, _) => hyperlink.TextDecorations = null;
                 hyperlink.Click += (_, _) =>
@@ -754,32 +742,32 @@ public static class MarkdownHelper
         foreach (Match m in SyntaxRegex.Matches(code))
         {
             if (m.Index > pos)
-                tb.Inlines.Add(new Run(code[pos..m.Index]) { Foreground = TextBrush });
+                tb.Inlines.Add(TokRun(code[pos..m.Index], "Markdown.Syntax.Text"));
 
             if (m.Groups[1].Success || m.Groups[2].Success)
-                tb.Inlines.Add(new Run(m.Value) { Foreground = Overlay0Brush, FontStyle = FontStyles.Italic });
+                tb.Inlines.Add(Fg(new Run(m.Value) { FontStyle = FontStyles.Italic }, "Markdown.Syntax.Comment"));
             else if (m.Groups[3].Success)
-                tb.Inlines.Add(new Run(m.Value) { Foreground = GreenBrush });
+                tb.Inlines.Add(TokRun(m.Value, "Markdown.Syntax.String"));
             else if (m.Groups[4].Success)
-                tb.Inlines.Add(new Run(m.Value) { Foreground = PeachBrush });
+                tb.Inlines.Add(TokRun(m.Value, "Markdown.Syntax.Number"));
             else if (m.Groups[5].Success)
             {
                 string word = m.Value;
                 if (keywords.Contains(word))
-                    tb.Inlines.Add(new Run(word) { Foreground = MauveBrush, FontWeight = FontWeights.SemiBold });
+                    tb.Inlines.Add(Fg(new Run(word) { FontWeight = FontWeights.SemiBold }, "Markdown.Syntax.Keyword"));
                 else if (word.Length > 0 && char.IsUpper(word[0]) && word.Any(char.IsLower))
-                    tb.Inlines.Add(new Run(word) { Foreground = YellowBrush });
+                    tb.Inlines.Add(TokRun(word, "Markdown.Syntax.Type"));
                 else
-                    tb.Inlines.Add(new Run(word) { Foreground = TextBrush });
+                    tb.Inlines.Add(TokRun(word, "Markdown.Syntax.Text"));
             }
             else
-                tb.Inlines.Add(new Run(m.Value) { Foreground = TextBrush });
+                tb.Inlines.Add(TokRun(m.Value, "Markdown.Syntax.Text"));
 
             pos = m.Index + m.Length;
         }
 
         if (pos < code.Length)
-            tb.Inlines.Add(new Run(code[pos..]) { Foreground = TextBrush });
+            tb.Inlines.Add(TokRun(code[pos..], "Markdown.Syntax.Text"));
     }
 
     private static HashSet<string> GetKeywordsForLanguage(string lang)

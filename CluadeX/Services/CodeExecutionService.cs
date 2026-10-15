@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using CluadeX.Models;
 
 namespace CluadeX.Services;
@@ -15,6 +16,20 @@ public class CodeExecutionService
 
     public async Task<CodeExecutionResult> ExecuteAsync(string code, string language, CancellationToken ct = default)
     {
+        // A shell code block is a shell command: the same blocklist as run_command / powershell, which the
+        // auto-run path (Auto-run code, the auto-fix loop) used to skip entirely. Python / JS / C# blocks are
+        // not shell — for those the Auto-run opt-in (or the user clicking Run) is the boundary.
+        if (DangerousCommandCheck.IsShellLanguage(language)
+            && _settingsService.Settings.Features.DangerousCommandBlocking
+            && DangerousCommandCheck.FindBlocked(code, DangerousCommandCheck.DialectOfLanguage(language)) is { } blocked)
+        {
+            return new CodeExecutionResult
+            {
+                Success = false,
+                Error = string.Format(LocalizedResources.Instance["chat.exec.blocked"], blocked),
+            };
+        }
+
         return language.ToLowerInvariant() switch
         {
             "csharp" or "c#" or "cs" => await ExecuteCSharpAsync(code, ct),
@@ -103,7 +118,11 @@ public class CodeExecutionService
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(tempFile)!);
-            await File.WriteAllTextAsync(tempFile, code, ct);
+            // Windows PowerShell 5.1 reads a .ps1 WITHOUT a byte-order mark in the ANSI code page: Thai came out as
+            // mojibake and “typographic quotes” stopped being quotes — PowerShell ran lines that the blocklist,
+            // reading them as PowerShell's tokenizer does, took for a string. With the BOM it reads UTF-8. Other
+            // interpreters keep BOM-less UTF-8 (cmd and bash would run the BOM as part of the first command).
+            await File.WriteAllTextAsync(tempFile, code, new UTF8Encoding(encoderShouldEmitUTF8Identifier: extension == ".ps1"), ct);
 
             string args;
             string exe;
