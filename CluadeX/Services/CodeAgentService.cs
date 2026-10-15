@@ -607,6 +607,9 @@ public partial class CodeAgentService
               - อย่าสร้าง helpers, utilities, หรือ abstractions สำหรับ one-time operations
               - โค้ดที่คล้ายกัน 3 บรรทัดดีกว่า premature abstraction
               - ถ้าแนวทางหนึ่งล้มเหลว ให้วิเคราะห์สาเหตุก่อนเปลี่ยนวิธี — อย่า retry แบบสุ่ม
+              - ทำงานต่อเนื่องจนเสร็จในรอบเดียว: เมื่อผู้ใช้สั่งงานแล้ว ให้ลงมือทำทุกขั้นจนจบ อย่าหยุดกลางทางเพื่อถามว่า "ทำต่อไหม" หรือบอกให้พิมพ์ "ทำต่อ"
+              - ตัดสินใจเองเมื่อมีทางเลือกที่สมเหตุสมผล (เลือกไฟล์ ค่า ชื่อ ลำดับงาน ตัวเลือกจากหลายแบบ) — เลือกแบบที่ดีที่สุด แล้วบอกสั้นๆ ว่าเลือกอะไรเพราะอะไรในสรุปท้าย อย่าโยนตัวเลือกกลับไปให้ผู้ใช้
+              - ถามผู้ใช้ (ask_user) เฉพาะเมื่อไปต่อไม่ได้จริงๆ หรือเป็น action เสี่ยงตามหัวข้อด้านล่าง (ลบ/เขียนทับ, push, ส่งข้อความ, แตะระบบ production)
               """
             : """
               - In general, do not propose changes to code you haven't read. Read it first.
@@ -617,6 +620,9 @@ public partial class CodeAgentService
               - Don't create helpers, utilities, or abstractions for one-time operations.
               - Three similar lines of code is better than a premature abstraction.
               - If an approach fails, diagnose why before switching tactics — don't retry blindly.
+              - Work continuously to completion in one turn: once the user gives a task, carry out every step to the end. Do not stop midway to ask "shall I continue?" or tell the user to say "continue".
+              - Make the call yourself whenever a reasonable choice exists (which file, value, name, order, or one of several options) — pick the best one, then say briefly what you chose and why in your final summary. Don't hand the choice back to the user.
+              - Ask the user (ask_user) only when you are truly blocked, or for the risky actions listed below (delete/overwrite, push, sending messages, touching production).
               """);
 
         // ═══════════════════════════════════════════
@@ -2769,6 +2775,16 @@ public partial class CodeAgentService
             // Last step of the budget: no more tools. The model reports what it found, what it changed and
             // what is left, so a long task ends with the work so far instead of an empty bubble (agenttest on
             // Snooker2D, 2026-10-09: 25 tool-only steps, FinalResponse "").
+            // A run still at work when the step budget runs out keeps going instead of stopping to ask the user to
+            // type "continue" (the owner wants tasks carried through). Another budget-sized block each time, up to
+            // MaxIterationOverride; a paid run is still held by the spend guard above. A per-run override (a pipe
+            // task's maxSteps) is a hard limit and never extends.
+            if (iteration == iterationBudget - 1 && _iterationOverride.Value == null && iterationBudget < MaxIterationOverride
+                && result.Steps.LastOrDefault()?.ToolCalls.Count > 0)
+            {
+                iterationBudget = Math.Min(MaxIterationOverride, iterationBudget + MaxAgentIterations);
+                _debugLog?.Info("Agent", $"step budget extended to {iterationBudget} — the run is still working");
+            }
             bool budgetLastStep = iteration == iterationBudget - 1 && iterationBudget > 1 && toolSchemas.Count > 0;
             if (budgetLastStep && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
             {
@@ -2786,7 +2802,7 @@ public partial class CodeAgentService
             string nativeThinkVerb = GetRandomSpinnerVerb();
             string nativeStepStatus = iteration == 0
                 ? $"{nativeThinkVerb}..."
-                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations} · {nativeThinkVerb}..." : $"Step {iteration + 1}/{MaxAgentIterations} · {nativeThinkVerb}...");
+                : (isThai ? $"ขั้นที่ {iteration + 1}/{iterationBudget} · {nativeThinkVerb}..." : $"Step {iteration + 1}/{iterationBudget} · {nativeThinkVerb}...");
             progress?.Report(nativeStepStatus);
             OnAgentStatus?.Invoke(nativeStepStatus);
 
