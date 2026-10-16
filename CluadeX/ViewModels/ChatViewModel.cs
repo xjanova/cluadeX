@@ -3544,6 +3544,20 @@ public partial class ChatViewModel : ViewModelBase
             if (run.ActiveStatus?.Content == $"⏵ {statusMessage}")
                 return;
 
+            // The running balloon (owner 2026-10-17): a background call that will fold into the work row right above
+            // says what it runs ON that row — no status line of its own, so the cards stay inside one balloon.
+            if (toolName != "agent" && BalloonFor(run.Messages, toolName, true) is { } work)
+            {
+                if (run.LiveRow != null && !ReferenceEquals(run.LiveRow, work)) run.LiveRow.IsLive = false;
+                run.LiveRow = work;
+                work.LiveText = statusMessage;
+                work.IsLive = true;
+                RefreshSessionBadges();
+                ScrollToBottom?.Invoke();
+                return;
+            }
+            if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
+
             // Min display time 700ms — ensure previous status was visible long enough
             var elapsed = DateTime.UtcNow - _lastToolStatusTime;
             if (elapsed < TimeSpan.FromMilliseconds(700) && run.ActiveStatus != null)
@@ -3607,6 +3621,62 @@ public partial class ChatViewModel : ViewModelBase
         return new ToolStepView(toolName, verb, ToolTargetOf(toolName, args, workDir), elapsed);
     }
 
+    /// <summary>The balloon the next background call folds into, if any: the last work row, looking past help notes,
+    /// finished status lines and the short lines the agent wrote since (its "what I'll do now"). Those lines become
+    /// captions inside the balloon (FoldedIntoBalloon) — what runs stays inside, the final answer outside.</summary>
+    private ChatMessage? BalloonFor(IList<ChatMessage> list, string toolName, bool success)
+    {
+        if (!success || !Groupable(GetToolCategory(toolName))) return null;
+        var narration = new List<ChatMessage>();
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            var m = list[i];
+            if (m.IsSideNote || m.FoldedIntoBalloon || m.Role == MessageRole.AgentStatus && !m.IsStreaming) continue;
+            if (m.Role == MessageRole.Assistant && !m.HasError && (m.Content?.Length ?? 0) <= 600 && narration.Count < 4)
+            {
+                narration.Add(m);
+                continue;
+            }
+            if (!IsFoldable(m)) return null;
+            for (int k = narration.Count - 1; k >= 0; k--)
+            {
+                var n = narration[k];
+                n.FoldedIntoBalloon = true;
+                string say = NarrationText(n.Content);
+                if (say.Length == 0) continue;
+                m.AddGroupStep(new ToolStepView("narration", say, null, null));
+                m.LiveText = say;
+            }
+            return m;
+        }
+        return null;
+    }
+
+    /// <summary>The words of a narration line, without the [ACTION:] blocks the text protocol puts in the same reply.</summary>
+    private static string NarrationText(string? content)
+    {
+        string t = System.Text.RegularExpressions.Regex.Replace(content ?? "", @"\[ACTION:[\s\S]*?(\[/ACTION\]|$)", "").Trim();
+        t = System.Text.RegularExpressions.Regex.Replace(t, @"\s+", " ");
+        return t.Length > 180 ? t[..180] + "…" : t;
+    }
+
+    /// <summary>The last row a tool result could fold into: help notes and finished status lines are looked past.</summary>
+    private static ChatMessage? LastWorkRow(IList<ChatMessage> list)
+    {
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            var m = list[i];
+            if (m.IsSideNote || m.FoldedIntoBalloon || m.Role == MessageRole.AgentStatus && !m.IsStreaming) continue;
+            return m;
+        }
+        return null;
+    }
+
+    /// <summary>A work row the next background call may fold into: a successful tool row with no diff or picture.</summary>
+    private static bool IsFoldable(ChatMessage m) =>
+        m.Role == MessageRole.ToolAction && m.ToolSuccess && !m.HasDiff && m.ThumbnailPath == null
+        && (m.IsCollapsedGroup || m.ToolKind != null && Groupable(GetToolCategory(m.ToolKind)));
+
     /// <summary>"mcp__brainx-brain__task_update" → "brainx-brain/task_update" for a group row's list.</summary>
     private static string ShortToolName(string toolName) =>
         toolName.StartsWith("mcp__", StringComparison.Ordinal) && toolName.Split("__") is { Length: >= 3 } p
@@ -3654,6 +3724,9 @@ public partial class ChatViewModel : ViewModelBase
             if (run?.ActiveStatus != null)
             {
                 run.ActiveStatus.IsStreaming = false;
+                // A tool's own "⏵ Reading x" line goes once its row arrives: left in the list (folded away on screen) it
+                // stood between two tool rows, so no two calls ever folded together in a real run.
+                if (run.ActiveStatus.ToolKind != null) list?.Remove(run.ActiveStatus);
                 run.ActiveStatus = null;
             }
 
@@ -3714,7 +3787,9 @@ public partial class ChatViewModel : ViewModelBase
 
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);
-            var lastMsg = onScreen && thumbnail == null ? list!.LastOrDefault(m => !m.IsSideNote) : null;
+            var lastMsg = onScreen && thumbnail == null
+                ? BalloonFor(list!, toolResult.ToolName, toolResult.Success) ?? LastWorkRow(list!)
+                : null;
             if (lastMsg?.ThumbnailPath != null) lastMsg = null;   // nor is anything merged into one
 
             // Every successful background call in a row folds into ONE row, whatever its family (owner 2026-10-17: "ไม่ต้อง
@@ -3764,7 +3839,8 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            // Normal: add as individual ToolAction message
+            // Normal: add as individual ToolAction message — the balloon above it, if any, is done.
+            if (run?.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
             var (_, verbKey) = ToolLook.Of(toolResult.ToolName);
             string toolVerb = verbKey == "tool.verb.mcp" ? (ToolLook.McpServer(toolResult.ToolName) ?? Loc(verbKey)) : Loc(verbKey);
             var msg = new ChatMessage

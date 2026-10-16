@@ -953,6 +953,7 @@ public class LocalizationService
         ["chat.model.priceTip"] = new() { ["en"] = "List price per million tokens: input / output", ["th"] = "ราคาต่อล้านโทเค็น: ขาเข้า / ขาออก" },
         ["chat.model.localPlaceholder"] = new() { ["en"] = "Model on this PC — pick a cloud model", ["th"] = "โมเดลบนเครื่อง — เลือกเพื่อใช้คลาวด์" },
         ["chat.model.switched"] = new() { ["en"] = "Now answering with {0}", ["th"] = "ตอนนี้ตอบด้วย {0}" },
+        ["chat.plan.closeTip"] = new() { ["en"] = "Close the plan bar (it comes back for a new plan, and goes by itself when everything is done)", ["th"] = "ปิดแถบแผนงาน (จะกลับมาเมื่อมีแผนใหม่ และหายไปเองเมื่อทำครบ)" },
         ["chat.model.needsKey"] = new() { ["en"] = "Add a {0} API key in Settings ▸ AI Provider first", ["th"] = "ใส่ API key ของ {0} ที่ ตั้งค่า ▸ ผู้ให้บริการ AI ก่อนนะ" },
         ["chat.model.noKeyLabel"] = new() { ["en"] = "needs a key", ["th"] = "ยังไม่มีคีย์" },
         ["chat.model.claudeCodePlan"] = new() { ["en"] = "your Claude plan", ["th"] = "แพ็กเกจ Claude ของคุณ" },

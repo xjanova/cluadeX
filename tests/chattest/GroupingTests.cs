@@ -67,5 +67,35 @@ internal static partial class Program
         rows[0].IsExpanded = false;
         Vm.ShowAgentInternals = internals;
 
+    
+        // G6 — a REAL run (the agent loop, so each call first shows its "⏵ running" line): the calls must still fold into
+        // one balloon. They did not in the app: the finished status line stayed between two tool rows (tests that fired
+        // OnToolExecuted directly never saw it).
+        await FreshChat();
+        // The plain queue: a keyed script only matches the turn's first call (the loop's next calls carry tool results).
+        Fake.Script.Clear();
+        Fake.Script.Enqueue(FakeStep.Reply("[ACTION: list_files]\npath: .\n[/ACTION]"));
+        Fake.Script.Enqueue(FakeStep.Reply("[ACTION: read_file]\npath: app.txt\n[/ACTION]"));
+        Fake.Script.Enqueue(FakeStep.Reply("[ACTION: list_files]\npath: .\n[/ACTION]"));
+        Fake.Script.Enqueue(FakeStep.Reply("All read."));
+        Vm.SetWorkingDirectory(ProjA);   // a project to look around in (app.txt is there)
+        await Send("[G6] look around");
+        bool sawLive = false;
+        for (int i = 0; i < 200 && Vm.IsGenerating; i++)
+        {
+            if (Vm.Messages.Any(m => m.IsLive && m.LiveText.Length > 0)) sawLive = true;
+            foreach (var pr in Vm.Messages.Where(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered).ToList())
+                pr.ResolvePermission(PermissionOutcome.Allowed);
+            await Task.Delay(25);
+        }
+        await WaitIdle();
+        await Settle();
+        var g6 = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).ToList();
+        Check("G6 a real run's background calls fold into ONE row (no status line left between them)",
+            g6.Count == 1 && g6[0].CollapsedCount == 3 && !Vm.Messages.Any(m => m.Role == MessageRole.AgentStatus && m.ToolKind != null),
+            string.Join(" | ", Vm.Messages.Select(m => $"{m.Role}:{m.ToolKind}:{m.CollapsedCount}:{(m.Content ?? "").Replace('\n', '⏎')[..Math.Min(90, (m.Content ?? "").Length)]}")));
+        Check("G6 while it ran, the row said what runs (the balloon); once done it is still", sawLive && !Vm.Messages.Any(m => m.IsLive),
+            $"sawLive={sawLive}");
+        Fake.ScriptFor.Clear();
     }
 }

@@ -154,9 +154,17 @@
                     <!-- Two layers: everything else may shrink and clip; the caption buttons keep their own column and are
                          always on screen (on a narrow window the Auto columns used to push them off the right edge). -->
                     <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <!-- The brand: the mascot and the name in real type — the ornate wordmark PNG shrank to 38 px was
+                         unreadable (owner 2026-10-17). It stays put; only the row after it glides. Theme colours: the name in Text.Primary, its X in the accent. -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="10,0,6,0" VerticalAlignment="Center" ToolTip="CluadeX">
+                        <Image Source="/CluadeX;component/Assets/logo.png" Width="30" Height="30" VerticalAlignment="Center"
+                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <TextBlock FontSize="19" FontWeight="Black" FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center"
+                                   Margin="7,0,0,1"><Run Text="Cluade" Foreground="{DynamicResource Text.Primary}"/><Run Text="X" Foreground="{DynamicResource Accent.1}"/></TextBlock>
+                    </StackPanel>
                     <!-- Too narrow for everything: the row glides to show each item in turn, and follows the mouse -->
-                    <views:MarqueeScroller>
+                    <views:MarqueeScroller Grid.Column="1">
                     <Grid x:Name="TitleContent">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>  <!-- The CluadeX wordmark -->
@@ -175,10 +183,6 @@
                         </Grid.ColumnDefinitions>
 
 
-                        <!-- The wordmark, nearly the bar's full height — always shown (the project part beside it steps aside
-                             on a narrow window, the brand does not). -->
-                        <Image Grid.Column="0" Source="/CluadeX;component/Assets/logo-wordmark.png" Height="38" Margin="10,2,0,2"
-                               VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" ToolTip="CluadeX"/>
 
                         <!-- Project + branch -->
                         <StackPanel x:Name="TitleProject" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
@@ -487,7 +491,7 @@
                     </Grid>
                     </views:MarqueeScroller>
                         <!-- Caption buttons (min/max/close) -->
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top"
                                 WindowChrome.IsHitTestVisibleInChrome="True">
                         <Button x:Name="BtnMinimize" Style="{StaticResource NeonCaptionButton}"
                                 Content="&#xE921;" Click="BtnMinimize_Click"/>

@@ -79,7 +79,18 @@ public partial class ChatViewModel
     /// <summary>0..1, for the bar's progress line.</summary>
     public double StickyPlanProgress { get => _stickyPlanProgress; private set => SetProperty(ref _stickyPlanProgress, value); }
 
-    public bool HasStickyPlan => _stickyPlanItems.Count > 0;
+    /// <summary>Shown while the plan has work left and the owner has not closed it: it goes by itself once every item is
+    /// done, and ✕ closes it mid-way until the agent writes a different plan (owner 2026-10-17).</summary>
+    public bool HasStickyPlan => _stickyPlanItems.Count > 0 && !_stickyPlanItems.All(p => p.IsDone) && _stickyPlanSignature != _stickyPlanDismissed;
+    private string _stickyPlanSignature = "", _stickyPlanDismissed = "";
+
+    public ICommand DismissStickyPlanCommand => _dismissStickyPlanCommand ??= new RelayCommand(() =>
+    {
+        _stickyPlanDismissed = _stickyPlanSignature;
+        OnPropertyChanged(nameof(HasStickyPlan));
+        OnPropertyChanged(nameof(HasStickyBar));
+    });
+    private ICommand? _dismissStickyPlanCommand;
     public bool HasStickyBranches => _stickyBranches.Count > 0;
     public bool HasStickyBar => HasStickyPlan || HasStickyBranches;
 
@@ -128,6 +139,8 @@ public partial class ChatViewModel
             })).ToList();
             int done = items.Count(p => p.IsDone);
             StickyPlanItems = items;
+            // The plan's identity: its chat and its items' words (a status change keeps it; a new plan has new words).
+            _stickyPlanSignature = session.Id + "|" + string.Join("|", items.Select(p => p.Text));
             StickyPlanHeader = items.Count == 0 ? "" : $"{Loc("chat.plan")} {done}/{items.Count}";
             StickyPlanNow = items.FirstOrDefault(p => p.IsActive)?.Text
                             ?? items.FirstOrDefault(p => p.IsPending)?.Text

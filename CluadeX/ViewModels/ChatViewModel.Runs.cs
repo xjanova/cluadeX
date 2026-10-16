@@ -23,6 +23,8 @@ public partial class ChatViewModel
         public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public CancellationTokenSource? Cts;
         public ChatMessage? ActiveStatus;
+        /// <summary>The running balloon: the background-work row the current calls fold into (IsLive while they run).</summary>
+        public ChatMessage? LiveRow;
         public ChatMessage? TodoMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
@@ -366,6 +368,7 @@ public partial class ChatViewModel
             PostRunCostSummary(run);
             leftover = run.Scope?.DrainUserNotes();
             _runs.Remove(run);
+            if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
             // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
             run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";
             run.Session.RunStep = "";

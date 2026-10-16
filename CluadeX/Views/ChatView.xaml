@@ -167,6 +167,10 @@
                                     </MultiDataTrigger.Conditions>
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </MultiDataTrigger>
+                                <!-- A line the agent wrote before its next call lives inside the running balloon now -->
+                                <DataTrigger Binding="{Binding FoldedIntoBalloon}" Value="True">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
                                 <!-- A LIVE status row (the "⏳ waiting" / "⏵ Reading…" line, IsStreaming) stays
                                      visible with Steps off — it is the only sign the agent is working. Finished
                                      status rows are internals and collapse. -->
@@ -984,6 +988,12 @@
                                                     <Setter Property="BorderThickness" Value="1"/>
                                                     <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
                                                 </DataTrigger>
+                                                <!-- The running balloon: the row the agent's background calls are folding into right now -->
+                                                <DataTrigger Binding="{Binding IsLive}" Value="True">
+                                                    <Setter Property="BorderThickness" Value="1.5"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                    <Setter Property="Effect" Value="{DynamicResource Fx.Card.Glow}"/>
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
@@ -996,7 +1006,74 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>  <!-- the running balloon's live line -->
                                         </Grid.RowDefinitions>
+
+                                        <!-- Live line of the running balloon: what runs right now, three dots and a light gliding by.
+                                             The calls themselves are boxes inside (open the row); the answer comes outside. -->
+                                        <Border Grid.Row="7" Margin="0,6,0,0" Padding="10,5" CornerRadius="10" ClipToBounds="True"
+                                                Background="{DynamicResource Surface.Chip}"
+                                                Visibility="{Binding IsLive, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <Grid>
+                                                <Grid Visibility="{DynamicResource Fx.Flourish}" IsHitTestVisible="False" Margin="-10,-5">
+                                                    <Rectangle>
+                                                        <Rectangle.Fill>
+                                                            <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                                                                <LinearGradientBrush.RelativeTransform><TranslateTransform X="-1"/></LinearGradientBrush.RelativeTransform>
+                                                                <GradientStop Color="{DynamicResource Fx.Sweep.Edge}" Offset="0.3"/>
+                                                                <GradientStop Color="{DynamicResource Fx.Sweep.Mid}" Offset="0.5"/>
+                                                                <GradientStop Color="{DynamicResource Fx.Sweep.Edge}" Offset="0.7"/>
+                                                            </LinearGradientBrush>
+                                                        </Rectangle.Fill>
+                                                        <Rectangle.Triggers>
+                                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                <BeginStoryboard>
+                                                                    <Storyboard RepeatBehavior="Forever">
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Fill.RelativeTransform.(TranslateTransform.X)"
+                                                                                         From="-1" To="1" Duration="0:0:1.8">
+                                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                                        </DoubleAnimation>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </EventTrigger>
+                                                        </Rectangle.Triggers>
+                                                    </Rectangle>
+                                                </Grid>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0">
+                                                        <StackPanel.Resources>
+                                                            <Style TargetType="Ellipse">
+                                                                <Setter Property="Width" Value="5"/>
+                                                                <Setter Property="Height" Value="5"/>
+                                                                <Setter Property="Margin" Value="1.5,0"/>
+                                                                <Setter Property="Fill" Value="{DynamicResource Accent.1}"/>
+                                                                <Setter Property="RenderTransform"><Setter.Value><TranslateTransform/></Setter.Value></Setter>
+                                                            </Style>
+                                                        </StackPanel.Resources>
+                                                        <Ellipse x:Name="LiveDot1"/>
+                                                        <Ellipse x:Name="LiveDot2"/>
+                                                        <Ellipse x:Name="LiveDot3"/>
+                                                        <StackPanel.Triggers>
+                                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                <BeginStoryboard>
+                                                                    <Storyboard RepeatBehavior="Forever" Duration="0:0:1.1">
+                                                                        <DoubleAnimation Storyboard.TargetName="LiveDot1" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                                                                                         From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0"/>
+                                                                        <DoubleAnimation Storyboard.TargetName="LiveDot2" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                                                                                         From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0.16"/>
+                                                                        <DoubleAnimation Storyboard.TargetName="LiveDot3" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                                                                                         From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0.32"/>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </EventTrigger>
+                                                        </StackPanel.Triggers>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding LiveText}" FontSize="12" Foreground="{DynamicResource Text.Primary}"
+                                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="520"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+
 
                                         <!-- Row 0: Role label + Tool Badge + Success/Fail + Hover Actions -->
                                         <Grid>
@@ -1589,7 +1666,12 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
+                            <!-- close the plan bar mid-way (it comes back only for a new plan; it also goes once all is done) -->
+                            <Button Grid.Column="4" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="6,3" Margin="4,0,0,0"
+                                    Style="{StaticResource IconButton}" Command="{Binding DismissStickyPlanCommand}"
+                                    ToolTip="{services:Loc chat.plan.closeTip}"/>
                             <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="12.5">
