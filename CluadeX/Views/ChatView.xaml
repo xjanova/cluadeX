@@ -1811,6 +1811,7 @@
                                       Visibility="{Binding HasChatModelChoices, Converter={StaticResource BoolVis}}">
                                     <ComboBox x:Name="ChatModelBox" ItemsSource="{Binding ChatModelChoices}" SelectedItem="{Binding SelectedChatModel}"
                                               Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="180"
+                                              Tag="{Binding LiveEffortSuffix}"
                                               ToolTip="{services:Loc chat.model.pickTip}">
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
@@ -1819,6 +1820,20 @@
                                                     <TextBlock Text="{Binding PriceLabel}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
                                                                FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,0,0"
                                                                ToolTip="{services:Loc chat.model.priceTip}"/>
+                                                    <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                               FontSize="11" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.2}"
+                                                               VerticalAlignment="Center" Margin="8,0,0,0">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ComboBoxItem}}" Value="{x:Null}">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
                                                 </StackPanel>
                                             </DataTemplate>
                                         </ComboBox.ItemTemplate>
@@ -1868,9 +1883,38 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center">
                                     <TextBlock x:Name="EffortLabel" Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
                                                Margin="0,0,5,0" ToolTip="{services:Loc chat.effortTip}"/>
+                                    <!-- "auto → medium": while a run works under auto, the closed box shows the level it really uses -->
                                     <ComboBox x:Name="EffortBox" ItemsSource="{Binding EffortOptions}" SelectedItem="{Binding ReasoningEffort}"
                                               Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="92"
-                                              ToolTip="{services:Loc chat.effortTip}"/>
+                                              Tag="{Binding LiveEffortLevel}" ToolTip="{services:Loc chat.effortTip}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                                                    <TextBlock VerticalAlignment="Center" Margin="4,0,0,0" FontWeight="SemiBold" Foreground="{DynamicResource Accent.2}">
+                                                        <Run Text="→ "/><Run Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBox}, Mode=OneWay}"/>
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <MultiDataTrigger>
+                                                                        <MultiDataTrigger.Conditions>
+                                                                            <Condition Binding="{Binding RelativeSource={RelativeSource AncestorType=ComboBoxItem}}" Value="{x:Null}"/>
+                                                                            <Condition Binding="{Binding}" Value="auto"/>
+                                                                        </MultiDataTrigger.Conditions>
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </MultiDataTrigger>
+                                                                    <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBox}}" Value="">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
                                     <!-- What really answers: the model and the effort its requests use now ("auto → medium" mid-run) -->
                                     <Border x:Name="LiveEffortChip" CornerRadius="6" Padding="8,3" Margin="6,0,0,0" VerticalAlignment="Center"
                                             Background="{DynamicResource State.Fill.Faint}" ToolTip="{services:Loc chat.liveEffortTip}">

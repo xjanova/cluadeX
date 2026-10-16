@@ -311,7 +311,7 @@ public partial class ChatViewModel : ViewModelBase
             if (SetProperty(ref _reasoningEffort, v))
             {
                 _settingsService.UpdateSettings(s => s.ReasoningEffort = v);
-                OnPropertyChanged(nameof(LiveModelEffortText));
+                OnPropertyChanged(nameof(LiveModelEffortText)); OnPropertyChanged(nameof(LiveEffortSuffix)); OnPropertyChanged(nameof(LiveEffortLevel));
             }
         }
     }
@@ -325,7 +325,25 @@ public partial class ChatViewModel : ViewModelBase
     public string ActiveModelLabel
     {
         get => _activeModelLabel;
-        set { if (SetProperty(ref _activeModelLabel, value)) OnPropertyChanged(nameof(LiveModelEffortText)); }
+        set { if (SetProperty(ref _activeModelLabel, value)) OnPropertyChanged(nameof(LiveModelEffortText)); OnPropertyChanged(nameof(LiveEffortSuffix)); OnPropertyChanged(nameof(LiveEffortLevel)); }
+    }
+
+    /// <summary>The level "auto" is really using in this chat's run right now ("low" / "medium" / "high" / "xhigh"), "" when
+    /// no run is going or the effort is not "auto". The effort box shows it after "auto".</summary>
+    public string LiveEffortLevel =>
+        EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto
+            ? RunOf(CurrentSession)?.Scope?.LiveEffort ?? "" : "";
+
+    /// <summary>"⚡ auto → medium" — the effort this chat's requests really use, shown in the model boxes next to the
+    /// selected model (the closed box only; the drop-down lists models).</summary>
+    public string LiveEffortSuffix
+    {
+        get
+        {
+            string setting = EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
+            string? live = RunOf(CurrentSession)?.Scope?.LiveEffort;
+            return "⚡ " + (live != null && setting == EffortLevels.Auto ? $"auto → {live}" : setting);
+        }
     }
 
     /// <summary>"claude-opus-5-5 · medium" — the model answering and the effort its requests really use. While a run of
@@ -644,7 +662,12 @@ public partial class ChatViewModel : ViewModelBase
         Services.Tools.ProjectToolModule.ProjectOpened += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentOpenedProject(scope, path));
         AgentRunScope.LiveEffortChanged += _ =>
-            App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(LiveModelEffortText)));
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                OnPropertyChanged(nameof(LiveModelEffortText));
+                OnPropertyChanged(nameof(LiveEffortSuffix));
+                OnPropertyChanged(nameof(LiveEffortLevel));
+            });
         Services.Tools.ProjectToolModule.RelatedFolderAdded += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
         _providerManager = providerManager;
