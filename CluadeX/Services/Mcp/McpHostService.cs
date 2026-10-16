@@ -633,7 +633,7 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                     contextFiles = new { type = "array", items = new { type = "string" }, description = "Optional file paths in scope — listed in the task message" },
                     lessons = new { type = "array", items = new { type = "string" }, description = "Optional 'lessons learned' from past corrections — appended to the task message" },
                     workingDirectory = new { type = "string", description = "Optional project folder for this run — CluadeX switches to it for the run and back afterwards. Default: the open project" },
-                    maxSteps = new { type = "integer", description = "Optional step limit for this run (1-200). Default: the Max agent steps setting. When this build cannot apply a per-run limit, the result says so" },
+                    maxSteps = new { type = "integer", description = "Optional step limit for this run (1-100000, 0 = no limit). Default: the Max agent steps setting. When this build cannot apply a per-run limit, the result says so" },
                     acceptEdits = new { type = "boolean", description = "Optional. true = ask the user in CluadeX (once per folder per session) to let file edits inside the project run without a prompt for this run. Never for a drive root, the user folder or a system folder; never covers commands, MCP tools, paths outside, or build/hook/CI files; the automatic build check after such edits still asks. The result says when it was declined or refused. Default: the user's Accept-edits default (off)" },
                 }
             }
@@ -653,7 +653,7 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                     skill = new { type = "string", description = "Slash-command name without the slash, e.g. 'commit'" },
                     args = new { type = "string", description = "Free-form argument string passed to the skill template" },
                     workingDirectory = new { type = "string" },
-                    maxSteps = new { type = "integer", description = "Optional step limit for this run (1-200); the result says when it could not be applied" },
+                    maxSteps = new { type = "integer", description = "Optional step limit for this run (1-100000, 0 = no limit); the result says when it could not be applied" },
                 }
             }
         },

@@ -1988,7 +1988,7 @@ public partial class ChatViewModel : ViewModelBase
         }
         // A step limit this build can't apply is said, not swallowed.
         if (maxSteps is int askedSteps && FindStepLimitedAgentLoop() == null)
-            notes.Add($"maxSteps={Math.Clamp(askedSteps, 1, 200)} was not applied: this CluadeX build has no per-run step limit, "
+            notes.Add($"maxSteps={Math.Clamp(askedSteps, 1, CodeAgentService.MaxIterationOverride)} was not applied: this CluadeX build has no per-run step limit, "
                 + $"so the 'Max agent steps' setting ({_settingsService.Settings.MaxAgentIterations}) applied.");
         string WithNotes(string text) => notes.Count == 0 ? text : $"{text}\n\n({string.Join(" ", notes)})";
 
@@ -2239,7 +2239,7 @@ public partial class ChatViewModel : ViewModelBase
     {
         if (maxSteps is int steps)
         {
-            int limit = Math.Clamp(steps, 1, 200);
+            int limit = Math.Clamp(steps, 1, CodeAgentService.MaxIterationOverride);
             if (FindStepLimitedAgentLoop() is { } method)
             {
                 var ps = method.GetParameters();

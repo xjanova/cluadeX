@@ -1496,7 +1496,7 @@ internal static class Program
             var stopped = await Task.WhenAny(call, Task.Delay(20000)) == call ? await call : null;
             Check("P3 Stop during a pipe run returns isError=true to the caller", running && stopped is { IsError: true } && stopped.GetTextOutput().Contains("Stopped"), stopped?.GetTextOutput() ?? "no result");
             Check("P3 …and the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA) && !Vm.IsGenerating);
-            var bad = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"maxSteps\":0}");
+            var bad = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"maxSteps\":-1}");
             var missing = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"workingDirectory\":\"Z:\\\\no\\\\such\\\\folder\"}");
             Check("P3 a bad maxSteps or a folder that does not exist is refused as isError (it ran in the open project before)",
                 bad.IsError && bad.GetTextOutput().Contains("maxSteps") && missing.IsError && missing.GetTextOutput().Contains("does not exist") && SamePath(Vm.WorkingDirectory, ProjA),
