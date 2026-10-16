@@ -521,6 +521,7 @@ public partial class App : Application
                 Dispatcher.Invoke(() =>
                 {
                     options = chat.ChatModelChoices
+                        .Where(c => c.Provider != Models.AiProviderType.BrainX)   // never offered to the room itself
                         .Select(c => (object)new { provider = c.Provider.ToString(), model = c.Model, label = c.ProviderLabel, price = c.PriceLabel })
                         .ToArray();
                     effort = chat.ReasoningEffort;

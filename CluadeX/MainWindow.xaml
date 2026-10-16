@@ -148,7 +148,11 @@
                 <!-- ════════════════════════════════════════════════════════ -->
                 <Border Grid.Row="0" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource TitleBar.Border}"
                         Background="{DynamicResource TitleBar.Background}">
+                    <!-- Two layers: everything else may shrink and clip; the caption buttons keep their own column and are
+                         always on screen (on a narrow window the Auto columns used to push them off the right edge). -->
                     <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <Grid x:Name="TitleContent" ClipToBounds="True">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>  <!-- (unused: the cosmetic mac traffic lights were removed) -->
                             <ColumnDefinition Width="Auto"/>  <!-- Project / branch -->
@@ -167,7 +171,7 @@
 
 
                         <!-- Project + branch -->
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+                        <StackPanel x:Name="TitleProject" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
                             <TextBlock Text="CluadeX" FontFamily="{DynamicResource Font.Mono.Display}"
                                        FontSize="12" FontWeight="SemiBold"
                                        Foreground="{DynamicResource TitleBar.Foreground}" VerticalAlignment="Center"/>
@@ -215,7 +219,7 @@
                         </StackPanel>
 
                         <!-- Command palette pill — opens the real Ctrl+K palette -->
-                        <Button Grid.Column="3" Style="{StaticResource CommandPalettePill}"
+                        <Button x:Name="TitlePalette" Grid.Column="3" Style="{StaticResource CommandPalettePill}"
                                 MaxWidth="440" Margin="12,8"
                                 Command="{Binding OpenPaletteCommand}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
@@ -467,7 +471,7 @@
                         </StackPanel>
 
                         <!-- Buddy chip -->
-                        <Border Grid.Column="9" Margin="10,6,12,6" Padding="4,0,12,0"
+                        <Border x:Name="TitleBuddy" Grid.Column="9" Margin="10,6,12,6" Padding="4,0,12,0"
                                 CornerRadius="14"
                                 Background="{DynamicResource Buddy.Chip.Background}"
                                 BorderBrush="{DynamicResource Buddy.Chip.Border}" BorderThickness="1"
@@ -490,16 +494,18 @@
                             </StackPanel>
                         </Border>
 
+
+                    </Grid>
                         <!-- Caption buttons (min/max/close) -->
-                        <StackPanel Grid.Column="10" Orientation="Horizontal"
-                                    WindowChrome.IsHitTestVisibleInChrome="True">
-                            <Button x:Name="BtnMinimize" Style="{StaticResource NeonCaptionButton}"
-                                    Content="&#xE921;" Click="BtnMinimize_Click"/>
-                            <Button x:Name="BtnMaximize" Style="{StaticResource NeonCaptionButton}"
-                                    Content="&#xE922;" Click="BtnMaximize_Click"/>
-                            <Button x:Name="BtnClose" Style="{StaticResource NeonCaptionCloseButton}"
-                                    Content="&#xE8BB;" Click="BtnClose_Click"/>
-                        </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top"
+                                WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="BtnMinimize" Style="{StaticResource NeonCaptionButton}"
+                                Content="&#xE921;" Click="BtnMinimize_Click"/>
+                        <Button x:Name="BtnMaximize" Style="{StaticResource NeonCaptionButton}"
+                                Content="&#xE922;" Click="BtnMaximize_Click"/>
+                        <Button x:Name="BtnClose" Style="{StaticResource NeonCaptionCloseButton}"
+                                Content="&#xE8BB;" Click="BtnClose_Click"/>
+                    </StackPanel>
                     </Grid>
                 </Border>
 

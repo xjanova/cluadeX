@@ -1,3 +1,4 @@
+using System.IO;
 namespace CluadeX.ViewModels;
 
 public partial class ChatViewModel
@@ -24,6 +25,21 @@ public partial class ChatViewModel
                 navigate(page);
                 await Task.Delay(700);
             }
+        }
+        // Agent edits: a throwaway project, a 600-line file written and re-written as the agent would.
+        string proj = Path.Combine(Path.GetTempPath(), "cx-perf-" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(Path.Combine(proj, "src"));
+        ApplyWorkingDirectory(proj, announce: false, showEditor: false);
+        await Task.Delay(1500);
+        for (int i = 0; i < 4; i++)
+        {
+            string rel = Path.Combine("src", $"File{i % 2}.cs");
+            var lines = Enumerable.Range(0, 600).Select(n => $"    public int Value{n}_{i} => {n} * {i}; // line {n}");
+            File.WriteAllText(Path.Combine(proj, rel), "namespace Probe;\npublic class C\n{\n" + string.Join("\n", lines) + "\n}\n");
+            FileMutatedByAgent?.Invoke(rel, 1, null);
+            await Task.Delay(2500);
+            navigate("Chat");
+            await Task.Delay(800);
         }
         _debugLog?.Info("Perf", "probe done");
     }

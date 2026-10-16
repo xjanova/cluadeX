@@ -1872,7 +1872,7 @@
                                               Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="92"
                                               ToolTip="{services:Loc chat.effortTip}"/>
                                     <!-- What really answers: the model and the effort its requests use now ("auto → medium" mid-run) -->
-                                    <Border CornerRadius="6" Padding="8,3" Margin="6,0,0,0" VerticalAlignment="Center"
+                                    <Border x:Name="LiveEffortChip" CornerRadius="6" Padding="8,3" Margin="6,0,0,0" VerticalAlignment="Center"
                                             Background="{DynamicResource State.Fill.Faint}" ToolTip="{services:Loc chat.liveEffortTip}">
                                         <TextBlock Text="{Binding LiveModelEffortText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
                                                    FontFamily="{DynamicResource Font.Mono}"/>
@@ -1957,6 +1957,17 @@
                                         Command="{Binding SendMessageCommand}"
                                         FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
                                         ToolTip="{services:Loc chat.send}"/>
+                                <!-- Pause: finish this step, then stop cleanly — Resume (or "continue") goes on, even after a restart -->
+                                <Button Content="&#xE769;" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                        Command="{Binding PauseGenerationCommand}"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
+                                        ToolTip="{services:Loc chat.pause.tip}"
+                                        Visibility="{Binding IsGenerating, Converter={StaticResource BoolVis}}"/>
+                                <Button Content="&#xE768;" Style="{StaticResource PrimaryButton}" Margin="0,0,6,0"
+                                        Command="{Binding ResumeGenerationCommand}"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
+                                        ToolTip="{services:Loc chat.pause.resumeTip}"
+                                        Visibility="{Binding CanResume, Converter={StaticResource BoolVis}}"/>
                                 <Button Content="&#xE71A;" Style="{StaticResource DangerButton}"
                                         Command="{Binding StopGenerationCommand}"
                                         FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"

@@ -576,6 +576,8 @@ public partial class ChatViewModel : ViewModelBase
     public ICommand RefreshModelsCommand { get; }
     public ICommand SendMessageCommand { get; }
     public ICommand StopGenerationCommand { get; }
+    public ICommand PauseGenerationCommand { get; }
+    public ICommand ResumeGenerationCommand { get; }
     public ICommand ClearChatCommand { get; }
     public ICommand NewSessionCommand { get; }
     /// <summary>New chat AND bring the Chat page forward — for callers outside the chat page (title bar, Ctrl+N,
@@ -690,6 +692,8 @@ public partial class ChatViewModel : ViewModelBase
         // blocked Send in every other chat until it finished (several chats can run at once now).
         SendMessageCommand = new RelayCommand(() => Detached(SendMessage));
         StopGenerationCommand = new RelayCommand(StopGeneration);
+        PauseGenerationCommand = new RelayCommand(PauseGeneration);
+        ResumeGenerationCommand = new RelayCommand(ResumeGeneration);
         ClearChatCommand = new AsyncRelayCommand(ClearChatAsync);
         NewSessionCommand = new AsyncRelayCommand(NewSessionFromUserAsync);
         NewChatAndShowCommand = new AsyncRelayCommand(NewChatAndShowAsync);
@@ -1146,7 +1150,9 @@ public partial class ChatViewModel : ViewModelBase
             }
 
             CurrentSession.UpdatedAt = DateTime.Now;
+            CluadeX.Helpers.UiStallWatchdog.Note("saving the chat");
             _persistenceService.SaveSession(CurrentSession);
+            CluadeX.Helpers.UiStallWatchdog.Note("");
             _isDirty = false;
         }
         catch (Exception ex)
@@ -2023,6 +2029,7 @@ public partial class ChatViewModel : ViewModelBase
                 turn = BeginTurn();
                 taskSession = CurrentSession;
                 taskScope = AgentRunScope.Current;   // entered by BeginTurn inside this UI call — re-entered below
+                if (taskScope != null) taskScope.FromPipe = true;
                 linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 _cts = linked;
                 historySnapshot = BuildModelHistory(Messages, before: userMsg, includeTools: true);
@@ -4055,6 +4062,25 @@ public partial class ChatViewModel : ViewModelBase
                 sb.AppendLine($"\n**{Loc("chat.exec.errors")}:**\n```\n{result.ExecutionResult.Error}\n```");
         }
         return sb.ToString();
+    }
+
+    /// <summary>Pause the chat's run: it finishes the step in hand and stops cleanly (Resume / "continue" goes on).</summary>
+    private void PauseGeneration()
+    {
+        if (RunOf(CurrentSession)?.Scope is not { } scope) return;
+        scope.PauseRequested = true;
+        StatusText = Loc("chat.pause.requested");
+    }
+
+    /// <summary>The chat's last reply ended on Pause: Resume is offered (also after a restart — the reply is stored).</summary>
+    public bool CanResume => !IsGenerating && Messages.LastOrDefault(m => m.Role == MessageRole.Assistant) is { } last
+                             && (last.Content ?? "").StartsWith(AgentRunScope.PausedMarker, StringComparison.Ordinal);
+
+    private void ResumeGeneration()
+    {
+        if (!CanResume) return;
+        UserInput = Loc("chat.pause.resumeText");
+        if (SendMessageCommand.CanExecute(null)) SendMessageCommand.Execute(null);
     }
 
     private void StopGeneration()
