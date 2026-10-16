@@ -307,6 +307,10 @@ public partial class ChatViewModel : ViewModelBase
     /// always think it asks for the reasoning text), OpenAI models with reasoning effort, Gemini 2.5+. Hidden for
     /// models on this PC, Ollama, Claude Code's own plan and non-reasoning API models — there it did nothing.</summary>
     public bool ThinkToggleVisible { get => _thinkToggleVisible; private set => SetProperty(ref _thinkToggleVisible, value); }
+    private bool _effortVisible = true;
+    /// <summary>The Effort box only shows where the pick reaches the request: Claude models with output_config.effort,
+    /// OpenAI reasoning models, Gemini 2.5+, Claude Code (--effort). A model on this PC or Ollama ignores it.</summary>
+    public bool EffortVisible { get => _effortVisible; private set => SetProperty(ref _effortVisible, value); }
     private string _reasoningEffort = EffortLevels.Auto;
     public string ReasoningEffort
     {
@@ -436,6 +440,14 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.Anthropic => true,
             AiProviderType.OpenAI => OpenAiProvider.MaxEffort(configured ?? OpenAiProvider.DefaultModel) != null,
             AiProviderType.Gemini => GeminiProvider.ThinkingOf(configured ?? GeminiProvider.DefaultModel) != GeminiProvider.ThinkingControl.None,
+            _ => false,
+        };
+        EffortVisible = type switch
+        {
+            AiProviderType.Anthropic => AnthropicProvider.Traits(configured ?? AnthropicProvider.DefaultModel).EffortSupport > 0,
+            AiProviderType.OpenAI => OpenAiProvider.MaxEffort(configured ?? OpenAiProvider.DefaultModel) != null,
+            AiProviderType.Gemini => GeminiProvider.ThinkingOf(configured ?? GeminiProvider.DefaultModel) != GeminiProvider.ThinkingControl.None,
+            AiProviderType.ClaudeDev => true,
             _ => false,
         };
         OnPropertyChanged(nameof(BillingUrl));
@@ -3621,6 +3633,9 @@ public partial class ChatViewModel : ViewModelBase
     /// type the new lines in.</summary>
     public event Action<string, int, EditDiffResult?>? FileMutatedByAgent;
 
+    /// <summary>"chatId:problem" pairs already explained (ChromeHelp), so a run that keeps failing says it once.</summary>
+    private readonly HashSet<string> _chromeHelpShown = new();
+
     private void OnToolExecuted(ToolResult toolResult)
     {
         // The run whose tool finished, captured at event time: the row goes into ITS chat's live list whether or not
@@ -3635,6 +3650,15 @@ public partial class ChatViewModel : ViewModelBase
             {
                 run.ActiveStatus.IsStreaming = false;
                 run.ActiveStatus = null;
+            }
+
+            // Chrome trouble in plain words, once per chat per kind: not signed in, an unanswered permission, Save As.
+            var chromeProblem = Services.Chrome.ChromeHelp.Diagnose(toolResult.ToolName, (toolResult.Output ?? "") + " " + toolResult.Error, toolResult.Success);
+            if (chromeProblem != Services.Chrome.ChromeHelp.Problem.None && list != null
+                && _chromeHelpShown.Add($"{target?.Id ?? CurrentSession?.Id}:{chromeProblem}"))
+            {
+                bool thai = (_settingsService.Settings.Language ?? "th").StartsWith("th", StringComparison.OrdinalIgnoreCase);
+                list.Add(new ChatMessage { Role = MessageRole.System, IsSideNote = true, Content = Services.Chrome.ChromeHelp.Advice(chromeProblem, thai) });
             }
 
             // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit.
@@ -3685,13 +3709,17 @@ public partial class ChatViewModel : ViewModelBase
 
             // ─── Tool call grouping: collapse consecutive same-category calls ───
             string category = GetToolCategory(toolResult.ToolName);
-            var lastMsg = onScreen && thumbnail == null ? list!.LastOrDefault() : null;
+            var lastMsg = onScreen && thumbnail == null ? list!.LastOrDefault(m => !m.IsSideNote) : null;
             if (lastMsg?.ThumbnailPath != null) lastMsg = null;   // nor is anything merged into one
 
+            // Every successful background call in a row folds into ONE row, whatever its family (owner 2026-10-17: "ไม่ต้อง
+            // แตกกล่องออกไป ให้รวมกลุ่มไว้เลย เมื่อกดแยกดูจะเห็นกล่องภายใน") — opened, it lists each call as its own box.
+            // An edit (its diff), a question, a sub-agent, a picture and a failure still stand on their own.
             if (lastMsg is { Role: MessageRole.ToolAction, IsCollapsedGroup: true }
-                && GetToolCategory(lastMsg.CollapsedToolNames.LastOrDefault() ?? "") == category
+                && Groupable(category)
                 && lastMsg.ToolSuccess && toolResult.Success)
             {
+                if (GetToolCategory(lastMsg.CollapsedToolNames.LastOrDefault() ?? "") != category) lastMsg.ToolVerb = Loc("chat.tools.groupVerb");
                 // Merge into existing group
                 lastMsg.CollapsedCount++;
                 lastMsg.CollapsedToolNames.Add(toolResult.ToolName);
@@ -3706,15 +3734,15 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            if (lastMsg is { Role: MessageRole.ToolAction } && !lastMsg.IsCollapsedGroup
-                && GetToolCategory(lastMsg.CollapsedToolNames.LastOrDefault() ?? lastMsg.ToolName?.Split(' ').LastOrDefault() ?? "") == category
+            string lastCategory = lastMsg == null ? "" : GetToolCategory(lastMsg.ToolKind ?? lastMsg.CollapsedToolNames.LastOrDefault() ?? lastMsg.ToolName?.Split(' ').LastOrDefault() ?? "");
+            if (lastMsg is { Role: MessageRole.ToolAction } && !lastMsg.IsCollapsedGroup && !lastMsg.HasDiff
+                && lastMsg.ToolKind != null && Groupable(lastCategory)
                 && lastMsg.ToolSuccess && toolResult.Success
                 && Groupable(category))
             {
+                if (lastCategory != category) lastMsg.ToolVerb = Loc("chat.tools.groupVerb");
                 // Convert single ToolAction to group + add this one
-                string prevToolRaw = lastMsg.CollapsedToolNames.Count > 0
-                    ? lastMsg.CollapsedToolNames[0]
-                    : "read_file";
+                string prevToolRaw = lastMsg.ToolKind ?? (lastMsg.CollapsedToolNames.Count > 0 ? lastMsg.CollapsedToolNames[0] : "read_file");
                 // The first call becomes the group's first box, from what its own row showed.
                 lastMsg.AddGroupStep(new ToolStepView(lastMsg.ToolKind ?? prevToolRaw, lastMsg.ToolVerb ?? ShortToolName(prevToolRaw),
                     lastMsg.ToolTarget, lastMsg.ToolElapsedTime));

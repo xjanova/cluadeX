@@ -330,6 +330,11 @@
             <ColumnDefinition Width="*"/>     <!-- Editor center -->
             <ColumnDefinition Width="Auto"/>  <!-- Chat panel (EditorChatPanel.Width, resizable) -->
         </Grid.ColumnDefinitions>
+        <!-- Portrait window: the chat moves under the editor into row 1 (CodeEditorView.ApplyOrientation) -->
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="EditorRow" Height="*"/>
+            <RowDefinition x:Name="ChatRow" Height="0"/>
+        </Grid.RowDefinitions>
 
         <!-- ═════════════ FILE TREE PANEL ═════════════ -->
         <Border x:Name="ExplorerPanel" Grid.Column="0" Width="240" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Border.Subtle}"
@@ -2386,8 +2391,12 @@
         <views:ResizeGrip Grid.Column="0" HorizontalAlignment="Right" Margin="0,0,-3,0"
                           Key="editor.explorer" MinSize="160" MaxSize="640"
                           Target="{Binding ElementName=ExplorerPanel}"/>
-        <views:ResizeGrip Grid.Column="2" HorizontalAlignment="Left" Margin="-3,0,0,0" OnLeftEdge="True"
+        <views:ResizeGrip x:Name="ChatGrip" Grid.Column="2" HorizontalAlignment="Left" Margin="-3,0,0,0" OnLeftEdge="True"
                           Key="editor.chat" MinSize="280" MaxSize="1200"
                           Target="{Binding ElementName=EditorChatPanel}"/>
+        <!-- Portrait: drag the line between the editor and the chat under it -->
+        <GridSplitter x:Name="ChatSplitter" Grid.Row="1" Grid.ColumnSpan="3" Height="6" Margin="0,-3,0,0"
+                      HorizontalAlignment="Stretch" VerticalAlignment="Top" ResizeDirection="Rows"
+                      Background="Transparent" Cursor="SizeNS" Panel.ZIndex="50" Visibility="Collapsed"/>
     </Grid>
 </UserControl>

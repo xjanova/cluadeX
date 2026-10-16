@@ -267,7 +267,6 @@ public partial class MainWindow : Window
         static System.Windows.Visibility V(bool show) => show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
         // Nothing else hides on a narrow window any more: the title row glides (MarqueeScroller) so every chip comes
         // into view. Only the palette pill — a star column that would be squeezed to nothing — steps aside.
-        if (TitleModelBox != null) TitleModelBox.Visibility = V(DataContext is ViewModels.MainViewModel { ChatVM.HasChatModelChoices: true });
         if (TitlePalette != null) TitlePalette.Visibility = V(w >= 980);
     }
 }

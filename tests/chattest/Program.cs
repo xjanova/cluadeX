@@ -1872,7 +1872,8 @@ internal static partial class Program
             Vm.EstimateText.Contains("/step") && Vm.EstimateText.Contains("$2 ≈") && Vm.EstimateTip.Contains("claude-sonnet-5-5"),
             Vm.EstimateText + " | " + Vm.EstimateTip.Split('\n')[0]);
         Check("U7 estimate: every model in the box shows its price (input / output per MTok)",
-            Vm.ChatModelChoices.All(c => c.PriceLabel.StartsWith("$") && c.PriceLabel.Contains(" / $"))
+            Vm.ChatModelChoices.Where(c => c.Provider is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini)
+                .All(c => c.PriceLabel.StartsWith("$") && c.PriceLabel.Contains(" / $"))
             && Vm.ChatModelChoices.First(c => c.Model == "claude-sonnet-5-5").PriceLabel == "$2 / $10",
             Vm.ChatModelChoices.First(c => c.Model == "claude-sonnet-5-5").PriceLabel);
         Check("U7 look: as Claude, the model box shows the saved model and the budget box shows $2",
@@ -1916,7 +1917,9 @@ internal static partial class Program
             $"{approvals.FontSize}/{budgetBox.FontSize}/{modelBox.FontSize}");
         Settings.UpdateSettings(s => s.ProviderConfigs.Remove("Anthropic"));
         await Task.Delay(50); await Render();
-        Check("U7 text: no key, no model box", !Vm.HasChatModelChoices);
+        var noKey = Vm.ChatModelChoices.FirstOrDefault(c => c.Model == "claude-sonnet-5-5");
+        Check("U7 text: no key → Claude's models stay listed, marked as needing a key (every vendor is in the box)",
+            noKey is { NeedsKey: true } && noKey.PriceLabel.Contains(L("chat.model.noKeyLabel")), noKey?.PriceLabel);
         // The credit link moved to the window's title bar (the "today" chip's menu): MainWindow, not this view.
         Check("U7 text: the composer's \"+\" menu carries the agent switches and the chat actions",
             ((Button)View.FindName("MoreButton")).ContextMenu.Items.OfType<MenuItem>().Count() >= 9);
@@ -2206,6 +2209,9 @@ internal static partial class Program
         var runs = (System.Collections.IList)typeof(ChatViewModel).GetField("_runs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(Vm)!;
         var scope = (AgentRunScope)runs[0]!.GetType().GetProperty("Scope")!.GetValue(runs[0])!;
         scope.LiveEffort = "high";
+        // The fake answers as a model on this PC, where the Effort box is hidden (it changes nothing there); show it to
+        // test what it reads for a model that takes effort.
+        typeof(ChatViewModel).GetProperty("EffortVisible")!.SetValue(Vm, true);
         await Render();
         var effortBox = Find<ComboBox>(Win).First(c => c.Name == "EffortBox");
         string shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));

@@ -521,11 +521,11 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         Application.Current?.Dispatcher.BeginInvoke(() => AppendLog(serverName, message));
     }
 
-    /// <summary>"128 tools · v2.9.505": the version the server reported when it started (serverInfo.version).</summary>
+    /// <summary>"128 tools"; the version the server reported (serverInfo.version) goes on the item's badge.</summary>
     private string ToolsAndVersion(McpServerDisplayItem item)
     {
-        string tools = _loc.T("mcpm.toolCount", item.ToolCount);
-        return _mcpManager.ServerVersion(item.Name) is { Length: > 0 } v ? $"{tools} · v{v.TrimStart('v', 'V')}" : tools;
+        item.VersionText = _mcpManager.ServerVersion(item.Name) is { Length: > 0 } v ? "v" + v.TrimStart('v', 'V') : "";
+        return _loc.T("mcpm.toolCount", item.ToolCount);
     }
 
     private void OnToolsChanged()

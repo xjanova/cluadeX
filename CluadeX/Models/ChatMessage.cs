@@ -187,7 +187,8 @@ public class ChatMessage : INotifyPropertyChanged
     public string? ToolKind { get; set; }
     /// <summary>What the tool did in the user's language ("อ่านไฟล์") and on what ("scripts/main.gd"). Rows saved
     /// before these existed have neither and show <see cref="ToolName"/> instead.</summary>
-    public string? ToolVerb { get; set; }
+    private string? _toolVerb;
+    public string? ToolVerb { get => _toolVerb; set { _toolVerb = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasToolVerb)); } }
     private string? _toolTarget;
     public string? ToolTarget { get => _toolTarget; set { _toolTarget = value; OnPropertyChanged(); } }
     public bool HasToolVerb => !string.IsNullOrEmpty(ToolVerb);
@@ -237,6 +238,8 @@ public class ChatMessage : INotifyPropertyChanged
     public int CollapsedCount { get; set; }
     /// <summary>Individual tool names in this collapsed group.</summary>
     public List<string> CollapsedToolNames { get; set; } = new();
+    /// <summary>A help line dropped in beside the tool rows (ChromeHelp): tool rows on either side of it still fold together.</summary>
+    public bool IsSideNote { get; set; }
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
     /// a reloaded group shows its merged output instead).</summary>
     public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();

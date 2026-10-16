@@ -660,6 +660,8 @@ internal static partial class Program
         var back = await RenderSet("midnight-roundtrip");
         CompareWithGolden("midnight-roundtrip", back);
 
+        await PortraitChecks();
+
 
         return Finish();
     }
@@ -796,6 +798,34 @@ internal static partial class Program
     // ═══════════════════════════════════════════ rendering ═══════════════════════════════════════════
 
     static Visual RootVisual(Window w) => (Visual)VisualTreeHelper.GetChild(w, 0);
+
+    /// <summary>A narrow, tall window (the owner's 1094×1934 portrait screen, scaled): the title and status bars glide
+    /// to show what does not fit, and the Code page stacks the chat under the editor.</summary>
+    static async Task PortraitChecks()
+    {
+        Log("\n## Portrait window — bars glide, the Code page stacks");
+        const int PW = 760, PH = 1300;
+        MainWin.Width = PW; MainWin.Height = PH;
+        MainVm.NavigateToCommand.Execute("Code");
+        await Idle(800);
+        var bars = Find<CluadeX.Views.MarqueeScroller>(MainWin).ToList();
+        Check("P1 the title and status bars are gliding rows", bars.Count >= 2, $"{bars.Count}");
+        var over = bars.Where(b => b.ScrollableWidth > 12).ToList();
+        Check("P1 at 760 px at least one bar overflows (the row is measured at its natural width)", over.Count >= 1,
+            string.Join(", ", bars.Select(b => $"{b.ScrollableWidth:0}")));
+        await Task.Delay(3500); await Idle(100);
+        Check("P2 an overflowing bar glides by itself", over.Any(b => b.HorizontalOffset > 1),
+            string.Join(", ", over.Select(b => $"{b.HorizontalOffset:0.0}/{b.ScrollableWidth:0}")));
+        var chat = (FrameworkElement)Find<CluadeX.Views.CodeEditorView>(MainWin).FirstOrDefault()?.FindName("EditorChatPanel");
+        Check("P3 portrait: the Code page puts the chat under the editor, full width",
+            chat != null && Grid.GetRow(chat) == 1 && chat.ActualWidth > PW * 0.8, $"row={(chat == null ? -1 : Grid.GetRow(chat))} w={chat?.ActualWidth:0}");
+        FreezeVolatile();
+        var bmp = await Stable(() => (RootVisual(MainWin), PW, PH), "portrait/code-editor");
+        SavePng(bmp, Path.Combine(OutRoot, "renders", "portrait-code-editor.png"));
+        MainWin.Width = W; MainWin.Height = H;
+        await Idle(600);
+        Check("P4 landscape again: the chat is back on the right", chat != null && Grid.GetRow(chat) == 0 && Grid.GetColumn(chat) == 2);
+    }
 
     static RenderTargetBitmap Snapshot(Visual v, int w, int h)
     {
