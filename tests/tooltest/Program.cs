@@ -273,6 +273,39 @@ internal static partial class Program
             finally { AgentRunScope.Enter(null); Fs.WorkingDirectory = Root; }
         });
 
+        Console.WriteLine("── open_project add=true (a related folder beside the project) ──");
+        await Case("OPR", async () =>
+        {
+            string root = Path.GetFullPath(Root).TrimEnd('\\', '/');
+            string related = Path.Combine(Path.GetTempPath(), "tooltest-related-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(related);
+            File.WriteAllText(Path.Combine(related, "shared.txt"), "from the related repo");
+            var scope = new AgentRunScope("tooltest-related", root);
+            AgentRunScope.Enter(scope);
+            try
+            {
+                var before = await T("read_file", ("path", Path.Combine(related, "shared.txt")));
+                Check("OPR1", "before it is opened, a folder outside the project is out of reach", !before.Success, Seen(before));
+                var r = await T("open_project", ("path", related), ("add", "true"));
+                Check("OPR2", "add=true opens it beside the project — the project stays the main folder",
+                    r.Success && scope.WorkingDirectory == root && scope.ExtraFolders.Contains(related), Seen(r));
+                Check("OPR3", "…and the result says how many folders are open and which", Seen(r).Contains("2 folders are open") && Seen(r).Contains(related), Seen(r));
+                var rd = await T("read_file", ("path", Path.Combine(related, "shared.txt")));
+                Check("OPR4", "…its files are read by absolute path", rd.Success && Seen(rd).Contains("from the related repo"), Seen(rd));
+                var rel = await T("read_file", ("path", "App/Program.cs"));
+                Check("OPR5", "…relative paths still mean the main project", rel.Success && Seen(rel).Contains("calc.Add"), Seen(rel));
+                var again = await T("open_project", ("path", related), ("add", "true"));
+                Check("OPR6", "opening it twice does not list it twice", again.Success && scope.ExtraFolders.Count == 1, Seen(again));
+                var sibling = await T("read_file", ("path", Path.Combine(related + "-evil", "x.txt")));
+                Check("OPR7", "a sibling folder whose name only starts the same stays out of reach", !sibling.Success, Seen(sibling));
+            }
+            finally
+            {
+                AgentRunScope.Enter(null);
+                try { Directory.Delete(related, true); } catch { }
+            }
+        });
+
         Console.WriteLine("── read_file ──");
         await Case("R1", async () => { var r = await T("read_file", ("path", "App/Program.cs")); Check("R1", "reads a file", r.Success && Seen(r).Contains("calc.Add(2, 3)"), Seen(r)); });
         await Case("R1b", async () =>

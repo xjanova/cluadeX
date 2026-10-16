@@ -891,6 +891,10 @@ public class FileSystemService
                 normalized = ".";
             else if (rootedFull.StartsWith(wdSep, StringComparison.OrdinalIgnoreCase))
                 normalized = rootedFull[wdSep.Length..];
+            // A related folder this run also opened (open_project add=true): reached by absolute path.
+            else if (AgentRunScope.Current is { } scope
+                     && AgentRunScope.ContainingFolder(rootedFull, scope.ExtraFolders) != null)
+                return rootedFull;
             else
                 throw new UnauthorizedAccessException(
                     $"Access denied: '{relativePath}' is outside the project root. Use relative paths from the project root.");

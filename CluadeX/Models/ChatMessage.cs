@@ -351,6 +351,9 @@ public class ChatSession
     /// <summary>Absolute path of the project folder this session was created in (empty = no project).</summary>
     public string ProjectPath { get; set; } = "";
 
+    /// <summary>Related folders open beside <see cref="ProjectPath"/> for this chat (kept while the app runs).</summary>
+    public List<string> ExtraFolders { get; } = new();
+
     /// <summary>Display-only: last path segment of ProjectPath, or empty if no project.</summary>
     public string ProjectName => string.IsNullOrEmpty(ProjectPath)
         ? ""

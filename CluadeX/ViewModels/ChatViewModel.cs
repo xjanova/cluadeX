@@ -621,6 +621,8 @@ public partial class ChatViewModel : ViewModelBase
         // The agent opened a project itself (open_project): show it and remember it on that chat.
         Services.Tools.ProjectToolModule.ProjectOpened += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentOpenedProject(scope, path));
+        Services.Tools.ProjectToolModule.RelatedFolderAdded += (scope, path) =>
+            App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
         _providerManager = providerManager;
         _agentService = agentService;
         _codeExecutionService = codeExecutionService;
@@ -1350,10 +1352,33 @@ public partial class ChatViewModel : ViewModelBase
 
     private void OnMessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        UpdateContextInfo();
         _isDirty = true;
-        RefreshSidePanelFacts();
+        // Debounced: both refreshes walk the whole chat (history rebuild + token estimate over every message and tool
+        // output). Run per added row, a long run did that hundreds of times — O(n²) on the UI thread, the chat slowed
+        // the longer it got. Now once, 400 ms after the rows stop changing, at Background priority (below input).
+        _messagesChangedTimer ??= new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(400),
+        };
+        if (!_messagesChangedHooked)
+        {
+            _messagesChangedHooked = true;
+            _messagesChangedTimer.Tick += (_, _) =>
+            {
+                _messagesChangedTimer!.Stop();
+                UpdateContextInfo();
+                RefreshSidePanelFacts();
+            };
+        }
+        _messagesChangedTimer.Stop();
+        _messagesChangedTimer.Start();
     }
+    /// <summary>A grouped tool row keeps the last 16 KB of its outputs: the group grew without bound over a long run,
+    /// and every autosave and context count walked all of it.</summary>
+    private static string CapGroupOutput(string text) =>
+        text.Length <= 16_384 ? text : "…\n" + text[^16_384..];
+    private System.Windows.Threading.DispatcherTimer? _messagesChangedTimer;
+    private bool _messagesChangedHooked;
 
     // ─── Context Tracking ───
     private void UpdateContextInfo()
@@ -1532,6 +1557,7 @@ public partial class ChatViewModel : ViewModelBase
         _fileSystemService.WorkingDirectory = path;
         WorkingDirectory = path;
         OnPropertyChanged(nameof(ProjectName));
+        RaiseOpenFolders();
 
         // Invalidate system prompt cache (project context changed)
         _agentService.InvalidateSystemPromptCache();
@@ -2180,6 +2206,8 @@ public partial class ChatViewModel : ViewModelBase
         private readonly AgentRunScope? _scope;
         private readonly object _lock = new();
         private readonly StringBuilder _text = new();   // the current step's streamed text (agent thread, under _lock)
+        private readonly CluadeX.Helpers.UiThrottle _throttle = new();
+        private bool _finished;   // UI thread: set by Finish — a paced update still queued must not overwrite the final text
         private int _step = int.MinValue;
         private int _tokens;
         // UI thread only:
@@ -2233,12 +2261,13 @@ public partial class ChatViewModel : ViewModelBase
                 // The previous step's last 1-2 tokens were never shown (updates go every 3): its bubble gets them now.
                 if (newStep) { previousText = _text.ToString(); _text.Clear(); _step = step; }
                 _text.Append(token);
-                snapshot = _text.ToString();
+                // Paced: the snapshot is built only when an update will go (see UiThrottle).
+                snapshot = newStep || _throttle.Due ? _text.ToString() : "";
                 count = ++_tokens;
             }
             if (Run is { } r) r.StreamingTokenCount++;
             if (newStep) Ui(() => OpenBubble(snapshot, step, previousText), wait: true);
-            else if (count % 3 == 0) Ui(() => { if (_bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
+            else if (snapshot.Length > 0) _throttle.Post(() => { if (!_finished && _bubble != null && _bubbleStep == step) _bubble.Content = snapshot; });
         }
 
         private void OpenBubble(string text, int step, string previousText)
@@ -2296,6 +2325,7 @@ public partial class ChatViewModel : ViewModelBase
         /// safety net as a typed turn: tools ran but no summary is not an error (noSummary), nothing at all is.</summary>
         public void Finish(string? finalText, int toolsRun)
         {
+            _finished = true;
             string streamed;
             lock (_lock) streamed = _text.ToString();
             ChatMessage final;
@@ -2698,6 +2728,11 @@ public partial class ChatViewModel : ViewModelBase
     /// </summary>
     private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill)
     {
+        await AutoOpenProjectsAsync(input);
+        // Related folders ride along with the message so the model knows they are there (and how to reach them).
+        if (CurrentSession is { ExtraFolders.Count: > 0 } withExtras)
+            input += "\n\n[Open folders — main: " + _fileSystemService.AppWorkingDirectory + "; also open: "
+                + string.Join(", ", withExtras.ExtraFolders) + ". Relative paths are in the main folder; use absolute paths for the others.]";
         var turn = BeginTurn();
         if (userMsg.HasAttachedImages && AgentRunScope.Current is { } imageScope)
             imageScope.UserImages = await LoadAttachedImagesAsync(userMsg.AttachedImages);
@@ -3051,6 +3086,7 @@ public partial class ChatViewModel : ViewModelBase
         var streamSb = new System.Text.StringBuilder(4096);
         int lastStreamStep = -1;
         int scrollThrottle = 0;
+        var tokenThrottle = new CluadeX.Helpers.UiThrottle();
         int agenticTokenCount = 0;
         // Thinking that arrived while no reply bubble of its step was open (a tool-only step): shown on the
         // next bubble. Touched on the UI thread only.
@@ -3124,19 +3160,19 @@ public partial class ChatViewModel : ViewModelBase
             streamSb.Append(token);
             run.StreamingTokenCount++;
 
-            // Batch UI updates every 3 tokens (non-blocking BeginInvoke)
-            if (agenticTokenCount % 3 == 0)
+            // Paced UI updates (~12/s, below keyboard input — see UiThrottle)
+            if (tokenThrottle.Due)
             {
                 string snapshot = streamSb.ToString();
                 int capturedCount = run.StreamingTokenCount;
                 var bubble = streamingMsg;   // this step's bubble — by the time the update runs, a new step may own the field
-                App.Current?.Dispatcher.BeginInvoke(() =>
+                tokenThrottle.Post(() =>
                 {
                     if (bubble != null && !closedBubbles.Contains(bubble))
                         bubble.Content = snapshot;
 
-                    // Status update every 15 tokens (for the chat on screen only)
-                    if (capturedCount % 15 == 0 && ReferenceEquals(run.Session, CurrentSession))
+                    // Status update (for the chat on screen only)
+                    if (ReferenceEquals(run.Session, CurrentSession))
                     {
                         int elapsed = (int)run.Stopwatch.Elapsed.TotalSeconds;
                         double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;
@@ -3147,9 +3183,9 @@ public partial class ChatViewModel : ViewModelBase
                 });
             }
 
-            // Throttle scroll-to-bottom (every 20 tokens)
+            // Throttle scroll-to-bottom (every 20 tokens), below input too
             if (++scrollThrottle % 20 == 0)
-                App.Current?.Dispatcher.BeginInvoke(() => ScrollToBottom?.Invoke());
+                App.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => ScrollToBottom?.Invoke());
         }
 
         // The model's thinking, shown as the collapsed "Thinking" block above its reply. ThinkingContent used
@@ -3504,7 +3540,7 @@ public partial class ChatViewModel : ViewModelBase
                 lastMsg.Content = LocF("chat.tools.groupContent", lastMsg.CollapsedCount, string.Join(", ", lastMsg.CollapsedToolNames.Distinct()));
                 lastMsg.ToolName = LocF("chat.tools.groupName", lastMsg.CollapsedCount);
                 lastMsg.ToolTarget = $"{lastMsg.ToolTarget}, {ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory)}";
-                lastMsg.ToolOutput = (lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? "");
+                lastMsg.ToolOutput = CapGroupOutput((lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? ""));
                 lastMsg.ToolOutputLines += outputLines;
                 // Don't add new message — just updated existing
                 ScrollToBottom?.Invoke();
@@ -3526,7 +3562,7 @@ public partial class ChatViewModel : ViewModelBase
                 lastMsg.Content = LocF("chat.tools.groupContent", 2, string.Join(", ", lastMsg.CollapsedToolNames.Distinct()));
                 lastMsg.ToolTarget = $"{lastMsg.ToolTarget}, {ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory)}";
                 lastMsg.ToolName = LocF("chat.tools.groupName", 2);
-                lastMsg.ToolOutput = (lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? "");
+                lastMsg.ToolOutput = CapGroupOutput((lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? ""));
                 lastMsg.ToolOutputLines += outputLines;
                 ScrollToBottom?.Invoke();
                 return;
@@ -3801,6 +3837,7 @@ public partial class ChatViewModel : ViewModelBase
         var thinkSb = new StringBuilder();
         int tokenCount = 0;
         bool firstToken = true;
+        var tokenThrottle = new CluadeX.Helpers.UiThrottle();
         bool replyComplete = false;   // UI thread only
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -3841,16 +3878,15 @@ public partial class ChatViewModel : ViewModelBase
                 continue;
             }
 
-            // Subsequent tokens: async fire-and-forget (non-blocking)
-            // Batch updates every 3 tokens to reduce UI thrash without feeling laggy
-            if (tokenCount % 3 == 0)
+            // Subsequent tokens: paced (~12/s, below keyboard input — see UiThrottle)
+            if (tokenThrottle.Due)
             {
                 int capturedCount = tokenCount;
                 string snapshot = sb.ToString();
-                App.Current?.Dispatcher.BeginInvoke(() =>
+                tokenThrottle.Post(() =>
                 {
                     if (!replyComplete) assistantMsg.Content = snapshot;
-                    if (capturedCount % 15 == 0 && _activeAgentStatusMsg != null)
+                    if (_activeAgentStatusMsg != null)
                     {
                         int elapsed = (int)sw.Elapsed.TotalSeconds;
                         double tps = elapsed > 0 ? capturedCount / (double)elapsed : 0;

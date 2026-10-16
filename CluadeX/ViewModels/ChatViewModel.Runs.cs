@@ -29,6 +29,8 @@ public partial class ChatViewModel
         public readonly Stopwatch Stopwatch = new();
         public string StatusBase = "";
         public int StreamingTokenCount;
+        /// <summary>Rows in its chat at the last background save (skip a save when nothing was added).</summary>
+        public int SavedCount = -1;
         /// <summary>When each running tool started (Stopwatch timestamps, in call order): its row shows how long it took.</summary>
         public readonly System.Collections.Concurrent.ConcurrentQueue<long> ToolStarts = new();
     }
@@ -106,6 +108,169 @@ public partial class ChatViewModel
         OnPropertyChanged(nameof(CanSend));
         OnPropertyChanged(nameof(RunningElsewhereText));
         OnPropertyChanged(nameof(HasRunningElsewhere));
+        RaiseOpenFolders();
+    }
+
+    // ─── open folders (the project + related ones) ───
+
+    /// <summary>Every folder the chat on screen works in: the project first, then related ones.</summary>
+    private List<string> OpenFolders()
+    {
+        var list = new List<string>();
+        string main = _fileSystemService.AppWorkingDirectory;
+        if (!string.IsNullOrWhiteSpace(main)) list.Add(main);
+        if (CurrentSession != null)
+            foreach (var f in CurrentSession.ExtraFolders)
+                if (!list.Any(x => PathEquals(x, f))) list.Add(f);
+        return list;
+    }
+
+    /// <summary>"📁 2 โฟลเดอร์ · CluadeX, Atmos" — shown when more than the project is open.</summary>
+    public string OpenFoldersText
+    {
+        get
+        {
+            var all = OpenFolders();
+            if (all.Count < 2) return "";
+            return "📁 " + LocF("chat.folders.count", all.Count) + " · "
+                + string.Join(", ", all.Select(f => System.IO.Path.GetFileName(f.TrimEnd('\\', '/'))));
+        }
+    }
+
+    public string OpenFoldersTip => string.Join("\n", OpenFolders());
+    public bool HasExtraFolders => OpenFolders().Count > 1;
+
+    private void RaiseOpenFolders()
+    {
+        OnPropertyChanged(nameof(OpenFoldersText));
+        OnPropertyChanged(nameof(OpenFoldersTip));
+        OnPropertyChanged(nameof(HasExtraFolders));
+    }
+
+    /// <summary>A run opened a related folder beside its project (open_project add=true): the chat keeps it.</summary>
+    private void OnAgentAddedFolder(AgentRunScope? scope, string path)
+    {
+        var session = (scope?.Owner as ChatRun)?.Session ?? CurrentSession;
+        if (session == null) return;
+        if (!session.ExtraFolders.Any(f => PathEquals(f, path)) && !PathEquals(session.ProjectPath, path))
+            session.ExtraFolders.Add(path);
+        RaiseOpenFolders();
+        _debugLog?.Info("Chat", $"agent opened related folder {path}");
+    }
+
+    /// <summary>
+    /// Before a turn: the projects the message names are opened at once — a new chat about "atmos" lands in
+    /// D:\Code\Atmos before the model even starts. Known projects (the registry of folders opened before) match by
+    /// name; failing that, a new chat asks BrainX, whose notes record where each project lives. The first named
+    /// project becomes the chat's project (only when none is open or the chat is new); the others open beside it.
+    /// Announced in one line: how many folders and which.
+    /// </summary>
+    private async Task AutoOpenProjectsAsync(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input) || input.StartsWith("/")) return;
+        var session = CurrentSession;
+        if (session == null) return;
+        bool newChat = !Messages.Any(m => m.Role == MessageRole.Assistant);
+        try
+        {
+            var named = MatchKnownProjects(input);
+            if (named.Count == 0 && newChat && BrainSyncService.Current is { IsBrainAvailable: true } brain)
+                named = await FindProjectsInBrainAsync(brain, input);
+            if (named.Count == 0) return;
+
+            var opened = new List<string>();
+            string main = _fileSystemService.AppWorkingDirectory;
+            bool mayMoveMain = newChat || string.IsNullOrWhiteSpace(main);
+            if (mayMoveMain && !named.Any(n => PathEquals(n, main)))
+            {
+                ApplyWorkingDirectory(named[0], announce: false, showEditor: false);
+                ProjectRegistryService.Current?.Record(named[0]);
+                session.ProjectPath = named[0];
+                session.ExtraFolders.Clear();
+                opened.Add(named[0]);
+                main = named[0];
+                RebuildVisibleSessions();
+            }
+            foreach (var p in named)
+            {
+                if (PathEquals(p, main) || session.ExtraFolders.Any(f => PathEquals(f, p))) continue;
+                session.ExtraFolders.Add(p);
+                ProjectRegistryService.Current?.Record(p);
+                opened.Add(p);
+            }
+            if (opened.Count == 0) return;
+            var all = OpenFolders();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = "📁 " + LocF("chat.folders.opened", all.Count) + "\n"
+                    + string.Join("\n", all.Select((f, i) => (i == 0 ? "• " : "• + ") + f)),
+            });
+            RaiseOpenFolders();
+            _debugLog?.Info("Chat", $"auto-opened {string.Join(", ", opened)} from the message");
+        }
+        catch (Exception ex)
+        {
+            _debugLog?.Warn("Chat", "auto-opening the projects a message names failed", ex);
+        }
+    }
+
+    /// <summary>Generic folder names that would match ordinary words — never matched by name alone.</summary>
+    private static readonly HashSet<string> TooGenericNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "src", "app", "apps", "code", "test", "tests", "demo", "temp", "tmp", "web", "api", "lib", "docs", "data",
+        "main", "new", "old", "project", "projects", "server", "client", "site", "game", "games", "tools", "bin",
+    };
+
+    /// <summary>Where the text names a folder: "Thaiprompt-Affiliate" also matches "thaiprompt affiliate". -1 = not named.</summary>
+    private static int NamedAt(string text, string folder)
+    {
+        string name = System.IO.Path.GetFileName(folder.TrimEnd('\\', '/'));
+        if (name.Length < 4 || TooGenericNames.Contains(name)) return -1;
+        var parts = System.Text.RegularExpressions.Regex.Split(name, @"[-_. ]+").Where(x => x.Length > 0)
+            .Select(System.Text.RegularExpressions.Regex.Escape);
+        var m = System.Text.RegularExpressions.Regex.Match(text,
+            @"(?<![A-Za-z0-9])" + string.Join(@"[-_. ]?", parts) + @"(?![A-Za-z0-9])",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return m.Success ? m.Index : -1;
+    }
+
+    /// <summary>Known projects (the registry) the text names, in the order they appear.</summary>
+    private static List<string> MatchKnownProjects(string text)
+    {
+        var hits = new List<(int At, string Path)>();
+        foreach (var e in ProjectRegistryService.Current?.Recent(200) ?? [])
+        {
+            if (!System.IO.Directory.Exists(e.Path)) continue;
+            int at = NamedAt(text, e.Path);
+            if (at >= 0 && !hits.Any(h => PathEquals(h.Path, e.Path))) hits.Add((at, e.Path));
+        }
+        return hits.OrderBy(h => h.At).Select(h => h.Path).Take(4).ToList();
+    }
+
+    /// <summary>Project folders BrainX notes give for the text: absolute folder paths in the top hits whose folder name
+    /// the text names. 5 s at most — the turn never waits long on the brain.</summary>
+    private static async Task<List<string>> FindProjectsInBrainAsync(BrainSyncService brain, string text)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        string q = Services.Mcp.McpServerManager.RedactSecrets(text.Length > 160 ? text[..160] : text) + " project path";
+        string raw = await brain.SearchAsync(q, limit: 5, semantic: true, cts.Token);
+        if (string.IsNullOrWhiteSpace(raw) || raw.StartsWith("(")) return new();
+        raw = raw.Replace("\\\\", "\\");   // JSON-escaped backslashes
+        var hits = new List<(int At, string Path)>();
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(raw, @"[A-Za-z]:\\[^\s""'`<>|*?]+"))
+        {
+            string p = m.Value.TrimEnd('.', ',', ';', ')', ']', '\\', '/');
+            try
+            {
+                if (System.IO.File.Exists(p)) p = System.IO.Path.GetDirectoryName(p) ?? p;
+                if (!System.IO.Directory.Exists(p) || PermissionService.IsUnsafeAcceptEditsRoot(p)) continue;
+            }
+            catch { continue; }
+            int at = NamedAt(text, p);
+            if (at >= 0 && !hits.Any(h => PathEquals(h.Path, p))) hits.Add((at, p));
+        }
+        return hits.OrderBy(h => h.At).Select(h => h.Path).Take(4).ToList();
     }
 
     /// <summary>Start a command's work and return at once; a failure is reported like an async command's.</summary>
@@ -164,6 +329,8 @@ public partial class ChatViewModel
         var run = new ChatRun { Session = session, Messages = Messages };
         string? folder = _fileSystemService.AppWorkingDirectory;
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
+        foreach (var extra in session.ExtraFolders.ToList())
+            if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
         _runs.Add(run);
         AgentRunScope.Enter(run.Scope);
         // The app-wide key too (code that runs outside the scope — a UI-thread callback — keys by the latest chat).
@@ -273,8 +440,12 @@ public partial class ChatViewModel
     /// <summary>Every run whose chat is not on screen, stored (autosave tick, app closing).</summary>
     private void SaveBackgroundRuns()
     {
-        foreach (var run in _runs.Where(r => !ReferenceEquals(r.Session, CurrentSession)).ToList())
+        // Only chats that gained rows since the last tick: each save rewrites the whole chat on the UI thread.
+        foreach (var run in _runs.Where(r => !ReferenceEquals(r.Session, CurrentSession) && r.Messages.Count != r.SavedCount).ToList())
+        {
             SaveRunChat(run);
+            run.SavedCount = run.Messages.Count;
+        }
     }
 
     /// <summary>Stop the run of <paramref name="sessionId"/> (asks first) and wait for it to unwind. True when

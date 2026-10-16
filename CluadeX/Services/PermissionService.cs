@@ -321,6 +321,11 @@ public class PermissionService
     public bool AcceptEditsCovers(string projectRoot, string path)
         => AcceptsEditsIn(projectRoot) && IsPlainPathInside(projectRoot, path);
 
+    /// <summary>Accept edits for the project also covers a related folder the run opened beside it — with the same
+    /// exclusions (.git, hook folders, junctions out).</summary>
+    public bool AcceptEditsCoversRelated(string projectRoot, string relatedRoot, string path)
+        => AcceptsEditsIn(projectRoot) && !IsUnsafeAcceptEditsRoot(relatedRoot, null) && IsPlainPathInside(relatedRoot, path);
+
     /// <summary>Folders whose files run code on their own (git hooks, hook managers, editor tasks, agent settings) —
     /// and credential folders (.ssh, .gnupg, .aws), which a project has no business editing unseen.</summary>
     private static readonly HashSet<string> CodeRunningFolders = new(StringComparer.OrdinalIgnoreCase)
