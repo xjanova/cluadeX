@@ -155,7 +155,11 @@ public sealed class AgentRunScope
     {
         var notes = DrainUserNotes();
         if (notes.Count == 0) return null;
-        return "[The user sent this while you were working. Take it into account from here on — it may change or add to the task:]\n"
+        // Queued, not a detour: the owner wants the plan in hand finished first (2026-10-16). A correction to the
+        // current work or a "stop" still applies at once.
+        return "[The user sent this while you were working. It is QUEUED: first finish the plan you are on, then do this "
+               + "next, in the same turn. Only if it corrects the current work or says stop/cancel, apply it now. "
+               + "Say in one short line that you have queued it, then carry on:]\n"
                + string.Join("\n\n", notes.Select(n => n.Text));
     }
 

@@ -447,8 +447,8 @@ public class LocalizationService
 
         // ═══════ CHAT VIEW ═══════
         ["chat.placeholder"] = new() { ["en"] = "Type a message...", ["th"] = "พิมพ์ข้อความ..." },
-        ["chat.steer.placeholder"] = new() { ["en"] = "Working… type to add to or change the task — Enter sends it at the next step", ["th"] = "กำลังทำงาน… พิมพ์เพิ่มหรือเปลี่ยนคำสั่งได้ — Enter แล้วจะส่งให้ AI ในขั้นถัดไป" },
-        ["chat.steer.queued"] = new() { ["en"] = "Sent — the agent reads it at its next step", ["th"] = "ส่งแล้ว — AI จะอ่านในขั้นถัดไป" },
+        ["chat.steer.placeholder"] = new() { ["en"] = "Working… type a new request — Enter queues it after the current plan", ["th"] = "กำลังทำงาน… พิมพ์คำสั่งใหม่ได้ — Enter แล้วจะเข้าคิว ทำต่อหลังจบแผนที่ทำอยู่" },
+        ["chat.steer.queued"] = new() { ["en"] = "📥 Queued — the agent finishes its current plan first, then does this", ["th"] = "📥 รับเข้าคิวแล้ว — AI จะทำตามแผนที่ทำอยู่ให้จบก่อน แล้วค่อยทำข้อนี้" },
         ["chat.status.projectFollowed"] = new() { ["en"] = "Opened this chat's project: {0}", ["th"] = "เปิดโปรเจกต์ของแชทนี้แล้ว: {0}" },
         ["chat.attach.image"] = new() { ["en"] = "Attach image…", ["th"] = "แนบรูปภาพ…" },
         ["chat.attach.remove"] = new() { ["en"] = "Remove this image", ["th"] = "เอารูปนี้ออก" },

@@ -631,6 +631,7 @@ public partial class CodeAgentService
               - ถ้าแนวทางหนึ่งล้มเหลว ให้วิเคราะห์สาเหตุก่อนเปลี่ยนวิธี — อย่า retry แบบสุ่ม
               - ทำงานต่อเนื่องจนเสร็จในรอบเดียว: เมื่อผู้ใช้สั่งงานแล้ว ให้ลงมือทำทุกขั้นจนจบ อย่าหยุดกลางทางเพื่อถามว่า "ทำต่อไหม" หรือบอกให้พิมพ์ "ทำต่อ"
               - ตัดสินใจเองเมื่อมีทางเลือกที่สมเหตุสมผล (เลือกไฟล์ ค่า ชื่อ ลำดับงาน ตัวเลือกจากหลายแบบ) — เลือกแบบที่ดีที่สุด แล้วบอกสั้นๆ ว่าเลือกอะไรเพราะอะไรในสรุปท้าย อย่าโยนตัวเลือกกลับไปให้ผู้ใช้
+              - งานที่มีหลายส่วนอิสระ (สำรวจหลายโฟลเดอร์/หลายโปรเจกต์/หลายเรื่องพร้อมกัน) ให้แตก agent_spawn หลายตัวในคำตอบเดียว — ทำงานขนานกัน และผู้ใช้เห็นเป็นแผนผังเอเจนต์ในแชท
               - ถามผู้ใช้ (ask_user) เฉพาะเมื่อไปต่อไม่ได้จริงๆ หรือเป็น action เสี่ยงตามหัวข้อด้านล่าง (ลบ/เขียนทับ, push, ส่งข้อความ, แตะระบบ production)
               """
             : """
@@ -644,6 +645,7 @@ public partial class CodeAgentService
               - If an approach fails, diagnose why before switching tactics — don't retry blindly.
               - Work continuously to completion in one turn: once the user gives a task, carry out every step to the end. Do not stop midway to ask "shall I continue?" or tell the user to say "continue".
               - Make the call yourself whenever a reasonable choice exists (which file, value, name, order, or one of several options) — pick the best one, then say briefly what you chose and why in your final summary. Don't hand the choice back to the user.
+              - A task with several independent parts (investigating several folders, projects or questions) → several agent_spawn calls in ONE response: they run in parallel and the user watches them on the agent map in the chat.
               - Ask the user (ask_user) only when you are truly blocked, or for the risky actions listed below (delete/overwrite, push, sending messages, touching production).
               """);
 

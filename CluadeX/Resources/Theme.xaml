@@ -218,7 +218,10 @@
                             <ColumnDefinition/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <ScrollContentPresenter Grid.Column="0"/>
+                        <!-- CanContentScroll must be passed through: without it a ListBox inside falls back to physical
+                             scrolling and its VirtualizingStackPanel builds EVERY row (a 578-row chat took 35 s to open). -->
+                        <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Grid.Column="0"
+                                                CanContentScroll="{TemplateBinding CanContentScroll}"/>
                         <ScrollBar Grid.Column="1" Name="PART_VerticalScrollBar"
                                    Style="{StaticResource SlimScrollBar}"
                                    Value="{TemplateBinding VerticalOffset}"
