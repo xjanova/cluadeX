@@ -857,6 +857,7 @@ public partial class App : Application
         services.AddSingleton<Services.Batch.BatchService>();
         services.AddSingleton<SessionMemoryService>();
         services.AddSingleton<CheckpointService>();
+        services.AddSingleton<WatchService>();
         services.AddSingleton<RepoMapService>();
         services.AddSingleton<EmbeddingService>();
         services.AddSingleton<AutonomousCodingService>();
@@ -940,6 +941,7 @@ public partial class App : Application
         services.AddSingleton<PluginManagerViewModel>();
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
+        services.AddSingleton<WatchViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
         services.AddSingleton<TimeMachineViewModel>();

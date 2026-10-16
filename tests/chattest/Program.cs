@@ -31,7 +31,7 @@ namespace ChatTest;
 ///
 ///   dotnet build CluadeX/CluadeX.csproj [-p:OutDir=X\]   then   cd tests/chattest && dotnet run [-p:CluadeXBin=X\]
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly StringBuilder Report = new();
@@ -265,6 +265,7 @@ internal static class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestWatchPage();                // W: the Watch page
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();

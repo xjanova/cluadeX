@@ -201,6 +201,25 @@ public partial class ChatViewModel
         if (SendMessageCommand.CanExecute(null)) SendMessageCommand.Execute(null);
     }
 
+    /// <summary>
+    /// The Watch page's "ask the AI": open the newest chat of <paramref name="projectPath"/> (or a new chat there) and
+    /// put <paramref name="text"/> in the input box — not sent; the owner reads it and presses Send (report, then wait).
+    /// </summary>
+    public async Task PrepareMessageInProjectAsync(string projectPath, string text)
+    {
+        string path = projectPath.TrimEnd('\\', '/');
+        var chat = Sessions.Where(s => string.Equals((s.ProjectPath ?? "").TrimEnd('\\', '/'), path, StringComparison.OrdinalIgnoreCase))
+                           .OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
+        if (chat != null && chat.Id != CurrentSession?.Id) await LoadSessionAsync(chat.Id);
+        else if (chat == null)
+        {
+            if (Directory.Exists(path)) ApplyWorkingDirectory(path, announce: false, showEditor: false);
+            NewSession();
+        }
+        NavigateToChatRequested?.Invoke();
+        UserInput = text;
+    }
+
     /// <summary>A line in the chat saying the files went back (so the agent's next turn knows too).</summary>
     public void NotePlanRewind(string sessionId, CheckpointService.Point p, bool ok, int files)
     {

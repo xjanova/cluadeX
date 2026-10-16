@@ -222,6 +222,7 @@ public class MainViewModel : ViewModelBase
     public PluginManagerViewModel PluginManagerVM { get; }
     public PermissionsViewModel PermissionsVM { get; }
     public TaskManagerViewModel TaskManagerVM { get; }
+    public WatchViewModel? WatchVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
     public McpServersViewModel McpServersVM { get; }
     public TimeMachineViewModel TimeMachineVM { get; }
@@ -254,7 +255,7 @@ public class MainViewModel : ViewModelBase
             ("Chat", "Chat", ""), ("Code", "Code Editor", ""),
             ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
             ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
-            ("McpServers", "MCP Servers", ""), ("Tasks", "Tasks", ""),
+            ("McpServers", "MCP Servers", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
             ("Permissions", "Permissions", ""), ("Features", "Features", ""),
             ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
             ("Instincts", "Instincts", ""), ("DebugLog", "Debug Log", ""),
@@ -372,7 +373,8 @@ public class MainViewModel : ViewModelBase
         XmanLicenseService? license = null,
         DgxSparkService? spark = null,
         CodeWorkspaceService? workspace = null,
-        DebugLogService? log = null)
+        DebugLogService? log = null,
+        WatchViewModel? watchVM = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
@@ -391,6 +393,7 @@ public class MainViewModel : ViewModelBase
         PluginManagerVM = pluginManagerVM;
         PermissionsVM = permissionsVM;
         TaskManagerVM = taskManagerVM;
+        WatchVM = watchVM;
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
         TimeMachineVM = timeMachineVM;
@@ -792,6 +795,7 @@ public class MainViewModel : ViewModelBase
             "Plugins" => PluginManagerVM,
             "Permissions" => PermissionsVM,
             "Tasks" => TaskManagerVM,
+            "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
             "Features" => FeaturesVM,
             "McpServers" => McpServersVM,
             "TimeMachine" => TimeMachineVM,
