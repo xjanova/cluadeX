@@ -296,6 +296,17 @@ internal static class Program
                         var r2 = await p.ChatWithToolsAsync(msgs, sys, EchoTool);
                         Check(model, "tools-roundtrip" + tag, true, $"stop={r2.StopReason} text={r2.TextContent}");
 
+                        // 3b. Per-message effort: the agent loop lowers/raises effort with an effort-only system message
+                        //     before the pending user turn (no cache reset). Where the model takes it, it must not be a 400;
+                        //     elsewhere the provider must drop it.
+                        var withEffort = new List<NativeMessage>(msgs);
+                        withEffort.Insert(withEffort.Count - 1, new NativeMessage { Role = "system", Effort = "low" });
+                        lastError = null;
+                        var rEffort = await p.ChatWithToolsAsync(withEffort, sys, EchoTool);
+                        bool pm = AnthropicProvider.PerMessageEffortOk(model, s);
+                        Check(model, "per-message-effort" + tag, rEffort.StopReason != "error" && lastError == null,
+                            $"{(pm ? "sent" : "dropped (model does not take it)")} · stop={rEffort.StopReason} {lastError}");
+
                         // 4. Same continuation after the earliest turn was edited — what microcompact does to
                         //    old turns. Thinking blocks are bound to the history; this must not be a 400.
                         if (thinking)

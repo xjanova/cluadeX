@@ -39,6 +39,41 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     // thinking.block_binding is only accepted with this beta; without the header the field is a 400.
     private const string ThinkingBindingBeta = "thinking-binding-controls-2026-08-01";
     private const string InterleavedThinkingBeta = "interleaved-thinking-2025-05-14";
+    private const string PerMessageEffortBeta = "mid-conversation-output-config-2026-07-01";
+
+    /// <summary>The model takes effort-only system messages in this request (needs thinking on: Sonnet 5.5 with
+    /// thinking off runs between_tools, where per-message effort is a 400).</summary>
+    public static bool PerMessageEffortOk(string model, AppSettings settings)
+    {
+        var t = Traits(model);
+        return t.PerMessageEffort && !(t.BetweenToolsOff && !settings.ExtendedThinkingEnabled);
+    }
+
+    /// <summary>The wire messages: effort-only system messages kept where the model takes them, dropped elsewhere.</summary>
+    private static List<Dictionary<string, object>> WireMessages(List<NativeMessage> messages, string model, AppSettings settings,
+        Func<NativeMessage, object> content, out bool usedPerMessageEffort)
+    {
+        bool ok = PerMessageEffortOk(model, settings);
+        usedPerMessageEffort = false;
+        var list = new List<Dictionary<string, object>>();
+        foreach (var m in messages)
+        {
+            if (m.Role == "system")
+            {
+                if (!ok || EffortFor(Traits(model), m.Effort) is not { } eff) continue;
+                list.Add(new Dictionary<string, object>
+                {
+                    ["role"] = "system",
+                    ["content"] = new List<object>(),
+                    ["output_config"] = new Dictionary<string, object> { ["effort"] = eff },
+                });
+                usedPerMessageEffort = true;
+                continue;
+            }
+            list.Add(new Dictionary<string, object> { ["role"] = m.Role, ["content"] = content(m) });
+        }
+        return list;
+    }
     // Thinking tokens count against max_tokens. The shared MaxTokens setting is sized for local models
     // (4096) and would cut a thinking model off mid-answer; streaming means a high cap costs nothing.
     private const int ThinkingMaxTokensFloor = 32000;
@@ -138,7 +173,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         bool OmitsThinkingText,  // display defaults to "omitted" — ask for "summarized" to see the reasoning
         bool ForcedToolChoice,   // accepts tool_choice any / tool
         int EffortSupport,       // output_config.effort: 0 none, 1 low–high (Opus 4.5), 2 + max (4.6), 3 + xhigh
-        bool BetweenToolsOff = false); // thinking can't be disabled, but {type:"between_tools"} turns it off (Sonnet 5.5+)
+        bool BetweenToolsOff = false, // thinking can't be disabled, but {type:"between_tools"} turns it off (Sonnet 5.5+)
+        bool PerMessageEffort = false); // effort-only system messages (Fable 5.1, Opus 5+, Sonnet 5.5+, Haiku 5.5+; thinking on)
 
     public static ModelTraits Traits(string? model)
     {
@@ -160,7 +196,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         return new(Adaptive: fableTier || v >= 46, AlwaysThinks: alwaysThinks,
                    ExplicitDisable: modern && !alwaysThinks, Sampling: !modern,
                    OmitsThinkingText: modern, ForcedToolChoice: forced, EffortSupport: effort,
-                   BetweenToolsOff: family == "sonnet" && v >= 55);
+                   BetweenToolsOff: family == "sonnet" && v >= 55,
+                   PerMessageEffort: fableTier ? v >= 51 : family == "opus" ? v >= 50 : v >= 55);
     }
 
     /// <summary>The user's effort pick as this model accepts it, or null to leave the field out ("auto",
@@ -801,11 +838,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         var requestObj = new Dictionary<string, object>
         {
             ["model"] = model,
-            ["messages"] = messages.Select(m => new Dictionary<string, object>
-            {
-                ["role"] = m.Role,
-                ["content"] = WireContent(m, search),
-            }).ToList(),
+            ["messages"] = WireMessages(messages, model, settings, m => WireContent(m, search), out bool perMessageEffort),
             ["max_tokens"] = settings.MaxTokens,
             ["tools"] = toolDefs,
             ["stream"] = true,
@@ -838,6 +871,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrlOf(config)}/v1/messages");
         AddAuthHeaders(request, config);
         AddBetaHeader(request, model, thinking);
+        if (perMessageEffort) request.Headers.Add("anthropic-beta", PerMessageEffortBeta);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
