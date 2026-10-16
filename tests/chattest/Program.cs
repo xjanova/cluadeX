@@ -265,6 +265,7 @@ internal static class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
         Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
@@ -2025,6 +2026,26 @@ internal static class Program
     }
 
     // ═══════════════════════════════════════════ U10 ══════════════════════════════════════════
+    static async Task TestStartupFollowsProject()
+    {
+        Log("\n## F6 — at startup the restored chat opens its own project (the files panel showed the old folder until a message was sent)");
+        Directory.CreateDirectory(ProjA);
+        Directory.CreateDirectory(ProjB);
+        var last = new ChatSession { Title = "startup chat in A", ProjectPath = ProjA, UpdatedAt = DateTime.Now.AddMinutes(5) };
+        last.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "keep going on the parser" });
+        last.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "ok" });
+        Persist.SaveSession(last);
+        string before = Vm.WorkingDirectory;
+        Vm.SetWorkingDirectory(ProjB);
+        // A second chat page built the way the app builds it at startup (same services, same database).
+        var vm2 = Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance<ChatViewModel>(Sp);
+        await WaitUntil(() => vm2.CurrentSession != null, 15000);
+        Check("F6 the newest chat is restored and its project (A) is open — not the folder left open before (B)",
+            vm2.CurrentSession?.Id == last.Id && string.Equals(vm2.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase),
+            $"chat={vm2.CurrentSession?.Title} folder={vm2.WorkingDirectory}");
+        Vm.SetWorkingDirectory(before);
+    }
+
     static async Task TestPlanWindow()
     {
         Log("\n## U12 — the plan window: this chat's plan, items added while it works or queued, go back, branch");
