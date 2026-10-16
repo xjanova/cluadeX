@@ -825,6 +825,8 @@ public class MainViewModel : ViewModelBase
     private async Task CheckForUpdate(bool manual)
     {
         string L(string key) => _loc.T(key);
+        // The splash already checked (and installed, if there was one) this launch.
+        if (!manual && Views.SplashWindow.StartupUpdateHandled) return;
         if (manual)
             App.Current?.Dispatcher.Invoke(() =>
             {

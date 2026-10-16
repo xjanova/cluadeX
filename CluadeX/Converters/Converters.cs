@@ -418,3 +418,34 @@ public class HexToColorConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
+
+/// <summary>A nav item's Tag ("chat", "settings" …) → its art icon in Assets/Icons (the Lavender theme draws these
+/// instead of the font glyphs). Cached; null when there is no such icon.</summary>
+public class NavIconSourceConverter : IValueConverter
+{
+    private static readonly Dictionary<string, System.Windows.Media.ImageSource?> Cache = new(StringComparer.OrdinalIgnoreCase);
+    public object? Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+    {
+        if (value is not string key || key.Length == 0) return null;
+        lock (Cache)
+        {
+            if (Cache.TryGetValue(key, out var hit)) return hit;
+            System.Windows.Media.ImageSource? img = null;
+            try
+            {
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri($"pack://application:,,,/CluadeX;component/Assets/Icons/{key}.png");
+                bmp.DecodePixelWidth = 64;
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                img = bmp;
+            }
+            catch { }
+            Cache[key] = img;
+            return img;
+        }
+    }
+    public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) => throw new NotSupportedException();
+}
