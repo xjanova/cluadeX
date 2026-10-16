@@ -11,6 +11,7 @@
         not: each is a fixed little picture of ITS theme, so its colours are literal by design.
     -->
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolVis"/>
         <!-- Classic — XP Silver: light silver window, Luna title bar, blue selection -->
         <DataTemplate x:Key="PreviewClassic">
             <Border Background="#ECECF0" BorderBrush="#8C8FA8" BorderThickness="1" ClipToBounds="True">
@@ -250,5 +251,63 @@
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+
+        <!-- Lavender Night only: its colours are the owner's to choose — the whole theme follows (ThemeTint) -->
+        <Border Margin="0,14,0,0" Padding="14,12" CornerRadius="10" Background="{DynamicResource Surface.Card}"
+                BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1"
+                Visibility="{Binding IsLavenderTheme, Converter={StaticResource BoolVis}}">
+            <StackPanel>
+                <TextBlock Text="{services:Loc settings.palette.title}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                <TextBlock Text="{services:Loc settings.palette.desc}" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Text.Muted}" Margin="0,2,0,10"/>
+
+                <TextBlock Text="{services:Loc settings.palette.background}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,6"/>
+                <ItemsControl ItemsSource="{Binding BackgroundSwatches}" Focusable="False">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Command="{Binding DataContext.PickBackgroundCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                    CommandParameter="{Binding Hex}" ToolTip="{Binding Name}" Cursor="Hand" Margin="0,0,8,8"
+                                    AutomationProperties.Name="{Binding Name}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Brush}"
+                                                BorderBrush="{DynamicResource Border.Strong}" BorderThickness="2"/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <TextBlock Text="{services:Loc settings.palette.accent}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" Margin="0,6,0,6"/>
+                <ItemsControl ItemsSource="{Binding AccentSwatches}" Focusable="False">
+                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Button Command="{Binding DataContext.PickAccentCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                    CommandParameter="{Binding Hex}" ToolTip="{Binding Name}" Cursor="Hand" Margin="0,0,8,8"
+                                    AutomationProperties.Name="{Binding Name}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Brush}"
+                                                BorderBrush="{DynamicResource Border.Strong}" BorderThickness="2"/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock Text="{services:Loc settings.palette.own}" VerticalAlignment="Center" Foreground="{DynamicResource Text.Secondary}" FontSize="12" Margin="0,0,8,0"/>
+                    <TextBox Text="{Binding CustomBackground, UpdateSourceTrigger=PropertyChanged}" Width="92" ToolTip="{services:Loc settings.palette.bgHex}"/>
+                    <TextBox Text="{Binding CustomAccent, UpdateSourceTrigger=PropertyChanged}" Width="92" Margin="6,0,0,0" ToolTip="{services:Loc settings.palette.acHex}"/>
+                    <Button Content="{services:Loc settings.palette.apply}" Command="{Binding ApplyCustomColoursCommand}" Margin="8,0,0,0" Padding="12,4"
+                            Style="{StaticResource SecondaryButton}"/>
+                    <Button Content="{services:Loc settings.palette.reset}" Command="{Binding ResetThemeColoursCommand}" Margin="6,0,0,0" Padding="12,4"
+                            Style="{StaticResource SecondaryButton}"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>
