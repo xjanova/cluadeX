@@ -202,6 +202,17 @@ public class HookService
         foreach (var hook in hooks)
         {
             var result = await RunHookAsync(hook, BuildToolContext(call), ct);
+            // A timeout is not a verdict. On a loaded machine (the agent's own build/test running) a PowerShell hook's
+            // cold start alone passed 10 s and the bundled dangerous-command check BLOCKED an ordinary command
+            // (Reverse X run, 2026-10-16). Run it once more, warm, with twice the time; only a second timeout blocks.
+            if (!result.Success && result.TimedOut && !ct.IsCancellationRequested)
+            {
+                _log?.Warn("Hooks", $"PreToolUse hook timed out — retrying once with {hook.TimeoutMs * 2} ms: {Describe(hook)}");
+                int was = hook.TimeoutMs;
+                hook.TimeoutMs = was * 2;
+                try { result = await RunHookAsync(hook, BuildToolContext(call), ct); }
+                finally { hook.TimeoutMs = was; }
+            }
             if (!result.Success)
                 return result; // Block tool execution
         }
@@ -488,6 +499,7 @@ public class HookService
             {
                 Success = false,
                 ExitCode = -1,
+                TimedOut = !cancelled,
                 Message = cancelled ? L("hook.cancelled") : string.Format(L("hook.timedOut"), hook.TimeoutMs),
             };
         }
@@ -1340,6 +1352,8 @@ public class HookResult
     public bool Success { get; set; }
     public string Message { get; set; } = "";
     public int ExitCode { get; set; }
+    /// <summary>The hook ran past its time limit (not a verdict of the hook itself).</summary>
+    public bool TimedOut { get; set; }
 }
 
 /// <summary>
