@@ -1069,7 +1069,7 @@ public class LocalizationService
         ["settings.cachingDesc"] = new() { ["en"] = "Caches the system prompt between requests — cheaper and faster repeated calls. Recommended.", ["th"] = "แคช system prompt ระหว่างคำขอ ทำให้ถูกลงและเร็วขึ้น · แนะนำให้เปิด" },
         ["settings.agentBehaviour"] = new() { ["en"] = "Agent Behaviour", ["th"] = "พฤติกรรมของเอเจนต์" },
         ["settings.maxSteps"] = new() { ["en"] = "Max agent steps per turn", ["th"] = "จำนวนขั้นสูงสุดต่อรอบของเอเจนต์" },
-        ["settings.maxStepsTip"] = new() { ["en"] = "How many tool steps the agent may take before it must answer (1–100). More = longer tasks, more cost.", ["th"] = "จำนวนขั้นที่เอเจนต์ใช้เครื่องมือได้ก่อนต้องตอบ (1–100) · มากขึ้น = ทำงานยาวขึ้นแต่เปลืองขึ้น" },
+        ["settings.maxStepsTip"] = new() { ["en"] = "How many tool steps a run may take (0 = no limit). At the limit, a run still working asks once whether to go on.", ["th"] = "จำนวนขั้นที่เอเจนต์ทำได้ต่อรอบ (0 = ไม่จำกัด) · ถึงลิมิตแล้วงานยังไม่เสร็จ จะถามครั้งเดียวว่าทำต่อไหม" },
         ["settings.idleTimeout"] = new() { ["en"] = "Idle timeout (seconds)", ["th"] = "หมดเวลาเมื่อไม่มีการตอบ (วินาที)" },
         ["settings.idleTimeoutTip"] = new() { ["en"] = "Abort a request that sends nothing for this long (0 = never). Resets on every streamed token.", ["th"] = "ยกเลิกคำขอที่ไม่ส่งอะไรกลับมานานเท่านี้ (0 = ไม่ยกเลิก) · นับใหม่ทุกครั้งที่ได้รับ token" },
         ["settings.readBeforeEdit"] = new() { ["en"] = "Require reading a file before editing it", ["th"] = "ต้องอ่านไฟล์ก่อนจึงจะแก้ได้" },
