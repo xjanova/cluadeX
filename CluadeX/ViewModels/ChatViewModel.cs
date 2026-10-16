@@ -1181,6 +1181,11 @@ public partial class ChatViewModel : ViewModelBase
 
         try
         {
+            // Only a chat that really got new rows moves up the history: SaveNow runs on every chat switch, and bumping
+            // the time then made every chat the owner merely looked at jump to "Today" (2026-10-17: a wall of old
+            // Reverse X chats on top after clicking through them).
+            bool changed = CurrentSession.Messages.Count != Messages.Count
+                           || !ReferenceEquals(CurrentSession.Messages.LastOrDefault(), Messages.LastOrDefault());
             // Sync CurrentSession.Messages from the UI Messages collection
             // to ensure they are never out of sync when saving to DB
             CurrentSession.Messages = Messages.ToList();
@@ -1201,7 +1206,7 @@ public partial class ChatViewModel : ViewModelBase
                 }
             }
 
-            CurrentSession.UpdatedAt = DateTime.Now;
+            if (changed) CurrentSession.UpdatedAt = DateTime.Now;
             CluadeX.Helpers.UiStallWatchdog.Note("saving the chat");
             _persistenceService.SaveSession(CurrentSession);
             CluadeX.Helpers.UiStallWatchdog.Note("");
