@@ -35,16 +35,23 @@ internal static partial class Program
         Tool("read_file"); Tool("grep_search");
         await Settle();
         rows = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).ToList();
-        Check("G2 another server starts its own row; shell commands fold together; reading and searching fold together",
-            rows.Count == 4 && rows[2].CollapsedCount == 3 && rows[3].CollapsedCount == 2, string.Join(" | ", rows.Select(r => $"{r.CollapsedCount}:{r.Content}")));
+        Check("G2 background calls of every kind in a row (another server, shell, reading) fold into the SAME row, called 'Worked'",
+            rows.Count == 1 && rows[0].CollapsedCount == 11 && rows[0].ToolVerb == L("chat.tools.groupVerb"),
+            string.Join(" | ", rows.Select(r => $"{r.CollapsedCount}:{r.ToolVerb}:{r.Content}")));
 
         Tool("edit_file"); Tool("edit_file");
         Tool("run_command", ok: false, output: "error: build failed"); Tool("run_command");
         await Settle();
         rows = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).ToList();
         Check("G3 edits stay one row each (their own diff); a failed command stays visible on its own",
-            rows.Count == 8 && !rows[4].IsCollapsedGroup && !rows[5].IsCollapsedGroup && !rows[6].ToolSuccess && !rows[7].IsCollapsedGroup,
+            rows.Count == 5 && !rows[1].IsCollapsedGroup && !rows[2].IsCollapsedGroup && !rows[3].ToolSuccess && !rows[4].IsCollapsedGroup,
             string.Join(" | ", rows.Select(r => $"{r.ToolName}:{r.ToolSuccess}:{r.CollapsedCount}")));
+        Tool("mcp__cluadex-chrome__tabs_context_mcp", ok: false, output: "Browser extension is not connected. Please ensure the Claude browser extension is installed");
+        Tool("mcp__cluadex-chrome__tabs_context_mcp", ok: false, output: "Browser extension is not connected. Please ensure the Claude browser extension is installed");
+        await Settle();
+        var help = Vm.Messages.Where(m => m.Role == MessageRole.System && m.Content.Contains("chrome://extensions")).ToList();
+        Check("G5 Chrome not connected → ONE plain-language note with the steps (extension, account, reload), not one per failure",
+            help.Count == 1 && help[0].IsSideNote, string.Join(" | ", help.Select(h => h.Content.Split('\n')[0])));
         bool internals = Vm.ShowAgentInternals;
         Vm.ShowAgentInternals = true;   // the owner shows tool rows; the harness default hides the successful ones
         var list = Find<System.Windows.Controls.ListBox>(Win).First(l => l.Name == "ChatList");
@@ -55,7 +62,7 @@ internal static partial class Program
         list.ScrollIntoView(rows[0]);
         await Settle(); await Task.Delay(500); await Render();
         var boxes = Container(rows[0]) is { } c0 ? Find<System.Windows.Controls.ItemsControl>(c0).FirstOrDefault(i => ReferenceEquals(i.ItemsSource, rows[0].GroupSteps)) : null;
-        Check("G4 an opened group shows its calls as boxes on screen", boxes is { IsVisible: true, Items.Count: 5 }, $"boxes={boxes?.Items.Count} visible={boxes?.IsVisible}");
+        Check("G4 an opened group shows its calls as boxes on screen", boxes is { IsVisible: true, Items.Count: 11 }, $"boxes={boxes?.Items.Count} visible={boxes?.IsVisible}");
         SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-tool-group-open.png"));
         rows[0].IsExpanded = false;
         Vm.ShowAgentInternals = internals;

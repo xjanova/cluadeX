@@ -17,7 +17,21 @@ public partial class ChatViewModel
     // ─── Model ───
 
     /// <summary>One pick in the model box: a model of an API provider that has a key, with its list price.</summary>
-    public sealed record ChatModelChoice(AiProviderType Provider, string Model, string ProviderLabel, string PriceLabel);
+    /// <summary>One model in the composer's box. <paramref name="NeedsKey"/>: its vendor has no API key yet (listed so every
+    /// vendor CluadeX supports is in one place; picking it says where to add the key instead of switching).</summary>
+    public sealed record ChatModelChoice(AiProviderType Provider, string Model, string ProviderLabel, string PriceLabel, bool NeedsKey = false)
+    {
+        /// <summary>The girl who stands for this vendor (Assets\Girls), shown as a small portrait in the box.</summary>
+        public string Girl => Provider switch
+        {
+            AiProviderType.Anthropic or AiProviderType.ClaudeDev => "claude",
+            AiProviderType.OpenAI => "codex",
+            AiProviderType.Gemini => "gemini",
+            AiProviderType.BrainX => "brainx",
+            _ => "cluadex",
+        };
+        public System.Windows.Media.ImageSource? GirlImage => GirlArt.Image(Girl);
+    }
 
     /// <summary>"$2 / $10" — input / output per million tokens.</summary>
     private static string PriceLabelOf(string model)
@@ -69,14 +83,35 @@ public partial class ChatViewModel
     {
         var s = _settingsService.Settings;
         var list = new List<ChatModelChoice>();
+        // Every vendor CluadeX speaks to, with every model it knows — a vendor without a key is listed too, marked, so the
+        // owner sees what exists (owner 2026-10-17: "ควรมีทุกค่ายที่รองรับ โมเดลทุกตัว").
         foreach (var type in new[] { AiProviderType.Anthropic, AiProviderType.OpenAI, AiProviderType.Gemini })
         {
-            if (!s.ProviderConfigs.TryGetValue(type.ToString(), out var cfg) || string.IsNullOrWhiteSpace(cfg.ApiKey)) continue;
+            s.ProviderConfigs.TryGetValue(type.ToString(), out var cfg);
+            bool hasKey = !string.IsNullOrWhiteSpace(cfg?.ApiKey);
             var models = KnownModelsOf(type).ToList();
-            string? saved = cfg.EffectiveModelId?.Trim();
+            string? saved = cfg?.EffectiveModelId?.Trim();
             if (!string.IsNullOrEmpty(saved) && !models.Contains(saved)) models.Insert(0, saved);
             string label = _providerManager.GetProvider(type).DisplayName;
-            list.AddRange(models.Select(m => new ChatModelChoice(type, m, label, PriceLabelOf(m))));
+            list.AddRange(models.Select(m => new ChatModelChoice(type, m, label,
+                hasKey ? PriceLabelOf(m) : $"{PriceLabelOf(m)} · {Loc("chat.model.noKeyLabel")}", NeedsKey: !hasKey)));
+        }
+        // Claude Code: the installed CLI on the owner's own Claude plan (no API key, no per-token price).
+        if (Services.Chrome.ClaudeInChromeLauncher.FindClaudeExe(s.ClaudeCodePathOverride) != null)
+        {
+            string cc = s.ProviderConfigs.TryGetValue(nameof(AiProviderType.ClaudeDev), out var ccCfg) && !string.IsNullOrWhiteSpace(ccCfg.EffectiveModelId)
+                ? ccCfg.EffectiveModelId!.Trim() : "default";
+            list.Add(new ChatModelChoice(AiProviderType.ClaudeDev, cc, _providerManager.GetProvider(AiProviderType.ClaudeDev).DisplayName, Loc("chat.model.claudeCodePlan")));
+        }
+        // The model on this PC — listed while it answers (picking one is the local picker's job: it loads weights into VRAM).
+        if (_providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+        {
+            var at = _providerManager.ActiveProviderType;
+            string name = at == AiProviderType.Ollama
+                ? (s.ProviderConfigs.TryGetValue(nameof(AiProviderType.Ollama), out var oc) ? oc.EffectiveModelId ?? "" : "")
+                : s.SelectedModelName ?? "";
+            if (!string.IsNullOrWhiteSpace(name))
+                list.Add(new ChatModelChoice(at, name.Trim(), _providerManager.GetProvider(at).DisplayName, Loc("chat.model.thisPc")));
         }
         // The BrainX cowork room: offered whenever the brain is connected — the agents in the room answer.
         if (BrainSyncService.Current?.IsBrainAvailable == true)
@@ -109,6 +144,9 @@ public partial class ChatViewModel
     {
         try
         {
+            if (c.NeedsKey) { StatusText = LocF("chat.model.needsKey", c.ProviderLabel); return; }
+            // The model on this PC is only listed while it answers: nothing to switch.
+            if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama) return;
             bool otherProvider = _providerManager.ActiveProviderType != c.Provider;
             if (otherProvider)
             {
@@ -151,7 +189,8 @@ public partial class ChatViewModel
             RefreshChatModelChoices();
             // The BrainX room model is the owner's choice only: set from outside (the room's office), every task the room
             // then hands CluadeX would be relayed straight back into the room.
-            var choice = ChatModelChoices.FirstOrDefault(c => c.Model == model.Trim() && c.Provider != AiProviderType.BrainX);
+            var choice = ChatModelChoices.FirstOrDefault(c => c.Model == model.Trim() && !c.NeedsKey
+                && c.Provider is not (AiProviderType.BrainX or AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama));
             if (choice == null) return LocF("chat.model.notOffered", model.Trim());
             if (!Equals(choice, _selectedChatModel))
             {

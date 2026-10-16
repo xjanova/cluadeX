@@ -405,6 +405,16 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
         set { if (_toolCountText != value) { _toolCountText = value; OnPropertyChanged(nameof(ToolCountText)); } }
     }
 
+    private string _versionText = "";
+    /// <summary>"v2.9.505" — what the server reported when it started (serverInfo.version); "" until then. Shown as a
+    /// badge beside the name (owner: the BrainX version must be easy to see).</summary>
+    public string VersionText
+    {
+        get => _versionText;
+        set { if (_versionText != value) { _versionText = value; OnPropertyChanged(nameof(VersionText)); OnPropertyChanged(nameof(HasVersion)); } }
+    }
+    public bool HasVersion => _versionText.Length > 0;
+
     /// <summary>Localized enabled/disabled badge text (set by the view-model).</summary>
     public string EnabledLabel
     {

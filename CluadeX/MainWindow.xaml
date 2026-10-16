@@ -254,39 +254,6 @@
                         <!-- License chip — always in view: a glowing invitation when this PC has no key, a countdown
                              during the free trial, a quiet "Pro" once bought. Opens the license dialog. -->
                         <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
-                        <!-- The model answering the chat: pick another here or in the composer (a model on this PC shows by name) -->
-                        <ComboBox x:Name="TitleModelBox" ItemsSource="{Binding ChatVM.ChatModelChoices}" SelectedItem="{Binding ChatVM.SelectedChatModel}"
-                                  Tag="{Binding ChatVM.LiveEffortSuffix}"
-                                  Style="{StaticResource ModernComboBox}" Padding="10,3" FontSize="12" MinWidth="170" Height="28"
-                                  Margin="0,0,8,0" VerticalAlignment="Center" WindowChrome.IsHitTestVisibleInChrome="True"
-                                  ToolTip="{services:Loc chat.model.pickTip}"
-                                  Visibility="{Binding ChatVM.HasChatModelChoices, Converter={StaticResource BoolVis}}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Accent.2}"
-                                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                        <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{Binding PriceLabel}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
-                                                   Foreground="{DynamicResource Status.Warning}" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                        <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                                   FontSize="11" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Accent.2}"
-                                                   VerticalAlignment="Center" Margin="8,0,0,0">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ComboBoxItem}}" Value="{x:Null}">
-                                                            <Setter Property="Visibility" Value="Visible"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
 
                         <!-- Today: what CluadeX spent on paid APIs, against the daily budget when one is set. Click: set it. -->
                         <Button Margin="0,0,8,0" Cursor="Hand" Click="TodayChip_Click" VerticalAlignment="Center"

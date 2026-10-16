@@ -2153,7 +2153,30 @@
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal">
+                                                    <!-- the vendor's girl, a round portrait (her head from the full figure); not in Classic -->
+                                                    <Grid Width="26" Height="26" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{DynamicResource Fx.Flourish}">
+                                                        <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2">
+                                                            <Ellipse.Fill>
+                                                                <ImageBrush ImageSource="{Binding GirlImage}" Stretch="UniformToFill"
+                                                                            Viewbox="0.18,0.0,0.64,0.32" ViewboxUnits="RelativeToBoundingBox"/>
+                                                            </Ellipse.Fill>
+                                                        </Ellipse>
+                                                    </Grid>
+                                                    <StackPanel VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding ProviderLabel}" FontSize="10" Foreground="{DynamicResource Text.Muted}">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ComboBoxItem}}" Value="{x:Null}">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                    </StackPanel>
                                                     <TextBlock Text="{Binding PriceLabel}" FontSize="11" Foreground="{DynamicResource Status.Warning}"
                                                                FontFamily="{DynamicResource Font.Mono}" VerticalAlignment="Center" Margin="8,0,0,0"
                                                                ToolTip="{services:Loc chat.model.priceTip}"/>
@@ -2218,7 +2241,8 @@
                                     </StackPanel>
                                 </CheckBox>
 
-                                <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Margin="0,2,8,2" VerticalAlignment="Center"
+                                            Visibility="{Binding EffortVisible, Converter={StaticResource BoolVis}}">
                                     <TextBlock x:Name="EffortLabel" Text="{services:Loc chat.effort}" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center"
                                                Margin="0,0,5,0" ToolTip="{services:Loc chat.effortTip}"/>
                                     <!-- "auto → medium": while a run works under auto, the closed box shows the level it really uses -->

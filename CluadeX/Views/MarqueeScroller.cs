@@ -53,7 +53,7 @@ public sealed class MarqueeScroller : ScrollViewer
     }
 
     /// <summary>The row is measured at the bar's width when that is enough (star columns stretch as before) and at its
-    /// own minimum width — the Auto parts, stars at nothing — when it is not; only then is there anything to glide.</summary>
+    /// natural width when it is not; only then is there anything to glide.</summary>
     private void FitContent() => (base.Content as FitPanel)?.InvalidateMeasure();
 
     protected override void OnContentChanged(object oldContent, object newContent)
@@ -82,10 +82,32 @@ public sealed class MarqueeScroller : ScrollViewer
             if (Child == null) return default;
             double h = double.IsInfinity(constraint.Height) ? _owner.ActualHeight : constraint.Height;
             if (h <= 0 || double.IsNaN(h)) h = double.PositiveInfinity;
-            Child.Measure(new Size(0, h));
-            double width = Math.Max(Child.DesiredSize.Width, _owner.ActualWidth);
+            // Natural width first (unbounded): a FrameworkElement clips its DesiredSize to the space it is given, so
+            // measuring at 0 always answered 0 and the bar never knew it overflowed.
+            Child.Measure(new Size(double.PositiveInfinity, h));
+            double width = Math.Max(MinimumWidth(Child), _owner.ActualWidth);
             Child.Measure(new Size(width, h));
             return new Size(width, Child.DesiredSize.Height);
+        }
+
+        /// <summary>The row's natural width, less what its star columns asked for: those columns are meant to give way
+        /// (the title's search pill), so only the fixed parts make the bar overflow.</summary>
+        private static double MinimumWidth(UIElement child)
+        {
+            double natural = child.DesiredSize.Width;
+            if (child is not Grid g) return natural;
+            double give = 0;
+            for (int col = 0; col < g.ColumnDefinitions.Count; col++)
+            {
+                var cd = g.ColumnDefinitions[col];
+                if (!cd.Width.IsStar) continue;
+                double widest = 0;
+                foreach (UIElement c in g.Children)
+                    if (c.Visibility != Visibility.Collapsed && Grid.GetColumn(c) == col && Grid.GetColumnSpan(c) == 1)
+                        widest = Math.Max(widest, c.DesiredSize.Width);
+                give += Math.Max(0, widest - cd.MinWidth);
+            }
+            return Math.Max(0, natural - give);
         }
 
         protected override Size ArrangeOverride(Size arrangeSize)

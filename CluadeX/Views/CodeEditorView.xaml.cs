@@ -76,11 +76,58 @@ public partial class CodeEditorView : UserControl
     private void FitSidePanels()
     {
         if (ActualWidth <= 0) return;
+        if (ApplyOrientation()) return;
         var (explorer, chat) = SidePanelWidths(ActualWidth, ExplorerPanel.Width, EditorChatPanel.Width);
         ExplorerPanel.MaxWidth = explorer;
         ExplorerPanel.Visibility = explorer < 1 ? Visibility.Collapsed : Visibility.Visible;
         EditorChatPanel.MaxWidth = chat;
     }
+
+    private bool _stacked;
+    private double _chatSideWidth = double.NaN;
+
+    /// <summary>A portrait window (taller than wide, not very wide): the chat leaves the right-hand column and sits under
+    /// the editor across the whole width, with a draggable line between them; side by side again once the window turns
+    /// landscape. True while stacked (the side-panel fitting then only concerns the file tree).</summary>
+    private bool ApplyOrientation()
+    {
+        bool stacked = IsPortrait(ActualWidth, ActualHeight);
+        if (stacked != _stacked)
+        {
+            _stacked = stacked;
+            if (stacked)
+            {
+                _chatSideWidth = EditorChatPanel.Width;
+                Grid.SetRow(EditorChatPanel, 1); Grid.SetColumn(EditorChatPanel, 0); Grid.SetColumnSpan(EditorChatPanel, 3);
+                EditorChatPanel.Width = double.NaN;
+                EditorChatPanel.MaxWidth = double.PositiveInfinity;
+                EditorChatPanel.BorderThickness = new Thickness(0, 1, 0, 0);
+                EditorRow.Height = new GridLength(1.15, GridUnitType.Star);
+                ChatRow.Height = new GridLength(1, GridUnitType.Star);
+                ChatGrip.Visibility = Visibility.Collapsed;
+                ChatSplitter.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                Grid.SetRow(EditorChatPanel, 0); Grid.SetColumn(EditorChatPanel, 2); Grid.SetColumnSpan(EditorChatPanel, 1);
+                if (!double.IsNaN(_chatSideWidth)) EditorChatPanel.Width = _chatSideWidth;
+                EditorChatPanel.BorderThickness = new Thickness(1, 0, 0, 0);
+                EditorRow.Height = new GridLength(1, GridUnitType.Star);
+                ChatRow.Height = new GridLength(0);
+                ChatGrip.Visibility = Visibility.Visible;
+                ChatSplitter.Visibility = Visibility.Collapsed;
+            }
+        }
+        if (!stacked) return false;
+        // Stacked: only the file tree shares the editor's row.
+        var (explorer, _) = SidePanelWidths(ActualWidth, ExplorerPanel.Width, 0);
+        ExplorerPanel.MaxWidth = explorer;
+        ExplorerPanel.Visibility = explorer < 1 ? Visibility.Collapsed : Visibility.Visible;
+        return true;
+    }
+
+    /// <summary>Taller than wide by a margin, and not a wide screen: stack the chat under the editor.</summary>
+    public static bool IsPortrait(double width, double height) => height > width * 1.15 && width < 1400;
 
     public const double EditorMinWidth = 320, ExplorerMinWidth = 160, ChatMinWidth = 280, ChatFloorWidth = 220;
 

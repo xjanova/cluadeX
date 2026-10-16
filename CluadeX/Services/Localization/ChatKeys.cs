@@ -254,6 +254,7 @@ internal static class ChatKeys
         ["plan.rewind.note"] = new() { ["en"] = "Files went back to before step {0} ({1}) — {2} file(s). The previous state is a restore point in the plan window.", ["th"] = "ไฟล์ย้อนกลับไปก่อนขั้น {0} ({1}) แล้ว — {2} ไฟล์ สภาพก่อนย้อนเก็บเป็นจุดย้อนกลับในหน้าต่างแผน" },
         ["chat.tools.groupContent"] = new() { ["en"] = "{0} operations ({1})", ["th"] = "{0} การทำงาน ({1})" },
         ["chat.tools.groupName"] = new() { ["en"] = "{0} tools", ["th"] = "{0} เครื่องมือ" },
+        ["chat.tools.groupVerb"] = new() { ["en"] = "Worked", ["th"] = "ทำงานเบื้องหลัง" },
         ["chat.skill.notInvocable"] = new() { ["en"] = "Skill '/{0}' can't be run directly.", ["th"] = "สกิล '/{0}' เรียกใช้โดยตรงไม่ได้" },
         ["chat.skill.unknown"] = new() { ["en"] = "Unknown skill '/{0}'. Available: {1}", ["th"] = "ไม่รู้จักสกิล '/{0}' — ที่ใช้ได้: {1}" },
         ["chat.skill.unknownNone"] = new() { ["en"] = "Unknown skill '/{0}'. No skills are available.", ["th"] = "ไม่รู้จักสกิล '/{0}' และยังไม่มีสกิลให้ใช้" },
