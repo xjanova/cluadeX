@@ -10,12 +10,13 @@ public static class ThemeIds
     public const string Classic = "Classic";
     public const string Midnight = "Midnight";
     public const string NeonCyber = "NeonCyber";
+    public const string Lavender = "Lavender";
 
     /// <summary>The look CluadeX had before themes existed — what a fresh install, an unknown or a damaged
     /// settings value gets.</summary>
     public const string Default = Midnight;
 
-    public static IReadOnlyList<string> All { get; } = [Classic, Midnight, NeonCyber];
+    public static IReadOnlyList<string> All { get; } = [Classic, Midnight, NeonCyber, Lavender];
 }
 
 /// <summary>One entry of the theme picker. <paramref name="IsReady"/> false shows an "in progress" badge on the
@@ -55,6 +56,8 @@ public sealed class ThemeService
         new(ThemeIds.Classic, "theme.classic.name", "theme.classic.desc", IsReady: true),
         new(ThemeIds.Midnight, "theme.midnight.name", "theme.midnight.desc", IsReady: true),
         new(ThemeIds.NeonCyber, "theme.neon.name", "theme.neon.desc", IsReady: true),
+        // The mascot's night room (2026-10-16): generated from Midnight's keys by design/lavender/make_theme.py.
+        new(ThemeIds.Lavender, "theme.lavender.name", "theme.lavender.desc", IsReady: true),
     ];
 
     /// <summary>The theme on screen now. Midnight until <see cref="ApplySaved"/> / <see cref="Apply"/> says otherwise

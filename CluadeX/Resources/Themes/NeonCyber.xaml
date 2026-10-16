@@ -36,6 +36,10 @@
 
     <sys:String x:Key="Theme.Id">NeonCyber</sys:String>
 
+    <!-- Menu icons: font glyphs, or the ChatGPT-made art in Assets/Icons (Lavender) -->
+    <Visibility x:Key="NavIcon.Glyph.Visibility">Visible</Visibility>
+    <Visibility x:Key="NavIcon.Art.Visibility">Collapsed</Visibility>
+
     <!-- ═════════════════════════════════════ 2. SEMANTIC TOKENS ═════════════════════════════════════ -->
 
     <!-- Fonts. The mock's Chakra Petch is used when installed; Bahnschrift (DIN-style, ships with Windows 10+)

@@ -39,6 +39,10 @@
 
     <sys:String x:Key="Theme.Id">Classic</sys:String>
 
+    <!-- Menu icons: font glyphs, or the ChatGPT-made art in Assets/Icons (Lavender) -->
+    <Visibility x:Key="NavIcon.Glyph.Visibility">Visible</Visibility>
+    <Visibility x:Key="NavIcon.Art.Visibility">Collapsed</Visibility>
+
     <!-- ═════════════════════════════════════ 2. SEMANTIC TOKENS ═════════════════════════════════════ -->
 
     <!-- Fonts: Tahoma is the XP UI face and carries Thai glyphs itself; Leelawadee UI / Segoe UI back it up -->

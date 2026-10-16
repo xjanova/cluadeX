@@ -38,7 +38,18 @@ public partial class App : Application
         // Two CluadeX processes fight over the SAME settings.json/session DB, and the second
         // instance's llama-server startup sweep kills the first instance's (still-owned) server —
         // observed live as "llama-server stopped (crashed or was killed)" in the first window.
-        _singleInstanceMutex = new System.Threading.Mutex(true, @"Local\CluadeX_SingleInstance", out bool isFirstInstance);
+        // A PORTABLE copy (portable.txt next to the exe) keeps its own data folder, so it has its own lock and can run
+        // beside the installed app — how a test copy is checked without closing the owner's CluadeX.
+        string lockName = @"Local\CluadeX_SingleInstance";
+        try
+        {
+            string root = Services.SettingsService.ResolveDataRoot(out bool portable);
+            if (portable)
+                lockName += "_" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(root.ToLowerInvariant())))[..12];
+        }
+        catch { }
+        _singleInstanceMutex = new System.Threading.Mutex(true, lockName, out bool isFirstInstance);
         if (!isFirstInstance)
         {
             // The installed app and a dev build share one data folder, so only one may run — but say which
@@ -99,7 +110,7 @@ public partial class App : Application
         catch (Exception ex) { WriteCrashLog("theme", ex); }
 
         var mainWindow = _serviceProvider.GetRequiredService<MainWindow>();
-        mainWindow.Show();
+        // Shown after the splash (end of this method), once the startup checks have run.
 
         // Ensure skill directories exist
         try
@@ -122,7 +133,7 @@ public partial class App : Application
         {
             // License on its own task: up to four calls to xman4289.com (15 s timeout each when the network is
             // bad) must not hold up the MCP servers below.
-            _ = Task.Run(async () =>
+            LicenseStartup = Task.Run(async () =>
             {
                 try
                 {
@@ -273,7 +284,21 @@ public partial class App : Application
                 dbg?.Warn("Hooks", "SessionStart hooks threw", ex);
             }
         });
+
+        // ─── Splash: the startup checks, shown — then the app ───
+        // Modal, so OnStartup waits here while the background services above (license, MCP, hooks) run; the splash
+        // reports them as they resolve. A splash that fails to show never blocks the app.
+        try
+        {
+            var splash = new Views.SplashWindow(_serviceProvider);
+            splash.ShowDialog();
+        }
+        catch (Exception ex) { WriteCrashLog("splash", ex); }
+        mainWindow.Show();
     }
+
+    /// <summary>The startup license check (validate + auto-provision), awaited by the splash instead of repeated.</summary>
+    public static Task? LicenseStartup { get; private set; }
 
     // ════════════════════════════════════════════════════════════════════
     //  MCP tool dispatcher

@@ -1101,7 +1101,7 @@ internal static partial class Program
         Check("T1 a fresh install starts on Midnight", (string)Prop(themes, "CurrentThemeId") == "Midnight", (string)Prop(themes, "CurrentThemeId"));
         Check("T1 the merged theme dictionary is Midnight's (Theme.Id marker)", res["Theme.Id"] as string == "Midnight", res["Theme.Id"] as string);
         var ids = ((IEnumerable)Prop(themes, "Themes")).Cast<object>().Select(t => (string)Prop(t, "Id")).ToList();
-        Check("T1 three themes: Classic, Midnight, Neon Cyber LED", ids.OrderBy(x => x).SequenceEqual(new[] { "Classic", "Midnight", "NeonCyber" }), string.Join(",", ids));
+        Check("T1 four themes: Classic, Midnight, Neon Cyber LED, Lavender Night", ids.OrderBy(x => x).SequenceEqual(new[] { "Classic", "Lavender", "Midnight", "NeonCyber" }), string.Join(",", ids));
 
         // T2 the token list in code exists in EVERY theme file, with the same kind of value, and no theme has extra keys.
         var tokensType = asm.GetType("CluadeX.Services.ThemeTokens");
@@ -1163,7 +1163,7 @@ internal static partial class Program
         // T6 the picker in Settings › General: three cards, picking one applies it live and marks it.
         var svm = MainVm.SettingsVM;
         var options = ((IEnumerable)Prop(svm, "ThemeOptions"))?.Cast<object>().ToList() ?? new();
-        Check("T6 the picker offers three themes", options.Count == 3, $"{options.Count}");
+        Check("T6 the picker offers four themes (Lavender added 2026-10-16)", options.Count == 4, $"{options.Count}");
         var cmd = Prop(svm, "SelectThemeCommand") as ICommand;
         cmd?.Execute("NeonCyber");
         await Idle(100);

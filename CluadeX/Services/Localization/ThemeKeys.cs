@@ -31,6 +31,8 @@ internal static class ThemeKeys
             ["en"] = "CluadeX's original dark theme in violet and blue.",
             ["th"] = "ธีมมืดแบบเดิมของ CluadeX โทนม่วง-ฟ้า",
         },
+        ["theme.lavender.name"] = new() { ["en"] = "Lavender Night", ["th"] = "ลาเวนเดอร์ราตรี" },
+        ["theme.lavender.desc"] = new() { ["en"] = "The CluadeX mascot's room: deep violet night, lavender glass, pink glow and gold", ["th"] = "ห้องของมาสคอต CluadeX: ม่วงราตรี กระจกลาเวนเดอร์ แสงชมพู และทอง" },
         ["theme.neon.name"] = new() { ["en"] = "Neon Cyber LED", ["th"] = "Neon Cyber LED" },
         ["theme.neon.desc"] = new()
         {

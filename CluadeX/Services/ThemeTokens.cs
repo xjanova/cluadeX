@@ -14,6 +14,7 @@ public static class ThemeTokens
     public static IReadOnlyList<string> All { get; } =
     [
         "Font.Ui", "Font.Ui.Display", "Font.Mono", "Font.Mono.Display",
+        "NavIcon.Glyph.Visibility", "NavIcon.Art.Visibility",
         "Bg.Window", "Bg.Panel", "Bg.Elevated", "Bg.Panel.Solid", "Bg.Overlay", "Bg.Scrim",
         "Backdrop.Nebula", "Backdrop.Orb.1", "Backdrop.Orb.2", "Backdrop.Orb.3", "Backdrop.Orb.4",
         "Surface.Panel", "Surface.Card", "Surface.Card.Flat", "Surface.Glass", "Surface.Sunken", "Surface.Raised",

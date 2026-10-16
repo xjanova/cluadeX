@@ -586,22 +586,22 @@
                                  Hex Editor and Debug Log live under Settings › General › More tools, Ctrl+K and their
                                  Ctrl+number keys; the agent still opens Hex Editor itself. -->
                             <StackPanel Margin="0,8,0,8">
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8BD;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="chat" Content="&#xE8BD;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Chat, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Chat"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.chatTip}" AutomationProperties.Name="Chat"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE70F;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="code" Content="&#xE70F;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Code, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Code"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.codeTip}" AutomationProperties.Name="Code Editor"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE8F1;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="models" Content="&#xE8F1;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Models, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Models"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.modelsTip}" AutomationProperties.Name="Models"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE823;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="timemachine" Content="&#xE823;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=TimeMachine, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="TimeMachine"
                                              GroupName="Activity"
@@ -609,12 +609,12 @@
 
                                 <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
 
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xECAA;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="mcp" Content="&#xECAA;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=McpServers, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.mcpTip}" AutomationProperties.Name="MCP Servers"/>
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE9D5;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="tasks" Content="&#xE9D5;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
                                              GroupName="Activity"
@@ -624,7 +624,7 @@
 
                             <!-- Bottom: Settings -->
                             <StackPanel Grid.Row="2" Margin="0,4,0,12">
-                                <RadioButton Style="{StaticResource ActivityBarButton}" Content="&#xE713;"
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="settings" Content="&#xE713;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Settings, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Settings"
                                              GroupName="Activity"
