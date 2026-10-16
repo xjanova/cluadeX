@@ -88,6 +88,9 @@ public partial class App : Application
 
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
+        // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
+        var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
+        _ = Task.Run(checkpoints.Prune);
 
         // Panel widths the user dragged (sidebar, explorer, chat pane, side panel) come back after a restart.
         var panelSettings = _serviceProvider.GetRequiredService<SettingsService>();
@@ -852,6 +855,7 @@ public partial class App : Application
         // BatchService — half-price batch API jobs (Anthropic / OpenAI), kept in batches.json and polled until done.
         services.AddSingleton<Services.Batch.BatchService>();
         services.AddSingleton<SessionMemoryService>();
+        services.AddSingleton<CheckpointService>();
         services.AddSingleton<RepoMapService>();
         services.AddSingleton<EmbeddingService>();
         services.AddSingleton<AutonomousCodingService>();

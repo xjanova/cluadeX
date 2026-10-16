@@ -264,6 +264,7 @@ internal static class Program
         TestAutoCompact();                    // U9: the compaction toast's "compact by itself" tick
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
+        await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
         Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
@@ -2024,6 +2025,106 @@ internal static class Program
     }
 
     // ═══════════════════════════════════════════ U10 ══════════════════════════════════════════
+    static async Task TestPlanWindow()
+    {
+        Log("\n## U12 — the plan window: this chat's plan, items added while it works or queued, go back, branch");
+        string store = Path.Combine(Settings.DataRoot, "cp-store-" + Guid.NewGuid().ToString("N")[..6]);
+        string proj = Path.Combine(Path.GetTempPath(), "cluadex-planwin-" + Guid.NewGuid().ToString("N")[..6]);
+        string? branchDir = null;
+        PlanWindow? win = null;
+        Directory.CreateDirectory(proj);
+        try
+        {
+            static (int, string) G(string dir, params string[] a)
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = dir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+                foreach (var x in a) psi.ArgumentList.Add(x);
+                using var pr = System.Diagnostics.Process.Start(psi)!;
+                string o = pr.StandardOutput.ReadToEnd() + pr.StandardError.ReadToEnd();
+                pr.WaitForExit();
+                return (pr.ExitCode, o);
+            }
+            string f = Path.Combine(proj, "main.txt");
+            File.WriteAllText(f, "v1\n");
+            G(proj, "init", "-q"); G(proj, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A");
+            G(proj, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "v1");
+
+            await FreshChat();
+            var session = Vm.CurrentSession!;
+            session.ProjectPath = proj;
+            var cp = new CheckpointService(null, store);
+            // Two agent steps of this chat: v1 → v2 (step 1), v2 → v3 (step 2).
+            var scope = new AgentRunScope(session.Id, proj);
+            AgentRunScope.Enter(scope);
+            scope.Step = 1; cp.CaptureBeforeChange(f); File.WriteAllText(f, "v2\n");
+            scope.Step = 2; cp.CaptureBeforeChange(f); File.WriteAllText(f, "v3\n");
+            AgentRunScope.Enter(null);
+            // The agent's last plan for this chat (what todo_write left).
+            var plans = (System.Collections.IDictionary)typeof(ChatViewModel).GetField("_lastPlans", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Vm)!;
+            plans[session.Id] = new List<TodoItem> { new() { Content = "Write the parser", Status = "completed" }, new() { Content = "Add tests", Status = "in_progress" } };
+
+            Vm.OpenPlanWindow(session);
+            win = Application.Current.Windows.OfType<PlanWindow>().FirstOrDefault();
+            Check("U12 the plan window opens for the chat", win != null);
+            if (win == null) return;
+            var pvm = (PlanWindowViewModel)win.DataContext;
+            win.Left = -12000;
+            await Task.Delay(300); win.UpdateLayout();
+            Check("U12 it shows the chat's plan with done / active marks", pvm.Rows.Count == 2 && pvm.Rows[0].IsDone && pvm.Rows[1].IsActive,
+                string.Join(" | ", pvm.Rows.Select(r => r.State + ":" + r.Text)));
+            Check("U12 and its steps, newest first", pvm.Steps.Count == 2 && pvm.Steps[0].Step == 2, string.Join(",", pvm.Steps.Select(x => x.Step)));
+            Vm.OpenPlanWindow(session);
+            Check("U12 opening it again brings the same window forward (one per chat)", Application.Current.Windows.OfType<PlanWindow>().Count() == 1);
+
+            pvm.NewItem = "Update the README";
+            pvm.AddItemCommand.Execute(null);
+            Check("U12 an item added while the chat is idle is queued, with Start offered", pvm.Rows.Any(r => r.IsQueued && r.Text == "Update the README") && pvm.CanStartQueued,
+                pvm.Message);
+
+            LocSvc.SetLanguage("th");
+            await Task.Delay(200); win.UpdateLayout();
+            SaveWindow(win, Path.Combine(AppContext.BaseDirectory, "plan-window-th.png"));
+            LocSvc.SetLanguage("en");
+
+            // Go back to before step 2 → v2; the current v3 is kept as a point.
+            pvm.AskRewindCommand.Execute(pvm.Steps[0]);
+            Check("U12 going back asks first", pvm.IsConfirmOpen && File.ReadAllText(f) == "v3\n");
+            pvm.ConfirmCommand.Execute(null);
+            await WaitUntil(() => File.ReadAllText(f) == "v2\n");
+            Check("U12 confirmed: the file is as it was before step 2", File.ReadAllText(f) == "v2\n", File.ReadAllText(f) + " " + pvm.Message);
+
+            // Branch from step 1 → a worktree with v1, the project stays v2, a new chat opens there.
+            var step1 = pvm.Steps.First(x => x.Step == 1);
+            pvm.AskBranchCommand.Execute(step1);
+            pvm.ConfirmCommand.Execute(null);
+            await WaitUntil(() => Vm.CurrentSession?.ProjectPath is { Length: > 0 } pp && pp != proj, 30000);
+            branchDir = Vm.CurrentSession?.ProjectPath;
+            Check("U12 branching opens a new chat in a worktree with the files from before step 1",
+                branchDir != null && branchDir != proj && File.Exists(Path.Combine(branchDir, "main.txt"))
+                && File.ReadAllText(Path.Combine(branchDir, "main.txt")) == "v1\n", $"{branchDir} | {pvm.Message}");
+            Check("U12 …and leaves the original project alone", File.ReadAllText(f) == "v2\n");
+        }
+        finally
+        {
+            win?.Close();
+            AgentRunScope.Enter(null);
+            try { if (branchDir != null && branchDir != proj) { var psi = new System.Diagnostics.ProcessStartInfo("git", $"worktree remove --force \"{branchDir}\"") { WorkingDirectory = proj, CreateNoWindow = true, UseShellExecute = false }; System.Diagnostics.Process.Start(psi)!.WaitForExit(); } } catch { }
+            foreach (var d in new[] { proj, store, branchDir })
+                try { if (d != null && Directory.Exists(d)) { foreach (var fi in new DirectoryInfo(d).EnumerateFiles("*", SearchOption.AllDirectories)) fi.Attributes = FileAttributes.Normal; Directory.Delete(d, true); } } catch { }
+        }
+    }
+
+    static void SaveWindow(Window w, string path)
+    {
+        var el = (FrameworkElement)w.Content;
+        var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap((int)el.ActualWidth, (int)el.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bmp.Render(el);
+        var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+        using var fs = File.Create(path);
+        enc.Save(fs);
+    }
+
     static async Task TestLiveEffort()
     {
         Log("\n## U11 — the effort \"auto\" really uses is shown while the run works");

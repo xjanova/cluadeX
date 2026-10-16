@@ -1997,6 +1997,11 @@
                                         </Style>
                                     </Button.Style>
                                 </Button>
+                                <!-- Plan window: this chat's plan, add items, go back to / branch from a step -->
+                                <Button Content="&#xE9D5;" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
+                                        Command="{Binding OpenPlanWindowCommand}"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="12,8"
+                                        ToolTip="{services:Loc plan.open.tip}"/>
                                 <Button Content="&#xE725;" Style="{StaticResource PrimaryButton}"
                                         Command="{Binding SendMessageCommand}"
                                         FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="14,8"
