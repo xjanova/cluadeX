@@ -376,27 +376,119 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
     public BrainConnectProblem LastBrainConnectProblem { get; private set; }
 
-    /// <summary>BrainX's MCP server exe, or null when BrainX isn't installed. The stable <c>BrainX\mcp</c> shim
-    /// first (it survives BrainX updates), then the Velopack <c>current</c> folder.</summary>
+    /// <summary>
+    /// BrainX's MCP server exe, or null when BrainX isn't installed — ONLY the mirror BrainX keeps for other apps,
+    /// <c>%USERPROFILE%\.brainx\mcp\brainx-mcp.exe</c>. Never the Velopack install (<c>%LOCALAPPDATA%\BrainX\current</c>
+    /// or <c>app-*</c>), not even as a fallback: a brainx-mcp running from there locks the folder Velopack has to
+    /// rename, and on 2026-10-16 that made BrainX's Setup fail twice with "Access is denied". No brain beats a
+    /// BrainX that can't update.
+    /// </summary>
     public static string? FindInstalledBrainExe()
+    {
+        string mirror = BrainMirrorPath();
+        return File.Exists(mirror) ? mirror : null;
+    }
+
+    /// <summary>The mirror exe's path whether or not it exists — what a brain entry inside BrainX's install folder is
+    /// redirected to.</summary>
+    private static string BrainMirrorPath()
     {
 #if DEBUG
         // Debug builds only: the contract harness (tests/apitest) points this at a stub so the startup
         // auto-connect path can be exercised without ever starting the real BrainX. Read on every call — never
         // cached — and when it is set it is the ONLY answer: a missing stub means "not installed", never a
-        // fall-through to the real install.
+        // fall-through to the real mirror.
         string? overridePath = Environment.GetEnvironmentVariable("CLUADEX_BRAINX_EXE");
-        if (!string.IsNullOrWhiteSpace(overridePath))
-            return File.Exists(overridePath) ? overridePath : null;
+        if (!string.IsNullOrWhiteSpace(overridePath)) return overridePath;
 #endif
-        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        foreach (var p in new[]
+        return BrainMirrorExe(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    }
+
+    /// <summary>%LOCALAPPDATA% — where BrainX's Velopack install lives.</summary>
+    private static string BrainXLocalAppData()
+    {
+#if DEBUG
+        // Debug builds only: the contract harness puts a fake BrainX install here, so the "never from BrainX\current"
+        // rule is proven through the real start path without touching the real install.
+        string? overrideRoot = Environment.GetEnvironmentVariable("CLUADEX_BRAINX_LOCALAPPDATA");
+        if (!string.IsNullOrWhiteSpace(overrideRoot)) return overrideRoot;
+#endif
+        return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    }
+
+    /// <summary>Where BrainX mirrors its MCP server for other apps (it keeps it updated; deploy-mcp.ps1 hot-swaps it).</summary>
+    public static string BrainMirrorExe(string userProfile) => Path.Combine(userProfile, ".brainx", "mcp", "brainx-mcp.exe");
+
+    /// <summary>True when <paramref name="path"/> is inside BrainX's Velopack install — <c>&lt;localAppData&gt;\BrainX\current\…</c>
+    /// or <c>…\BrainX\app-*\…</c> — the folders a running brainx-mcp locks against BrainX's own update.</summary>
+    public static bool IsInBrainXInstallFolder(string? path, string localAppData)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(localAppData)) return false;
+        string full, root;
+        try
         {
-            Path.Combine(local, "BrainX", "mcp", "brainx-mcp.exe"),
-            Path.Combine(local, "BrainX", "current", "mcp", "brainx-mcp.exe"),
-        })
-            if (File.Exists(p)) return p;
-        return null;
+            full = Path.GetFullPath(path.Trim().Trim('"'));
+            root = Path.GetFullPath(Path.Combine(localAppData, "BrainX"));
+        }
+        catch { return false; }   // not a path (a bare command like "npx", or junk) — nothing to lock
+        root = root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+        string first = full.Substring(root.Length).Split('\\', '/')[0];
+        return first.Equals("current", StringComparison.OrdinalIgnoreCase)
+            || first.StartsWith("app-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The brain's launch, made safe for BrainX's updater. A command line that names nothing inside BrainX's install
+    /// folder is returned as it is (the config's command is honoured). One that does — an entry written by an older
+    /// CluadeX, or by hand — is redirected to the mirror <paramref name="mirrorExe"/> (with the arguments that pointed
+    /// into the install folder dropped), or refused when the mirror is missing. Null config = refused.
+    /// </summary>
+    public static McpServerConfig? RouteBrainLaunch(McpServerConfig configured, string localAppData, string mirrorExe, Func<string, bool> fileExists)
+    {
+        var args = configured.Args ?? new List<string>();
+        bool pinsInstall = IsInBrainXInstallFolder(configured.Command, localAppData)
+            || args.Any(a => IsInBrainXInstallFolder(a, localAppData));
+        if (!pinsInstall) return configured;
+        if (!fileExists(mirrorExe)) return null;
+        return new McpServerConfig
+        {
+            Name = configured.Name,
+            Command = mirrorExe,
+            Args = args.Where(a => !IsInBrainXInstallFolder(a, localAppData)).ToList(),
+            Env = configured.Env != null ? new Dictionary<string, string>(configured.Env) : null,
+            Enabled = configured.Enabled,
+            ManagedBy = configured.ManagedBy,
+            StartupTimeoutSeconds = configured.StartupTimeoutSeconds,
+        };
+    }
+
+    /// <summary>
+    /// Before every start of the brain: take its entry from mcp_servers.json as it is NOW. BrainX's onboarding heals
+    /// that entry (points it at the mirror) while CluadeX runs, and the copy loaded at startup used to be respawned
+    /// for the whole session — a CluadeX started before the heal kept running brainx-mcp from BrainX\current.
+    /// The file is only read here, never written. Unreadable file/entry, or the entry gone → the loaded copy stays.
+    /// </summary>
+    private McpServerConfig RefreshBrainEntryFromDisk(string name, McpServerConfig loaded)
+    {
+        ConfigSnapshot? disk;
+        lock (_configFileLock) disk = ReadConfigFile(out _);
+        if (disk == null || !disk.Readable.TryGetValue(name, out var onDisk)) return loaded;
+        bool same = string.Equals(onDisk.Command, loaded.Command, StringComparison.Ordinal)
+            && (onDisk.Args ?? new()).SequenceEqual(loaded.Args ?? new(), StringComparer.Ordinal)
+            && DictEquals(onDisk.Env, loaded.Env);
+        if (same) return loaded;
+        Log(name, $"mcp_servers.json changed since it was loaded — starting it as the file says now ({onDisk.Command})");
+        onDisk.Enabled = loaded.Enabled;   // on/off is the MCP page's call, not this refresh's
+        _configs[name] = onDisk;
+        return onDisk;
+
+        static bool DictEquals(Dictionary<string, string>? a, Dictionary<string, string>? b)
+        {
+            if ((a?.Count ?? 0) != (b?.Count ?? 0)) return false;
+            if (a == null || b == null) return true;
+            return a.All(kv => b.TryGetValue(kv.Key, out var v) && v == kv.Value);
+        }
     }
 
     /// <summary>True while the brain is starting, or crashed and its supervisor is still respawning it.</summary>
@@ -1267,6 +1359,25 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         await gate.WaitAsync(ct);
         try
         {
+            // The brain: the file's entry as it is now, then never from BrainX's install folder (see RouteBrainLaunch).
+            if (LooksLikeBrain(name) && string.IsNullOrEmpty(config.ManagedBy))
+            {
+                config = RefreshBrainEntryFromDisk(name, config);
+                var routed = RouteBrainLaunch(config, BrainXLocalAppData(), BrainMirrorPath(), File.Exists);
+                if (routed == null)
+                {
+                    string why = string.Format(L("mcp.brain.mirrorMissing"), name);
+                    _launchRefusals[name] = why;
+                    await RetireRefusedServerAsync(name);
+                    Log(name, $"not started: {config.Command} is inside BrainX's install folder and the mirror ~\\.brainx\\mcp is missing");
+                    SetState(name, McpServerState.Failed, why);
+                    return false;
+                }
+                if (!ReferenceEquals(routed, config))
+                    Log(name, $"{config.Command} is inside BrainX's install folder (it would block BrainX's update) — starting the mirror {routed.Command} instead");
+                config = routed;
+            }
+
             // Every start — first start, Restart, supervisor respawn — asks the launch resolvers what to spawn.
             var (launch, refusal) = await ResolveLaunchAsync(name, config, ct);
             if (refusal != null)
