@@ -266,7 +266,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
             _ => _loc.T("mcpm.statusStopped"),
         };
         item.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(item.Name).Count;
-        item.ToolCountText = _loc.T("mcpm.toolCount", item.ToolCount);
+        item.ToolCountText = ToolsAndVersion(item);
         item.EnabledLabel = item.Enabled ? _loc.T("mcpm.enabledBadge") : _loc.T("mcpm.disabledBadge");
     }
 
@@ -521,6 +521,13 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         Application.Current?.Dispatcher.BeginInvoke(() => AppendLog(serverName, message));
     }
 
+    /// <summary>"128 tools · v2.9.505": the version the server reported when it started (serverInfo.version).</summary>
+    private string ToolsAndVersion(McpServerDisplayItem item)
+    {
+        string tools = _loc.T("mcpm.toolCount", item.ToolCount);
+        return _mcpManager.ServerVersion(item.Name) is { Length: > 0 } v ? $"{tools} · v{v.TrimStart('v', 'V')}" : tools;
+    }
+
     private void OnToolsChanged()
     {
         Application.Current?.Dispatcher.BeginInvoke(() =>
@@ -528,7 +535,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
             foreach (var s in Servers)
             {
                 s.ToolCount = _mcpManager.ToolRegistry.GetToolsForServer(s.Name).Count;
-                s.ToolCountText = _loc.T("mcpm.toolCount", s.ToolCount);
+                s.ToolCountText = ToolsAndVersion(s);
             }
             RefreshSelectedTools();
         });

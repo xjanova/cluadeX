@@ -145,6 +145,8 @@ public static class ThemeTokens
         "Syntax.Function", "Syntax.Control", "Syntax.Variable",
         "Shadow.Card", "Shadow.Button", "Shadow.Popup", "Shadow.Panel",
         "Glow.Accent.1", "Glow.Accent.2", "Glow.Accent.3", "Glow.Success",
+        // The playful extras (Tokens.md ▸ Fx): Classic switches them off with Fx.Flourish.
+        "Fx.Flourish", "Fx.Sweep.Edge", "Fx.Sweep.Mid", "Fx.Card.Glow",
         // Chat + code editor (team A): one-off colours no shared token matched within 8/255.
         "Accent.1.Border.Soft", "Accent.2.Hover", "State.Hover.Danger",
         "Banner.Warning.Background", "Banner.Danger.Background",

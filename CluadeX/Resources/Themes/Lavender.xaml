@@ -1260,4 +1260,11 @@
     <SolidColorBrush x:Key="Preview.Page.Icon" Color="#AA6CD4"/>
     <!-- ══════ END GROUP C ADDITIONS ══════ -->
 
+    <!-- ══════ Fx: the playful extras (girls beside questions, the light sweeping a live status) ══════
+         Fx.Flourish hides them where a theme wants a plain look (Classic). Each theme colours its own. -->
+    <Visibility x:Key="Fx.Flourish">Visible</Visibility>
+    <Color x:Key="Fx.Sweep.Edge">#00E9D5FF</Color>
+    <Color x:Key="Fx.Sweep.Mid">#33E9D5FF</Color>
+    <DropShadowEffect x:Key="Fx.Card.Glow" Color="#A44CFF" BlurRadius="20" ShadowDepth="0" Opacity="0.35"/>
+
 </ResourceDictionary>

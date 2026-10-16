@@ -1001,3 +1001,11 @@ Catppuccin keys follow their app-level role (`BaseBrush` = dialog background, `T
 in the theme slot is shadowed because `Theme.xaml` merges after it): the mock's square corners (the shared styles
 hard-code `CornerRadius` 6-12), the 1 px cyan outline on idle dock icons, corner brackets on cards, and letter-spaced
 uppercase labels.
+
+## Fx — the playful extras (every theme)
+
+| Key | Type | What |
+|---|---|---|
+| `Fx.Flourish` | `Visibility` | `Collapsed` hides the extras: the girl beside an agent's question, the light sweeping a live status line. Classic = `Collapsed`. |
+| `Fx.Sweep.Edge` / `Fx.Sweep.Mid` | `Color` | the sweeping band over a live status line (transparent edge → tinted middle). |
+| `Fx.Card.Glow` | `DropShadowEffect` | the halo around the question card (Opacity 0 = none, Classic). |

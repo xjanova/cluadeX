@@ -237,6 +237,15 @@ public class ChatMessage : INotifyPropertyChanged
     public int CollapsedCount { get; set; }
     /// <summary>Individual tool names in this collapsed group.</summary>
     public List<string> CollapsedToolNames { get; set; } = new();
+    /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:
+    /// a reloaded group shows its merged output instead).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ToolStepView> GroupSteps { get; } = new();
+    public bool HasGroupSteps => GroupSteps.Count > 0;
+    public void AddGroupStep(ToolStepView step)
+    {
+        GroupSteps.Add(step);
+        if (GroupSteps.Count == 1) OnPropertyChanged(nameof(HasGroupSteps));
+    }
 
     // ─── ask_user question ───
     public List<string> QuestionOptions { get; set; } = new();
@@ -246,6 +255,10 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>Answered, cancelled, or a row from an earlier session (nobody is waiting for it any more).</summary>
     public bool QuestionAnswered => _questionAnswered || QuestionCallback == null;
     public bool HasQuestionOptions => QuestionOptions.Count > 0;
+    /// <summary>The girl standing beside this question (an Assets\Girls name), picked at random when it was asked.</summary>
+    public string? QuestionGirl { get; set; }
+    public System.Windows.Media.ImageSource? QuestionGirlImage => Services.GirlArt.Image(QuestionGirl);
+    public System.Windows.Media.Color QuestionGirlGlow => Services.GirlArt.Glow(QuestionGirl);
     private string _answerDraft = "";
     public string AnswerDraft { get => _answerDraft; set { _answerDraft = value; OnPropertyChanged(); } }
 
@@ -349,8 +362,29 @@ public class CodeBlock
     public int EndIndex { get; set; }
 }
 
-public class ChatSession
+public class ChatSession : System.ComponentModel.INotifyPropertyChanged
 {
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    private void Raise(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
+    private string _runStatus = "";
+    /// <summary>The sidebar's live badge: "" idle, "working" (a run goes on), "waiting" (it asks the owner something),
+    /// "done" (finished while the owner was in another chat — cleared when it is opened). Not stored.</summary>
+    public string RunStatus
+    {
+        get => _runStatus;
+        set { if (_runStatus != value) { _runStatus = value; Raise(nameof(RunStatus)); Raise(nameof(HasRunStatus)); } }
+    }
+    public bool HasRunStatus => _runStatus.Length > 0;
+
+    private string _runStep = "";
+    /// <summary>What the run is doing now ("⏵ อ่านไฟล์ main.gd"), under the title while it works.</summary>
+    public string RunStep
+    {
+        get => _runStep;
+        set { if (_runStep != value) { _runStep = value; Raise(nameof(RunStep)); } }
+    }
+
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = "New Chat";
     public DateTime CreatedAt { get; set; } = DateTime.Now;

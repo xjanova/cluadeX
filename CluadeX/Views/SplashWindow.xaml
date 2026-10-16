@@ -1,4 +1,4 @@
-<Window x:Class="CluadeX.Views.SplashWindow"
+﻿<Window x:Class="CluadeX.Views.SplashWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="CluadeX" Width="940" Height="600"
@@ -90,10 +90,10 @@
             </Grid>
         </Grid>
     </Border>
-    <Image Source="/CluadeX;component/Assets/splash-girl.png" Height="580" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+    <Image x:Name="SplashGirl" Source="/CluadeX;component/Assets/splash-girl.png" Height="580" HorizontalAlignment="Right" VerticalAlignment="Bottom"
            Margin="0,0,64,6" RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False">
         <Image.Effect>
-            <DropShadowEffect Color="#C084FC" BlurRadius="26" ShadowDepth="0" Opacity="0.55"/>
+            <DropShadowEffect x:Name="SplashGirlGlow" Color="#C084FC" BlurRadius="26" ShadowDepth="0" Opacity="0.55"/>
         </Image.Effect>
     </Image>
     </Grid>

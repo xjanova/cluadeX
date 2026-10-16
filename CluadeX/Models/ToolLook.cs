@@ -105,6 +105,14 @@ public static class DiffPairs
     }
 }
 
+/// <summary>One call inside a folded group of tool rows — the small box the group shows when opened.</summary>
+public sealed record ToolStepView(string? Kind, string Verb, string? Target, string? Elapsed)
+{
+    public string Glyph => ToolLook.Of(Kind).Glyph;
+    public bool HasTarget => !string.IsNullOrEmpty(Target);
+    public bool HasElapsed => !string.IsNullOrEmpty(Elapsed);
+}
+
 /// <summary>One step of the agent's plan, as the plan card shows it.</summary>
 public sealed record PlanItemView(int Number, string Text, string State)
 {

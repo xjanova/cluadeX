@@ -53,6 +53,50 @@ public partial class CodeEditorView : UserControl
         // Preview, so Ctrl+S reaches us even when the focused control (editor, terminal box) would
         // otherwise swallow the key.
         PreviewKeyDown += OnPagePreviewKeyDown;
+        SizeChanged += (_, _) => FitSidePanels();
+        // A dragged grip changes Width: refit, so a drag past the room left shows as far as it can go.
+        var width = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(WidthProperty, typeof(FrameworkElement));
+        Loaded += (_, _) =>
+        {
+            width.AddValueChanged(ExplorerPanel, OnPanelWidthChanged);
+            width.AddValueChanged(EditorChatPanel, OnPanelWidthChanged);
+            FitSidePanels();
+        };
+        Unloaded += (_, _) =>
+        {
+            width.RemoveValueChanged(ExplorerPanel, OnPanelWidthChanged);
+            width.RemoveValueChanged(EditorChatPanel, OnPanelWidthChanged);
+        };
+    }
+
+    private void OnPanelWidthChanged(object? sender, EventArgs e) => FitSidePanels();
+
+    /// <summary>Narrow window: the side panels give way so the editor keeps room. Only MaxWidth changes — the
+    /// widths the user dragged (and the grips remember) stay, and come back as soon as the window widens.</summary>
+    private void FitSidePanels()
+    {
+        if (ActualWidth <= 0) return;
+        var (explorer, chat) = SidePanelWidths(ActualWidth, ExplorerPanel.Width, EditorChatPanel.Width);
+        ExplorerPanel.MaxWidth = explorer;
+        ExplorerPanel.Visibility = explorer < 1 ? Visibility.Collapsed : Visibility.Visible;
+        EditorChatPanel.MaxWidth = chat;
+    }
+
+    public const double EditorMinWidth = 320, ExplorerMinWidth = 160, ChatMinWidth = 280, ChatFloorWidth = 220;
+
+    /// <summary>How wide the file tree and the chat may be in a page <paramref name="total"/> wide, given the widths
+    /// the user picked. The chat is the main surface, so the tree gives way first: it shrinks to its minimum, then the
+    /// chat shrinks to its own, then the tree folds away, and last the chat shrinks to a floor and the editor takes
+    /// what is left. Infinity = no limit.</summary>
+    public static (double Explorer, double Chat) SidePanelWidths(double total, double explorer, double chat)
+    {
+        double spare = total - EditorMinWidth;
+        if (explorer + chat <= spare) return (double.PositiveInfinity, double.PositiveInfinity);
+        double e = Math.Max(Math.Min(explorer, ExplorerMinWidth), spare - chat);
+        if (e + chat <= spare) return (e, double.PositiveInfinity);
+        double c = Math.Max(Math.Min(chat, ChatMinWidth), spare - e);
+        if (e + c <= spare) return (e, c);
+        return (0, Math.Max(Math.Min(chat, ChatFloorWidth), spare));
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)

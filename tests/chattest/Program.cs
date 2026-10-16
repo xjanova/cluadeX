@@ -1203,6 +1203,13 @@ internal static partial class Program
             $"agentic={Vm.AgenticMode} project={Vm.HasProject} msgs=" + string.Join(" | ", Vm.Messages.Select(m => $"{m.Role}:{m.Content.Replace('\n', '⏎')}")));
         var blue = q == null || Container(q) == null ? null : Find<Button>(Container(q)).FirstOrDefault(b => b.Content as string == "blue");
         Check("Q1 …as buttons on screen", blue is { IsVisible: true });
+        await Task.Delay(700); await Render();   // the card's glide-in
+        var girl = q == null || Container(q) == null ? null : Find<System.Windows.Controls.Image>(Container(q)).FirstOrDefault(i => i.Source != null && i.IsVisible);
+        Check("Q1b a girl (one of Assets\\Girls) stands beside the open question", q?.QuestionGirl != null && girl != null,
+            $"girl={q?.QuestionGirl} names={string.Join(",", CluadeX.Services.GirlArt.Names)}");
+        Check("Q1c the chat's row in the history says it waits for the owner", Vm.CurrentSession?.RunStatus == "waiting",
+            $"status={Vm.CurrentSession?.RunStatus} step={Vm.CurrentSession?.RunStep}");
+        SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-question-girl.png"));
         if (blue != null) Click(blue);
         bool done = await WaitIdle(20000);
         bool toldAgent = Fake.Calls.Any(c => c.Input.Contains("User answered: blue") || c.History.Any(h => h.Content.Contains("User answered: blue")));
