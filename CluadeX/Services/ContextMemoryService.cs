@@ -147,7 +147,8 @@ public class ContextMemoryService
                 return id.StartsWith("gemini-1.5-pro") ? 2_097_152 : 1_048_576;
 
             case AiProviderType.ClaudeDev:
-                return 200_000;   // the Claude Code CLI's standard window
+            case AiProviderType.BrainX:
+                return 200_000;   // the Claude Code CLI's standard window (the room's agents are of that class)
 
             default:
                 return 128_000;

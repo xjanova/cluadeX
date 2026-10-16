@@ -1928,9 +1928,10 @@ public partial class CodeAgentService
         // Sending it through either loop below would put a second planner on top of
         // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
         // over one task. One call, its answer is the turn.
-        if (_providerManager.ActiveProviderType == AiProviderType.ClaudeDev)
+        // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX)
         {
-            _debugLog?.Info("Agent", "claude-dev passthrough · delegating turn to the Claude Code CLI");
+            _debugLog?.Info("Agent", $"{_providerManager.ActiveProviderType} passthrough · delegating the turn");
             var cdResult = new AgentLoopResult { TurnCount = 1 };
             var cdText = new StringBuilder();
             await foreach (var chunk in _providerManager.ActiveProvider.ChatAsync(history, userMessage ?? "", null, ct))

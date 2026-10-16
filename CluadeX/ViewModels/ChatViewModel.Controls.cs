@@ -44,6 +44,8 @@ public partial class ChatViewModel
         }
     }
 
+    private const string BrainXRoomModel = "cowork-room";
+
     private static IEnumerable<string> KnownModelsOf(AiProviderType type) => type switch
     {
         AiProviderType.Anthropic => AnthropicProvider.KnownModels,
@@ -57,6 +59,7 @@ public partial class ChatViewModel
         AiProviderType.Anthropic => AnthropicProvider.DefaultModel,
         AiProviderType.OpenAI => OpenAiProvider.DefaultModel,
         AiProviderType.Gemini => GeminiProvider.DefaultModel,
+        AiProviderType.BrainX => BrainXRoomModel,
         _ => "",
     };
 
@@ -75,6 +78,9 @@ public partial class ChatViewModel
             string label = _providerManager.GetProvider(type).DisplayName;
             list.AddRange(models.Select(m => new ChatModelChoice(type, m, label, PriceLabelOf(m))));
         }
+        // The BrainX cowork room: offered whenever the brain is connected — the agents in the room answer.
+        if (BrainSyncService.Current?.IsBrainAvailable == true)
+            list.Add(new ChatModelChoice(AiProviderType.BrainX, BrainXRoomModel, "BrainX", Loc("chat.model.brainxRoom")));
 
         _syncingModelChoice = true;
         try
@@ -108,8 +114,8 @@ public partial class ChatViewModel
             {
                 // A run holds its provider for the whole loop; the model of the same provider can change mid-run.
                 if (_runs.Count > 0) { StatusText = Loc("chat.model.providerBusy"); return; }
-                // Cloud providers are the paid tier — the same gate as Settings ▸ AI Provider.
-                if (_activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
+                // Cloud providers are the paid tier — the same gate as Settings ▸ AI Provider. (The BrainX room is not.)
+                if (c.Provider != AiProviderType.BrainX && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
             }
             string key = c.Provider.ToString();
             _settingsService.UpdateSettings(s =>

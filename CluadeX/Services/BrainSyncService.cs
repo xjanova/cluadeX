@@ -233,6 +233,25 @@ public class BrainSyncService
     /// brain MCP server isn't running — returns an explanatory string, never throws. The returned
     /// text is the brain's raw JSON result (title + preview + tags per hit), suitable as model context.
     /// </summary>
+    /// <summary>Call any tool on the brain server (the cowork room, the agent bus). Ok=false with the reason when the
+    /// brain is not connected or the tool reported an error.</summary>
+    public async Task<(bool Ok, string Text)> CallToolAsync(string tool, Dictionary<string, object> args, CancellationToken ct = default)
+    {
+        var server = FindBrainServer();
+        if (server == null) return (false, "BrainX is not connected");
+        try
+        {
+            var result = await _mcp.CallToolWithObjectArgsAsync(server, tool, args, ct);
+            return (!result.IsError, ExtractText(result));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log.Warn("BrainSync", $"{tool} threw: {ex.Message}");
+            return (false, ex.Message);
+        }
+    }
+
     public async Task<string> SearchAsync(string query, int limit = 5, bool semantic = false, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query)) return "(empty query)";
