@@ -176,7 +176,7 @@
                       AutomationProperties.Name="{services:Loc settings.theme}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <UniformGrid Columns="3" Margin="0,0,-12,0"/>
+                    <UniformGrid Columns="2" Margin="0,0,-12,0"/>
                 </ItemsPanelTemplate>
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
