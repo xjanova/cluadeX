@@ -1323,7 +1323,17 @@ public partial class ChatViewModel : ViewModelBase
     private void FollowChatProject(ChatSession? session)
     {
         string? path = session?.ProjectPath;
-        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
+        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+        {
+            // A chat with no project (or whose folder is gone) shows no files — never the previous chat's
+            // (owner 2026-10-16). The panel says so and offers Open folder.
+            if (session != null && HasProject)
+            {
+                ApplyWorkingDirectory("", announce: false, showEditor: false);
+                StatusText = string.IsNullOrWhiteSpace(path) ? Loc("chat.status.noProjectChat") : LocF("chat.status.projectMissing", path);
+            }
+            return;
+        }
         if (HasProject && PathEquals(WorkingDirectory, path)) return;
         ApplyWorkingDirectory(path, announce: false, showEditor: false);
         StatusText = LocF("chat.status.projectFollowed", Path.GetFileName(path.TrimEnd('\\', '/')));
@@ -1612,7 +1622,20 @@ public partial class ChatViewModel : ViewModelBase
             SetWorkingDirectory(folder);
     }
 
-    public void SetWorkingDirectory(string path) => ApplyWorkingDirectory(path, announce: true, showEditor: true);
+    public void SetWorkingDirectory(string path)
+    {
+        ApplyWorkingDirectory(path, announce: true, showEditor: true);
+        // The chat on screen now belongs to this folder: coming back to it later shows these files, not whatever was
+        // open last (owner 2026-10-16: "อยู่แชทไหน ไฟล์โปรเจคต้องตรงกันทันที"). It used to be set only when a chat was made.
+        // A chat that already has its own (existing) project keeps it — only an unbound chat is tied here.
+        if (CurrentSession is { } chat && !string.IsNullOrWhiteSpace(path)
+            && (string.IsNullOrWhiteSpace(chat.ProjectPath) || !Directory.Exists(chat.ProjectPath)))
+        {
+            chat.ProjectPath = path;
+            if (Messages.Count > 0) { _isDirty = true; AutoSave(); }
+            RebuildVisibleSessions();
+        }
+    }
 
     /// <summary>
     /// Switch the open project. <paramref name="announce"/> posts the "📁 Opened project" line in the open chat;

@@ -91,6 +91,9 @@ public partial class App : Application
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
+        // The Watch page for the phone comes back on if it was on when the app closed.
+        try { var watchWeb = _serviceProvider.GetRequiredService<WatchWebServer>(); if (watchWeb.Settings.Enabled) watchWeb.Start(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("watch web: " + ex.Message); }
 
         // Panel widths the user dragged (sidebar, explorer, chat pane, side panel) come back after a restart.
         var panelSettings = _serviceProvider.GetRequiredService<SettingsService>();
@@ -858,6 +861,7 @@ public partial class App : Application
         services.AddSingleton<SessionMemoryService>();
         services.AddSingleton<CheckpointService>();
         services.AddSingleton<WatchService>();
+        services.AddSingleton<WatchWebServer>();
         services.AddSingleton<RepoMapService>();
         services.AddSingleton<EmbeddingService>();
         services.AddSingleton<AutonomousCodingService>();

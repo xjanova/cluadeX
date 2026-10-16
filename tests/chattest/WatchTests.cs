@@ -77,6 +77,34 @@ internal static partial class Program
                 $"folder={Vm.WorkingDirectory} calls {sentBefore}→{Fake.Calls.Count}");
             Vm.UserInput = "";
 
+            // The phone page: only with the key; read-only; the apps as JSON.
+            var web = new WatchWebServer(svc, Settings, null, Path.Combine(root, "watch-web.json"));
+            string key = web.Settings.Key;
+            Check("WA12 the page and the data need the key: none or a wrong one → 403 with nothing about the projects",
+                web.Handle("GET / HTTP/1.1").Status.StartsWith("403") && web.Handle("GET /api?k=nope HTTP/1.1").Status.StartsWith("403")
+                && !web.Handle("GET /api?k=nope HTTP/1.1").Body.Contains("BadApp") && web.Handle($"POST /api?k={key} HTTP/1.1").Status.StartsWith("405"));
+            var page = web.Handle($"GET /?k={key} HTTP/1.1");
+            var api = web.Handle($"GET /api?k={key} HTTP/1.1");
+            Check("WA13 with the key: the page (no CDN, values put in as text) and the apps as JSON with the failing evidence",
+                page.Status.StartsWith("200") && page.Body.Contains("textContent") && !page.Body.Contains("innerHTML") && !page.Body.Contains("https://")
+                && api.Status.StartsWith("200") && api.Body.Contains("BadApp") && api.Body.Contains("\"problem\":true") && api.Body.Contains("boom"), api.Body.Length.ToString());
+            string oldKey = key; web.NewKey(save: false);
+            Check("WA14 a new key retires the old address", web.Handle($"GET /api?k={oldKey} HTTP/1.1").Status.StartsWith("403"));
+            web.Settings.Port = 18787;
+            bool started = web.Start();
+            try
+            {
+                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                var res = started ? await http.GetAsync($"http://127.0.0.1:{web.Port}/api?k={web.Settings.Key}") : null;
+                string body = res == null ? "" : await res.Content.ReadAsStringAsync();
+                Check("WA15 over real HTTP: the server answers the phone's request with the data and no-referrer",
+                    started && res!.IsSuccessStatusCode && body.Contains("BadApp") && res.Headers.TryGetValues("Referrer-Policy", out var rp) && rp.Contains("no-referrer"),
+                    $"started={started} {web.LastError}");
+                var qr = WatchViewModel.MakeQr($"http://192.168.1.2:{web.Port}/?k={web.Settings.Key}");
+                Check("WA16 the address becomes a QR code image", qr.Width > 100, qr.Width.ToString());
+            }
+            finally { web.Stop(remember: false); }
+
             win = new Window { Width = 1280, Height = 820, Content = new WatchView { DataContext = vm }, ShowActivated = false, Left = -12000, Top = 0 };
             win.Show();
             foreach (var lang in new[] { "th", "en" })

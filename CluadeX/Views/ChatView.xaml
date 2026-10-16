@@ -2212,8 +2212,11 @@
                             </HierarchicalDataTemplate>
                         </TreeView.ItemTemplate>
                     </TreeView>
-                    <TextBlock Grid.Row="1" Text="{services:Loc chat.header.noProject}" FontSize="12" Foreground="{DynamicResource Text.Muted}"
-                               Margin="14,4" Visibility="{Binding HasProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                    <StackPanel Grid.Row="1" Margin="14,4" Visibility="{Binding HasProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                        <TextBlock Text="{services:Loc chat.side.noProjectChat}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text.Muted}"/>
+                        <Button Content="{services:Loc chat.side.openFolder}" Command="{Binding OpenFolderCommand}" HorizontalAlignment="Left"
+                                Style="{StaticResource SecondaryButton}" Padding="10,4" Margin="0,8,0,0"/>
+                    </StackPanel>
                 </Grid>
 
                 <!-- The last image the agent looked at (a game screenshot, a page it opened) -->
