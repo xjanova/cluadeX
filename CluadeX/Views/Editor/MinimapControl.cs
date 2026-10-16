@@ -242,7 +242,10 @@ public class MinimapControl : FrameworkElement
         {
             double y = (from - 1) * yPerLine;
             double h = Math.Max(2, (to - from + 1) * yPerLine);
-            dc.DrawRectangle(changeBrush, null, new Rect(0, y, railW, Math.Min(h, ActualHeight - y)));
+            // A range past the bottom (the file shrank since the edit) has no height left: a negative Rect threw
+            // on every render (crash-logs 2026-10-14, 27 in a minute).
+            double drawH = Math.Min(h, ActualHeight - y);
+            if (drawH > 0) dc.DrawRectangle(changeBrush, null, new Rect(0, y, railW, drawH));
         }
 
         // Caret line

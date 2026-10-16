@@ -1334,6 +1334,9 @@ public partial class CodeAgentService
             sb.AppendLine($"- LIVE STATUS, measured by the app this turn: {_brainSync.LiveStatusLine}");
             sb.AppendLine("  That line is ground truth. NEVER claim you cannot reach the brain while it");
             sb.AppendLine("  says CONNECTED — if asked about the connection, quote it and stop.");
+            sb.AppendLine("- The brain is where you LOOK THINGS UP first — where a project lives, how something was");
+            sb.AppendLine("  done before, a server, a past decision, a bug's fix. Search it before local memory,");
+            sb.AppendLine("  files or guessing; local memory is a supplement, not the source.");
             sb.AppendLine("- Search FIRST, answer SECOND. Before a non-trivial answer or any file edit, call");
             sb.AppendLine("  `brain_search` with 2-4 keywords. If it returns nothing, retry once with");
             sb.AppendLine("  `brain_semantic_search` (it handles Thai and paraphrases).");
@@ -1978,7 +1981,9 @@ public partial class CodeAgentService
         // Skip the brain round-trip for very short / conversational asks ("hi", "โมเดลอะไร", "thanks").
         // Auto-recall targets non-trivial coding tasks; on a quick question the extra latency is exactly
         // what makes the app feel sluggish — which is the whole complaint we're fixing here.
-        if (userMessage.Trim().Length < 25) return userMessage;
+        // A short message that names something ("open atmos", "หา key ของ xman") still goes to the brain first.
+        if (userMessage.Trim().Length < 25
+            && !System.Text.RegularExpressions.Regex.IsMatch(userMessage, @"[A-Za-z][A-Za-z0-9_.-]{3,}")) return userMessage;
 
         try
         {

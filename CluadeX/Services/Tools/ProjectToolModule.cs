@@ -27,6 +27,9 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// page subscribes: it opens the folder in the app when that chat is on screen and stores it on the chat.</summary>
     public static event Action<AgentRunScope?, string>? ProjectOpened;
 
+    /// <summary>Raised after a run opened a related folder beside its project (add=true).</summary>
+    public static event Action<AgentRunScope?, string>? RelatedFolderAdded;
+
     public const string ToolName = "open_project";
 
     public string Id => "project";
@@ -53,6 +56,12 @@ public sealed class ProjectToolModule : IAgentToolModule
                     ["type"] = "string",
                     ["description"] = "Absolute path of the project folder, e.g. D:\\Code\\Atmos",
                 },
+                ["add"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "\"true\" = open it BESIDE the current project (a related repo: a shared library, the API a "
+                        + "client calls) instead of switching to it. Reach its files by absolute path.",
+                },
             },
             ["required"] = new[] { "path" },
         };
@@ -61,7 +70,8 @@ public sealed class ProjectToolModule : IAgentToolModule
             Name = ToolName,
             Description = "Open a project folder so the file, search, shell and build tools work in it (from your next step on). "
                 + "Use it when the user names a project and no folder — or the wrong one — is open: find the path (brain_search "
-                + "notes record where each project lives), then call this. Do not ask the user to open it and do not hand the task off.",
+                + "notes record where each project lives), then call this. Do not ask the user to open it and do not hand the task off. "
+                + "When the task also spans a related project, open that one with add=\"true\" so both stay open.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(schema)).RootElement.Clone(),
         };
     }
@@ -99,6 +109,25 @@ public sealed class ProjectToolModule : IAgentToolModule
                 + "Ask the user to open it with the Open Folder button if they really mean it."));
 
         string? before = context.WorkingDirectory;
+        bool add = call.GetArg("add").Trim().Equals("true", StringComparison.OrdinalIgnoreCase)
+                   && !string.IsNullOrWhiteSpace(before);
+        if (add)
+        {
+            bool added = AgentRunScope.Current?.AddExtraFolder(full) ?? false;
+            _registry?.Record(full);
+            try { RelatedFolderAdded?.Invoke(AgentRunScope.Current, full); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[open_project] RelatedFolderAdded handler failed: {ex.Message}"); }
+            var all = new List<string> { before! };
+            if (AgentRunScope.Current is { } sc) all.AddRange(sc.ExtraFolders);
+            string addText = (added ? $"Opened {full} beside the project." : $"{full} was already open.")
+                + $" {all.Count} folders are open: " + string.Join(", ", all)
+                + $". Relative paths stay in {before}; reach {full} by absolute path. Top level:\n" + Listing(full);
+            return Task.FromResult(new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true, Output = addText,
+                Summary = $"📁+ {full}", FilePath = full,
+            });
+        }
         if (AgentRunScope.Current is { } scope)
         {
             scope.WorkingDirectory = full;

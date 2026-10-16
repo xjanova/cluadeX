@@ -1917,7 +1917,11 @@ public class AgentToolService : IDisposable
     private bool IsAcceptedEdit(ToolCall call, string resource) =>
         call.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.CreateDirectory
         && _fileSystem.HasWorkingDirectory
-        && _permissionService.AcceptEditsCovers(_fileSystem.WorkingDirectory, resource);
+        && (_permissionService.AcceptEditsCovers(_fileSystem.WorkingDirectory, resource)
+            // A related folder opened beside the project: edits there go as free as in the project itself.
+            || Path.IsPathRooted(resource) && AgentRunScope.Current is { } s
+               && AgentRunScope.ContainingFolder(Path.GetFullPath(resource), s.ExtraFolders) is { } extra
+               && _permissionService.AcceptEditsCoversRelated(_fileSystem.WorkingDirectory, extra, resource));
 
     /// <summary>
     /// What a non-URL call's rule is matched against: the argument its executor ACTUALLY acts on, else the
@@ -2011,8 +2015,9 @@ public class AgentToolService : IDisposable
         try
         {
             string full = Path.GetFullPath(Path.IsPathRooted(resource) ? resource : Path.Combine(root, resource));
-            string rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            return (full + Path.DirectorySeparatorChar).StartsWith(rootFull, StringComparison.OrdinalIgnoreCase);
+            var folders = new List<string?> { root };
+            if (AgentRunScope.Current is { } s) folders.AddRange(s.ExtraFolders);
+            return AgentRunScope.ContainingFolder(full, folders) != null;
         }
         catch { return false; }
     }

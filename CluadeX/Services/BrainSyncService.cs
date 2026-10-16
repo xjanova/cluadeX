@@ -27,7 +27,11 @@ public class BrainSyncService
     {
         _mcp = mcp;
         _log = log;
+        Current = this;
     }
+
+    /// <summary>The app's brain bridge (null before DI built it, or in a harness without one).</summary>
+    public static BrainSyncService? Current { get; private set; }
 
     /// <summary>True if at least one configured MCP server is running AND looks like an ObsidianX brain.</summary>
     public bool IsBrainAvailable => FindBrainServer() != null;

@@ -1777,6 +1777,12 @@
                                         </ContextMenu>
                                     </Button.ContextMenu>
                                 </Button>
+                                <!-- Folders open for this chat (project + related ones) -->
+                                <Border Margin="0,2,8,2" Padding="8,3" CornerRadius="10" VerticalAlignment="Center"
+                                        Background="{DynamicResource Surface.Raised}" ToolTip="{Binding OpenFoldersTip}"
+                                        Visibility="{Binding HasExtraFolders, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{Binding OpenFoldersText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"/>
+                                </Border>
                                 <!-- Model (an API provider with a key): shows its price; a model on this PC is named over it -->
                                 <Grid Margin="0,2,8,2" VerticalAlignment="Center"
                                       Visibility="{Binding HasChatModelChoices, Converter={StaticResource BoolVis}}">

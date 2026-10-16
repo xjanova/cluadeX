@@ -37,6 +37,36 @@ public sealed class AgentRunScope
     /// <summary>Whoever started the run (the chat page's run record), for routing its events back.</summary>
     public object? Owner { get; }
 
+    private readonly List<string> _extraFolders = new();
+    /// <summary>Related project folders opened beside <see cref="WorkingDirectory"/> (open_project add=true, or the
+    /// chat naming another project). Tools reach them by absolute path; relative paths stay in the main folder.</summary>
+    public IReadOnlyList<string> ExtraFolders { get { lock (_extraFolders) return _extraFolders.ToList(); } }
+
+    /// <summary>Add a related folder (ignored when it is the main folder or already open). True = newly added.</summary>
+    public bool AddExtraFolder(string path)
+    {
+        lock (_extraFolders)
+        {
+            if (string.Equals(path, WorkingDirectory, StringComparison.OrdinalIgnoreCase)) return false;
+            if (_extraFolders.Any(f => string.Equals(f, path, StringComparison.OrdinalIgnoreCase))) return false;
+            _extraFolders.Add(path);
+            return true;
+        }
+    }
+
+    /// <summary>The folder (main or related) that contains <paramref name="fullPath"/>, or null.</summary>
+    public static string? ContainingFolder(string fullPath, IEnumerable<string?> folders)
+    {
+        foreach (var f in folders)
+        {
+            if (string.IsNullOrWhiteSpace(f)) continue;
+            string root = System.IO.Path.GetFullPath(f).TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+            string cmp = fullPath.TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+            if (cmp.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return f;
+        }
+        return null;
+    }
+
     public List<string>? ActiveSkillAllowedTools { get; set; }
 
     /// <summary>Where the run's shell is after a `cd` (null = the project root).</summary>

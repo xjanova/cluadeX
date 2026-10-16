@@ -994,6 +994,8 @@ public class LocalizationService
         ["chat.ask.send"] = new() { ["en"] = "Answer", ["th"] = "ส่งคำตอบ" },
         ["chat.ask.placeholder"] = new() { ["en"] = "Type your answer and press Enter", ["th"] = "พิมพ์คำตอบแล้วกด Enter" },
         ["chat.ask.cancelled"] = new() { ["en"] = "(not answered — the run was stopped)", ["th"] = "(ไม่ได้ตอบ — งานถูกหยุด)" },
+        ["chat.folders.count"] = new() { ["en"] = "{0} folders", ["th"] = "{0} โฟลเดอร์" },
+        ["chat.folders.opened"] = new() { ["en"] = "Opened for this chat — {0} folders:", ["th"] = "เปิดให้แชทนี้แล้ว — {0} โฟลเดอร์:" },
         ["chat.runs.elsewhereOne"] = new() { ["en"] = "⏳ working in “{0}”", ["th"] = "⏳ กำลังทำงานในแชท “{0}”" },
         ["chat.runs.elsewhereMany"] = new() { ["en"] = "⏳ {0} chats working (“{1}” …)", ["th"] = "⏳ กำลังทำงานอยู่ {0} แชท (“{1}” …)" },
         ["chat.runs.waitingForYou"] = new() { ["en"] = "waiting for your answer", ["th"] = "รอคำตอบจากคุณ" },
