@@ -190,7 +190,7 @@ public partial class ChatViewModel : ViewModelBase
     public ChatSession? CurrentSession
     {
         get => _currentSession;
-        set { if (SetProperty(ref _currentSession, value)) RaiseRunStateChanged(); }
+        set { if (SetProperty(ref _currentSession, value)) { RaiseRunStateChanged(); RefreshStickyPlan(); } }
     }
     public string WorkingDirectory
     {

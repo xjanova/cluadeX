@@ -997,7 +997,7 @@ internal static class ImageWire
             try { planRun = await Turn(new List<ChatMessage>(), "Fix the screenshot layout bug in the game and add a test for it."); }
             finally { fs.WorkingDirectory = ""; agent.InvalidateSystemPromptCache(); }
             var pb = anth.Bodies().Skip(start).ToList();
-            const string planNote = "this task has no plan yet — call todo_write";
+            const string planNote = "this task has no plan yet — in your next step call todo_write ONCE";
             Check("loop", "plan-first: a work task with no plan by step 3 is told once to write one (in the 4th request, not before, not again)",
                 planRun.Success && pb.Count >= 5 && !Plain(pb[2]).Contains(planNote) && Plain(pb[3]).Contains(planNote)
                 && Plain(pb[4]).Split(planNote).Length == 2,

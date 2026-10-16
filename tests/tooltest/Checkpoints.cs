@@ -69,6 +69,20 @@ internal static partial class Program
                     && File.ReadAllText(Path.Combine(proj, "b.txt")) == "new file\n");
             }
 
+            // todo_write takes the whole plan in one call (it replaces the list); bad JSON is refused, the plan kept.
+            var tscope = new AgentRunScope("chat-todo", proj);
+            AgentRunScope.Enter(tscope);
+            var tw = await T("todo_write", ("todos", "[{\"content\":\"Read\",\"status\":\"completed\"},{\"content\":\"Fix\",\"status\":\"in_progress\"},{\"content\":\"Test\"}]"));
+            Check("TW1", "todo_write todos=[…] sets the whole plan in one call", tw.Success && tscope.Todos.Count == 3
+                && tscope.Todos[0].Status == "completed" && tscope.Todos[1].Status == "in_progress" && tscope.Todos[2].Status == "pending", Seen(tw));
+            var tw2 = await T("todo_write", ("todos", "[{\"content\":\"Read\",\"status\":\"completed\"},{\"content\":\"Fix\",\"status\":\"completed\"}]"));
+            Check("TW2", "sending it again replaces the list (no duplicates)", tw2.Success && tscope.Todos.Count == 2 && tscope.Todos.All(t => t.Status == "completed"), Seen(tw2));
+            var tw3 = await T("todo_write", ("todos", "[{oops"));
+            Check("TW3", "bad JSON is refused and the plan is kept", !tw3.Success && tscope.Todos.Count == 2, Seen(tw3));
+            var tw4 = await T("todo_write", ("action", "add"), ("content", "One more"));
+            Check("TW4", "the one-item form still works", tw4.Success && tscope.Todos.Count == 3, Seen(tw4));
+            AgentRunScope.Enter(null);
+
             // Outside a run nothing is captured (a typed command, the editor's Save).
             int before = cp.Points(proj).Count;
             await T("edit_file", ("path", "a.txt"), ("find", "four"), ("replace", "five"));

@@ -2103,6 +2103,33 @@ internal static class Program
                 branchDir != null && branchDir != proj && File.Exists(Path.Combine(branchDir, "main.txt"))
                 && File.ReadAllText(Path.Combine(branchDir, "main.txt")) == "v1\n", $"{branchDir} | {pvm.Message}");
             Check("U12 …and leaves the original project alone", File.ReadAllText(f) == "v2\n");
+
+            // U13 — the plan bar pinned over the chat: progress + the item in progress; a branch shows a chip back to
+            // where it came from, and the parent a chip to its branch; a chip opens that chat.
+            var branchChat = Vm.CurrentSession!;
+            plans[branchChat.Id] = new List<TodoItem> { new() { Content = "Re-check the parser", Status = "completed" }, new() { Content = "Port the fix", Status = "in_progress" }, new() { Content = "Run tests", Status = "pending" } };
+            Vm.RefreshStickyPlan();
+            await Render();
+            var bar = Find<Border>(Win).FirstOrDefault(b => b.Name == "StickyPlanBar");
+            Check("U13 the plan bar shows over the chat with 1/3 and the item in progress",
+                bar is { IsVisible: true } && Vm.StickyPlanHeader.EndsWith("1/3") && Vm.StickyPlanNow == "Port the fix" && Math.Abs(Vm.StickyPlanProgress - 1.0 / 3) < 0.01,
+                $"{Vm.StickyPlanHeader} · {Vm.StickyPlanNow} · visible={bar?.IsVisible}");
+            Check("U13 the branch has a chip back to the chat it came from", Vm.StickyBranches.Count == 1 && Vm.StickyBranches[0].IsParent && Vm.StickyBranches[0].SessionId == session.Id,
+                string.Join(" | ", Vm.StickyBranches.Select(b => b.Label + " " + b.Title)));
+            Vm.IsStickyPlanExpanded = true;
+            LocSvc.SetLanguage("th");
+            await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-sticky-plan-th.png"));
+            LocSvc.SetLanguage("en");
+            Vm.IsStickyPlanExpanded = false;
+            Vm.GoToChatCommand.Execute(session.Id);
+            await WaitUntil(() => Vm.CurrentSession?.Id == session.Id);
+            await Render();
+            Check("U13 its chip opens the parent chat, which shows a chip to the branch (step 1)",
+                Vm.CurrentSession?.Id == session.Id && Vm.StickyBranches.Any(b => !b.IsParent && b.SessionId == branchChat.Id && b.Label.Contains("1")),
+                string.Join(" | ", Vm.StickyBranches.Select(b => b.Label + " " + b.Title)));
+            await FreshChat();
+            Check("U13 a new chat with no plan and no branches shows no bar", !Vm.HasStickyBar);
         }
         finally
         {

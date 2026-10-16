@@ -95,10 +95,9 @@
         </Border>
 
         <!-- ═══ CHAT MESSAGES AREA (Virtualized) ═══ -->
-        <Border Grid.Row="1" Background="Transparent">
+        <Grid Grid.Row="1" Background="Transparent">
                 <ListBox x:Name="ChatList" ItemsSource="{Binding Messages}" Margin="0"
                          Background="Transparent" BorderThickness="0"
-                         Padding="0,12"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          VirtualizingStackPanel.IsVirtualizing="True"
@@ -106,6 +105,17 @@
                          VirtualizingStackPanel.ScrollUnit="Pixel"
                          SelectionMode="Single"
                          HorizontalContentAlignment="Stretch">
+                    <!-- Room above the first message for the pinned plan bar, when it shows -->
+                    <ListBox.Style>
+                        <Style TargetType="ListBox">
+                            <Setter Property="Padding" Value="0,12"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasStickyBar}" Value="True">
+                                    <Setter Property="Padding" Value="0,64,0,12"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.Style>
                     <!-- Use slim scrollbar style for the ListBox's internal ScrollViewer -->
                     <ListBox.Template>
                         <ControlTemplate TargetType="ListBox">
@@ -1351,7 +1361,120 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-        </Border>
+
+                <!-- ═══ The plan, pinned to the top while the chat scrolls; branch chips jump between related chats ═══ -->
+                <Border x:Name="StickyPlanBar" VerticalAlignment="Top" Margin="22,8,30,0" Padding="14,9,12,9" CornerRadius="12"
+                        BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                        Background="{DynamicResource Dialog.Background}" Effect="{DynamicResource Shadow.Dialog}"
+                        MaxWidth="900" HorizontalAlignment="Stretch"
+                        Visibility="{Binding HasStickyBar, Converter={StaticResource BoolVis}}">
+                    <StackPanel>
+                        <Grid Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="12.5">
+                                <Run Text="{Binding StickyPlanHeader, Mode=OneWay}" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                                <Run Text="  ·  " Foreground="{DynamicResource Text.Faint}"/>
+                                <Run Text="{Binding StickyPlanNow, Mode=OneWay}" Foreground="{DynamicResource Text.Secondary}"/>
+                            </TextBlock>
+                            <Button Grid.Column="2" Content="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Padding="6,3" Margin="8,0,0,0"
+                                    Style="{StaticResource IconButton}" Command="{Binding OpenPlanWindowCommand}"
+                                    ToolTip="{services:Loc plan.open.tip}"/>
+                            <ToggleButton Grid.Column="3" Margin="4,0,0,0" Padding="6,3" Cursor="Hand" Background="Transparent" BorderThickness="0"
+                                          IsChecked="{Binding IsStickyPlanExpanded}" ToolTip="{services:Loc chat.plan.expandTip}"
+                                          Foreground="{DynamicResource Text.Muted}" FontFamily="Segoe MDL2 Assets" FontSize="11">
+                                <ToggleButton.Style>
+                                    <Style TargetType="ToggleButton">
+                                        <Setter Property="Content" Value="&#xE70D;"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ToggleButton">
+                                                    <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="6">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Style.Triggers>
+                                            <Trigger Property="IsChecked" Value="True"><Setter Property="Content" Value="&#xE70E;"/></Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource State.Fill.Faint}"/></Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ToggleButton.Style>
+                            </ToggleButton>
+                        </Grid>
+                        <!-- progress line -->
+                        <Grid Height="3" Margin="0,7,0,0" Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
+                            <Border CornerRadius="1.5" Background="{DynamicResource State.Fill.Faint}"/>
+                            <ProgressBar Minimum="0" Maximum="1" Value="{Binding StickyPlanProgress, Mode=OneWay}" Height="3"
+                                         BorderThickness="0" Background="Transparent" Foreground="{DynamicResource Status.Success}"/>
+                        </Grid>
+                        <!-- the whole plan, when expanded -->
+                        <ItemsControl ItemsSource="{Binding StickyPlanItems}" Margin="2,8,0,0"
+                                      Visibility="{Binding IsStickyPlanExpanded, Converter={StaticResource BoolVis}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Margin="0,2">
+                                        <TextBlock x:Name="M" Text="&#xE739;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="20"
+                                                   Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="T" Text="{Binding Text}" FontSize="12" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{DynamicResource Text.Secondary}"/>
+                                    </StackPanel>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                            <Setter TargetName="M" Property="Text" Value="&#xE73E;"/>
+                                            <Setter TargetName="M" Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                            <Setter TargetName="T" Property="Foreground" Value="{DynamicResource Text.Muted}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                            <Setter TargetName="M" Property="Text" Value="&#xE768;"/>
+                                            <Setter TargetName="M" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                            <Setter TargetName="T" Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                                            <Setter TargetName="T" Property="FontWeight" Value="SemiBold"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <!-- related chats: where this one branched from, and its branches -->
+                        <ItemsControl ItemsSource="{Binding StickyBranches}" Margin="0,8,0,0"
+                                      Visibility="{Binding HasStickyBranches, Converter={StaticResource BoolVis}}">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Margin="0,0,6,4" Padding="9,3" Cursor="Hand" ToolTip="{services:Loc chat.plan.goTip}"
+                                            Command="{Binding DataContext.GoToChatCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding SessionId}">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="Chip" CornerRadius="10" Padding="{TemplateBinding Padding}" BorderThickness="1"
+                                                        BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource State.Fill.Faint}">
+                                                    <TextBlock FontSize="11.5" MaxWidth="320" TextTrimming="CharacterEllipsis">
+                                                        <Run Text="{Binding Label, Mode=OneWay}" Foreground="{DynamicResource Accent.1}"/>
+                                                        <Run Text=" "/>
+                                                        <Run Text="{Binding Title, Mode=OneWay}" Foreground="{DynamicResource Text.Primary}"/>
+                                                    </TextBlock>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+        </Grid>
 
         <!-- ═══ EMPTY STATE with Suggested Prompts ═══ -->
         <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"

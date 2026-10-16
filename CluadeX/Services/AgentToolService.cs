@@ -1094,7 +1094,9 @@ public class AgentToolService : IDisposable
         // Meta tools
         // 'action' was missing from the schema, so completing/listing/clearing todos was
         // unreachable and "mark done" silently appended a duplicate instead.
-        schemas.Add(new() { Name = "todo_write", Description = "Update the task/todo list", InputSchema = MakeSchema(("action", "string", "add|complete|list|clear (default add)", false), ("content", "string", "Todo item text (required for add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
+        schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist. Prefer `todos`: send the WHOLE list in one call (it replaces the plan), and send it again with new statuses as items finish. One item in_progress at a time.",
+            InputSchema = MakeSchema(("todos", "string", "The whole plan as a JSON array, e.g. [{\"content\":\"Read the client\",\"status\":\"completed\"},{\"content\":\"Fix the timeout\",\"status\":\"in_progress\"},{\"content\":\"Run the tests\",\"status\":\"pending\"}]", false),
+                ("action", "string", "Without todos: add|complete|list|clear (default add)", false), ("content", "string", "Without todos: the item text (add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
@@ -3327,6 +3329,43 @@ public class AgentToolService : IDisposable
 
     private ToolResult ExecuteTodoWrite(ToolCall call)
     {
+        // The whole plan in one call (Claude Code's TodoWrite): five separate "add" calls used to be the only way to
+        // write a five-item plan (Reverse X run, 2026-10-16).
+        string todosJson = call.GetArg("todos");
+        if (!string.IsNullOrWhiteSpace(todosJson))
+        {
+            List<TodoItem> items;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(todosJson);
+                if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                    return Fail(call, "'todos' must be a JSON array of {content, status}");
+                items = new List<TodoItem>();
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    string text = el.ValueKind == System.Text.Json.JsonValueKind.String ? el.GetString() ?? ""
+                        : el.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
+                    if (string.IsNullOrWhiteSpace(text)) continue;
+                    string st = el.ValueKind == System.Text.Json.JsonValueKind.Object && el.TryGetProperty("status", out var sv)
+                        ? (sv.GetString() ?? "pending").ToLowerInvariant() : "pending";
+                    if (st is not ("pending" or "in_progress" or "completed")) st = st is "done" ? "completed" : st is "active" ? "in_progress" : "pending";
+                    items.Add(new TodoItem { Content = text.Trim(), Status = st });
+                }
+            }
+            catch (System.Text.Json.JsonException ex) { return Fail(call, "'todos' is not valid JSON: " + ex.Message); }
+            _todoItems.Clear();
+            _todoItems.AddRange(items);
+            TodoChanged?.Invoke();
+            int doneCount = items.Count(t => t.Status == "completed");
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = $"Plan updated: {items.Count} item(s), {doneCount} done"
+                         + (items.FirstOrDefault(t => t.Status == "in_progress") is { } cur ? $", now: {cur.Content}" : ""),
+                Summary = $"Plan: {doneCount}/{items.Count}",
+            };
+        }
+
         string action = call.GetArg("action", "add");
         string content = call.GetArg("content", call.GetArg("text", call.GetArg("item")));
         string status = call.GetArg("status", "pending");
