@@ -210,6 +210,10 @@ internal static class ChatKeys
         ["chat.model.confirmTight"] = new() { ["en"] = "⚠ The model is larger than the free VRAM. Loading it can freeze Windows or even restart the PC — close other programs that use the GPU first, or pick a smaller model.", ["th"] = "⚠ โมเดลใหญ่กว่า VRAM ที่ว่างอยู่ การโหลดอาจทำให้ Windows ค้างหรือเครื่องรีสตาร์ทได้ — ปิดโปรแกรมอื่นที่ใช้การ์ดจอก่อน หรือเลือกโมเดลที่เล็กกว่า" },
 
         // ─── Misc ───
+        ["chat.status.noProjectChat"] = new() { ["en"] = "This chat has no project — open a folder to tie it to one", ["th"] = "แชทนี้ยังไม่ได้ผูกกับโปรเจค — เปิดโฟลเดอร์เพื่อผูก" },
+        ["chat.status.projectMissing"] = new() { ["en"] = "This chat's folder is gone: {0}", ["th"] = "ไม่พบโฟลเดอร์ของแชทนี้: {0}" },
+        ["chat.side.noProjectChat"] = new() { ["en"] = "This chat is not tied to a project yet. Open a folder and the chat remembers it.", ["th"] = "แชทนี้ยังไม่ได้ผูกกับโปรเจค เปิดโฟลเดอร์แล้วแชทจะจำไว้" },
+        ["chat.side.openFolder"] = new() { ["en"] = "Open folder", ["th"] = "เปิดโฟลเดอร์" },
         ["chat.plan"] = new() { ["en"] = "Plan", ["th"] = "แผนงาน" },
         ["chat.plan.allDone"] = new() { ["en"] = "All done", ["th"] = "เสร็จครบแล้ว" },
         ["chat.plan.branchParent"] = new() { ["en"] = "⤴ Branched from", ["th"] = "⤴ แยกมาจาก" },

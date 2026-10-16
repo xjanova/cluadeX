@@ -265,6 +265,7 @@ internal static partial class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestToolGrouping();             // G: tool rows fold together
         await TestWatchPage();                // W: the Watch page
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
@@ -777,17 +778,27 @@ internal static partial class Program
             string.Equals(Vm.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
 
         var plain = ChatInDb("chat with no project", "hi", "hello");
-        Vm.SetWorkingDirectory(ProjB);
+        await Open(old.Id);
         await Open(plain.Id);
-        Check("F3 a chat that had no project leaves the open folder alone", string.Equals(Vm.WorkingDirectory, ProjB, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+        Check("F3 a chat with no project shows no files — not the previous chat's (A)", !Vm.HasProject && Vm.ProjectTree.Count == 0, Vm.WorkingDirectory);
 
         var gone = new ChatSession { Title = "chat whose folder was deleted", ProjectPath = Path.Combine(PipeRoot, "deleted-folder") };
         gone.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "x" });
         Persist.SaveSession(gone);
-        Vm.Sessions.Insert(0, new ChatSession { Id = gone.Id, Title = gone.Title });
+        Vm.Sessions.Insert(0, new ChatSession { Id = gone.Id, Title = gone.Title, ProjectPath = gone.ProjectPath });
+        await Open(old.Id);
         await Open(gone.Id);
-        Check("F4 a chat whose folder no longer exists opens without touching the open folder",
-            string.Equals(Vm.WorkingDirectory, ProjB, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
+        Check("F4 a chat whose folder no longer exists shows no files either (and says the folder is gone)",
+            !Vm.HasProject && Vm.StatusText.Contains("deleted-folder"), $"{Vm.WorkingDirectory} · {Vm.StatusText}");
+
+        // Opening a folder in a chat ties the chat to it: leave and come back, the same files.
+        await Open(plain.Id);
+        Vm.SetWorkingDirectory(ProjB);
+        await Open(old.Id);
+        await Open(plain.Id);
+        Check("F7 a folder opened in a chat is remembered by that chat: back in it, its files (B) are shown",
+            string.Equals(Vm.WorkingDirectory, ProjB, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Persist.LoadSession(plain.Id)?.ProjectPath, ProjB, StringComparison.OrdinalIgnoreCase), Vm.WorkingDirectory);
 
         // The chat on screen at startup never went through the chat list: sending in it brings its folder back.
         await Open(old.Id);
@@ -2037,7 +2048,9 @@ internal static partial class Program
         last.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "ok" });
         Persist.SaveSession(last);
         string before = Vm.WorkingDirectory;
+        await FreshChat();   // an empty chat on screen: tying it to B saves nothing, so "last" stays the newest chat
         Vm.SetWorkingDirectory(ProjB);
+        Persist.SaveSession(last);   // saved last, so it is the newest chat whatever earlier tests left behind
         // A second chat page built the way the app builds it at startup (same services, same database).
         var vm2 = Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance<ChatViewModel>(Sp);
         await WaitUntil(() => vm2.CurrentSession != null, 15000);

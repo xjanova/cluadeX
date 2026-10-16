@@ -11,6 +11,47 @@ public sealed class WatchViewModel : ViewModelBase
     private readonly ChatViewModel _chat;
     private readonly FileSystemService _fs;
     private readonly LocalizationService _loc;
+    private readonly WatchWebServer? _web;
+
+    // ─── The page for a phone on the same Wi-Fi ───
+    public bool IsSharing
+    {
+        get => _web?.IsRunning == true;
+        set
+        {
+            if (_web == null || value == _web.IsRunning) return;
+            if (value && !_web.Start()) Status = string.Format(_loc.T("watch.web.startFailed"), _web.LastError);
+            if (!value) _web.Stop();
+            RaiseShare();
+        }
+    }
+    public string PhoneUrl => _web?.PhoneUrl ?? "";
+    public bool HasPhoneUrl => PhoneUrl.Length > 0;
+    public System.Windows.Media.ImageSource? PhoneQr => HasPhoneUrl ? MakeQr(PhoneUrl) : null;
+
+    private void RaiseShare()
+    {
+        OnPropertyChanged(nameof(IsSharing)); OnPropertyChanged(nameof(PhoneUrl));
+        OnPropertyChanged(nameof(HasPhoneUrl)); OnPropertyChanged(nameof(PhoneQr));
+    }
+
+    /// <summary>A QR code of <paramref name="text"/> as a WPF image (QRCoder, PNG bytes → frozen bitmap).</summary>
+    public static System.Windows.Media.ImageSource MakeQr(string text)
+    {
+        using var gen = new QRCoder.QRCodeGenerator();
+        using var data = gen.CreateQrCode(text, QRCoder.QRCodeGenerator.ECCLevel.M);
+        byte[] png = new QRCoder.PngByteQRCode(data).GetGraphic(8);
+        var bmp = new System.Windows.Media.Imaging.BitmapImage();
+        bmp.BeginInit();
+        bmp.StreamSource = new System.IO.MemoryStream(png);
+        bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+        bmp.EndInit();
+        bmp.Freeze();
+        return bmp;
+    }
+
+    public ICommand NewKeyCommand { get; }
+    public ICommand CopyPhoneUrlCommand { get; }
 
     public ObservableCollection<WatchedApp> Apps => _watch.Apps;
     public bool HasApps => Apps.Count > 0;
@@ -56,8 +97,21 @@ public sealed class WatchViewModel : ViewModelBase
     public ICommand CancelRemoveCommand { get; }
     public ICommand SaveCommand { get; }
 
-    public WatchViewModel(WatchService watch, ChatViewModel chat, FileSystemService fs, LocalizationService loc)
+    public WatchViewModel(WatchService watch, ChatViewModel chat, FileSystemService fs, LocalizationService loc, WatchWebServer? web = null)
     {
+        _web = web;
+        NewKeyCommand = new RelayCommand(() =>
+        {
+            if (_web == null) return;
+            _web.NewKey();
+            RaiseShare();
+            Status = _loc.T("watch.web.newKeyDone");
+        });
+        CopyPhoneUrlCommand = new RelayCommand(() =>
+        {
+            if (!HasPhoneUrl) return;
+            try { System.Windows.Clipboard.SetText(PhoneUrl); Status = _loc.T("watch.web.copied"); } catch { }
+        });
         _watch = watch;
         _chat = chat;
         _fs = fs;

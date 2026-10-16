@@ -117,6 +117,10 @@
 
             <!-- Watched apps -->
             <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <TextBlock Text="{services:Loc watch.empty}" TextWrapping="Wrap" FontSize="12.5" Foreground="{DynamicResource Text.Muted}"
                            Margin="4,8" Visibility="{Binding HasApps, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Style="{StaticResource SlimScrollViewer}">
@@ -168,6 +172,40 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
+                            <!-- The same page on a phone, on this Wi-Fi -->
+                <Border Grid.Row="1" Margin="0,10,0,0" Padding="14,12" CornerRadius="12" BorderThickness="1"
+                        BorderBrush="{DynamicResource Border.Subtle}" Background="{DynamicResource Surface.Card.Flat}">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc watch.web.title}" FontWeight="SemiBold" FontSize="13" Foreground="{DynamicResource Text.Primary}"/>
+                                <TextBlock Text="{services:Loc watch.web.desc}" FontSize="11.5" TextWrapping="Wrap" Margin="0,2,8,0" Foreground="{DynamicResource Text.Muted}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" IsChecked="{Binding IsSharing}" VerticalAlignment="Center"
+                                      Style="{StaticResource ModernCheckBox}" ToolTip="{services:Loc watch.web.toggleTip}" Content="{services:Loc watch.web.on}" Foreground="{DynamicResource Text.Secondary}"/>
+                        </Grid>
+                        <StackPanel Margin="0,10,0,0" Visibility="{Binding HasPhoneUrl, Converter={StaticResource BoolVis}}">
+                            <Border Background="White" CornerRadius="10" Padding="8" HorizontalAlignment="Center">
+                                <Image Source="{Binding PhoneQr}" Width="168" Height="168" RenderOptions.BitmapScalingMode="NearestNeighbor"/>
+                            </Border>
+                            <TextBox Text="{Binding PhoneUrl, Mode=OneWay}" IsReadOnly="True" Margin="0,8,0,0" FontSize="11"
+                                     FontFamily="{DynamicResource Font.Mono}" Background="Transparent" BorderThickness="0" TextWrapping="Wrap"
+                                     Foreground="{DynamicResource Text.Secondary}" HorizontalContentAlignment="Center"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,6,0,0">
+                                <Button Content="{services:Loc watch.web.copy}" Command="{Binding CopyPhoneUrlCommand}" Style="{StaticResource SecondaryButton}"
+                                        Padding="10,4" Margin="0,0,6,0"/>
+                                <Button Content="{services:Loc watch.web.newKey}" Command="{Binding NewKeyCommand}" Style="{StaticResource SecondaryButton}"
+                                        Padding="10,4" ToolTip="{services:Loc watch.web.newKeyTip}"/>
+                            </StackPanel>
+                            <TextBlock Text="{services:Loc watch.web.firewall}" FontSize="10.5" TextWrapping="Wrap" Margin="0,8,0,0"
+                                       Foreground="{DynamicResource Text.Faint}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </Grid>
 
             <!-- The selected app -->
