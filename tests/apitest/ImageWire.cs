@@ -983,6 +983,28 @@ internal static class ImageWire
             var savedShots = Directory.Exists(store.SessionDirectory(session)) ? Directory.GetFiles(store.SessionDirectory(session), "*.jpg").Length : 0;
             Check("loop", "each screenshot saved once under screens\\<chat>", savedShots == 4, $"{savedShots} files");
 
+            // ── plan-first: a work task still going at step 3 with no plan is told once to write one ──
+            k = 0;
+            anth.Responder = _ => Interlocked.Increment(ref k) switch
+            {
+                <= 4 => (200, "text/event-stream", ToolUseSse("toolu_p" + k, tool, "{\"action\":\"screenshot\"}")),
+                _ => (200, "text/event-stream", ImageWireGolden.EndTurnSse),
+            };
+            start = anth.Count;
+            fs.WorkingDirectory = project;   // a project open: the file tools (todo_write among them) are offered
+            agent.InvalidateSystemPromptCache();
+            AgentLoopResult planRun;
+            try { planRun = await Turn(new List<ChatMessage>(), "Fix the screenshot layout bug in the game and add a test for it."); }
+            finally { fs.WorkingDirectory = ""; agent.InvalidateSystemPromptCache(); }
+            var pb = anth.Bodies().Skip(start).ToList();
+            const string planNote = "this task has no plan yet — call todo_write";
+            Check("loop", "plan-first: a work task with no plan by step 3 is told once to write one (in the 4th request, not before, not again)",
+                planRun.Success && pb.Count >= 5 && !Plain(pb[2]).Contains(planNote) && Plain(pb[3]).Contains(planNote)
+                && Plain(pb[4]).Split(planNote).Length == 2,
+                $"requests={pb.Count} · in each: {string.Join(",", pb.Select(b => Plain(b).Split(planNote).Length - 1))}");
+            Check("loop", "plan-first control: the screenshot question above (not a work task) got no plan reminder",
+                bodies.Count >= 5 && !Plain(bodies[4]).Contains(planNote), "");
+
             // ── overflow: a prompt-too-long with images present drops the images before compacting ──
             k = 0;
             anth.Responder = _ => Interlocked.Increment(ref k) switch
