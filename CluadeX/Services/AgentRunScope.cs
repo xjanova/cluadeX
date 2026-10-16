@@ -105,6 +105,9 @@ public sealed class AgentRunScope
     public string TurnId { get; } = DateTime.UtcNow.ToString("yyyyMMddHHmmss") + "-" + Guid.NewGuid().ToString("N")[..6];
     public int Step { get; set; }
 
+    /// <summary>The loop's result so far (an AgentLoopResult) — read when the run is stopped mid-task.</summary>
+    public object? PartialResult { get; set; }
+
     /// <summary>Pause asked for: the loop finishes the step in hand (its tools complete, their results are kept) and
     /// ends the turn cleanly before the next request — the chat is saved and "continue" picks it up, even after a
     /// restart (to update the app mid-task).</summary>
