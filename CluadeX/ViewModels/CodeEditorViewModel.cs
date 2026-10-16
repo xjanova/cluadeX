@@ -947,6 +947,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         {
             if (string.IsNullOrEmpty(relPath) || !_workspace.HasWorkingDirectory) return;
             string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, relPath));
+            var perf = System.Diagnostics.Stopwatch.StartNew();
+            CluadeX.Helpers.UiStallWatchdog.Note("the editor following an agent edit");
+            long tOpen = 0, tShow = 0;
 
             var existing = Tabs.FirstOrDefault(t => string.Equals(t.FullPath, full, StringComparison.OrdinalIgnoreCase));
 
@@ -962,6 +965,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
             var loaded = await _workspace.OpenFileAsync(full);
             if (loaded == null) return;   // binary / too large — skip live-follow
+            tOpen = perf.ElapsedMilliseconds;
 
             FinishTypingInstantly();      // a newer edit arrived — fast-forward any reveal still running
 
@@ -998,10 +1002,17 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 }
             }
 
+            tShow = perf.ElapsedMilliseconds;
             // A brand-new file (write_file created it) isn't in the explorer yet — refresh the
             // deepest populated ancestor folder so the tree shows it without collapsing the rest.
             if (!TreeContains(full))
                 RefreshAncestorFolder(full);
+            long tTree = perf.ElapsedMilliseconds;
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+            {
+                _log?.Info("Perf", $"agent edit {Path.GetFileName(full)} ({loaded.Content.Length / 1024} KB): open {tOpen} · show {tShow - tOpen} · tree {tTree - tShow} · drawn at {perf.ElapsedMilliseconds} ms");
+                CluadeX.Helpers.UiStallWatchdog.Note("");
+            });
 
             _ = _workspace.EnrichGitStatusAsync(Tree);   // live git badges
             _ = RefreshGitAsync();                        // live source-control panel

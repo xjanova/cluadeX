@@ -37,6 +37,10 @@ public sealed class AgentRunScope
     /// <summary>Whoever started the run (the chat page's run record), for routing its events back.</summary>
     public object? Owner { get; }
 
+    /// <summary>The run was started by another program over the cluadex-mcp pipe (BrainX's cowork room, a script) —
+    /// not typed by the owner. The BrainX model never relays such a run back into the room: that is a loop.</summary>
+    public bool FromPipe { get; set; }
+
     private readonly List<string> _extraFolders = new();
     /// <summary>Related project folders opened beside <see cref="WorkingDirectory"/> (open_project add=true, or the
     /// chat naming another project). Tools reach them by absolute path; relative paths stay in the main folder.</summary>
@@ -96,6 +100,14 @@ public sealed class AgentRunScope
     /// <summary>Effort "auto": the agent loop's pick for its next request (low / medium / high / xhigh), read by the
     /// providers through <see cref="Models.EffortLevels.Effective"/>. Null = none picked (the provider's default).</summary>
     public string? StepEffort { get; set; }
+
+    /// <summary>Pause asked for: the loop finishes the step in hand (its tools complete, their results are kept) and
+    /// ends the turn cleanly before the next request — the chat is saved and "continue" picks it up, even after a
+    /// restart (to update the app mid-task).</summary>
+    public volatile bool PauseRequested;
+
+    /// <summary>The first line of a reply that ended on Pause — the chat shows Resume while it is the last reply.</summary>
+    public const string PausedMarker = "⏸";
 
     private string? _liveEffort;
     /// <summary>The effort this run's requests really go out with now (top-level, or the latest per-message change) —

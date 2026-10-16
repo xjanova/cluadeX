@@ -470,6 +470,9 @@ internal static class Program
             $"{modelView.Count} messages");
         Check("C2 the latest answer is still in the model's view", modelView.Last().Content == "answer 15");
 
+        // The chat list virtualizes (only rows on screen exist): bring the marker into view first.
+        ChatList.ScrollIntoView(markers[0]);
+        await Render();
         var markerContainer = Container(markers[0]);
         await Render();
         Check("C2 the marker renders as a visible divider", markerContainer?.Visibility == Visibility.Visible

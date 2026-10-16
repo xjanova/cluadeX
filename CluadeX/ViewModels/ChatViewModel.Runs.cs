@@ -109,6 +109,7 @@ public partial class ChatViewModel
         OnPropertyChanged(nameof(RunningElsewhereText));
         OnPropertyChanged(nameof(HasRunningElsewhere));
         OnPropertyChanged(nameof(LiveModelEffortText));
+        OnPropertyChanged(nameof(CanResume));
         RaiseOpenFolders();
     }
 

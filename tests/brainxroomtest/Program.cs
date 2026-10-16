@@ -33,6 +33,23 @@ static class Program
         var online = BrainXRoomProvider.RoomOnline("""{"room":[{"agent":"claude","online":true},{"agent":"codex","online":false}]}""");
         Check("P5", "room[] → who is online now", online.SequenceEqual(new[] { "claude" }), string.Join(",", online));
 
+        Console.WriteLine("── offline: loop guards ──");
+        static async Task<string> Ask(BrainXRoomProvider pv, string msg)
+        {
+            var sb = new StringBuilder();
+            await foreach (var c in pv.ChatAsync(new List<ChatMessage>(), msg)) sb.Append(c);
+            return sb.ToString();
+        }
+        var offlineProvider = new BrainXRoomProvider(new FileSystemService());
+        var pipeScope = new AgentRunScope("pipe-test", null) { FromPipe = true };
+        AgentRunScope.Enter(pipeScope);
+        string fromPipe = await Ask(offlineProvider, "@codex ทำงานนี้");
+        AgentRunScope.Enter(null);
+        Check("G1", "a run started over the pipe (the room handing work to cluadex) is never relayed back into the room",
+            fromPipe.Contains("วนลูป") && !fromPipe.Contains("ส่งเข้าห้อง cowork แล้ว"), fromPipe);
+        string relayed = await Ask(offlineProvider, "ทำ X\n---\n" + BrainXRoomProvider.RelayFooter + " (...)");
+        Check("G2", "a request that already carries our relay footer is not relayed again", relayed.Contains("ส่งซ้ำ"), relayed);
+
         if (!args.Contains("--live")) { Console.WriteLine($"\n═══ {pass} pass · {fail} FAIL ═══ (add --live for the room round trip)"); return fail == 0 ? 0 : 1; }
 
         Console.WriteLine("── live: a request through the room ──");

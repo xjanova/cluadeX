@@ -25,6 +25,9 @@ namespace CluadeX.Services.Providers;
 public sealed class BrainXRoomProvider : IAiProvider
 {
     private readonly FileSystemService _fileSystem;
+    private volatile bool _joined;
+    /// <summary>The first line of the footer every relayed request carries (a loop marker as well).</summary>
+    public const string RelayFooter = "Relayed from the owner's CluadeX chat";
     private string _status = "Not connected";
 
     /// <summary>No reply at all within this long = nobody took it (the owner's choice: 2 minutes).</summary>
@@ -91,7 +94,22 @@ public sealed class BrainXRoomProvider : IAiProvider
                 OnError?.Invoke(ex.Message);
                 channel.Writer.TryWrite($"\n\n⚠ BrainX: {ex.Message}");
             }
-            finally { channel.Writer.TryComplete(); }
+            finally
+            {
+                channel.Writer.TryComplete();
+                // 5. Out of the room between turns: a seat left behind would put room traffic ("addressedToYou") into
+                //    every brain tool reply of CluadeX's ordinary runs — the agent would start answering the room.
+                if (_joined && BrainSyncService.Current is { } b)
+                {
+                    try
+                    {
+                        using var leaveCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        await b.CallToolAsync("cowork_leave", new Dictionary<string, object>(), leaveCts.Token);
+                    }
+                    catch { }
+                    _joined = false;
+                }
+            }
         });
         await foreach (var s in channel.Reader.ReadAllAsync(CancellationToken.None)) yield return s;
         await work;
@@ -110,14 +128,35 @@ public sealed class BrainXRoomProvider : IAiProvider
 
     private async Task RunTurnAsync(string userMessage, Action<string> emit, CancellationToken ct)
     {
+        // ─── Loop guards ───
+        // 1. A run another program started over the pipe (the room's broker handing work to cluadex, a script) is
+        //    never relayed back into the room — room → CluadeX → room → … would never end.
+        if (AgentRunScope.Current is { FromPipe: true })
+        {
+            emit("⚠ งานนี้ถูกส่งมาจากภายนอก (ผ่าน pipe ของ CluadeX เช่นห้อง cowork) — โมเดล BrainX จะไม่ส่งต่อกลับเข้าห้องอีก เพราะจะวนลูป "
+                 + "เลือกโมเดลอื่น (เช่น Claude API หรือโมเดลในเครื่อง) ให้ CluadeX ทำงานนี้เอง");
+            return;
+        }
+        // 2. A request that already went through a room relay (our own footer is in it) is not relayed again.
+        if (userMessage.Contains(RelayFooter, StringComparison.Ordinal))
+        {
+            emit("⚠ ข้อความนี้เคยถูกส่งผ่านห้อง cowork มาแล้ว — ไม่ส่งซ้ำเพื่อกันการวนลูป");
+            return;
+        }
+        var (to, text) = ParseTarget(userMessage);
+        // 3. Never address ourselves: "@cluadex" would hand the job to this very seat.
+        if (to != null)
+        {
+            to = string.Join(",", to.Split(',').Where(a => !NotResponders.Contains(a)));
+            if (to.Length == 0) to = null;
+        }
+        if (text.Length == 0) { emit("พิมพ์คำถามหรือคำสั่งที่จะส่งเข้าห้องด้วยครับ"); return; }
         var brain = BrainSyncService.Current;
         if (brain is not { IsBrainAvailable: true })
         {
             emit("⚠ BrainX ยังไม่เชื่อมต่อ — เปิด BrainX แล้วดูที่ชิป 🧠 หรือหน้า MCP Servers ก่อน");
             return;
         }
-        var (to, text) = ParseTarget(userMessage);
-        if (text.Length == 0) { emit("พิมพ์คำถามหรือคำสั่งที่จะส่งเข้าห้องด้วยครับ"); return; }
 
         string topic = "cx-" + Guid.NewGuid().ToString("N")[..6];
         string project = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : "";
@@ -133,7 +172,10 @@ public sealed class BrainXRoomProvider : IAiProvider
             ["work"] = work,
             ["display"] = "CluadeX (owner's chat)",
             ["skills"] = new[] { "relays the owner's chat requests" },
+            // 4. The room must not route work to this seat — it only relays.
+            ["cannot"] = new[] { "take tasks in the room — this seat only relays the owner's CluadeX chat; never assign or address work to cluadex" },
         }, ct);
+        _joined = joinOk;
         if (!joinOk || joinText.Contains("\"roomOpen\":false") || joinText.Contains("\"joined\":false"))
         {
             emit("⚠ เข้าห้อง cowork ไม่ได้ — ห้องอาจปิดอยู่ เปิดห้องจากหน้าต่าง BrainX (Cowork) ก่อน แล้วส่งใหม่\n\n" + Trim(joinText, 300));
@@ -241,7 +283,7 @@ public sealed class BrainXRoomProvider : IAiProvider
         sb.AppendLine(text);
         sb.AppendLine();
         sb.AppendLine("---");
-        sb.AppendLine("Relayed from the owner's CluadeX chat (the owner is waiting there for your answer).");
+        sb.AppendLine(RelayFooter + " (the owner is waiting there for your answer). Do not hand this back to cluadex.");
         if (folders.Count > 0)
             sb.AppendLine("Project folder(s) on this PC — you may edit files there directly: " + string.Join(", ", folders));
         sb.AppendLine($"Reply in this room with to:'cluadex' and topic:'{topic}'. Put code in fenced blocks with the file path "

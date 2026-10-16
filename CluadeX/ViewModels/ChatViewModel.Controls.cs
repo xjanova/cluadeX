@@ -149,7 +149,9 @@ public partial class ChatViewModel
         if (!string.IsNullOrWhiteSpace(model))
         {
             RefreshChatModelChoices();
-            var choice = ChatModelChoices.FirstOrDefault(c => c.Model == model.Trim());
+            // The BrainX room model is the owner's choice only: set from outside (the room's office), every task the room
+            // then hands CluadeX would be relayed straight back into the room.
+            var choice = ChatModelChoices.FirstOrDefault(c => c.Model == model.Trim() && c.Provider != AiProviderType.BrainX);
             if (choice == null) return LocF("chat.model.notOffered", model.Trim());
             if (!Equals(choice, _selectedChatModel))
             {

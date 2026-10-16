@@ -217,7 +217,9 @@ public partial class ChatView : UserControl
     /// <summary>True while the reader is at (or within a few lines of) the bottom — only then does new output
     /// pull the view down.</summary>
     private bool _stickToBottom = true;
-    private const double BottomSlackPx = 48;
+    // 160, not 48: with pixel virtualization a jump to the end lands up to ~120 px short until the rows it realized are
+    // measured — that read as "the reader scrolled up" and new output stopped being followed.
+    private const double BottomSlackPx = 160;
 
     private void HookScrollViewer()
     {
@@ -240,12 +242,22 @@ public partial class ChatView : UserControl
             // Content grew (a message arrived, a reply streamed, a bubble re-measured): keep following.
             sv.ScrollToEnd();
         }
+        else if (e.VerticalChange != 0 && sv.ScrollableHeight - sv.VerticalOffset <= BottomSlackPx)
+        {
+            // The reader came back to the bottom while rows were being re-measured (a jump to the end realizes rows and
+            // changes the extent in the same event) — they are following again.
+            _stickToBottom = true;
+        }
     }
 
     private void ScrollToEnd()
     {
         HookScrollViewer();
         _chatScrollViewer?.ScrollToEnd();
+        // Pixel virtualization: the rows realized by that jump are measured after it and the extent grows — settle on
+        // the real end once layout is idle (it stopped ~100 px short).
+        Dispatcher.InvokeAsync(() => { if (_stickToBottom) _chatScrollViewer?.ScrollToEnd(); },
+            System.Windows.Threading.DispatcherPriority.ContextIdle);
     }
 
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
@@ -406,6 +418,8 @@ public partial class ChatView : UserControl
         ComposerButtons.HorizontalAlignment = narrow ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
         ComposerButtons.Margin = narrow ? new Thickness(0, 4, 0, 0) : new Thickness(0);
         EffortLabel.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        // The "model · effort in use" chip needs room; a narrow composer keeps it in the effort box's tooltip instead.
+        LiveEffortChip.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         BudgetLabel.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         ChatModelBox.MinWidth = narrow ? 150 : 180;
         ApprovalBox.MinWidth = narrow ? 120 : 150;

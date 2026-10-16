@@ -11,6 +11,10 @@ public partial class MainWindow : Window
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
+        // A narrow window: the title bar's extras step aside, widest-first, so nothing important is clipped. The model
+        // picker and the buddy also live below (the composer, the sidebar); the caption buttons have their own column.
+        SizeChanged += (_, _) => ApplyTitleBarRoom();
+        Loaded += (_, _) => ApplyTitleBarRoom();
         _viewModel = viewModel;
         DataContext = viewModel;
         // Activity bar uses RadioButtons bound via SelectedNavItem converter —
@@ -255,5 +259,15 @@ public partial class MainWindow : Window
             RootBorder.Padding = new Thickness(0);
 
         BtnMaximize.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+    }
+
+    private void ApplyTitleBarRoom()
+    {
+        double w = ActualWidth;
+        static System.Windows.Visibility V(bool show) => show ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        if (TitleBuddy != null) TitleBuddy.Visibility = V(w >= 1350);
+        if (TitleModelBox != null) TitleModelBox.Visibility = V(w >= 1180 && DataContext is ViewModels.MainViewModel { ChatVM.HasChatModelChoices: true });
+        if (TitlePalette != null) TitlePalette.Visibility = V(w >= 980);
+        if (TitleProject != null) TitleProject.Visibility = V(w >= 820);
     }
 }

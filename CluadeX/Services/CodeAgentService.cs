@@ -1339,6 +1339,9 @@ public partial class CodeAgentService
             sb.AppendLine("- The brain is where you LOOK THINGS UP first — where a project lives, how something was");
             sb.AppendLine("  done before, a server, a past decision, a bug's fix. Search it before local memory,");
             sb.AppendLine("  files or guessing; local memory is a supplement, not the source.");
+            sb.AppendLine("- Save what you learned: after work that took real effort and taught something (a fix, a gotcha,");
+            sb.AppendLine("  a decision, where something lives), save it before you finish — brain_remember for one line,");
+            sb.AppendLine("  brain_create_note for a full lesson. Never save secrets.");
             sb.AppendLine("- Search FIRST, answer SECOND. Before a non-trivial answer or any file edit, call");
             sb.AppendLine("  `brain_search` with 2-4 keywords. If it returns nothing, retry once with");
             sb.AppendLine("  `brain_semantic_search` (it handles Thai and paraphrases).");
@@ -2014,6 +2017,26 @@ public partial class CodeAgentService
             // keyword search server-side when embeddings are unavailable.
             string lessons = await _brainSync.SearchAsync(query, limit: recallLocal ? 2 : 3, semantic: true, timeoutCts.Token);
 
+            // The semantic search can miss its window on a busy brain (an embedding round trip; Reverse X run 2026-10-16:
+            // timed out, and a 100-step run started with no brain context at all). Keyword search is fast — try it next.
+            if (IsBrainSearchFailure(lessons))
+            {
+                using var kwCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                kwCts.CancelAfter(TimeSpan.FromSeconds(4));
+                string kw = Services.Mcp.McpServerManager.RedactSecrets(string.Join(" ",
+                    (projectName + " " + userMessage).Split(new[] { ' ', '\n', '\t', ',', '.', ':' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Where(w => w.Length >= 3).Take(6)));
+                try { lessons = await _brainSync.SearchAsync(kw, limit: recallLocal ? 2 : 3, semantic: false, kwCts.Token); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested) { lessons = "(brain search error: timeout)"; }
+                // Still nothing from a brain that is up: the model asks it itself, first.
+                if (IsBrainSearchFailure(lessons))
+                {
+                    _debugLog?.Warn("Agent", "brain auto-recall failed twice — telling the model to search the brain first");
+                    return userMessage + "\n\n[The app's automatic BrainX recall did not answer in time. Before you start, "
+                        + "call brain_search with 2-4 keywords for this task (project name first), then do the task.]";
+                }
+            }
+
             // SearchAsync returns "(...)" sentinels for not-connected / error / empty — skip those.
             if (string.IsNullOrWhiteSpace(lessons) || lessons.StartsWith("(", StringComparison.Ordinal))
                 return userMessage;
@@ -2064,6 +2087,51 @@ public partial class CodeAgentService
         {
             return userMessage; // never block a task on the brain
         }
+    }
+
+    /// <summary>A brain search that errored or timed out (not merely "no hits"): SearchAsync's error sentinels.</summary>
+    private static bool IsBrainSearchFailure(string? r) =>
+        r != null && (r.StartsWith("(brain search error", StringComparison.Ordinal) || r.StartsWith("(brain search failed", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Brain-end: after a run that did real work, a short record goes into BrainX on its own — what was asked, in which
+    /// project, which files changed, how it ended — the way the owner's Claude Code sessions save what they learned.
+    /// The model is also told to save lessons itself (system prompt); this makes sure something always lands.
+    /// Best-effort, off the run's critical path, secrets redacted.
+    /// </summary>
+    private void SaveRunToBrain(string userMessage, AgentLoopResult result)
+    {
+        try
+        {
+            if (_brainSync is not { IsBrainAvailable: true } || !_settingsService.Settings.BrainAutoRecallEnabled) return;
+            // The model input may carry the recall block in front of the user's words — record the words only.
+            int fence = userMessage.LastIndexOf("</brainx_recall_", StringComparison.Ordinal);
+            if (fence >= 0 && userMessage.IndexOf('>', fence) is int gt and >= 0) userMessage = userMessage[(gt + 1)..].TrimStart();
+            int toolCalls = result.Steps.Sum(st => st.ToolCalls.Count);
+            if (toolCalls < 3 || !LooksNonTrivialTask(userMessage)) return;
+            var files = result.Steps.SelectMany(st => st.ToolResults)
+                .Where(r => r.Success && !string.IsNullOrEmpty(r.FilePath)
+                            && r.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit)
+                .Select(r => r.FilePath!).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToList();
+            string project = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "(no project)";
+            string ask = userMessage.Trim().Split('\n')[0];
+            if (ask.Length > 200) ask = ask[..200] + "…";
+            string outcome = (result.FinalResponse ?? "").Trim();
+            if (outcome.Length > 700) outcome = outcome[..700] + "…";
+            string text = $"CluadeX run ({DateTime.Now:yyyy-MM-dd HH:mm}) in {project}: {ask}\n"
+                + $"Ended: {result.StopReason}, {result.Steps.Count} steps, {toolCalls} tool calls."
+                + (files.Count > 0 ? "\nFiles changed: " + string.Join(", ", files) : "")
+                + (outcome.Length > 0 ? "\nOutcome: " + outcome : "");
+            text = Services.Mcp.McpServerManager.RedactSecrets(text);
+            _ = Task.Run(async () =>
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                var (ok, msg) = await _brainSync.CallToolAsync("brain_remember", new Dictionary<string, object> { ["text"] = text }, cts.Token);
+                if (ok) _debugLog?.Info("Agent", $"brain-end: run saved to BrainX ({text.Length} chars)");
+                else _debugLog?.Warn("Agent", "brain-end: saving the run to BrainX failed: " + msg);
+            });
+        }
+        catch (Exception ex) { _debugLog?.Warn("Agent", "brain-end: could not build the run record", ex); }
     }
 
     /// <summary>Legacy agentic loop using [ACTION:] text parsing (for non-Anthropic providers).</summary>
@@ -2806,6 +2874,18 @@ public partial class CodeAgentService
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
+
+            // Pause: the step before this one finished (tools ran, results kept) — end here, cleanly, before spending more.
+            if (iteration > 0 && AgentRunScope.Current is { PauseRequested: true })
+            {
+                result.StopReason = "paused";
+                result.Success = true;
+                result.FinalResponse = isThai
+                    ? $"{AgentRunScope.PausedMarker} หยุดชั่วคราวหลังขั้นที่ {iteration} — งานที่ทำไปแล้วอยู่ครบ กด ▶ ทำต่อ (หรือพิมพ์ \"ทำต่อ\") เพื่อทำต่อจากจุดนี้ ปิดโปรแกรมเพื่ออัปเดตก่อนก็ได้"
+                    : $"{AgentRunScope.PausedMarker} Paused after step {iteration} — the work so far is kept. Press ▶ Resume (or type \"continue\") to pick up from here; you can close the app to update first.";
+                _debugLog?.Info("Agent", $"paused by the user after step {iteration}");
+                break;
+            }
 
             // Spend guard: a paid run that has used its budget asks before the next request (each step re-sends the
             // whole conversation; a long run on a strong model is tens of dollars). "Stop" ends here, nothing more sent.
@@ -3980,6 +4060,8 @@ public partial class CodeAgentService
                     ? $"หมดงบ {result.Steps.Count} ขั้นตอนก่อนงานเสร็จ — งานอาจค้างกลางทาง พิมพ์ \"ทำต่อ\" เพื่อให้ทำต่อจากจุดเดิม"
                     : $"Ran out of steps ({result.Steps.Count}) before finishing — the task may be incomplete. Say \"continue\" to pick up where it left off.");
         }
+
+        SaveRunToBrain(userMessage ?? "", result);
 
         // Stop hook — runs after the agentic loop returns, with session telemetry.
         if (_hookService != null)
