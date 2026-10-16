@@ -308,6 +308,10 @@ public class AppSettings
     /// (Services.ThemeIds). Anything else starts Midnight and is rewritten — see ThemeService.ApplySaved.</summary>
     public string Theme { get; set; } = "Midnight";
 
+    /// <summary>Lavender Night's custom background / accent (#RRGGBB; empty = the theme's own). See ThemeTint.</summary>
+    public string LavenderBackground { get; set; } = "";
+    public string LavenderAccent { get; set; } = "";
+
     // Activation Key — unlocks advanced features
     public string? ActivationKey { get; set; }
     /// <summary>Server license_type of <see cref="ActivationKey"/> (demo, yearly, lifetime, …).</summary>

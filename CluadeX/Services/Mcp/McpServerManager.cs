@@ -256,6 +256,13 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     public string? BrainServerName
         => _configs.Keys.FirstOrDefault(LooksLikeBrain);
 
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _serverVersions = new();
+    /// <summary>The version a server reported in its initialize reply (serverInfo.version), or null.</summary>
+    public string? ServerVersion(string name) => _serverVersions.TryGetValue(name, out var v) ? v : null;
+    /// <summary>The connected brain's version ("2.9.497"), or null.</summary>
+    public string? BrainVersion => BrainServerName is { } n ? ServerVersion(n) : null;
+    private string BrainVersionLabel => BrainVersion is { } v ? $"v{v} " : "";
+
     /// <summary>Lifecycle state of the brain server (Stopped when none is configured). Between two respawn
     /// attempts this is Reconnecting, not Failed — see <see cref="GetServerState"/>.</summary>
     public McpServerState BrainState
@@ -294,7 +301,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                 return $"brain · reconnecting {(_reconnectAttempts.TryGetValue(name, out int a) ? a : 1)}/{MaxReconnectAttempts}";
             return GetServerState(name) switch
             {
-                McpServerState.Ready    => $"brain · {BrainToolCount} tools",
+                McpServerState.Ready    => $"brain {BrainVersionLabel}· {BrainToolCount} tools",
                 McpServerState.Starting => "brain · connecting…",
                 McpServerState.Failed   => "brain · DOWN",
                 _                       => "brain · stopped",
@@ -1359,6 +1366,17 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                 SetState(name, McpServerState.Failed, errorMsg);
                 return false;
             }
+
+            // The server's own name + version (BrainX says e.g. "brainx-mcp 2.9.497") — shown on the brain chip.
+            try
+            {
+                if (initResponse.Result is { } res && res.TryGetProperty("serverInfo", out var si))
+                {
+                    string ver = si.TryGetProperty("version", out var v) ? v.GetString() ?? "" : "";
+                    if (ver.Length > 0) _serverVersions[name] = ver;
+                }
+            }
+            catch { }
 
             // Send initialized notification
             await transport.SendNotificationAsync("notifications/initialized", ct: ct);

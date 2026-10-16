@@ -482,6 +482,55 @@ public partial class SettingsViewModel : ViewModelBase
     {
         string current = _themes?.CurrentThemeId ?? ThemeIds.Default;
         foreach (var o in ThemeOptions) o.IsSelected = o.Id == current;
+        OnPropertyChanged(nameof(IsLavenderTheme));
+    }
+
+    // ─── Lavender Night: custom colours (ThemeTint) ───
+
+    public sealed record ColorSwatch(string Hex, string Name)
+    {
+        public System.Windows.Media.Brush Brush { get; } = MakeBrush(Hex);
+        private static System.Windows.Media.Brush MakeBrush(string hex)
+        {
+            var b = new System.Windows.Media.SolidColorBrush(Services.ThemeTint.Parse(hex) ?? System.Windows.Media.Colors.Transparent);
+            b.Freeze();
+            return b;
+        }
+    }
+
+    /// <summary>The palette shows while Lavender Night is the theme in use.</summary>
+    public bool IsLavenderTheme => _themes?.CurrentThemeId == ThemeIds.Lavender;
+
+    public IReadOnlyList<ColorSwatch> BackgroundSwatches => Services.ThemeTint.Backgrounds
+        .Select(b => new ColorSwatch(b.Hex, _settingsService.Settings.Language == "th" ? b.NameTh : b.NameEn)).ToList();
+    public IReadOnlyList<ColorSwatch> AccentSwatches => Services.ThemeTint.Accents
+        .Select(a => new ColorSwatch(a.Hex, _settingsService.Settings.Language == "th" ? a.NameTh : a.NameEn)).ToList();
+
+    private string _customBackground = "", _customAccent = "";
+    /// <summary>Hex typed in the "own colour" box for the background / accent.</summary>
+    public string CustomBackground { get => _customBackground; set => SetProperty(ref _customBackground, value); }
+    public string CustomAccent { get => _customAccent; set => SetProperty(ref _customAccent, value); }
+
+    public ICommand PickBackgroundCommand => _pickBg ??= new RelayCommand<string>(hex => SetThemeColour(bg: hex));
+    public ICommand PickAccentCommand => _pickAc ??= new RelayCommand<string>(hex => SetThemeColour(ac: hex));
+    public ICommand ApplyCustomColoursCommand => _applyCustom ??= new RelayCommand(() =>
+    {
+        if (Services.ThemeTint.Parse(CustomBackground) != null) SetThemeColour(bg: CustomBackground.Trim());
+        if (Services.ThemeTint.Parse(CustomAccent) != null) SetThemeColour(ac: CustomAccent.Trim());
+    });
+    public ICommand ResetThemeColoursCommand => _resetColours ??= new RelayCommand(() => SetThemeColour(bg: "", ac: ""));
+    private ICommand? _pickBg, _pickAc, _applyCustom, _resetColours;
+
+    private void SetThemeColour(string? bg = null, string? ac = null)
+    {
+        _settingsService.UpdateSettings(s =>
+        {
+            if (bg != null) s.LavenderBackground = bg;
+            if (ac != null) s.LavenderAccent = ac;
+        });
+        if (bg != null) CustomBackground = bg;
+        if (ac != null) CustomAccent = ac;
+        _themes?.Reload();   // the whole theme recoloured, live
     }
 
     private void RefreshThemeTexts()

@@ -118,6 +118,16 @@ public sealed class ThemeService
     /// current one stays) or the theme already on screen. <paramref name="persist"/> remembers the choice in
     /// settings.json. Any thread; the swap itself runs on the UI thread.
     /// </summary>
+    private bool _forceReload;
+
+    /// <summary>Re-apply the current theme (after its custom colours changed).</summary>
+    public void Reload()
+    {
+        _forceReload = true;
+        try { Apply(CurrentThemeId, persist: false); }
+        finally { _forceReload = false; }
+    }
+
     public bool Apply(string? themeId, bool persist = true)
     {
         var app = Application.Current;
@@ -134,7 +144,7 @@ public sealed class ThemeService
 
         var merged = app.Resources.MergedDictionaries;
         int slot = FindSlot(merged);
-        if (slot >= 0 && merged[slot][IdKey] as string == id)
+        if (slot >= 0 && merged[slot][IdKey] as string == id && !_forceReload)
         {
             CurrentThemeId = id;
             if (persist) Persist(id);
@@ -147,6 +157,9 @@ public sealed class ThemeService
             dict = new ResourceDictionary { Source = DictionaryUri(id) };
             if (dict[IdKey] as string != id)
                 throw new InvalidOperationException($"{id}.xaml does not name itself '{id}' in {IdKey}");
+            // Lavender Night takes the owner's own background / accent (Settings › General › theme colours).
+            if (id == ThemeIds.Lavender && _settings != null)
+                ThemeTint.Apply(dict, _settings.Settings.LavenderBackground, _settings.Settings.LavenderAccent);
         }
         catch (Exception ex)
         {

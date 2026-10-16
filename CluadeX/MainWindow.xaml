@@ -154,7 +154,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <Grid x:Name="TitleContent" ClipToBounds="True">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>  <!-- (unused: the cosmetic mac traffic lights were removed) -->
+                            <ColumnDefinition Width="Auto"/>  <!-- The CluadeX wordmark -->
                             <ColumnDefinition Width="Auto"/>  <!-- Project / branch -->
                             <ColumnDefinition Width="*"/>
                             <!-- The palette pill is the one thing that gives way on a narrow window: star-sized, so the
@@ -170,11 +170,13 @@
                         </Grid.ColumnDefinitions>
 
 
+                        <!-- The wordmark, nearly the bar's full height — always shown (the project part beside it steps aside
+                             on a narrow window, the brand does not). -->
+                        <Image Grid.Column="0" Source="/CluadeX;component/Assets/logo-wordmark.png" Height="38" Margin="10,2,0,2"
+                               VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" ToolTip="CluadeX"/>
+
                         <!-- Project + branch -->
-                        <StackPanel x:Name="TitleProject" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
-                            <TextBlock Text="CluadeX" FontFamily="{DynamicResource Font.Mono.Display}"
-                                       FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TitleBar.Foreground}" VerticalAlignment="Center"/>
+                        <StackPanel x:Name="TitleProject" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
                             <!-- Version chip: vX.Y.Z · commit · build time — set in code-behind from the
                                  assembly InformationalVersion, so which build is running is never a guess. -->
                             <Border Margin="8,0,0,0" Padding="6,2" CornerRadius="4" VerticalAlignment="Center"
