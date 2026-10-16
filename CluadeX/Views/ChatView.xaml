@@ -1153,10 +1153,31 @@
                                             </Grid>
                                         </Button>
 
-                                        <!-- The edit, before / after side by side — shown for every file edit/write -->
+                                        <!-- The edit: one summary line; the before / after diff is built only when opened -->
+                                        <ToggleButton IsChecked="{Binding DiffExpanded}" HorizontalAlignment="Left" Margin="0,6,0,0"
+                                                      Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="0"
+                                                      Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                      ToolTip="{services:Loc chat.diff.toggleTip}">
+                                            <ToggleButton.Template>
+                                                <ControlTemplate TargetType="ToggleButton">
+                                                    <Border Background="{DynamicResource State.Fill.Faint}" CornerRadius="5" Padding="8,2">
+                                                        <TextBlock FontSize="11" Foreground="{DynamicResource Text.Secondary}">
+                                                            <Run x:Name="Chevron" Text="▸ "/><Run Text="{services:Loc chat.diff.show}"/>
+                                                            <Run Text="  "/><Run Text="{Binding DiffAddedText, Mode=OneWay}" Foreground="{DynamicResource Status.Success}"/>
+                                                            <Run Text=" "/><Run Text="{Binding DiffRemovedText, Mode=OneWay}" Foreground="{DynamicResource Status.Danger}"/>
+                                                        </TextBlock>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsChecked" Value="True">
+                                                            <Setter TargetName="Chevron" Property="Text" Value="▾ "/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </ToggleButton.Template>
+                                        </ToggleButton>
                                         <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
-                                                Background="{DynamicResource Surface.Sunken}" Margin="0,6,0,2" ClipToBounds="True"
-                                                Visibility="{Binding HasDiff, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                Background="{DynamicResource Surface.Sunken}" Margin="0,4,0,2" ClipToBounds="True"
+                                                Visibility="{Binding DiffExpanded, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                             <Grid>
                                                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -1171,8 +1192,10 @@
                                                     </TextBlock>
                                                 </Border>
                                                 <ScrollViewer Grid.Row="1" Grid.ColumnSpan="2" MaxHeight="300" VerticalScrollBarVisibility="Auto"
-                                                              HorizontalScrollBarVisibility="Disabled">
-                                                    <ItemsControl ItemsSource="{Binding DiffPairs}" Margin="0,2,0,4">
+                                                              HorizontalScrollBarVisibility="Disabled" CanContentScroll="True">
+                                                    <ItemsControl ItemsSource="{Binding DiffPairs}" Margin="0,2,0,4"
+                                                                  VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                                                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
                                                                 <Grid TextElement.FontFamily="{DynamicResource Font.Mono}" TextElement.FontSize="11">
@@ -1848,6 +1871,12 @@
                                     <ComboBox x:Name="EffortBox" ItemsSource="{Binding EffortOptions}" SelectedItem="{Binding ReasoningEffort}"
                                               Style="{StaticResource ModernComboBox}" Padding="10,4" FontSize="13" MinWidth="92"
                                               ToolTip="{services:Loc chat.effortTip}"/>
+                                    <!-- What really answers: the model and the effort its requests use now ("auto → medium" mid-run) -->
+                                    <Border CornerRadius="6" Padding="8,3" Margin="6,0,0,0" VerticalAlignment="Center"
+                                            Background="{DynamicResource State.Fill.Faint}" ToolTip="{services:Loc chat.liveEffortTip}">
+                                        <TextBlock Text="{Binding LiveModelEffortText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                                                   FontFamily="{DynamicResource Font.Mono}"/>
+                                    </Border>
                                 </StackPanel>
 
                                 <!-- Approvals: ask first / accept edits in the project / allow everything in this chat

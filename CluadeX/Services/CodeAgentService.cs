@@ -2656,8 +2656,12 @@ public partial class CodeAgentService
             && Services.Providers.AnthropicProvider.PerMessageEffortOk(
                    ModelIdFor(_providerManager.ActiveProvider) is { Length: > 0 } pmModel ? pmModel : Services.Providers.AnthropicProvider.DefaultModel,
                    _settingsService.Settings);
+        // OpenAI (reasoning effort) and Gemini (thinking level): a per-request parameter outside the cached prompt, so
+        // the level can move both ways step by step at no cache cost — same policy as per-message effort.
+        bool topLevelBothWays = smartEffortOn && !perMessageEffort
+            && _providerManager.ActiveProviderType is AiProviderType.OpenAI or AiProviderType.Gemini;
         string? stepEffort = smartEffortOn
-            ? (perMessageEffort ? StepEffortFor(taskNonTrivial, bigSpec, 0, false, false, 0, 0, false) : SmartEffort(taskNonTrivial, 0, 0, 0, 0, null))
+            ? (perMessageEffort || topLevelBothWays ? StepEffortFor(taskNonTrivial, bigSpec, 0, false, false, 0, 0, false) : SmartEffort(taskNonTrivial, 0, 0, 0, 0, null))
             : null;
         string? appliedEffort = stepEffort;      // per-message mode: the level the conversation is at now
         int failedStepsInARow = 0;               // consecutive steps with a failed tool call (smart effort)
@@ -2945,7 +2949,19 @@ public partial class CodeAgentService
                             OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {want}" : $"This one is hard — raising effort to {want}");
                         appliedEffort = want;
                     }
-                    if (AgentRunScope.Current is { } effortScope) effortScope.StepEffort = stepEffort;
+                    if (AgentRunScope.Current is { } effortScope) { effortScope.StepEffort = stepEffort; effortScope.LiveEffort = perMessageEffort ? appliedEffort : stepEffort; }
+                }
+                else if (smartEffortOn && topLevelBothWays)
+                {
+                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    if (want != stepEffort)
+                    {
+                        _debugLog?.Info("Agent", $"step {iteration + 1}: effort {stepEffort} → {want} (per request; build red {lastBuildFailed}, "
+                            + $"failed steps in a row {failedStepsInARow}, wrap-up {budgetLastStep || wrapUpForced})");
+                        stepEffort = want;
+                    }
+                    if (AgentRunScope.Current is { } effortScope) { effortScope.StepEffort = stepEffort; effortScope.LiveEffort = perMessageEffort ? appliedEffort : stepEffort; }
                 }
                 else if (smartEffortOn)
                 {
@@ -2957,7 +2973,7 @@ public partial class CodeAgentService
                         OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {next}" : $"This one is hard — raising effort to {next}");
                         stepEffort = next;
                     }
-                    if (AgentRunScope.Current is { } effortScope) effortScope.StepEffort = stepEffort;
+                    if (AgentRunScope.Current is { } effortScope) { effortScope.StepEffort = stepEffort; effortScope.LiveEffort = perMessageEffort ? appliedEffort : stepEffort; }
                 }
                 // For the spend panel's "without savings": what microcompact kept out of this request (this flow only —
                 // a sub-agent beside it sets its own).

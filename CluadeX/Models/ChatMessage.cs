@@ -170,6 +170,15 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_isExpanded != value) { _isExpanded = value; OnPropertyChanged(); } }
     }
 
+    private bool _diffExpanded;
+    /// <summary>The edit's side-by-side diff is open. Closed by default: a long chat built every diff line of every edit
+    /// (a 500-line write = thousands of elements) each time the row scrolled into view — the chat stuttered and froze.</summary>
+    public bool DiffExpanded
+    {
+        get => _diffExpanded;
+        set { if (_diffExpanded != value) { _diffExpanded = value; OnPropertyChanged(); } }
+    }
+
     /// <summary>Elapsed time for tool execution display (e.g. "1.2s").</summary>
     public string? ToolElapsedTime { get; set; }
 

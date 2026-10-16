@@ -309,7 +309,10 @@ public partial class ChatViewModel : ViewModelBase
         {
             string v = EffortLevels.Normalize(value);
             if (SetProperty(ref _reasoningEffort, v))
+            {
                 _settingsService.UpdateSettings(s => s.ReasoningEffort = v);
+                OnPropertyChanged(nameof(LiveModelEffortText));
+            }
         }
     }
 
@@ -319,7 +322,24 @@ public partial class ChatViewModel : ViewModelBase
     private double _rateLimitFraction, _rateLimitUsedPercent;
     private bool _hasRateLimit;
     public string ActiveProviderLabel { get => _activeProviderLabel; set => SetProperty(ref _activeProviderLabel, value); }
-    public string ActiveModelLabel { get => _activeModelLabel; set => SetProperty(ref _activeModelLabel, value); }
+    public string ActiveModelLabel
+    {
+        get => _activeModelLabel;
+        set { if (SetProperty(ref _activeModelLabel, value)) OnPropertyChanged(nameof(LiveModelEffortText)); }
+    }
+
+    /// <summary>"claude-opus-5-5 · medium" — the model answering and the effort its requests really use. While a run of
+    /// this chat works under "auto", the level the loop picked for the current step (it moves); otherwise the setting.</summary>
+    public string LiveModelEffortText
+    {
+        get
+        {
+            string setting = EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
+            string? live = RunOf(CurrentSession)?.Scope?.LiveEffort;
+            string effort = live != null && setting == EffortLevels.Auto ? $"auto → {live}" : setting;
+            return string.IsNullOrWhiteSpace(ActiveModelLabel) ? effort : $"{ActiveModelLabel} · {effort}";
+        }
+    }
     /// <summary>0–1 of the rate limit still available this minute (drives the gauge's fill).</summary>
     public double RateLimitFraction { get => _rateLimitFraction; set => SetProperty(ref _rateLimitFraction, value); }
     /// <summary>100 − percent left: feeds the same green→red brush the context bar uses.</summary>
@@ -621,6 +641,8 @@ public partial class ChatViewModel : ViewModelBase
         // The agent opened a project itself (open_project): show it and remember it on that chat.
         Services.Tools.ProjectToolModule.ProjectOpened += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentOpenedProject(scope, path));
+        AgentRunScope.LiveEffortChanged += _ =>
+            App.Current?.Dispatcher.BeginInvoke(() => OnPropertyChanged(nameof(LiveModelEffortText)));
         Services.Tools.ProjectToolModule.RelatedFolderAdded += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
         _providerManager = providerManager;
