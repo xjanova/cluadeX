@@ -2646,7 +2646,24 @@ public partial class CodeAgentService
         // a turn — each change re-writes the conversation's cache once.
         bool smartEffortOn = !loopIsLocal && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto;
         bool taskNonTrivial = LooksNonTrivialTask(userMessage ?? "");
-        string? stepEffort = smartEffortOn ? SmartEffort(taskNonTrivial, 0, 0, 0, 0, null) : null;
+        // A long, multi-part brief earns a careful first (planning) step.
+        bool bigSpec = taskNonTrivial && (userMessage ?? "").Length >= 1500;
+        // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1): effort moves BOTH ways step by
+        // step — effort-only system messages change it without resetting the cache, so the top-level value stays fixed for
+        // the whole turn. Elsewhere the old rule stands: climb only, each climb re-writes the cache once.
+        bool perMessageEffort = smartEffortOn
+            && _providerManager.ActiveProviderType == AiProviderType.Anthropic
+            && Services.Providers.AnthropicProvider.PerMessageEffortOk(
+                   ModelIdFor(_providerManager.ActiveProvider) is { Length: > 0 } pmModel ? pmModel : Services.Providers.AnthropicProvider.DefaultModel,
+                   _settingsService.Settings);
+        // OpenAI (reasoning effort) and Gemini (thinking level): a per-request parameter outside the cached prompt, so
+        // the level can move both ways step by step at no cache cost — same policy as per-message effort.
+        bool topLevelBothWays = smartEffortOn && !perMessageEffort
+            && _providerManager.ActiveProviderType is AiProviderType.OpenAI or AiProviderType.Gemini;
+        string? stepEffort = smartEffortOn
+            ? (perMessageEffort || topLevelBothWays ? StepEffortFor(taskNonTrivial, bigSpec, 0, false, false, 0, 0, false) : SmartEffort(taskNonTrivial, 0, 0, 0, 0, null))
+            : null;
+        string? appliedEffort = stepEffort;      // per-message mode: the level the conversation is at now
         int failedStepsInARow = 0;               // consecutive steps with a failed tool call (smart effort)
 
         // ─── Smart context enrichment (respects SmartEditing toggle) ───
@@ -2917,7 +2934,36 @@ public partial class CodeAgentService
                 else if (wrapUpForced && iterToolChoice == null) iterToolChoice = "none";
                 if (budgetLastStep && iterToolChoice is null or "required") iterToolChoice = "none";
                 // Smart effort: climb when the run shows it is hard; the provider reads it off the run's scope.
-                if (smartEffortOn)
+                if (smartEffortOn && perMessageEffort)
+                {
+                    // Top-level effort stays at the turn's first pick (stepEffort, on the scope); this step's level goes out as
+                    // an effort-only system message placed before the pending user turn (it applies from that turn on).
+                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    if (want != appliedEffort && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
+                    {
+                        nativeMessages.Insert(nativeMessages.Count - 1, new Services.Providers.NativeMessage { Role = "system", Effort = want });
+                        _debugLog?.Info("Agent", $"step {iteration + 1}: effort {appliedEffort} → {want} (per-message; build red {lastBuildFailed}, "
+                            + $"failed steps in a row {failedStepsInARow}, wrap-up {budgetLastStep || wrapUpForced})");
+                        if (Array.IndexOf(EffortLevels.All, want) > Array.IndexOf(EffortLevels.All, appliedEffort))
+                            OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {want}" : $"This one is hard — raising effort to {want}");
+                        appliedEffort = want;
+                    }
+                    if (AgentRunScope.Current is { } effortScope) { effortScope.StepEffort = stepEffort; effortScope.LiveEffort = perMessageEffort ? appliedEffort : stepEffort; }
+                }
+                else if (smartEffortOn && topLevelBothWays)
+                {
+                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    if (want != stepEffort)
+                    {
+                        _debugLog?.Info("Agent", $"step {iteration + 1}: effort {stepEffort} → {want} (per request; build red {lastBuildFailed}, "
+                            + $"failed steps in a row {failedStepsInARow}, wrap-up {budgetLastStep || wrapUpForced})");
+                        stepEffort = want;
+                    }
+                    if (AgentRunScope.Current is { } effortScope) { effortScope.StepEffort = stepEffort; effortScope.LiveEffort = perMessageEffort ? appliedEffort : stepEffort; }
+                }
+                else if (smartEffortOn)
                 {
                     string next = SmartEffort(taskNonTrivial, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEditAttempts, stepEffort);
                     if (next != stepEffort)
@@ -2927,7 +2973,7 @@ public partial class CodeAgentService
                         OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {next}" : $"This one is hard — raising effort to {next}");
                         stepEffort = next;
                     }
-                    if (AgentRunScope.Current is { } effortScope) effortScope.StepEffort = stepEffort;
+                    if (AgentRunScope.Current is { } effortScope) { effortScope.StepEffort = stepEffort; effortScope.LiveEffort = perMessageEffort ? appliedEffort : stepEffort; }
                 }
                 // For the spend panel's "without savings": what microcompact kept out of this request (this flow only —
                 // a sub-agent beside it sets its own).
@@ -4197,6 +4243,23 @@ public partial class CodeAgentService
     /// the run shows it is hard (a red-build or false-finish guard fired, two failing steps in a row, two failed
     /// edits), two levels up when it keeps going wrong (a second red-build guard, four failing steps, four failed
     /// edits). Never below <paramref name="current"/>: a turn only climbs. Public for the contract harness.</summary>
+    /// <summary>
+    /// Per-message smart effort: the level for THIS step, free to go down as well as up (no cache cost). Routine work at
+    /// low/medium; a long brief's planning step at high; a step that follows red builds or repeated failures climbs, and
+    /// drops back once things are green; the final summary step runs at low. Public for the contract harness.
+    /// </summary>
+    public static string StepEffortFor(bool nonTrivial, bool bigSpec, int iteration, bool wrapUp, bool buildRed,
+        int redBuildGuards, int failedStepsInARow, bool falseFinish)
+    {
+        string[] ladder = ["low", "medium", "high", "xhigh"];
+        if (wrapUp) return "low";
+        int level = nonTrivial ? 1 : 0;
+        if (iteration == 0 && bigSpec) level = 2;
+        if (buildRed && redBuildGuards >= 2 || failedStepsInARow >= 4) level = Math.Max(level, nonTrivial ? 3 : 2);
+        else if (buildRed || failedStepsInARow >= 2 || falseFinish) level = Math.Max(level, nonTrivial ? 2 : 1);
+        return ladder[Math.Min(level, ladder.Length - 1)];
+    }
+
     public static string SmartEffort(bool nonTrivial, int redBuildGuards, int falseFinishGuards, int failedStepsInARow,
         int failedEdits, string? current)
     {
@@ -4336,10 +4399,18 @@ public partial class CodeAgentService
 
         foreach (var msg in messages)
         {
+            // An effort-only system message sits between turns and takes no part in the alternation; two in a row,
+            // the later one wins.
+            if (msg.Role == "system")
+            {
+                if (result.Count > 0 && result[^1].Role == "system") result[^1] = msg;
+                else result.Add(msg);
+                continue;
+            }
             if (msg.Role == lastRole && result.Count > 0)
             {
-                // Merge into previous message
-                result[^1].Content.AddRange(msg.Content);
+                // Merge into previous message (the last real turn, past any effort message)
+                result.Last(m => m.Role != "system").Content.AddRange(msg.Content);
             }
             else
             {
@@ -4349,7 +4420,7 @@ public partial class CodeAgentService
         }
 
         // Ensure first message is user
-        if (result.Count > 0 && result[0].Role == "assistant")
+        if (result.FirstOrDefault(m => m.Role != "system") is { Role: "assistant" })
         {
             result.Insert(0, new Services.Providers.NativeMessage
             {

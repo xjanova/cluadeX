@@ -25,6 +25,25 @@ internal static class EffortWire
         check("effort", "never down within a turn: a clean step after 'high' stays high", E(true, cur: "high") == "high", E(true, cur: "high"));
         check("effort", "never above xhigh", E(true, red: 5, failSteps: 9, failEdits: 9, cur: "xhigh") == "xhigh", "");
 
+        // Per-message effort (Opus 5+, Sonnet 5.5+, Haiku 5.5+, Fable 5.1): the level moves both ways, no cache cost.
+        string S(bool nt, bool big = false, int it = 3, bool wrap = false, bool red = false, int reds = 0, int fails = 0, bool ff = false)
+            => CodeAgentService.StepEffortFor(nt, big, it, wrap, red, reds, fails, ff);
+        check("step-effort", "a long brief plans at high, then real work runs at medium", S(true, big: true, it: 0) == "high" && S(true, big: true, it: 1) == "medium",
+            $"{S(true, big: true, it: 0)}/{S(true, big: true, it: 1)}");
+        check("step-effort", "a red build climbs; green again drops back (no ratchet)", S(true, red: true, reds: 1) == "high" && S(true, red: false, reds: 1) == "medium",
+            $"{S(true, red: true, reds: 1)}/{S(true, red: false, reds: 1)}");
+        check("step-effort", "still red after two guards, or four failing steps = xhigh", S(true, red: true, reds: 2) == "xhigh" && S(true, fails: 4) == "xhigh", "");
+        check("step-effort", "the wrap-up summary runs at low, even after trouble", S(true, wrap: true, red: true, reds: 3) == "low", S(true, wrap: true, red: true, reds: 3));
+        check("step-effort", "a chat-sized ask stays low", S(false) == "low" && S(false, it: 0) == "low", S(false));
+        check("step-effort", "which models take effort-only messages",
+            AnthropicProvider.Traits("claude-opus-5-5").PerMessageEffort && AnthropicProvider.Traits("claude-opus-5").PerMessageEffort
+            && AnthropicProvider.Traits("claude-sonnet-5-5").PerMessageEffort && AnthropicProvider.Traits("claude-haiku-5-5").PerMessageEffort
+            && AnthropicProvider.Traits("claude-fable-5-1").PerMessageEffort && !AnthropicProvider.Traits("claude-fable-5").PerMessageEffort
+            && !AnthropicProvider.Traits("claude-sonnet-5").PerMessageEffort && !AnthropicProvider.Traits("claude-opus-4-8").PerMessageEffort, "");
+        check("step-effort", "Sonnet 5.5 with Think off (between_tools) does not take them",
+            !AnthropicProvider.PerMessageEffortOk("claude-sonnet-5-5", new AppSettings { ExtendedThinkingEnabled = false })
+            && AnthropicProvider.PerMessageEffortOk("claude-sonnet-5-5", new AppSettings { ExtendedThinkingEnabled = true }), "");
+
         static Dictionary<string, object> Req(string model, bool think, string effort)
         {
             var r = new Dictionary<string, object> { ["model"] = model, ["max_tokens"] = 4096 };

@@ -97,6 +97,16 @@ public sealed class AgentRunScope
     /// providers through <see cref="Models.EffortLevels.Effective"/>. Null = none picked (the provider's default).</summary>
     public string? StepEffort { get; set; }
 
+    private string? _liveEffort;
+    /// <summary>The effort this run's requests really go out with now (top-level, or the latest per-message change) —
+    /// what the chat shows next to the effort picker. Raises <see cref="LiveEffortChanged"/>.</summary>
+    public string? LiveEffort
+    {
+        get => _liveEffort;
+        set { if (_liveEffort == value) return; _liveEffort = value; LiveEffortChanged?.Invoke(this); }
+    }
+    public static event Action<AgentRunScope>? LiveEffortChanged;
+
     private decimal _baselineUsd;
     /// <summary>What this run would have cost with no saving: no prompt cache, no tool search, no microcompact, no batch.</summary>
     public decimal BaselineUsd { get { lock (_costLock) return _baselineUsd; } }

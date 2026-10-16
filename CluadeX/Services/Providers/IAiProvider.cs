@@ -100,8 +100,11 @@ public class ToolSchema
 /// <summary>Native API message with structured content blocks.</summary>
 public class NativeMessage
 {
-    public string Role { get; set; } = "user"; // user, assistant
+    public string Role { get; set; } = "user"; // user, assistant; "system" only for a per-message effort change
     public List<ContentBlock> Content { get; set; } = new();
+    /// <summary>Role "system" with no content: changes effort from the next user turn on (Anthropic per-message effort,
+    /// beta mid-conversation-output-config-2026-07-01) without the cache reset a top-level change causes.</summary>
+    public string? Effort { get; set; }
 }
 
 /// <summary>A content block in a native API message.</summary>
