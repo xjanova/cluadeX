@@ -3541,7 +3541,17 @@ public partial class ChatViewModel : ViewModelBase
 
     // Tool categories for grouping consecutive calls
     private static readonly HashSet<string> ReadTools = new(StringComparer.OrdinalIgnoreCase)
-        { "read_file", "list_files", "glob", "search_files", "search_content" };
+        { "read_file", "list_files", "glob", "search_files", "search_content", "grep", "grep_search", "glob_search",
+          "find_symbol", "list_symbols", "codebase_search", "lsp_diagnostics", "memory_list" };
+    private static readonly HashSet<string> ShellTools = new(StringComparer.OrdinalIgnoreCase)
+        { "run_command", "powershell", "run_build", "run_tests", "bg_output", "bg_list", "task_output", "task_list" };
+    private static readonly HashSet<string> WebTools = new(StringComparer.OrdinalIgnoreCase)
+        { "web_search", "web_fetch" };
+    private static readonly HashSet<string> PlanTools = new(StringComparer.OrdinalIgnoreCase)
+        { "todo_write", "memory_save", "brain_recall", "brain_search" };
+    /// <summary>Rows that stay on their own: an edit (its own diff), a question to the owner, a sub-agent (its map card).</summary>
+    private static readonly HashSet<string> NeverGrouped = new(StringComparer.OrdinalIgnoreCase)
+        { "write_file", "edit_file", "multi_edit", "notebook_edit", "ask_user", "agent_spawn", "subagent_invoke", "plan_mode", "skill_invoke" };
     private static readonly HashSet<string> GitTools = new(StringComparer.OrdinalIgnoreCase)
         { "git_status", "git_diff", "git_log", "git_branch", "git_add", "git_stash" };
 
@@ -3549,8 +3559,40 @@ public partial class ChatViewModel : ViewModelBase
     {
         if (ReadTools.Contains(toolName)) return "read";
         if (GitTools.Contains(toolName)) return "git";
+        if (ShellTools.Contains(toolName)) return "shell";
+        if (WebTools.Contains(toolName)) return "web";
+        if (PlanTools.Contains(toolName)) return "plan";
+        // MCP calls to one server in a row (brain task_update, agent_inbox, agent_send …) are one row, not a wall of
+        // rows (owner 2026-10-16: "รวบไว้ด้วยกันได้ไหม มันเยอะไป").
+        if (toolName.StartsWith("mcp__", StringComparison.Ordinal) && toolName.Split("__") is { Length: >= 3 } mcp) return "mcp:" + mcp[1];
         return toolName; // unique category = no grouping
     }
+
+    /// <summary>"mcp__brainx-brain__task_update" → "brainx-brain/task_update" for a group row's list.</summary>
+    private static string ShortToolName(string toolName) =>
+        toolName.StartsWith("mcp__", StringComparison.Ordinal) && toolName.Split("__") is { Length: >= 3 } p
+            ? p[1] + "/" + string.Join("__", p.Skip(2)) : toolName;
+
+    /// <summary>A group row's targets: "task_update, agent_inbox ×2" — a repeat counts instead of being listed again.</summary>
+    private static string JoinTargets(string? a, string? b)
+    {
+        if (string.IsNullOrWhiteSpace(b)) return a ?? "";
+        if (string.IsNullOrWhiteSpace(a)) return b;
+        var parts = a.Split(", ").ToList();
+        for (int i = 0; i < parts.Count; i++)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(parts[i], @"^(.*) ×(\d+)$");
+            string name = m.Success ? m.Groups[1].Value : parts[i];
+            if (name != b) continue;
+            parts[i] = $"{name} ×{(m.Success ? int.Parse(m.Groups[2].Value) + 1 : 2)}";
+            return string.Join(", ", parts);
+        }
+        return a + ", " + b;
+    }
+
+    /// <summary>Everything in a row of the same kind folds into one row (owner: "ฉลาดในการรวมกลุ่มให้มากที่สุด") —
+    /// a different tool of the same family included — except the rows that must stay visible on their own.</summary>
+    private static bool Groupable(string category) => !NeverGrouped.Contains(category);
 
     /// <summary>Raised (on the UI thread) when the agent mutates a file: (relativePath, firstChangedLine, diff — null
     /// when none was computed). The Code Editor subscribes to open/refresh that file live, scroll to the change and
@@ -3631,9 +3673,9 @@ public partial class ChatViewModel : ViewModelBase
                 // Merge into existing group
                 lastMsg.CollapsedCount++;
                 lastMsg.CollapsedToolNames.Add(toolResult.ToolName);
-                lastMsg.Content = LocF("chat.tools.groupContent", lastMsg.CollapsedCount, string.Join(", ", lastMsg.CollapsedToolNames.Distinct()));
+                lastMsg.Content = LocF("chat.tools.groupContent", lastMsg.CollapsedCount, string.Join(", ", lastMsg.CollapsedToolNames.Select(ShortToolName).Distinct()));
                 lastMsg.ToolName = LocF("chat.tools.groupName", lastMsg.CollapsedCount);
-                lastMsg.ToolTarget = $"{lastMsg.ToolTarget}, {ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory)}";
+                lastMsg.ToolTarget = JoinTargets(lastMsg.ToolTarget, ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory));
                 lastMsg.ToolOutput = CapGroupOutput((lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? ""));
                 lastMsg.ToolOutputLines += outputLines;
                 // Don't add new message — just updated existing
@@ -3644,7 +3686,7 @@ public partial class ChatViewModel : ViewModelBase
             if (lastMsg is { Role: MessageRole.ToolAction } && !lastMsg.IsCollapsedGroup
                 && GetToolCategory(lastMsg.CollapsedToolNames.LastOrDefault() ?? lastMsg.ToolName?.Split(' ').LastOrDefault() ?? "") == category
                 && lastMsg.ToolSuccess && toolResult.Success
-                && category is "read" or "git")
+                && Groupable(category))
             {
                 // Convert single ToolAction to group + add this one
                 string prevToolRaw = lastMsg.CollapsedToolNames.Count > 0
@@ -3653,8 +3695,8 @@ public partial class ChatViewModel : ViewModelBase
                 lastMsg.IsCollapsedGroup = true;
                 lastMsg.CollapsedCount = 2;
                 lastMsg.CollapsedToolNames = new List<string> { prevToolRaw, toolResult.ToolName };
-                lastMsg.Content = LocF("chat.tools.groupContent", 2, string.Join(", ", lastMsg.CollapsedToolNames.Distinct()));
-                lastMsg.ToolTarget = $"{lastMsg.ToolTarget}, {ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory)}";
+                lastMsg.Content = LocF("chat.tools.groupContent", 2, string.Join(", ", lastMsg.CollapsedToolNames.Select(ShortToolName).Distinct()));
+                lastMsg.ToolTarget = JoinTargets(lastMsg.ToolTarget, ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory));
                 lastMsg.ToolName = LocF("chat.tools.groupName", 2);
                 lastMsg.ToolOutput = CapGroupOutput((lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? ""));
                 lastMsg.ToolOutputLines += outputLines;

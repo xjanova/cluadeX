@@ -265,6 +265,7 @@ internal static partial class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestToolGrouping();             // G: tool rows fold together
         await TestWatchPage();                // W: the Watch page
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
