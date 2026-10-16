@@ -238,6 +238,19 @@ public class ChatMessage : INotifyPropertyChanged
     public int CollapsedCount { get; set; }
     /// <summary>Individual tool names in this collapsed group.</summary>
     public List<string> CollapsedToolNames { get; set; } = new();
+    private bool _foldedIntoBalloon;
+    /// <summary>A short line the agent wrote just before its next background call ("I'll open Grok and download scene
+    /// D"): it became that call's caption inside the running balloon, so the row itself is hidden. Kept in the list
+    /// (it is still the model's own words in the history). Not stored.</summary>
+    public bool FoldedIntoBalloon { get => _foldedIntoBalloon; set { if (_foldedIntoBalloon != value) { _foldedIntoBalloon = value; OnPropertyChanged(); } } }
+
+    private bool _isLive;
+    /// <summary>The running balloon: the agent's background calls are folding into this row right now (its live line
+    /// says what runs). Cleared when something else comes after it or the run ends. Not stored.</summary>
+    public bool IsLive { get => _isLive; set { if (_isLive != value) { _isLive = value; OnPropertyChanged(); } } }
+    private string _liveText = "";
+    public string LiveText { get => _liveText; set { if (_liveText != value) { _liveText = value; OnPropertyChanged(); } } }
+
     /// <summary>A help line dropped in beside the tool rows (ChromeHelp): tool rows on either side of it still fold together.</summary>
     public bool IsSideNote { get; set; }
     /// <summary>The group's calls, one small box each, shown when the group row is opened (not stored with the chat:

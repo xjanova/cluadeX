@@ -192,14 +192,23 @@ public partial class CodeAgentService
     {
         int more = MaxAgentIterations;
         string goOn = isThai ? $"ทำต่อ (อีก {more} ขั้น)" : $"Go on (another {more} steps)";
+        // The composer's "No limit" is the MONEY budget; the step limit lives in Settings — owners took one for the other
+        // and were asked again at 25 steps (2026-10-17). This answer removes the step limit for good, from here.
+        string always = isThai ? "ทำต่อ และไม่ต้องถามอีก (ไม่จำกัดขั้น)" : "Go on, never ask again (no step limit)";
         string stop = isThai ? "หยุดตรงนี้" : "Stop here";
         string q = isThai
-            ? $"⏱ ใช้ไป {used} ขั้น ถึงลิมิตที่ตั้งไว้แล้ว แต่งานยังไม่เสร็จ — ทำต่อไหม?"
-            : $"⏱ {used} steps used, the limit you set, and the task isn't finished. Keep going?";
-        string? answer = await _agentToolService.AskUserAsync(q, [goOn, stop]);
+            ? $"⏱ ใช้ไป {used} ขั้น ถึงลิมิตจำนวนขั้นที่ตั้งไว้ (ตั้งค่า ▸ จำนวนขั้นสูงสุด — คนละอันกับงบเงิน \"ไม่จำกัด\") แต่งานยังไม่เสร็จ — ทำต่อไหม?"
+            : $"⏱ {used} steps used — the step limit in Settings (not the money budget) — and the task isn't finished. Keep going?";
+        string? answer = await _agentToolService.AskUserAsync(q, [goOn, always, stop]);
         ct.ThrowIfCancellationRequested();
         if (answer == null) return false;
         string a = answer.Trim();
+        if (a == always)
+        {
+            _settingsService.UpdateSettings(s => s.MaxAgentIterations = 0);
+            _debugLog?.Info("Agent", "step limit removed — the owner said never ask again");
+            return true;
+        }
         return !(a.Equals(stop, StringComparison.OrdinalIgnoreCase) || a.Contains("หยุด", StringComparison.Ordinal)
                  || a.StartsWith("stop", StringComparison.OrdinalIgnoreCase));
     }
@@ -374,6 +383,7 @@ public partial class CodeAgentService
         {
             sb.AppendLine("""
                 คุณคือ CluadeX ผู้ช่วยเขียนโค้ดบนเครื่องของผู้ใช้ ตอบภาษาไทยเสมอ (โค้ด/ชื่อ tool เป็นอังกฤษ)
+                คุณเป็นผู้หญิง พูด "ฉัน" ลงท้าย "ค่ะ/คะ" (ห้าม ผม/ครับ) · ก่อนทำบอกหนึ่งบรรทัดว่าจะทำอะไร · ได้ผลแล้วบอกผล
 
                 # กฎเหล็ก
                 - ตอบ "คำถามที่ถูกถามจริงๆ" — อ่านคำถามล่าสุดของผู้ใช้อีกครั้งก่อนตอบ แล้วตอบเรื่องนั้นเรื่องเดียว
@@ -397,6 +407,7 @@ public partial class CodeAgentService
         {
             sb.AppendLine("""
                 You are CluadeX, an AI coding assistant running locally on the user's machine.
+                Before acting, say in one line what you will do; after, say what came of it.
 
                 # Hard rules
                 - Answer the question that was ACTUALLY asked — re-read the user's last message before answering, and answer that one thing.
@@ -893,6 +904,10 @@ public partial class CodeAgentService
               - Do not restate what the user said — just do it
               - If you can say it in one sentence, don't use three
               """);
+
+        // Her character and the "say what you do, say what came of it" rule (owner 2026-10-17).
+        sb.AppendLine();
+        sb.AppendLine(AgentPersona.Section(_providerManager.ActiveProviderType, isThai));
 
         // ═══════════════════════════════════════════
         // Section 10: Available Skills
@@ -2926,8 +2941,8 @@ public partial class CodeAgentService
                 && result.Steps.LastOrDefault()?.ToolCalls.Count > 0
                 && await ContinuePastStepLimitAsync(iterationBudget, isThai, ct))
             {
-                iterationBudget += MaxAgentIterations;
-                _debugLog?.Info("Agent", $"step limit raised to {iterationBudget} — the user said go on");
+                iterationBudget = MaxAgentIterations >= UnlimitedSteps ? UnlimitedSteps : iterationBudget + MaxAgentIterations;
+                _debugLog?.Info("Agent", $"step limit raised to {StepOf(iterationBudget)} — the user said go on");
             }
             bool budgetLastStep = iteration == iterationBudget - 1 && iterationBudget > 1 && toolSchemas.Count > 0;
             if (budgetLastStep && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
