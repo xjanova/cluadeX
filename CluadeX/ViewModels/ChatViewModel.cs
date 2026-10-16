@@ -301,6 +301,12 @@ public partial class ChatViewModel : ViewModelBase
 
     // ─── Effort (how hard the model works per reply — see EffortLevels) ───
     public IReadOnlyList<string> EffortOptions { get; } = EffortLevels.All;
+
+    private bool _thinkToggleVisible = true;
+    /// <summary>The Think box only shows where the toggle changes the request: every Claude model (on the ones that
+    /// always think it asks for the reasoning text), OpenAI models with reasoning effort, Gemini 2.5+. Hidden for
+    /// models on this PC, Ollama, Claude Code's own plan and non-reasoning API models — there it did nothing.</summary>
+    public bool ThinkToggleVisible { get => _thinkToggleVisible; private set => SetProperty(ref _thinkToggleVisible, value); }
     private string _reasoningEffort = EffortLevels.Auto;
     public string ReasoningEffort
     {
@@ -424,6 +430,13 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.Gemini => configured ?? GeminiProvider.DefaultModel,
             AiProviderType.ClaudeDev => configured is null or "default" or "auto" ? Loc("chat.usage.cliDefault") : configured,
             _ => configured ?? Loc("chat.usage.noModel"),
+        };
+        ThinkToggleVisible = type switch
+        {
+            AiProviderType.Anthropic => true,
+            AiProviderType.OpenAI => OpenAiProvider.MaxEffort(configured ?? OpenAiProvider.DefaultModel) != null,
+            AiProviderType.Gemini => GeminiProvider.ThinkingOf(configured ?? GeminiProvider.DefaultModel) != GeminiProvider.ThinkingControl.None,
+            _ => false,
         };
         OnPropertyChanged(nameof(BillingUrl));
         OnPropertyChanged(nameof(HasBillingPage));
@@ -3534,6 +3547,7 @@ public partial class ChatViewModel : ViewModelBase
             };
             run.Messages.Add(statusMsg);
             run.ActiveStatus = statusMsg;
+            RefreshSessionBadges();
             _lastToolStatusTime = DateTime.UtcNow;
             ScrollToBottom?.Invoke();
         });
@@ -3566,6 +3580,14 @@ public partial class ChatViewModel : ViewModelBase
         // rows (owner 2026-10-16: "รวบไว้ด้วยกันได้ไหม มันเยอะไป").
         if (toolName.StartsWith("mcp__", StringComparison.Ordinal) && toolName.Split("__") is { Length: >= 3 } mcp) return "mcp:" + mcp[1];
         return toolName; // unique category = no grouping
+    }
+
+    /// <summary>A call as one small box inside a group row.</summary>
+    private ToolStepView StepOf(string toolName, Dictionary<string, string>? args, string? elapsed, string? workDir)
+    {
+        var (_, verbKey) = ToolLook.Of(toolName);
+        string verb = verbKey == "tool.verb.mcp" ? (ToolLook.McpServer(toolName) is { } srv ? $"{srv} · {ShortToolName(toolName).Split('/').Last()}" : Loc(verbKey)) : Loc(verbKey);
+        return new ToolStepView(toolName, verb, ToolTargetOf(toolName, args, workDir), elapsed);
     }
 
     /// <summary>"mcp__brainx-brain__task_update" → "brainx-brain/task_update" for a group row's list.</summary>
@@ -3673,6 +3695,7 @@ public partial class ChatViewModel : ViewModelBase
                 // Merge into existing group
                 lastMsg.CollapsedCount++;
                 lastMsg.CollapsedToolNames.Add(toolResult.ToolName);
+                lastMsg.AddGroupStep(StepOf(toolResult.ToolName, toolResult.Arguments, toolElapsed, run?.Scope?.WorkingDirectory ?? WorkingDirectory));
                 lastMsg.Content = LocF("chat.tools.groupContent", lastMsg.CollapsedCount, string.Join(", ", lastMsg.CollapsedToolNames.Select(ShortToolName).Distinct()));
                 lastMsg.ToolName = LocF("chat.tools.groupName", lastMsg.CollapsedCount);
                 lastMsg.ToolTarget = JoinTargets(lastMsg.ToolTarget, ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory));
@@ -3692,6 +3715,10 @@ public partial class ChatViewModel : ViewModelBase
                 string prevToolRaw = lastMsg.CollapsedToolNames.Count > 0
                     ? lastMsg.CollapsedToolNames[0]
                     : "read_file";
+                // The first call becomes the group's first box, from what its own row showed.
+                lastMsg.AddGroupStep(new ToolStepView(lastMsg.ToolKind ?? prevToolRaw, lastMsg.ToolVerb ?? ShortToolName(prevToolRaw),
+                    lastMsg.ToolTarget, lastMsg.ToolElapsedTime));
+                lastMsg.AddGroupStep(StepOf(toolResult.ToolName, toolResult.Arguments, toolElapsed, run?.Scope?.WorkingDirectory ?? WorkingDirectory));
                 lastMsg.IsCollapsedGroup = true;
                 lastMsg.CollapsedCount = 2;
                 lastMsg.CollapsedToolNames = new List<string> { prevToolRaw, toolResult.ToolName };

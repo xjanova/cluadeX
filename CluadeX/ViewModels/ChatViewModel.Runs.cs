@@ -111,6 +111,21 @@ public partial class ChatViewModel
         OnPropertyChanged(nameof(LiveModelEffortText)); OnPropertyChanged(nameof(LiveEffortSuffix)); OnPropertyChanged(nameof(LiveEffortLevel));
         OnPropertyChanged(nameof(CanResume));
         RaiseOpenFolders();
+        RefreshSessionBadges();
+    }
+
+    /// <summary>Each chat in the sidebar shows how its run stands: working (with the step), waiting for the owner, or
+    /// finished while the owner looked elsewhere. UI thread.</summary>
+    private void RefreshSessionBadges()
+    {
+        foreach (var run in _runs)
+        {
+            bool waiting = run.Messages.Any(m => m.Role is MessageRole.PermissionRequest && !m.PermissionAnswered
+                                                 || m.Role == MessageRole.Question && !m.QuestionAnswered);
+            run.Session.RunStatus = waiting ? "waiting" : "working";
+            run.Session.RunStep = waiting ? Loc("chat.runs.waitingForYou") : (run.ActiveStatus?.Content ?? "").TrimStart('⏵', ' ');
+        }
+        if (CurrentSession is { RunStatus: "done" } open) open.RunStatus = "";
     }
 
     // ─── open folders (the project + related ones) ───
@@ -299,6 +314,7 @@ public partial class ChatViewModel
             Role = MessageRole.Question,
             Content = "❓ " + question.Trim(),
             QuestionOptions = options,
+            QuestionGirl = Services.GirlArt.PickName(),
             QuestionCallback = answer => tcs.TrySetResult(answer),
         };
         var token = run?.Cts?.Token ?? CancellationToken.None;
@@ -350,6 +366,9 @@ public partial class ChatViewModel
             PostRunCostSummary(run);
             leftover = run.Scope?.DrainUserNotes();
             _runs.Remove(run);
+            // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
+            run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";
+            run.Session.RunStep = "";
             // Its chat is not on screen: the live list is that chat now — store it.
             if (!ReferenceEquals(run.Session, CurrentSession)) SaveRunChat(run);
             if (ReferenceEquals(AgentRunScope.Current, run.Scope)) AgentRunScope.Enter(null);

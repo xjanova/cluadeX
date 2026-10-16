@@ -257,16 +257,12 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!-- ═══ ask_user: the agent's question, its options and a free answer ═══ -->
-                                <Border Grid.Row="1" HorizontalAlignment="Left"
-                                        Margin="20,4,40,4"
-                                        Background="#2089B4FA"
-                                        BorderBrush="{DynamicResource Accent.1}"
-                                        BorderThickness="2,0,0,0"
-                                        CornerRadius="0,8,8,0"
-                                        Padding="12,8">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
+                                <!-- ═══ ask_user: the agent's question, its options and a free answer — a card with a girl
+                                     standing beside it (a random one per question, Assets\Girls). It glides in; the girl
+                                     sways gently while the question waits and leaves once it is answered. ═══ -->
+                                <Grid Grid.Row="1" HorizontalAlignment="Left" Margin="12,10,40,6">
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
                                             <Setter Property="Visibility" Value="Collapsed"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.Question}">
@@ -274,35 +270,137 @@
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </Border.Style>
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Primary}"
-                                                   FontSize="13" FontFamily="{DynamicResource Font.Ui}" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                                        <StackPanel Visibility="{Binding QuestionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
-                                            <ItemsControl ItemsSource="{Binding QuestionOptions}" Margin="0,0,0,6"
-                                                          Visibility="{Binding HasQuestionOptions, Converter={StaticResource BoolVis}}">
-                                                <ItemsControl.ItemsPanel>
-                                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
-                                                </ItemsControl.ItemsPanel>
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <Button Content="{Binding}" Padding="12,4" Margin="0,0,6,6" FontSize="12"
-                                                                Style="{StaticResource SecondaryButton}"
-                                                                Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                Click="QuestionOption_Click"/>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                            <Grid>
-                                                <Grid.ColumnDefinitions><ColumnDefinition MinWidth="220"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                                <TextBox Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12" Padding="6,3"
-                                                         ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
-                                                <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="12,3" Margin="6,0,0,0"
-                                                        FontSize="12" Style="{StaticResource PrimaryButton}" Click="QuestionSend_Click"/>
-                                            </Grid>
-                                        </StackPanel>
-                                    </StackPanel>
-                                </Border>
+                                    </Grid.Style>
+                                    <Grid.RenderTransform>
+                                        <TranslateTransform Y="14"/>
+                                    </Grid.RenderTransform>
+                                    <Grid.Triggers>
+                                        <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.45"/>
+                                                    <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)" To="0" Duration="0:0:0.55">
+                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </EventTrigger>
+                                    </Grid.Triggers>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- The girl: bottom-aligned with the card, leaning in over its left edge (not in a theme
+                                         whose Fx.Flourish is Collapsed — Classic) -->
+                                    <Grid Visibility="{DynamicResource Fx.Flourish}" Panel.ZIndex="2" VerticalAlignment="Bottom">
+                                    <Image Source="{Binding QuestionGirlImage}" Height="210" VerticalAlignment="Bottom" Margin="0,-18,-16,-6"
+                                           RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False" Panel.ZIndex="2"
+                                           RenderTransformOrigin="0.5,1">
+                                        <Image.Style>
+                                            <Style TargetType="Image">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding QuestionAnswered}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding QuestionGirlImage}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Image.Style>
+                                        <Image.Effect>
+                                            <DropShadowEffect Color="{Binding QuestionGirlGlow}" BlurRadius="22" ShadowDepth="0" Opacity="0.6"/>
+                                        </Image.Effect>
+                                        <Image.RenderTransform>
+                                            <RotateTransform Angle="-1.2"/>
+                                        </Image.RenderTransform>
+                                        <Image.Triggers>
+                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                <BeginStoryboard>
+                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                        <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(RotateTransform.Angle)"
+                                                                         From="-1.2" To="1.2" Duration="0:0:2.6">
+                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
+                                                    </Storyboard>
+                                                </BeginStoryboard>
+                                            </EventTrigger>
+                                        </Image.Triggers>
+                                    </Image>
+                                    </Grid>
+
+                                    <Border Grid.Column="1" CornerRadius="14" Padding="16,12,16,10" BorderThickness="1"
+                                            BorderBrush="{DynamicResource Accent.1}" Background="{DynamicResource Bg.Elevated}" MinWidth="280"
+                                            Effect="{DynamicResource Fx.Card.Glow}">
+                                        <Grid>
+                                            <!-- a soft tint of the accent over the card's surface -->
+                                            <Border CornerRadius="12" Margin="-15,-11,-15,-9" Background="{DynamicResource Accent.1}" Opacity="0.07" IsHitTestVisible="False"/>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Primary}"
+                                                           FontSize="13.5" FontFamily="{DynamicResource Font.Ui}" TextWrapping="Wrap" Margin="0,0,0,10"
+                                                           LineHeight="20"/>
+                                                <StackPanel Visibility="{Binding QuestionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                                    <ItemsControl ItemsSource="{Binding QuestionOptions}" Margin="0,0,0,6"
+                                                                  Visibility="{Binding HasQuestionOptions, Converter={StaticResource BoolVis}}">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="{Binding}" Padding="14,6" Margin="0,0,8,8" FontSize="12.5" Cursor="Hand"
+                                                                        Foreground="{DynamicResource Text.Primary}" Background="{DynamicResource Surface.Chip}"
+                                                                        BorderBrush="{DynamicResource Accent.1}" BorderThickness="1"
+                                                                        Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        Click="QuestionOption_Click">
+                                                                    <Button.Template>
+                                                                        <ControlTemplate TargetType="Button">
+                                                                            <Border x:Name="pill" CornerRadius="16" Background="{TemplateBinding Background}"
+                                                                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                                                                    Padding="{TemplateBinding Padding}" RenderTransformOrigin="0.5,0.5">
+                                                                                <Border.RenderTransform><ScaleTransform/></Border.RenderTransform>
+                                                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                                    <Setter TargetName="pill" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                                                    <Trigger.EnterActions>
+                                                                                        <BeginStoryboard>
+                                                                                            <Storyboard>
+                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" To="1.05" Duration="0:0:0.15"/>
+                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" To="1.05" Duration="0:0:0.15"/>
+                                                                                            </Storyboard>
+                                                                                        </BeginStoryboard>
+                                                                                    </Trigger.EnterActions>
+                                                                                    <Trigger.ExitActions>
+                                                                                        <BeginStoryboard>
+                                                                                            <Storyboard>
+                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.2"/>
+                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.2"/>
+                                                                                            </Storyboard>
+                                                                                        </BeginStoryboard>
+                                                                                    </Trigger.ExitActions>
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </Button.Template>
+                                                                </Button>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition MinWidth="200"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                        <TextBox Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
+                                                                 ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
+                                                        <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="14,4" Margin="8,0,0,0"
+                                                                FontSize="12.5" Style="{StaticResource PrimaryButton}" Click="QuestionSend_Click"/>
+                                                    </Grid>
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </Grid>
 
                                 <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
                                 <Border Grid.Row="1" HorizontalAlignment="Left"
@@ -497,61 +595,120 @@
                                     </StackPanel>
                                 </Border>
 
-                                <!-- ═══ AgentStatus: inline tool indicator ═══ -->
-                                <Border Grid.Row="1" HorizontalAlignment="Left"
-                                        Margin="20,1,40,1"
-                                        Background="Transparent"
-                                        Padding="2,3">
+                                <!-- ═══ AgentStatus: what the agent is running right now. Live: a soft pill with three
+                                     bouncing dots and a light sweeping across it, so it reads as "working" at a glance
+                                     while the words still say what runs. Finished: a quiet muted line. ═══ -->
+                                <Border Grid.Row="1" HorizontalAlignment="Left" Margin="18,2,40,2" Padding="10,4,12,4"
+                                        CornerRadius="12" BorderThickness="1" ClipToBounds="True">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderBrush" Value="Transparent"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}">
                                                     <Setter Property="Visibility" Value="Visible"/>
                                                 </DataTrigger>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.AgentStatus}"/>
+                                                        <Condition Binding="{Binding IsStreaming}" Value="True"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Background" Value="{DynamicResource Surface.Chip}"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                </MultiDataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Ellipse Width="9" Height="9" Margin="0,0,10,0"
-                                                 VerticalAlignment="Center">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Fill" Value="{DynamicResource Text.Muted}"/>
-                                                    <Setter Property="Opacity" Value="0.5"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                            <Setter Property="Fill" Value="{DynamicResource Accent.2}"/>
-                                                            <Setter Property="Opacity" Value="1"/>
-                                                            <DataTrigger.EnterActions>
-                                                                <BeginStoryboard x:Name="StatusPulse">
-                                                                    <Storyboard RepeatBehavior="Forever">
-                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                            From="0.4" To="1.0" Duration="0:0:0.5"
-                                                                            AutoReverse="True"/>
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </DataTrigger.EnterActions>
-                                                            <DataTrigger.ExitActions>
-                                                                <StopStoryboard BeginStoryboardName="StatusPulse"/>
-                                                            </DataTrigger.ExitActions>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Ellipse.Style>
-                                        </Ellipse>
-                                        <!-- Status text + elapsed time -->
-                                        <TextBlock Text="{Binding Content}"
-                                                   Foreground="{DynamicResource Text.Secondary}"
-                                                   FontSize="12"
-                                                   FontFamily="{DynamicResource Font.Ui}"
-                                                   VerticalAlignment="Center"/>
-                                        <TextBlock Text="{Binding ToolElapsedTime}"
-                                                   Foreground="{DynamicResource Text.Muted}"
-                                                   FontSize="10" FontFamily="{DynamicResource Font.Mono}"
-                                                   VerticalAlignment="Center" Margin="8,0,0,0"
-                                                   Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
-                                    </StackPanel>
+                                    <Grid>
+                                        <!-- the sweep: a soft band of light gliding left → right over the live pill -->
+                                        <Grid Visibility="{DynamicResource Fx.Flourish}" IsHitTestVisible="False">
+                                        <Rectangle IsHitTestVisible="False" Margin="-10,-4,-12,-4"
+                                                   Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                                                    <LinearGradientBrush.RelativeTransform>
+                                                        <TranslateTransform X="-1"/>
+                                                    </LinearGradientBrush.RelativeTransform>
+                                                    <GradientStop Color="{DynamicResource Fx.Sweep.Edge}" Offset="0.3"/>
+                                                    <GradientStop Color="{DynamicResource Fx.Sweep.Mid}" Offset="0.5"/>
+                                                    <GradientStop Color="{DynamicResource Fx.Sweep.Edge}" Offset="0.7"/>
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                            <Rectangle.Triggers>
+                                                <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                    <BeginStoryboard>
+                                                        <Storyboard RepeatBehavior="Forever">
+                                                            <DoubleAnimation Storyboard.TargetProperty="Fill.RelativeTransform.(TranslateTransform.X)"
+                                                                             From="-1" To="1" Duration="0:0:1.8">
+                                                                <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                            </DoubleAnimation>
+                                                        </Storyboard>
+                                                    </BeginStoryboard>
+                                                </EventTrigger>
+                                            </Rectangle.Triggers>
+                                        </Rectangle>
+                                        </Grid>
+                                        <StackPanel Orientation="Horizontal">
+                                            <!-- live: three dots bouncing one after another -->
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0"
+                                                        Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                                <StackPanel.Resources>
+                                                    <Style TargetType="Ellipse">
+                                                        <Setter Property="Width" Value="5"/>
+                                                        <Setter Property="Height" Value="5"/>
+                                                        <Setter Property="Margin" Value="1.5,0"/>
+                                                        <Setter Property="Fill" Value="{DynamicResource Accent.1}"/>
+                                                        <Setter Property="RenderTransform"><Setter.Value><TranslateTransform/></Setter.Value></Setter>
+                                                    </Style>
+                                                </StackPanel.Resources>
+                                                <Ellipse x:Name="Dot1"/>
+                                                <Ellipse x:Name="Dot2"/>
+                                                <Ellipse x:Name="Dot3"/>
+                                                <StackPanel.Triggers>
+                                                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                        <BeginStoryboard>
+                                                            <Storyboard RepeatBehavior="Forever" Duration="0:0:1.1">
+                                                                <DoubleAnimation Storyboard.TargetName="Dot1" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                                                                                 From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0">
+                                                                    <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                                </DoubleAnimation>
+                                                                <DoubleAnimation Storyboard.TargetName="Dot2" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                                                                                 From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0.16">
+                                                                    <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                                </DoubleAnimation>
+                                                                <DoubleAnimation Storyboard.TargetName="Dot3" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
+                                                                                 From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0.32">
+                                                                    <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                                </DoubleAnimation>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </EventTrigger>
+                                                </StackPanel.Triggers>
+                                            </StackPanel>
+                                            <!-- finished: a small muted dot -->
+                                            <Ellipse Width="7" Height="7" Margin="0,0,10,0" VerticalAlignment="Center" Fill="{DynamicResource Text.Muted}" Opacity="0.5"
+                                                     Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                            <!-- Status text + elapsed time -->
+                                            <TextBlock Text="{Binding Content}" FontSize="12" FontFamily="{DynamicResource Font.Ui}" VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsStreaming}" Value="True">
+                                                                <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding ToolElapsedTime}"
+                                                       Foreground="{DynamicResource Text.Muted}"
+                                                       FontSize="10" FontFamily="{DynamicResource Font.Mono}"
+                                                       VerticalAlignment="Center" Margin="8,0,0,0"
+                                                       Visibility="{Binding ToolElapsedTime, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                        </StackPanel>
+                                    </Grid>
                                 </Border>
 
                                 <!-- ═══ The agent's plan (todo_write): a checklist card that updates in place ═══ -->
@@ -1052,6 +1209,7 @@
                                                             <MultiDataTrigger.Conditions>
                                                                 <Condition Binding="{Binding Role}" Value="{x:Static models:MessageRole.ToolAction}"/>
                                                                 <Condition Binding="{Binding ToolArguments, Converter={StaticResource BoolVis}}" Value="Visible"/>
+                                                                <Condition Binding="{Binding HasGroupSteps}" Value="False"/>
                                                                 <Condition Binding="{Binding IsExpanded}" Value="True"/>
                                                             </MultiDataTrigger.Conditions>
                                                             <Setter Property="Visibility" Value="Visible"/>
@@ -1069,6 +1227,62 @@
                                                            TextTrimming="CharacterEllipsis"/>
                                             </ScrollViewer>
                                         </Border>
+
+                                        <!-- A folded group, opened: each call it holds as its own small box, gliding in one by one -->
+                                        <ItemsControl Grid.Row="1" Margin="0,6,0,2" ItemsSource="{Binding GroupSteps}">
+                                            <ItemsControl.Style>
+                                                <Style TargetType="ItemsControl">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding HasGroupSteps}" Value="True"/>
+                                                                <Condition Binding="{Binding IsExpanded}" Value="True"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ItemsControl.Style>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,4" Padding="10,5" CornerRadius="8" BorderThickness="1"
+                                                            Background="{DynamicResource Surface.Inset}" BorderBrush="{DynamicResource Border.Subtle}" Opacity="0">
+                                                        <Border.RenderTransform><TranslateTransform X="-10"/></Border.RenderTransform>
+                                                        <Border.Triggers>
+                                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                <BeginStoryboard>
+                                                                    <Storyboard>
+                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                                                                        <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(TranslateTransform.X)" To="0" Duration="0:0:0.35">
+                                                                            <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                                        </DoubleAnimation>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </EventTrigger>
+                                                        </Border.Triggers>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Accent.1}"
+                                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Verb}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                            <TextBlock Grid.Column="2" Text="{Binding Target}" FontSize="11.5" FontFamily="{DynamicResource Font.Mono}"
+                                                                       Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                                       ToolTip="{Binding Target}" Visibility="{Binding HasTarget, Converter={StaticResource BoolVis}}"/>
+                                                            <TextBlock Grid.Column="3" Text="{Binding Elapsed}" FontSize="10" FontFamily="{DynamicResource Font.Mono}"
+                                                                       Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                                                       Visibility="{Binding HasElapsed, Converter={StaticResource BoolVis}}"/>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
 
                                         <!-- Row 2: the images the user attached, then the message content (Markdown) -->
                                         <StackPanel Grid.Row="2">
@@ -1996,6 +2210,7 @@
                                 </DockPanel>
 
                                 <CheckBox IsChecked="{Binding ExtendedThinkingEnabled}" Foreground="{DynamicResource Accent.2}"
+                                          Visibility="{Binding ThinkToggleVisible, Converter={StaticResource BoolVis}}"
                                           VerticalAlignment="Center" Margin="0,2,10,2" ToolTip="{services:Loc chat.extendedThinkingTip}">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>

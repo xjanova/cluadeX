@@ -69,6 +69,25 @@ public sealed class ClaudeInChromeLauncher : IMcpLaunchResolver
     /// <summary>The extension has been connected to Claude Code at least once (its native host is registered).</summary>
     public static bool ExtensionSetUp => File.Exists(NativeHostLauncher);
 
+    /// <summary>An update removed the claude.exe the native-host script names: Chrome then cannot start the host, so
+    /// the extension never reaches <c>--claude-in-chrome-mcp</c> ("Browser extension is not connected") although its
+    /// side panel looks connected (that is the desktop app's own host). Point the script at <paramref name="exe"/>,
+    /// keeping a .bak of the old one. True when the script was rewritten.</summary>
+    public static bool RepairNativeHostLauncher(string exe)
+    {
+        try
+        {
+            if (!File.Exists(NativeHostLauncher) || !exe.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) return false;
+            string text = File.ReadAllText(NativeHostLauncher);
+            var named = Regex.Match(text, "\"([^\"]+?claude\\.exe)\"", RegexOptions.IgnoreCase);
+            if (!named.Success || File.Exists(named.Groups[1].Value)) return false;
+            File.Copy(NativeHostLauncher, NativeHostLauncher + ".bak", overwrite: true);
+            File.WriteAllText(NativeHostLauncher, text.Replace(named.Groups[1].Value, exe));
+            return true;
+        }
+        catch { return false; }   // read-only or locked: the start goes on, the tool error explains the rest
+    }
+
     public Task<McpLaunchResolution?> ResolveAsync(string serverName, McpServerConfig configured, CancellationToken ct)
     {
         if (serverName != ServerName && configured.ManagedBy != ManagedTag) return Task.FromResult<McpLaunchResolution?>(null);
@@ -76,6 +95,7 @@ public sealed class ClaudeInChromeLauncher : IMcpLaunchResolver
         if (exe == null)
             return Task.FromResult<McpLaunchResolution?>(McpLaunchResolution.Refuse(LocalizedResources.Instance["chrome.noClaudeCode"]));
         bool script = exe.EndsWith(".js", StringComparison.OrdinalIgnoreCase);   // the npm install: node cli.js …
+        if (!script) RepairNativeHostLauncher(exe);
         return Task.FromResult<McpLaunchResolution?>(McpLaunchResolution.Use(new McpServerConfig
         {
             Command = script ? "node" : exe,

@@ -25,6 +25,10 @@ internal static partial class Program
         Check("G1 five brainx-brain calls in a row are ONE row that lists them shortly",
             rows.Count == 1 && rows[0].IsCollapsedGroup && rows[0].CollapsedCount == 5 && rows[0].Content.Contains("brainx-brain/agent_send") && !rows[0].Content.Contains("mcp__") && rows[0].ToolTarget.Contains("agent_inbox ×2"),
             string.Join(" | ", rows.Select(r => r.Content)));
+        Check("G1b the folded row opens into one small box per call, in order",
+            rows.Count == 1 && rows[0].GroupSteps.Count == 5 && rows[0].GroupSteps[0].Kind == "mcp__brainx-brain__task_update"
+            && rows[0].GroupSteps[4].Verb.Contains("agent_send"),
+            string.Join(" | ", rows.FirstOrDefault()?.GroupSteps.Select(s => $"{s.Kind}:{s.Verb}:{s.Target}") ?? []));
 
         Tool("mcp__cluadex-chrome__computer");
         Tool("run_command"); Tool("powershell"); Tool("run_command");
@@ -47,6 +51,13 @@ internal static partial class Program
         list.ScrollIntoView(Vm.Messages.First());
         await Settle();
         SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-tool-groups.png"));
+        rows[0].IsExpanded = true;
+        list.ScrollIntoView(rows[0]);
+        await Settle(); await Task.Delay(500); await Render();
+        var boxes = Container(rows[0]) is { } c0 ? Find<System.Windows.Controls.ItemsControl>(c0).FirstOrDefault(i => ReferenceEquals(i.ItemsSource, rows[0].GroupSteps)) : null;
+        Check("G4 an opened group shows its calls as boxes on screen", boxes is { IsVisible: true, Items.Count: 5 }, $"boxes={boxes?.Items.Count} visible={boxes?.IsVisible}");
+        SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-tool-group-open.png"));
+        rows[0].IsExpanded = false;
         Vm.ShowAgentInternals = internals;
 
     }
