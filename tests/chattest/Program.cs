@@ -263,6 +263,7 @@ internal static class Program
         await TestUsageWindow();              // U8: the spend window — paid vs without savings, credit left
         TestAutoCompact();                    // U9: the compaction toast's "compact by itself" tick
         await TestNarrowComposer();           // U10: the composer docked beside the editor
+        await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
         Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
@@ -2023,6 +2024,34 @@ internal static class Program
     }
 
     // ═══════════════════════════════════════════ U10 ══════════════════════════════════════════
+    static async Task TestLiveEffort()
+    {
+        Log("\n## U11 — the effort \"auto\" really uses is shown while the run works");
+        await FreshChat();
+        Vm.ReasoningEffort = "auto";
+        Fake.Script.Enqueue(FakeStep.Hang());
+        await Send("[U11] a long task");
+        await WaitUntil(() => Vm.IsGenerating);
+        // The loop's pick for this step (the fake provider runs no smart-effort loop, so the test sets it on the run's scope).
+        var runs = (System.Collections.IList)typeof(ChatViewModel).GetField("_runs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(Vm)!;
+        var scope = (AgentRunScope)runs[0]!.GetType().GetProperty("Scope")!.GetValue(runs[0])!;
+        scope.LiveEffort = "high";
+        await Render();
+        var effortBox = Find<ComboBox>(Win).First(c => c.Name == "EffortBox");
+        string shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));
+        Check("U11 the effort box reads auto → high while the run uses high", shown.Contains("auto") && shown.Contains("high"), shown);
+        Check("U11 the model box carries the live effort too", Vm.LiveEffortSuffix.Contains("auto → high"), Vm.LiveEffortSuffix);
+        scope.LiveEffort = "medium";
+        await Render();
+        shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));
+        Check("U11 …and follows the level as it moves (high → medium)", shown.Contains("medium"), shown);
+        Vm.StopGenerationCommand.Execute(null);
+        await WaitIdle();
+        await Render();
+        shown = string.Join(" ", Find<TextBlock>(effortBox).Where(t => t.IsVisible).Select(t => t.Text));
+        Check("U11 with no run going it reads plain auto again", !shown.Contains("medium") && Vm.LiveEffortLevel == "", shown);
+    }
+
     static async Task TestNarrowComposer()
     {
         Log("\n## U10 — a narrow composer (the chat docked beside the editor) keeps its options in tidy rows");
