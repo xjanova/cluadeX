@@ -75,6 +75,7 @@ jobs:
             --packVersion ${{ steps.version.outputs.VERSION }} `
             --packDir publish `
             --mainExe CluadeX.exe `
+            --icon CluadeX/Assets/app.ico `
             --packTitle "CluadeX" `
             --packAuthors "Xman Studio" `
             --outputDir Releases

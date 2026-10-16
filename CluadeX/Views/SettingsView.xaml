@@ -4,7 +4,8 @@
              xmlns:conv="clr-namespace:CluadeX.Converters"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
              xmlns:services="clr-namespace:CluadeX.Services"
-             xmlns:settingsviews="clr-namespace:CluadeX.Views.Settings">
+             xmlns:settingsviews="clr-namespace:CluadeX.Views.Settings"
+             xmlns:views="clr-namespace:CluadeX.Views">
 
     <UserControl.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
@@ -256,12 +257,13 @@
 
             <!-- ═══════ Category content ═══════ -->
             <ScrollViewer Grid.Column="1" Style="{StaticResource SlimScrollViewer}" VerticalScrollBarVisibility="Auto">
-                <Grid MaxWidth="780" HorizontalAlignment="Left" Margin="0,0,12,24">
+                <Grid MaxWidth="1600" Margin="0,0,16,24">
 
                     <!-- ─────────────── AI PROVIDER ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=provider}">
                         <TextBlock Text="{services:Loc settings.cat.provider}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.provider}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -377,22 +379,16 @@
                                 </StackPanel>
                                 <TextBlock Text="{Binding ConnectionTestResult}" Foreground="{DynamicResource Accent.1}"
                                            FontSize="12" TextWrapping="Wrap"/>
-                                <Button Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,10,0,0"
-                                        Command="{Binding DataContext.OpenLicenseCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                        Visibility="{Binding ShowLicenseShortcut, Converter={StaticResource BoolVis}}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                        <TextBlock Text="{services:Loc settings.licenseOpen}" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </Button>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                     <!-- ─────────────── MODEL & OUTPUT ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=model}">
                         <TextBlock Text="{services:Loc settings.cat.model}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.model}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <Border Style="{StaticResource Card}" Background="{DynamicResource Accent.1.Tint.Faint}" Margin="0,0,0,12">
                             <StackPanel Orientation="Horizontal">
@@ -455,23 +451,16 @@
                                     <CheckBox Grid.Column="1" IsChecked="{Binding PromptCachingEnabled}" Style="{StaticResource ModernCheckBox}"
                                               VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}" Margin="0">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.thinkingBudget}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.thinkingBudgetDesc}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <TextBox Grid.Column="1" Text="{Binding ThinkingBudgetTokens, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
-                                </Grid>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                     <!-- ─────────────── AGENT ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=agent}">
                         <TextBlock Text="{services:Loc settings.cat.agent}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.agent}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -517,15 +506,6 @@
                                     <TextBox Text="{Binding AutoVerifyCommand, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
                                              FontFamily="{DynamicResource Font.Mono.Display}"/>
                                 </StackPanel>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="{services:Loc settings.maxAutoFix}" Style="{StaticResource SettingLabel}"/>
-                                        <TextBlock Text="{services:Loc settings.maxAutoFixDesc}" Style="{StaticResource SettingDesc}"/>
-                                    </StackPanel>
-                                    <TextBox Grid.Column="1" Text="{Binding MaxAutoFixAttempts, UpdateSourceTrigger=PropertyChanged}"
-                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
-                                </Grid>
                                 <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
@@ -572,7 +552,7 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding SemanticSearchEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
-                                <Grid Style="{StaticResource Row}" Visibility="{Binding SemanticSearchEnabled, Converter={StaticResource BoolVis}}">
+                                <Grid Style="{StaticResource Row}" Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel Margin="18,0,0,0">
                                         <TextBlock Text="{services:Loc settings.embeddingModel}" Style="{StaticResource SettingLabel}"/>
@@ -591,12 +571,14 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                     <!-- ─────────────── AUTONOMOUS LOOP ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=autonomous}">
                         <TextBlock Text="{services:Loc settings.cat.autonomous}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.autonomous}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -608,12 +590,6 @@
                                     <TextBox Grid.Column="1" Text="{Binding AutoFixMaxIterations, UpdateSourceTrigger=PropertyChanged}"
                                              Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
                                 </Grid>
-                                <StackPanel>
-                                    <TextBlock Text="{services:Loc settings.verifyCommand}" Style="{StaticResource SettingLabel}"/>
-                                    <TextBlock Text="{services:Loc settings.verifyCommandTip}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
-                                    <TextBox Text="{Binding AutoVerifyCommand, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
-                                             FontFamily="{DynamicResource Font.Mono.Display}"/>
-                                </StackPanel>
                             </StackPanel>
                         </Border>
 
@@ -641,12 +617,14 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                     <!-- ─────────────── CONTEXT & MEMORY ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=memory}">
                         <TextBlock Text="{services:Loc settings.cat.memory}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.memory}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -804,12 +782,14 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                     <!-- ─────────────── LOCAL MODELS ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=local}">
                         <TextBlock Text="{services:Loc settings.cat.local}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.local}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -957,8 +937,10 @@
                                     <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding MinP, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource NumBox}"
                                              Margin="16,0,0,10" ToolTip="{services:Loc settings.zeroDisabled}"/>
                                     <TextBlock Grid.Row="2" Text="{services:Loc settings.repeatWindow}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"
+                                               Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}"
                                                ToolTip="{services:Loc settings.repeatWindowTip}"/>
                                     <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding RepeatPenaltyTokens, UpdateSourceTrigger=PropertyChanged}"
+                                             Visibility="{Binding IsOllamaSelected, Converter={StaticResource BoolVis}}"
                                              Style="{StaticResource NumBox}" Margin="16,0,0,10" ToolTip="{services:Loc settings.repeatWindowTip}"/>
                                     <TextBlock Grid.Row="3" Text="{services:Loc settings.toolCallTemp}" Style="{StaticResource SettingLabel}" VerticalAlignment="Center"
                                                ToolTip="{services:Loc settings.toolCallTempTip}"/>
@@ -1008,12 +990,14 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                     <!-- ─────────────── GENERAL ─────────────── -->
                     <StackPanel Visibility="{Binding SelectedCategory, Converter={StaticResource EqVis}, ConverterParameter=general}">
                         <TextBlock Text="{services:Loc settings.cat.general}" Style="{StaticResource SectionTitle}"/>
                         <TextBlock Text="{services:Loc settings.catDesc.general}" Style="{StaticResource SectionDesc}"/>
+<views:MasonryPanel MinColumnWidth="460" Gap="14">
 
                         <!-- Appearance: the theme picker (Views/Settings/ThemePicker.xaml) — applies live, remembered -->
                         <Border Style="{StaticResource Card}">
@@ -1024,94 +1008,6 @@
                         </Border>
 
                         <!-- More tools: the pages that left the activity bar (still on Ctrl+K and their Ctrl+number keys) -->
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <TextBlock Text="{services:Loc settings.card.moreTools}" Style="{StaticResource CardTitle}"/>
-                                <TextBlock Text="{services:Loc settings.moreToolsDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
-                                <WrapPanel>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="Features" ToolTip="{services:Loc nav.featuresTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE734;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.features}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="Permissions" ToolTip="{services:Loc nav.permissionsTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.permissions}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="HookLibrary" ToolTip="{services:Loc nav.hooksTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE9F5;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.hookLibrary}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="Plugins" ToolTip="{services:Loc nav.pluginsTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE74C;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.plugins}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="Skills" ToolTip="{services:Loc nav.skillsTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.skills}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="SubAgents" ToolTip="{services:Loc nav.subagentsTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE99A;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.subagents}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="Instincts" ToolTip="{services:Loc nav.instinctsTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE82D;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.instincts}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="SecurityShield" ToolTip="{services:Loc nav.shieldTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE83D;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.securityShield}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="HexEditor" ToolTip="{services:Loc nav.hexTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.hexEditor}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,8,8" Padding="12,7"
-                                            Command="{Binding DataContext.NavigateToCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="DebugLog" ToolTip="{services:Loc nav.debugLogTip}">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="&#xEBE8;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                            <TextBlock Text="{services:Loc nav.debugLog}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
-                                </WrapPanel>
-                            </StackPanel>
-                        </Border>
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -1165,14 +1061,6 @@
                                 <TextBlock Foreground="{DynamicResource Accent.1}" FontSize="11" Margin="0,0,0,16"
                                            Text="{services:Loc settings.portableMode}"
                                            Visibility="{Binding IsPortable, Converter={StaticResource BoolVis}}"/>
-                                <TextBlock Text="{services:Loc settings.tempDir}" Style="{StaticResource SettingLabel}"/>
-                                <TextBlock Text="{services:Loc settings.tempDirDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBox Text="{Binding TempDirectory, UpdateSourceTrigger=LostFocus}" Style="{StaticResource WideBox}"/>
-                                    <Button Grid.Column="1" Content="&#xED25;" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets"
-                                            Command="{Binding BrowseTempDirCommand}" Margin="6,0,0,0" ToolTip="{services:Loc settings.browseTip}"/>
-                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -1227,6 +1115,7 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+                                            </views:MasonryPanel>
                     </StackPanel>
 
                 </Grid>
