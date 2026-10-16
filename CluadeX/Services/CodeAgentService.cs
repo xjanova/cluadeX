@@ -4074,6 +4074,21 @@ public partial class CodeAgentService
                 });
                 _debugLog?.Info("Agent", "brain-first: no recall and no brain call in step 1 — reminder sent with the tool results");
             }
+            // Plan-first, like brain-first: a task still going at step 3 with no plan is told once to write one, so the
+            // plan card and the plan window show where it is (owner 2026-10-16: a Reverse X run went on with no plan at all).
+            // A quick task that is done in two steps never sees this.
+            if (iteration == 2 && _agentToolService.TodoItems.Count == 0 && LooksNonTrivialTask(userMessage ?? "")
+                && toolSchemas.Any(t => _agentToolService.ResolveToolTypePublic(t.Name) == ToolType.TodoWrite))
+            {
+                userResultMsg.Content.Add(new Services.Providers.ContentBlock
+                {
+                    Type = "text",
+                    Text = isThai
+                        ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ในขั้นถัดไป วางแผน 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress แล้วอัปเดตเมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
+                        : "[Reminder: this task has no plan yet — call todo_write in your next step with 3-7 items, the current one in_progress, and update it as each finishes. The user follows your progress through this plan.]",
+                });
+                _debugLog?.Info("Agent", "plan-first: no plan by step 3 — reminder sent with the tool results");
+            }
             nativeMessages.Add(userResultMsg);
         }
 
