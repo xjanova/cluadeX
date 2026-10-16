@@ -56,6 +56,8 @@ public class AiProviderManager : IDisposable
         // The installed Claude Code CLI as a model — needs the working directory so
         // the CLI runs in (and reads) the user's actual project.
         _providers[AiProviderType.ClaudeDev] = new ClaudeDevProvider(settingsService, fileSystemService);
+        // The BrainX cowork room as a model: the turn goes to the agents in the room (BrainXRoomProvider).
+        _providers[AiProviderType.BrainX] = new BrainXRoomProvider(fileSystemService);
 
         // Set initial active provider
         var activeType = settingsService.Settings.ActiveProvider;
