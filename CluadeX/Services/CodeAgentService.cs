@@ -2226,6 +2226,7 @@ public partial class CodeAgentService
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
+            if (AgentRunScope.Current is { } stepScope) stepScope.Step = iteration + 1;   // names this step's restore point
 
             var step = new AgentStep { StepNumber = iteration + 1 };
 
@@ -2878,6 +2879,7 @@ public partial class CodeAgentService
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
+            if (AgentRunScope.Current is { } stepScope) stepScope.Step = iteration + 1;   // names this step's restore point
 
             // Pause: the step before this one finished (tools ran, results kept) — end here, cleanly, before spending more.
             if (iteration > 0 && AgentRunScope.Current is { PauseRequested: true })

@@ -805,6 +805,7 @@ public partial class ChatViewModel : ViewModelBase
             var items = _agentToolService.TodoItems.ToList();
             App.Current?.Dispatcher.BeginInvoke(() =>
             {
+                RememberPlan(todoRun, items);   // the plan window (and a finished run's plan) read it from here
                 var Messages = todoRun?.Messages ?? this.Messages;
                 ChatMessage? _todoListMsg = todoRun?.TodoMsg;
                 if (items.Count == 0)

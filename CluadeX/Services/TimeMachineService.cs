@@ -1,3 +1,4 @@
+using System.IO;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
@@ -33,8 +34,12 @@ public class TimeMachineService
         _log = log;
     }
 
-    public string WorkingDirectory => _fileSystem.WorkingDirectory;
-    public bool HasWorkingDirectory => _fileSystem.HasWorkingDirectory;
+    /// <summary>The project the Time Machine page is looking at — any project ever worked on, not only the open one
+    /// (owner 2026-10-16). Null = the chat's open folder.</summary>
+    public string? Project { get; set; }
+
+    public string WorkingDirectory => Project ?? _fileSystem.WorkingDirectory;
+    public bool HasWorkingDirectory => Project != null ? Directory.Exists(Project) : _fileSystem.HasWorkingDirectory;
 
     private string T(string key, params object[] args)
     {

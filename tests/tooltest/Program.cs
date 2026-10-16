@@ -1480,6 +1480,9 @@ internal static partial class Program
             // .ps1 written as UTF-8 with BOM; one web_fetch budget; a linear HTML stripper; the differential check.
             Console.WriteLine("\n── blocklist & web_fetch, round 4 ──");
             await Round4(provider, settings, loc);
+
+            Console.WriteLine("\n── restore points (Time Machine / plan window) ──");
+            await Checkpoints();
         }
         finally
         {
