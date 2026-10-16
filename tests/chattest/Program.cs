@@ -265,6 +265,7 @@ internal static class Program
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
+        await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
         Check("Z1 the harness never wrote ~/.cluadex (install.json, mcp-host.log, mcp_servers.json, settings.json)", changed.Count == 0, string.Join(", ", changed));
@@ -2025,6 +2026,26 @@ internal static class Program
     }
 
     // ═══════════════════════════════════════════ U10 ══════════════════════════════════════════
+    static async Task TestStartupFollowsProject()
+    {
+        Log("\n## F6 — at startup the restored chat opens its own project (the files panel showed the old folder until a message was sent)");
+        Directory.CreateDirectory(ProjA);
+        Directory.CreateDirectory(ProjB);
+        var last = new ChatSession { Title = "startup chat in A", ProjectPath = ProjA, UpdatedAt = DateTime.Now.AddMinutes(5) };
+        last.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "keep going on the parser" });
+        last.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "ok" });
+        Persist.SaveSession(last);
+        string before = Vm.WorkingDirectory;
+        Vm.SetWorkingDirectory(ProjB);
+        // A second chat page built the way the app builds it at startup (same services, same database).
+        var vm2 = Microsoft.Extensions.DependencyInjection.ActivatorUtilities.CreateInstance<ChatViewModel>(Sp);
+        await WaitUntil(() => vm2.CurrentSession != null, 15000);
+        Check("F6 the newest chat is restored and its project (A) is open — not the folder left open before (B)",
+            vm2.CurrentSession?.Id == last.Id && string.Equals(vm2.WorkingDirectory, ProjA, StringComparison.OrdinalIgnoreCase),
+            $"chat={vm2.CurrentSession?.Title} folder={vm2.WorkingDirectory}");
+        Vm.SetWorkingDirectory(before);
+    }
+
     static async Task TestPlanWindow()
     {
         Log("\n## U12 — the plan window: this chat's plan, items added while it works or queued, go back, branch");
@@ -2103,6 +2124,33 @@ internal static class Program
                 branchDir != null && branchDir != proj && File.Exists(Path.Combine(branchDir, "main.txt"))
                 && File.ReadAllText(Path.Combine(branchDir, "main.txt")) == "v1\n", $"{branchDir} | {pvm.Message}");
             Check("U12 …and leaves the original project alone", File.ReadAllText(f) == "v2\n");
+
+            // U13 — the plan bar pinned over the chat: progress + the item in progress; a branch shows a chip back to
+            // where it came from, and the parent a chip to its branch; a chip opens that chat.
+            var branchChat = Vm.CurrentSession!;
+            plans[branchChat.Id] = new List<TodoItem> { new() { Content = "Re-check the parser", Status = "completed" }, new() { Content = "Port the fix", Status = "in_progress" }, new() { Content = "Run tests", Status = "pending" } };
+            Vm.RefreshStickyPlan();
+            await Render();
+            var bar = Find<Border>(Win).FirstOrDefault(b => b.Name == "StickyPlanBar");
+            Check("U13 the plan bar shows over the chat with 1/3 and the item in progress",
+                bar is { IsVisible: true } && Vm.StickyPlanHeader.EndsWith("1/3") && Vm.StickyPlanNow == "Port the fix" && Math.Abs(Vm.StickyPlanProgress - 1.0 / 3) < 0.01,
+                $"{Vm.StickyPlanHeader} · {Vm.StickyPlanNow} · visible={bar?.IsVisible}");
+            Check("U13 the branch has a chip back to the chat it came from", Vm.StickyBranches.Count == 1 && Vm.StickyBranches[0].IsParent && Vm.StickyBranches[0].SessionId == session.Id,
+                string.Join(" | ", Vm.StickyBranches.Select(b => b.Label + " " + b.Title)));
+            Vm.IsStickyPlanExpanded = true;
+            LocSvc.SetLanguage("th");
+            await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-sticky-plan-th.png"));
+            LocSvc.SetLanguage("en");
+            Vm.IsStickyPlanExpanded = false;
+            Vm.GoToChatCommand.Execute(session.Id);
+            await WaitUntil(() => Vm.CurrentSession?.Id == session.Id);
+            await Render();
+            Check("U13 its chip opens the parent chat, which shows a chip to the branch (step 1)",
+                Vm.CurrentSession?.Id == session.Id && Vm.StickyBranches.Any(b => !b.IsParent && b.SessionId == branchChat.Id && b.Label.Contains("1")),
+                string.Join(" | ", Vm.StickyBranches.Select(b => b.Label + " " + b.Title)));
+            await FreshChat();
+            Check("U13 a new chat with no plan and no branches shows no bar", !Vm.HasStickyBar);
         }
         finally
         {

@@ -28,6 +28,123 @@ public partial class ChatViewModel
         if (id == null) return;
         _lastPlans[id] = items.Select(t => new TodoItem { Content = t.Content, Status = t.Status, CreatedAt = t.CreatedAt }).ToList();
         PlanChanged?.Invoke(id);
+        if (id == CurrentSession?.Id) RefreshStickyPlan();
+    }
+
+    // ─── The plan bar pinned to the top of the chat (owner 2026-10-16: "ลอยค้างอยู่ด้านบนสุดของแชท … ถ้ามีการแตกลาย
+    //     ไปไหนก็กดที่แผนวาปไปมาระหว่างแชทได้หมด") ───
+
+    /// <summary>A chat this one branched from, or one branched from it — a chip on the plan bar that opens it.</summary>
+    public sealed record BranchLink(string SessionId, string Label, string Title, bool IsParent);
+
+    private sealed record BranchRecord(string Child, string Parent, int Step, DateTime When);
+    private List<BranchRecord>? _branches;
+
+    private string BranchesFile => Path.Combine(_settingsService.DataRoot, "chat-branches.json");
+
+    private List<BranchRecord> Branches()
+    {
+        if (_branches != null) return _branches;
+        try
+        {
+            _branches = File.Exists(BranchesFile)
+                ? System.Text.Json.JsonSerializer.Deserialize<List<BranchRecord>>(File.ReadAllText(BranchesFile)) ?? new()
+                : new();
+        }
+        catch (Exception ex) { _debugLog?.Warn("Plan", "chat-branches.json unreadable — starting empty", ex); _branches = new(); }
+        return _branches;
+    }
+
+    private void RecordBranch(string child, string parent, int step)
+    {
+        var list = Branches();
+        list.Add(new BranchRecord(child, parent, step, DateTime.Now));
+        try { File.WriteAllText(BranchesFile, System.Text.Json.JsonSerializer.Serialize(list)); }
+        catch (Exception ex) { _debugLog?.Warn("Plan", "could not save chat-branches.json", ex); }
+    }
+
+    private IReadOnlyList<PlanItemView> _stickyPlanItems = Array.Empty<PlanItemView>();
+    public IReadOnlyList<PlanItemView> StickyPlanItems { get => _stickyPlanItems; private set => SetProperty(ref _stickyPlanItems, value); }
+
+    private IReadOnlyList<BranchLink> _stickyBranches = Array.Empty<BranchLink>();
+    public IReadOnlyList<BranchLink> StickyBranches { get => _stickyBranches; private set => SetProperty(ref _stickyBranches, value); }
+
+    private string _stickyPlanHeader = "", _stickyPlanNow = "";
+    /// <summary>"แผนงาน 2/5".</summary>
+    public string StickyPlanHeader { get => _stickyPlanHeader; private set => SetProperty(ref _stickyPlanHeader, value); }
+    /// <summary>The item in progress (or the next one).</summary>
+    public string StickyPlanNow { get => _stickyPlanNow; private set => SetProperty(ref _stickyPlanNow, value); }
+
+    private double _stickyPlanProgress;
+    /// <summary>0..1, for the bar's progress line.</summary>
+    public double StickyPlanProgress { get => _stickyPlanProgress; private set => SetProperty(ref _stickyPlanProgress, value); }
+
+    public bool HasStickyPlan => _stickyPlanItems.Count > 0;
+    public bool HasStickyBranches => _stickyBranches.Count > 0;
+    public bool HasStickyBar => HasStickyPlan || HasStickyBranches;
+
+    private bool _stickyLangHooked;
+    private bool _stickyPlanExpanded;
+    public bool IsStickyPlanExpanded { get => _stickyPlanExpanded; set => SetProperty(ref _stickyPlanExpanded, value); }
+
+    public ICommand ToggleStickyPlanCommand => _toggleStickyPlanCommand ??= new RelayCommand(() => IsStickyPlanExpanded = !IsStickyPlanExpanded);
+    private ICommand? _toggleStickyPlanCommand;
+
+    /// <summary>Open another chat (a branch chip).</summary>
+    public ICommand GoToChatCommand => _goToChatCommand ??= new RelayCommand<string>(id =>
+    {
+        if (!string.IsNullOrEmpty(id) && id != CurrentSession?.Id) _ = GoToChatAsync(id);
+    });
+    private ICommand? _goToChatCommand;
+
+    private async Task GoToChatAsync(string id)
+    {
+        await LoadSessionAsync(id);
+        NavigateToChatRequested?.Invoke();
+        RefreshStickyPlan();
+    }
+
+    /// <summary>Rebuild the plan bar for the chat on screen (UI thread).</summary>
+    public void RefreshStickyPlan()
+    {
+        if (!_stickyLangHooked)
+        {
+            _stickyLangHooked = true;   // the bar's words are built here, so a language switch rebuilds them
+            LocalizedResources.Instance.PropertyChanged += (_, _) => App.Current?.Dispatcher.BeginInvoke(RefreshStickyPlan);
+        }
+        var session = CurrentSession;
+        if (session == null)
+        {
+            StickyPlanItems = Array.Empty<PlanItemView>(); StickyBranches = Array.Empty<BranchLink>();
+        }
+        else
+        {
+            var plan = PlanSnapshot(session.Id).Items;
+            var items = plan.Select((t, i) => new PlanItemView(i + 1, t.Content, t.Status?.ToLowerInvariant() switch
+            {
+                "completed" or "done" => "done",
+                "in_progress" or "active" => "active",
+                _ => "pending",
+            })).ToList();
+            int done = items.Count(p => p.IsDone);
+            StickyPlanItems = items;
+            StickyPlanHeader = items.Count == 0 ? "" : $"{Loc("chat.plan")} {done}/{items.Count}";
+            StickyPlanNow = items.FirstOrDefault(p => p.IsActive)?.Text
+                            ?? items.FirstOrDefault(p => p.IsPending)?.Text
+                            ?? (items.Count > 0 ? Loc("chat.plan.allDone") : "");
+            StickyPlanProgress = items.Count == 0 ? 0 : (double)done / items.Count;
+
+            string TitleOf(string id) => Sessions.FirstOrDefault(s => s.Id == id)?.Title ?? "";
+            var links = new List<BranchLink>();
+            foreach (var b in Branches().Where(b => b.Child == session.Id && Sessions.Any(s => s.Id == b.Parent)))
+                links.Add(new BranchLink(b.Parent, Loc("chat.plan.branchParent"), TitleOf(b.Parent), true));
+            foreach (var b in Branches().Where(b => b.Parent == session.Id && Sessions.Any(s => s.Id == b.Child)))
+                links.Add(new BranchLink(b.Child, LocF("chat.plan.branchChild", b.Step), TitleOf(b.Child), false));
+            StickyBranches = links;
+        }
+        OnPropertyChanged(nameof(HasStickyPlan));
+        OnPropertyChanged(nameof(HasStickyBranches));
+        OnPropertyChanged(nameof(HasStickyBar));
     }
 
     public void OpenPlanWindow(ChatSession? session)
@@ -123,10 +240,15 @@ public partial class ChatViewModel
                 : Sessions.FirstOrDefault(s => s.Id == sessionId)?.Title ?? "";
             ApplyWorkingDirectory(target, announce: false, showEditor: false);
             NewSession();
-            if (CurrentSession != null) CurrentSession.Title = LocF("plan.branch.chatTitle", p.Step, title);
+            if (CurrentSession != null)
+            {
+                CurrentSession.Title = LocF("plan.branch.chatTitle", p.Step, title);
+                RecordBranch(CurrentSession.Id, sessionId, p.Step);
+            }
             Messages.Add(new ChatMessage { Role = MessageRole.System,
                 Content = "🌿 " + LocF("plan.branch.note", title, p.Step, p.When, target, branch) });
             NavigateToChatRequested?.Invoke();
+            RefreshStickyPlan();
             return LocF("plan.branch.done", target);
         }
         catch (Exception ex)

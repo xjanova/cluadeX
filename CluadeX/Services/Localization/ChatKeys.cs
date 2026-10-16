@@ -211,6 +211,11 @@ internal static class ChatKeys
 
         // ─── Misc ───
         ["chat.plan"] = new() { ["en"] = "Plan", ["th"] = "แผนงาน" },
+        ["chat.plan.allDone"] = new() { ["en"] = "All done", ["th"] = "เสร็จครบแล้ว" },
+        ["chat.plan.branchParent"] = new() { ["en"] = "⤴ Branched from", ["th"] = "⤴ แยกมาจาก" },
+        ["chat.plan.branchChild"] = new() { ["en"] = "⑂ Branch at step {0}", ["th"] = "⑂ แยกที่ขั้น {0}" },
+        ["chat.plan.expandTip"] = new() { ["en"] = "Show / hide the whole plan", ["th"] = "แสดง / ซ่อนแผนทั้งหมด" },
+        ["chat.plan.goTip"] = new() { ["en"] = "Open this chat", ["th"] = "เปิดแชทนี้" },
         ["plan.open.tip"] = new() { ["en"] = "Plan window: where this chat's plan is, add items, go back to or branch from any step", ["th"] = "หน้าต่างแผนงาน: แผนของแชทนี้อยู่ตรงไหน เพิ่มแผน ย้อนกลับหรือแยกงานจากขั้นไหนก็ได้" },
         ["plan.window.title"] = new() { ["en"] = "Plan", ["th"] = "แผนงาน" },
         ["plan.pin.tip"] = new() { ["en"] = "Keep on top", ["th"] = "ให้อยู่บนสุดเสมอ" },

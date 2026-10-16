@@ -4084,8 +4084,8 @@ public partial class CodeAgentService
                 {
                     Type = "text",
                     Text = isThai
-                        ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ในขั้นถัดไป วางแผน 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress แล้วอัปเดตเมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
-                        : "[Reminder: this task has no plan yet — call todo_write in your next step with 3-7 items, the current one in_progress, and update it as each finishes. The user follows your progress through this plan.]",
+                        ? "[เตือน: งานนี้ยังไม่มีแผน — เรียก todo_write ครั้งเดียวในขั้นถัดไป โดยส่ง todos เป็นแผนทั้งชุด 3-7 ข้อ ข้อที่กำลังทำเป็น in_progress แล้วส่งใหม่ทั้งชุดเมื่อแต่ละข้อเสร็จ ผู้ใช้ดูความคืบหน้าจากแผนนี้]"
+                        : "[Reminder: this task has no plan yet — in your next step call todo_write ONCE with `todos` = the whole plan (3-7 items, the current one in_progress), and send the whole list again as items finish. The user follows your progress through this plan.]",
                 });
                 _debugLog?.Info("Agent", "plan-first: no plan by step 3 — reminder sent with the tool results");
             }

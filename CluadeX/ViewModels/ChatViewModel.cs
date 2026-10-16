@@ -190,7 +190,7 @@ public partial class ChatViewModel : ViewModelBase
     public ChatSession? CurrentSession
     {
         get => _currentSession;
-        set { if (SetProperty(ref _currentSession, value)) RaiseRunStateChanged(); }
+        set { if (SetProperty(ref _currentSession, value)) { RaiseRunStateChanged(); RefreshStickyPlan(); } }
     }
     public string WorkingDirectory
     {
@@ -1028,6 +1028,9 @@ public partial class ChatViewModel : ViewModelBase
                     }
                     foreach (var msg in lastSession.Messages)
                         Messages.Add(msg);
+                    // Its project at once: the files panel used to keep the previous folder until the first message
+                    // was sent (owner 2026-10-16: "แต่ละแชทต้องแสดงไฟล์ให้ถูกต้อง … แม้เปิดมาใหม่").
+                    FollowChatProject(lastSession);
 
                     // ─── Crash recovery: detect if last session was interrupted ───
                     var lastMsg = lastSession.Messages.LastOrDefault();
