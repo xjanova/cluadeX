@@ -53,18 +53,23 @@
                                 BorderThickness="1" BorderBrush="Transparent">
                             <Grid>
                                 <!-- The theme picks: font glyph (Midnight, Classic, Neon) or the art icon named by Tag (Lavender) -->
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                <ContentPresenter x:Name="glyph" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                   Visibility="{DynamicResource NavIcon.Glyph.Visibility}"
                                                   TextBlock.FontFamily="Segoe MDL2 Assets"
                                                   TextBlock.FontSize="18"
                                                   TextBlock.Foreground="{TemplateBinding Foreground}"/>
-                                <Image Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality"
+                                <Image x:Name="art" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality"
                                        Visibility="{DynamicResource NavIcon.Art.Visibility}"
                                        Source="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource NavIconSource}}"/>
                             </Grid>
                         </Border>
                     </Grid>
                     <ControlTemplate.Triggers>
+                        <!-- An item with no art yet keeps its font glyph in an art theme instead of an empty square -->
+                        <Trigger SourceName="art" Property="Source" Value="{x:Null}">
+                            <Setter TargetName="art" Property="Visibility" Value="Collapsed"/>
+                            <Setter TargetName="glyph" Property="Visibility" Value="Visible"/>
+                        </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource ActivityBar.Hover.Background}"/>
                             <Setter Property="Foreground" Value="{DynamicResource ActivityBar.Hover.Foreground}"/>

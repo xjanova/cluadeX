@@ -69,6 +69,9 @@
         <DataTemplate DataType="{x:Type vm:PermissionsViewModel}">
             <views:PermissionsView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:WatchViewModel}">
+            <views:WatchView/>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:TaskManagerViewModel}">
             <views:TaskManagerView/>
         </DataTemplate>
@@ -621,6 +624,11 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Tasks"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.tasksTip}" AutomationProperties.Name="Tasks"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="watch" Content="&#xE7B3;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Watch, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Watch"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.watchTip}" AutomationProperties.Name="Watch"/>
                             </StackPanel>
                             </ScrollViewer>
 
