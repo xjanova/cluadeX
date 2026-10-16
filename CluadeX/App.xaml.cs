@@ -115,6 +115,7 @@ public partial class App : Application
         // each helper TryLogToDebugService call no-ops silently.
         var dbg = _serviceProvider.GetService<DebugLogService>();
         dbg?.Info("App", "MainWindow shown, starting background services");
+        CluadeX.Helpers.UiStallWatchdog.Start(Dispatcher, dbg);
 
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>

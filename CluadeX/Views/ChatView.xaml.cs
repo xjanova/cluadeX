@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using CluadeX.Helpers;
@@ -14,9 +15,27 @@ public partial class ChatView : UserControl
     private Action? _scrollHandler;
     private NotifyCollectionChangedEventHandler? _collectionHandler;
 
+    private static readonly List<WeakReference<ChatView>> Instances = new();
+
+    /// <summary>Perf probe: realized message rows per live chat view ("main 12 / panel 0").</summary>
+    public static string RealizedRows()
+    {
+        var parts = new List<string>();
+        foreach (var w in Instances)
+            if (w.TryGetTarget(out var v))
+            {
+                int n = 0;
+                for (int i = 0; i < v.ChatList.Items.Count; i++)
+                    if (v.ChatList.ItemContainerGenerator.ContainerFromIndex(i) != null) n++;
+                parts.Add($"{(v.IsVisible ? "visible" : "hidden")} {n}/{v.ChatList.Items.Count}");
+            }
+        return string.Join(" · ", parts);
+    }
+
     public ChatView()
     {
         InitializeComponent();
+        Instances.Add(new WeakReference<ChatView>(this));
 
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
@@ -25,6 +44,18 @@ public partial class ChatView : UserControl
         // editor (the editor keeps the caret).
         IsVisibleChanged += (_, e) =>
         {
+            // A hidden chat view (the kept page while the editor shows, the editor's docked chat while the chat page
+            // shows) lets go of the message list: it used to build the rows of every chat opened, and of every
+            // streamed update, for nobody to see — two or three views' worth of work per switch.
+            if (e.NewValue is true)
+            {
+                if (BindingOperations.GetBinding(ChatList, ItemsControl.ItemsSourceProperty) == null)
+                    ChatList.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Messages"));
+            }
+            else
+            {
+                BindingOperations.ClearBinding(ChatList, ItemsControl.ItemsSourceProperty);
+            }
             if (e.NewValue is true && !_hostedInEditor)
                 Dispatcher.InvokeAsync(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
         };

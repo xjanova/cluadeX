@@ -1150,6 +1150,9 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         if (CurrentSession?.Id == sessionId) return;
+        CluadeX.Helpers.UiStallWatchdog.Note("switching chat");
+        var switchWatch = System.Diagnostics.Stopwatch.StartNew();
+        long tSave = 0, tLoad = 0, tList = 0, tFollow = 0, tCtx = 0;
 
         // Navigate to Chat page if we're on a different page
         NavigateToChatRequested?.Invoke();
@@ -1189,8 +1192,15 @@ public partial class ChatViewModel : ViewModelBase
             return;
         }
 
+        tSave = switchWatch.ElapsedMilliseconds;
         // Load from database (full session with messages)
         var session = _persistenceService.LoadSession(sessionId);
+        tLoad = switchWatch.ElapsedMilliseconds - tSave;
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            _debugLog?.Info("Perf", $"chat switch {switchWatch.ElapsedMilliseconds} ms (save {tSave} · load {tLoad} · {session?.Messages.Count ?? 0} rows · list@{tList} follow@{tFollow} ctx@{tCtx} · realized {Views.ChatView.RealizedRows()})");
+            CluadeX.Helpers.UiStallWatchdog.Note("");
+        });
 
         if (session == null)
         {
@@ -1236,12 +1246,15 @@ public partial class ChatViewModel : ViewModelBase
             }
         }
 
+        tList = switchWatch.ElapsedMilliseconds;
         StatusText = session.Messages.Count > 0
             ? LocF("chat.status.loaded", session.Title, session.Messages.Count)
             : LocF("chat.status.loadedEmpty", session.Title);
         FollowChatProject(session);
+        tFollow = switchWatch.ElapsedMilliseconds;
 
         UpdateContextInfo();
+        tCtx = switchWatch.ElapsedMilliseconds;
         ScrollToBottom?.Invoke();
     }
 
@@ -2653,6 +2666,8 @@ public partial class ChatViewModel : ViewModelBase
         if (text.StartsWith("/")) { StatusText = Loc("chat.steer.noSlash"); return; }
         var bubble = new ChatMessage { Role = MessageRole.User, Content = text };
         run.Messages.Add(bubble);
+        // Said in the chat, not only the status bar: the user sees it was taken and when it will be done.
+        run.Messages.Add(new ChatMessage { Role = MessageRole.System, Content = Loc("chat.steer.queued") });
         run.Scope.AddUserNote(text, bubble);
         UserInput = string.Empty;
         StatusText = Loc("chat.steer.queued");

@@ -381,6 +381,11 @@ public class MainViewModel : ViewModelBase
         _workspace = workspace;
         _log = log;
         ChatVM = chatVM;
+#if DEBUG
+        if (Environment.GetEnvironmentVariable("CLUADEX_PERF_PROBE") == "1")
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle,
+                async () => { await Task.Delay(8000); await chatVM.RunPerfProbeAsync(NavigateTo); });
+#endif
         ModelManagerVM = modelManagerVM;
         SettingsVM = settingsVM;
         PluginManagerVM = pluginManagerVM;
@@ -776,6 +781,8 @@ public class MainViewModel : ViewModelBase
     private void NavigateTo(string? target)
     {
         if (target == null) return;
+        CluadeX.Helpers.UiStallWatchdog.Note("opening page " + target);
+        var navWatch = System.Diagnostics.Stopwatch.StartNew();
         SelectedNavItem = target;
         CurrentView = target switch
         {
@@ -802,6 +809,12 @@ public class MainViewModel : ViewModelBase
         // Sync model list/selection when navigating to Chat (picks up changes from Models tab)
         if (target == "Chat")
             ChatVM.SyncModelSelectionFromSettings();
+        // How long until the page is drawn (Loaded priority runs after layout + render of the new page).
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
+        {
+            _log?.Info("Perf", $"page {target} shown in {navWatch.ElapsedMilliseconds} ms");
+            CluadeX.Helpers.UiStallWatchdog.Note("");
+        });
     }
 
     // ─── Auto-Update ───
