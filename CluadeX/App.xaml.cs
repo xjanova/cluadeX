@@ -88,6 +88,9 @@ public partial class App : Application
 
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
+        // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
+        var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
+        _ = Task.Run(checkpoints.Prune);
 
         // Panel widths the user dragged (sidebar, explorer, chat pane, side panel) come back after a restart.
         var panelSettings = _serviceProvider.GetRequiredService<SettingsService>();
@@ -389,7 +392,8 @@ public partial class App : Application
     private static McpToolResult ToMcpResult(ViewModels.McpTaskOutcome outcome)
         => outcome.IsError ? ErrorResult(outcome.Text) : TextResult(outcome.Text);
 
-    /// <summary>Optional "maxSteps": an integer 1-200 (a numeric string is accepted). Absent = the setting.</summary>
+    /// <summary>Optional "maxSteps": an integer 0-100000 (a numeric string is accepted); 0 = no step limit for this run,
+    /// like the setting's 0 (owner 2026-10-16: long tasks must not stop at a cap). Absent = the setting.</summary>
     private static bool TryReadMaxSteps(System.Text.Json.JsonElement args, out int? maxSteps, out string? error)
     {
         maxSteps = null;
@@ -400,9 +404,9 @@ public partial class App : Application
         int n;
         if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt32(out n)) { }
         else if (v.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(v.GetString(), out n)) { }
-        else { error = "'maxSteps' must be an integer from 1 to 200"; return false; }
-        if (n < 1 || n > 200) { error = "'maxSteps' must be an integer from 1 to 200"; return false; }
-        maxSteps = n;
+        else { error = "'maxSteps' must be an integer from 0 (no limit) to 100000"; return false; }
+        if (n < 0 || n > CodeAgentService.UnlimitedSteps) { error = "'maxSteps' must be an integer from 0 (no limit) to 100000"; return false; }
+        maxSteps = n == 0 ? CodeAgentService.UnlimitedSteps : n;
         return true;
     }
 
@@ -852,6 +856,7 @@ public partial class App : Application
         // BatchService — half-price batch API jobs (Anthropic / OpenAI), kept in batches.json and polled until done.
         services.AddSingleton<Services.Batch.BatchService>();
         services.AddSingleton<SessionMemoryService>();
+        services.AddSingleton<CheckpointService>();
         services.AddSingleton<RepoMapService>();
         services.AddSingleton<EmbeddingService>();
         services.AddSingleton<AutonomousCodingService>();

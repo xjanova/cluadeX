@@ -27,18 +27,18 @@ public partial class CodeAgentService
     private readonly CostTrackingService? _costTrackingService;
 
     // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
-    // A caller may override it for one run (a pipe-driven task's maxSteps): clamped 1–200, and scoped to that
+    // A caller may override it for one run (a pipe-driven task's maxSteps): 1–100000 or 0 for no limit, and scoped to that
     // call's async flow only — a chat turn running at the same time keeps the setting.
     // 0 in settings = no step limit (the run goes on until it is done; a paid run is still held by the spend guard).
     private int MaxAgentIterations => _iterationOverride.Value is int o
         ? Math.Clamp(o, 1, MaxIterationOverride)
         : _settingsService.Settings.MaxAgentIterations <= 0 ? UnlimitedSteps
         : Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 1000);
-    private const int UnlimitedSteps = 100_000;
+    public const int UnlimitedSteps = 100_000;
     private static string StepOf(int budget) => budget >= UnlimitedSteps ? "∞" : budget.ToString();
 
     /// <summary>Largest per-run step budget <see cref="ExecuteAgenticAsync"/> accepts.</summary>
-    public const int MaxIterationOverride = 200;
+    public const int MaxIterationOverride = UnlimitedSteps;   // a pipe task may ask for no limit (maxSteps 0)
     private static readonly AsyncLocal<int?> _iterationOverride = new();
 
     // High-value BUILT-IN tools offered to a SMALL-context local model (the full ~46-schema catalogue eats
@@ -1892,7 +1892,7 @@ public partial class CodeAgentService
     /// Integrates smart editing for code validation and context enrichment.
     /// Integrates context memory for automatic compaction.
     /// </summary>
-    /// <param name="maxIterations">Step budget for THIS run only (a pipe-driven task's maxSteps), clamped 1–200;
+    /// <param name="maxIterations">Step budget for THIS run only (a pipe-driven task's maxSteps), 1–100000 (100000 = no limit);
     /// null = Settings.MaxAgentIterations.</param>
     public async Task<AgentLoopResult> ExecuteAgenticAsync(
         List<ChatMessage> history,
@@ -1960,7 +1960,18 @@ public partial class CodeAgentService
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
         {
-            return await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct);
+            try { return await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct); }
+            catch (OperationCanceledException)
+            {
+                // Stopped (or the app closing) mid-task: what it did so far still goes to the brain — the owner wants
+                // saving to be the program's own habit, never something a prompt has to ask for (2026-10-16).
+                if (AgentRunScope.Current?.PartialResult is AgentLoopResult partial)
+                {
+                    partial.StopReason = "stopped";
+                    SaveRunToBrain(userMessage, partial);
+                }
+                throw;
+            }
         }
 
         _debugLog?.Warn("Agent", "dispatching to LEGACY [ACTION:] loop (provider has no native tool use) — "
@@ -2226,6 +2237,7 @@ public partial class CodeAgentService
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
+            if (AgentRunScope.Current is { } stepScope) stepScope.Step = iteration + 1;   // names this step's restore point
 
             var step = new AgentStep { StepNumber = iteration + 1 };
 
@@ -2654,6 +2666,7 @@ public partial class CodeAgentService
         CancellationToken ct)
     {
         var result = new AgentLoopResult();
+        if (AgentRunScope.Current is { } partialScope) partialScope.PartialResult = result;   // a stopped run still saves to the brain
         // Ask the backend whether this model sees images BEFORE the prompt is built (Ollama answers from
         // /api/show), so the prompt's vision line and what the loop does with images agree.
         await ProviderSeesImagesAsync(_providerManager.ActiveProvider, ct);
@@ -2878,6 +2891,7 @@ public partial class CodeAgentService
         {
             ct.ThrowIfCancellationRequested();
             result.TurnCount = iteration + 1;
+            if (AgentRunScope.Current is { } stepScope) stepScope.Step = iteration + 1;   // names this step's restore point
 
             // Pause: the step before this one finished (tools ran, results kept) — end here, cleanly, before spending more.
             if (iteration > 0 && AgentRunScope.Current is { PauseRequested: true })

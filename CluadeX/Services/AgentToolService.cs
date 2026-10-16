@@ -803,6 +803,18 @@ public class AgentToolService : IDisposable
             if (!hookResult.Success)
                 return Fail(call, string.Format(L("chat.perm.hookBlocked"), hookResult.Message));
 
+            // Restore point: keep the file as it is now before an agent tool changes it (CheckpointService).
+            if (call.Type is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit or ToolType.NotebookEdit
+                && CheckpointService.Current is { } checkpoints)
+            {
+                string target = call.Type == ToolType.NotebookEdit ? call.GetArg("notebook_path", call.GetArg("path")) : call.GetArg("path");
+                if (!string.IsNullOrWhiteSpace(target))
+                {
+                    try { checkpoints.CaptureBeforeChange(_fileSystem.ResolveSafePath(target)); }
+                    catch { /* the tool itself reports a bad path */ }
+                }
+            }
+
             var toolResult = call.Type switch
             {
                 // File tools

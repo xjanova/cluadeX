@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.IO;
 using System.Windows.Input;
 using CluadeX.Models;
 using CluadeX.Services;
@@ -15,6 +16,9 @@ public class TimeMachineViewModel : ViewModelBase
     private readonly TimeMachineService _tm;
     private readonly LocalizationService _loc;
     private readonly DebugLogService? _log;
+    private readonly DatabaseService? _db;
+    private readonly CheckpointService? _checkpoints;
+    private readonly ProjectRegistryService? _registry;
 
     // One token per selection: clicking through commits quickly used to let an older commit's file list
     // (still loading) land after a newer one's, mixing two commits in the Changes panel.
@@ -109,6 +113,107 @@ public class TimeMachineViewModel : ViewModelBase
     private string _currentBranchName = "";
     public string CurrentBranchName { get => _currentBranchName; set => SetProperty(ref _currentBranchName, value); }
 
+    // ─── Project + day (owner 2026-10-16: "ต้องเห็นทุกโปรเจคที่ทำมา เก็บทั้งหมด เลือกวัน เลือกโปรเจคได้ถูกต้อง") ───
+    public sealed record ProjectOption(string Path, string Name, DateTime LastUsed, bool Exists)
+    {
+        public string Display => Exists ? $"{Name}  —  {Path}" : $"{Name}  —  {Path}  ✕";
+        public override string ToString() => Display;   // the themed ComboBox shows the item's text
+    }
+
+    /// <summary>A day that has commits or restore points ("all days" when <see cref="Day"/> is null).</summary>
+    public sealed record DayOption(DateTime? Day, string Label, int Count)
+    {
+        public override string ToString() => Count > 0 ? $"{Label}   ({Count})" : Label;
+    }
+
+    /// <summary>Only the days something happened — a calendar of empty days was no help in finding work.</summary>
+    public ObservableCollection<DayOption> Days { get; } = new();
+
+    private DayOption? _selectedDayOption;
+    public DayOption? SelectedDayOption
+    {
+        get => _selectedDayOption;
+        set { if (SetProperty(ref _selectedDayOption, value) && !_loadingDays) SelectedDay = value?.Day; }
+    }
+    private bool _loadingDays;
+
+    private void RebuildDays()
+    {
+        var counts = new Dictionary<DateTime, int>();
+        foreach (var c in Commits) { var d = c.Date.ToLocalTime().Date; counts[d] = counts.GetValueOrDefault(d) + 1; }
+        string? project = _selectedProject?.Path ?? (_tm.HasWorkingDirectory ? _tm.WorkingDirectory : null);
+        if (_checkpoints != null && project != null)
+            foreach (var p in _checkpoints.Points(project)) { var d = p.TimeUtc.ToLocalTime().Date; counts[d] = counts.GetValueOrDefault(d) + 1; }
+        CultureInfo culture;
+        try { culture = (CultureInfo)CultureInfo.GetCultureInfo(_loc.T("tm.dateCulture")).Clone(); culture.DateTimeFormat.Calendar = new GregorianCalendar(); }
+        catch { culture = CultureInfo.InvariantCulture; }
+        _loadingDays = true;
+        try
+        {
+            Days.Clear();
+            Days.Add(new DayOption(null, _loc.T("tm.allDays"), 0));
+            foreach (var kv in counts.OrderByDescending(k => k.Key))
+                Days.Add(new DayOption(kv.Key, kv.Key.ToString("ddd d MMM yyyy", culture), kv.Value));
+            var keep = Days.FirstOrDefault(d => d.Day == _selectedDay);
+            if (keep == null) { _selectedDay = null; OnPropertyChanged(nameof(SelectedDay)); OnPropertyChanged(nameof(HasDayFilter)); keep = Days[0]; }
+            _selectedDayOption = keep;
+            OnPropertyChanged(nameof(SelectedDayOption));
+        }
+        finally { _loadingDays = false; }
+    }
+
+    public ObservableCollection<ProjectOption> Projects { get; } = new();
+
+    private ProjectOption? _selectedProject;
+    public ProjectOption? SelectedProject
+    {
+        get => _selectedProject;
+        set
+        {
+            if (SetProperty(ref _selectedProject, value) && !_loadingProjects && value != null)
+            {
+                _tm.Project = value.Path;
+                _ = LoadAsync();
+            }
+        }
+    }
+    private bool _loadingProjects;
+
+    private DateTime? _selectedDay;
+    /// <summary>Only that local day's commits and restore points; null = every day.</summary>
+    public DateTime? SelectedDay
+    {
+        get => _selectedDay;
+        set
+        {
+            if (SetProperty(ref _selectedDay, value?.Date))
+            {
+                OnPropertyChanged(nameof(HasDayFilter));
+                RebuildVisibleCommits();
+                LoadRestorePoints();
+            }
+        }
+    }
+    public bool HasDayFilter => _selectedDay != null;
+
+    /// <summary>Restore points CluadeX kept before each agent step changed files (CheckpointService) — they also cover
+    /// work that was never committed.</summary>
+    public ObservableCollection<CheckpointService.Point> RestorePoints { get; } = new();
+    public bool HasRestorePoints => RestorePoints.Count > 0;
+
+    private CheckpointService.Point? _pendingPoint;
+    public CheckpointService.Point? PendingPoint
+    {
+        get => _pendingPoint;
+        set { if (SetProperty(ref _pendingPoint, value)) OnPropertyChanged(nameof(IsPointConfirmOpen)); }
+    }
+    public bool IsPointConfirmOpen => _pendingPoint != null;
+
+    public ICommand ClearDayCommand { get; }
+    public ICommand AskRestorePointCommand { get; }
+    public ICommand ConfirmRestorePointCommand { get; }
+    public ICommand CancelRestorePointCommand { get; }
+
     public int CommitCount => Commits.Count;
     public int VisibleCount => VisibleCommits.Count;
 
@@ -124,11 +229,19 @@ public class TimeMachineViewModel : ViewModelBase
     public ICommand ShowAllCommand { get; }
     public ICommand ShowAgentOnlyCommand { get; }
 
-    public TimeMachineViewModel(TimeMachineService tm, LocalizationService loc, DebugLogService? log = null)
+    public TimeMachineViewModel(TimeMachineService tm, LocalizationService loc, DebugLogService? log = null,
+        DatabaseService? db = null, CheckpointService? checkpoints = null, ProjectRegistryService? registry = null)
     {
         _tm = tm;
         _loc = loc;
         _log = log;
+        _db = db;
+        _checkpoints = checkpoints;
+        _registry = registry;
+        ClearDayCommand = new RelayCommand(() => SelectedDayOption = Days.FirstOrDefault());
+        AskRestorePointCommand = new RelayCommand<CheckpointService.Point>(p => { if (p != null) PendingPoint = p; });
+        CancelRestorePointCommand = new RelayCommand(() => PendingPoint = null);
+        ConfirmRestorePointCommand = new AsyncRelayCommand(DoRestorePointAsync);
         RefreshCommand = new AsyncRelayCommand(() => LoadAsync());
         SelectCommitCommand = new RelayCommand<CommitInfo>(c => { if (c != null) Selected = c; });
         SelectFileCommand = new RelayCommand<CommitFileChange>(f => { if (f != null) SelectedFile = f; });
@@ -181,10 +294,13 @@ public class TimeMachineViewModel : ViewModelBase
         if (!keepStatus) StatusMessage = "";
         try
         {
+            await LoadProjectsAsync();
+            LoadRestorePoints();
             if (!await _tm.IsGitRepoAsync())
             {
                 StatusMessage = _loc.T("tm.notRepoHint");
                 Commits.Clear();
+                RebuildDays();
                 VisibleCommits.Clear();
                 Files.Clear();
                 DiffLines.Clear();
@@ -196,6 +312,7 @@ public class TimeMachineViewModel : ViewModelBase
             var loaded = await Task.Run(() => _tm.ListCommitsAsync(200));
             Commits.Clear();
             foreach (var c in loaded) Commits.Add(c);
+            RebuildDays();
             RebuildVisibleCommits();
             OnPropertyChanged(nameof(CommitCount));
 
@@ -213,10 +330,66 @@ public class TimeMachineViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Every project ever worked on: chats' folders, the project registry, restore-point projects and the
+    /// open folder — one row per folder (case-insensitive), most recently used first.</summary>
+    private async Task LoadProjectsAsync()
+    {
+        string? open = _tm.Project ?? (_tm.HasWorkingDirectory ? _tm.WorkingDirectory : null);
+        var found = await Task.Run(() => CollectProjects(open));
+        _loadingProjects = true;
+        try
+        {
+            Projects.Clear();
+            foreach (var p in found) Projects.Add(p);
+            SelectedProject = open == null ? null
+                : Projects.FirstOrDefault(p => string.Equals(p.Path, open.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
+        }
+        finally { _loadingProjects = false; }
+    }
+
+    private List<ProjectOption> CollectProjects(string? open)
+    {
+        var map = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? p, DateTime when)
+        {
+            if (string.IsNullOrWhiteSpace(p)) return;
+            p = p.TrimEnd('\\', '/');
+            if (!map.TryGetValue(p, out var t) || when > t) map[p] = when;
+        }
+        try { if (_db != null) foreach (var s in _db.LoadSessionList()) Add(s.ProjectPath, s.UpdatedAt); }
+        catch (Exception ex) { _log?.Warn("TimeMachine", "chat projects unavailable", ex); }
+        try { if (_registry != null) foreach (var e in _registry.Recent(500)) Add(e.Path, e.LastOpened); } catch { }
+        try { if (_checkpoints != null) foreach (var c in _checkpoints.Projects()) Add(c.Project, c.LastUtc.ToLocalTime()); } catch { }
+        if (open != null) Add(open, DateTime.Now);
+        return map.OrderByDescending(kv => kv.Value)
+            .Select(kv => new ProjectOption(kv.Key, Path.GetFileName(kv.Key) is { Length: > 0 } n ? n : kv.Key, kv.Value, Directory.Exists(kv.Key)))
+            .ToList();
+    }
+
+    private void LoadRestorePoints()
+    {
+        RestorePoints.Clear();
+        string? project = _selectedProject?.Path ?? (_tm.HasWorkingDirectory ? _tm.WorkingDirectory : null);
+        if (_checkpoints != null && project != null)
+            foreach (var p in _checkpoints.Points(project, _selectedDay).Take(300)) RestorePoints.Add(p);
+        OnPropertyChanged(nameof(HasRestorePoints));
+    }
+
+    private async Task DoRestorePointAsync()
+    {
+        var point = _pendingPoint;
+        PendingPoint = null;
+        if (point == null || _checkpoints == null) return;
+        var r = await Task.Run(() => _checkpoints.RestoreTo(point.Project, point.Id));
+        StatusMessage = r.Ok ? _loc.T("tm.pointRestored", r.Files) : _loc.T("tm.pointFailed", r.Message);
+        LoadRestorePoints();
+    }
+
     private void RebuildVisibleCommits()
     {
         VisibleCommits.Clear();
         var src = _filterAgentOnly ? Commits.Where(c => c.IsAiAuthored) : Commits;
+        if (_selectedDay is { } day) src = src.Where(c => c.Date.ToLocalTime().Date == day);
         foreach (var c in src) VisibleCommits.Add(c);
         OnPropertyChanged(nameof(VisibleCount));
     }

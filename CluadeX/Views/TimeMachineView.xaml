@@ -432,6 +432,7 @@
             <!-- ═══ HEADER ═══ -->
             <Border Grid.Row="0" Padding="24,16" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"
                     Background="{DynamicResource Page.Header.Background}">
+                <StackPanel>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
@@ -502,6 +503,20 @@
                         </Button>
                     </StackPanel>
                 </Grid>
+                    <WrapPanel Margin="0,12,0,0">
+                        <TextBlock Text="{services:Loc tm.project}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="{DynamicResource Text.Muted}" FontSize="12"/>
+                        <ComboBox ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}"
+                                  MinWidth="380" MaxWidth="640" Margin="0,0,18,0"
+                                  ToolTip="{Binding SelectedProject.Path}"/>
+                        <TextBlock Text="{services:Loc tm.day}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="{DynamicResource Text.Muted}" FontSize="12"/>
+                        <ComboBox ItemsSource="{Binding Days}" SelectedItem="{Binding SelectedDayOption}" MinWidth="200" Margin="0,0,8,0"/>
+                        <Button Content="{services:Loc tm.allDays}" Command="{Binding ClearDayCommand}"
+                                Style="{StaticResource NeonButton}"
+                                Visibility="{Binding HasDayFilter, Converter={StaticResource BoolVis}}"/>
+                    </WrapPanel>
+                </StackPanel>
             </Border>
 
             <!-- ═══ SPLIT CONTENT ═══ -->
@@ -516,6 +531,7 @@
                 <Border Grid.Column="0" Style="{StaticResource NeonPanel}">
                     <Grid>
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
@@ -541,8 +557,49 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- Restore points kept before agent edits (CheckpointService) -->
+                        <Border Grid.Row="1" Padding="14,10" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}"
+                                Visibility="{Binding HasRestorePoints, Converter={StaticResource BoolVis}}">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc tm.restorePoints}" FontWeight="SemiBold" FontSize="12"
+                                           Foreground="{DynamicResource Text.Primary}" Margin="4,0,0,6"/>
+                                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding RestorePoints}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,6" Margin="0,0,0,4" CornerRadius="6"
+                                                        Background="{DynamicResource State.Fill.Faint}">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Title}" FontSize="12" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{DynamicResource Text.Primary}"/>
+                                                            <TextBlock FontSize="10" Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis"
+                                                                       FontFamily="{DynamicResource Font.Mono.Display}">
+                                                                <Run Text="{Binding When, Mode=OneWay}"/>
+                                                                <Run Text="  ·  "/>
+                                                                <Run Text="{Binding FileList, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                        <Button Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                                Style="{StaticResource NeonButton}"
+                                                                Content="{services:Loc tm.restoreHere}"
+                                                                Command="{Binding DataContext.AskRestorePointCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Commit list with spine -->
-                        <Grid Grid.Row="1">
+                        <Grid Grid.Row="2">
                             <!-- Spine layers — drawn behind ItemsControl -->
                             <Grid HorizontalAlignment="Left" Margin="36,12,0,12">
                                 <Rectangle Width="6" Margin="-3,0,0,0" Opacity="0.18" Fill="{DynamicResource TimeMachine.Spine}">
@@ -818,6 +875,37 @@
                                 <TextBlock Text="{services:Loc timemachine.confirmRewind}"/>
                             </StackPanel>
                         </Button>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ═══ CONFIRM RESTORE POINT ═══ -->
+        <Grid Background="{DynamicResource Bg.Scrim.Dialog}"
+              Visibility="{Binding IsPointConfirmOpen, Converter={StaticResource BoolVis}}">
+            <Border Width="480" Padding="24" Style="{StaticResource NeonPanel}"
+                    VerticalAlignment="Center" HorizontalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="{services:Loc tm.pointConfirmTitle}" FontSize="16" FontWeight="Bold"
+                               Foreground="{DynamicResource Text.Primary}"/>
+                    <TextBlock Text="{services:Loc tm.pointConfirmBody}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,12"
+                               Foreground="{DynamicResource Text.Muted}"/>
+                    <Border Background="{DynamicResource State.Fill.Faint}" BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                            CornerRadius="8" Padding="14,10" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Text="{Binding PendingPoint.Title}" FontSize="13" FontWeight="Medium" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Primary}"/>
+                            <TextBlock Text="{Binding PendingPoint.When}" FontSize="11" Margin="0,4,0,0"
+                                       FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Faint}"/>
+                            <TextBlock Text="{Binding PendingPoint.FileList}" FontSize="11" Margin="0,2,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Text.Secondary}"/>
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="{services:Loc timemachine.cancel}" Style="{StaticResource NeonButton}"
+                                Margin="0,0,8,0" Command="{Binding CancelRestorePointCommand}"/>
+                        <Button Content="{services:Loc tm.restoreHere}" Style="{StaticResource NeonPrimaryButton}"
+                                Command="{Binding ConfirmRestorePointCommand}"/>
                     </StackPanel>
                 </StackPanel>
             </Border>
