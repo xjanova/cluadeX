@@ -29,9 +29,13 @@ public partial class CodeAgentService
     // Agentic loop step cap — user-configurable (was a hardcoded 15 that cut off complex tasks mid-flight).
     // A caller may override it for one run (a pipe-driven task's maxSteps): clamped 1–200, and scoped to that
     // call's async flow only — a chat turn running at the same time keeps the setting.
+    // 0 in settings = no step limit (the run goes on until it is done; a paid run is still held by the spend guard).
     private int MaxAgentIterations => _iterationOverride.Value is int o
         ? Math.Clamp(o, 1, MaxIterationOverride)
-        : Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 100);
+        : _settingsService.Settings.MaxAgentIterations <= 0 ? UnlimitedSteps
+        : Math.Clamp(_settingsService.Settings.MaxAgentIterations, 1, 1000);
+    private const int UnlimitedSteps = 100_000;
+    private static string StepOf(int budget) => budget >= UnlimitedSteps ? "∞" : budget.ToString();
 
     /// <summary>Largest per-run step budget <see cref="ExecuteAgenticAsync"/> accepts.</summary>
     public const int MaxIterationOverride = 200;
@@ -180,6 +184,24 @@ public partial class CodeAgentService
             || a.StartsWith("stop", StringComparison.OrdinalIgnoreCase)) return false;
         scope.BudgetGrantedUsd = scope.CostUsd;   // another full budget from here
         return true;
+    }
+
+    /// <summary>At the step limit with the run still working: asks to go on for another block. True = go on.
+    /// Nobody to ask (headless) = stop at the limit.</summary>
+    private async Task<bool> ContinuePastStepLimitAsync(int used, bool isThai, CancellationToken ct)
+    {
+        int more = MaxAgentIterations;
+        string goOn = isThai ? $"ทำต่อ (อีก {more} ขั้น)" : $"Go on (another {more} steps)";
+        string stop = isThai ? "หยุดตรงนี้" : "Stop here";
+        string q = isThai
+            ? $"⏱ ใช้ไป {used} ขั้น ถึงลิมิตที่ตั้งไว้แล้ว แต่งานยังไม่เสร็จ — ทำต่อไหม?"
+            : $"⏱ {used} steps used, the limit you set, and the task isn't finished. Keep going?";
+        string? answer = await _agentToolService.AskUserAsync(q, [goOn, stop]);
+        ct.ThrowIfCancellationRequested();
+        if (answer == null) return false;
+        string a = answer.Trim();
+        return !(a.Equals(stop, StringComparison.OrdinalIgnoreCase) || a.Contains("หยุด", StringComparison.Ordinal)
+                 || a.StartsWith("stop", StringComparison.OrdinalIgnoreCase));
     }
 
     // "Go on" past the daily cap: allowed up to today's spend + another day's budget (for this calendar day only).
@@ -2132,7 +2154,7 @@ public partial class CodeAgentService
             string thinkVerb = GetRandomSpinnerVerb();
             string stepStatus = iteration == 0
                 ? $"{thinkVerb}..."
-                : (isThai ? $"ขั้นที่ {iteration + 1}/{MaxAgentIterations} · {thinkVerb}..." : $"Step {iteration + 1}/{MaxAgentIterations} · {thinkVerb}...");
+                : (isThai ? $"ขั้นที่ {iteration + 1}/{StepOf(MaxAgentIterations)} · {thinkVerb}..." : $"Step {iteration + 1}/{StepOf(MaxAgentIterations)} · {thinkVerb}...");
             progress?.Report(stepStatus);
             OnAgentStatus?.Invoke(stepStatus);
 
@@ -2775,15 +2797,14 @@ public partial class CodeAgentService
             // Last step of the budget: no more tools. The model reports what it found, what it changed and
             // what is left, so a long task ends with the work so far instead of an empty bubble (agenttest on
             // Snooker2D, 2026-10-09: 25 tool-only steps, FinalResponse "").
-            // A run still at work when the step budget runs out keeps going instead of stopping to ask the user to
-            // type "continue" (the owner wants tasks carried through). Another budget-sized block each time, up to
-            // MaxIterationOverride; a paid run is still held by the spend guard above. A per-run override (a pipe
-            // task's maxSteps) is a hard limit and never extends.
-            if (iteration == iterationBudget - 1 && _iterationOverride.Value == null && iterationBudget < MaxIterationOverride
-                && result.Steps.LastOrDefault()?.ToolCalls.Count > 0)
+            // A run still at work when it reaches the step limit asks once, right there, whether to go on for another
+            // block — never before. No limit set (0) = never asks. A per-run override (a pipe task's maxSteps) is hard.
+            if (iteration == iterationBudget - 1 && _iterationOverride.Value == null && iterationBudget < UnlimitedSteps
+                && result.Steps.LastOrDefault()?.ToolCalls.Count > 0
+                && await ContinuePastStepLimitAsync(iterationBudget, isThai, ct))
             {
-                iterationBudget = Math.Min(MaxIterationOverride, iterationBudget + MaxAgentIterations);
-                _debugLog?.Info("Agent", $"step budget extended to {iterationBudget} — the run is still working");
+                iterationBudget += MaxAgentIterations;
+                _debugLog?.Info("Agent", $"step limit raised to {iterationBudget} — the user said go on");
             }
             bool budgetLastStep = iteration == iterationBudget - 1 && iterationBudget > 1 && toolSchemas.Count > 0;
             if (budgetLastStep && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
@@ -2802,7 +2823,7 @@ public partial class CodeAgentService
             string nativeThinkVerb = GetRandomSpinnerVerb();
             string nativeStepStatus = iteration == 0
                 ? $"{nativeThinkVerb}..."
-                : (isThai ? $"ขั้นที่ {iteration + 1}/{iterationBudget} · {nativeThinkVerb}..." : $"Step {iteration + 1}/{iterationBudget} · {nativeThinkVerb}...");
+                : (isThai ? $"ขั้นที่ {iteration + 1}/{StepOf(iterationBudget)} · {nativeThinkVerb}..." : $"Step {iteration + 1}/{StepOf(iterationBudget)} · {nativeThinkVerb}...");
             progress?.Report(nativeStepStatus);
             OnAgentStatus?.Invoke(nativeStepStatus);
 

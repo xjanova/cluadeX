@@ -45,7 +45,7 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(PromptCachingEnabled)] = (vm, s) => s.PromptCachingEnabled = vm.PromptCachingEnabled,
         [nameof(ThinkingBudgetTokens)] = (vm, s) => s.ThinkingBudgetTokens = Math.Clamp(vm.ThinkingBudgetTokens, 1024, 64000),
         // Agent
-        [nameof(MaxAgentIterations)] = (vm, s) => s.MaxAgentIterations = Math.Clamp(vm.MaxAgentIterations, 1, 100),
+        [nameof(MaxAgentIterations)] = (vm, s) => s.MaxAgentIterations = Math.Clamp(vm.MaxAgentIterations, 0, 1000),
         [nameof(InteractiveRequestTimeoutSeconds)] = (vm, s) => s.InteractiveRequestTimeoutSeconds = Math.Clamp(vm.InteractiveRequestTimeoutSeconds, 0, 3600),
         [nameof(EnforceReadBeforeEdit)] = (vm, s) => s.EnforceReadBeforeEdit = vm.EnforceReadBeforeEdit,
         [nameof(AutoVerifyAfterEditEnabled)] = (vm, s) => s.AutoVerifyAfterEditEnabled = vm.AutoVerifyAfterEditEnabled,
