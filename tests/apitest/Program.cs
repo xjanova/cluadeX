@@ -543,6 +543,7 @@ internal static class Program
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
         await HandoffWire.Run(Check, Section);
+        await ClaudeDevStreamWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
     }
 

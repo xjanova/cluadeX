@@ -65,6 +65,11 @@ public class ClaudeDevProvider : IAiProvider
     /// <summary>The grant for the turn in flight (set by the agent loop around its one delegated call).</summary>
     public static readonly AsyncLocal<WorkerGrant?> Grant = new();
 
+    /// <summary>Set by the agent loop around a worker turn: every stream-json line goes here (ClaudeDevStreamTurn turns
+    /// it into tool rows, the plan, steps) instead of being quoted into the reply. ChatAsync then yields only what no
+    /// event carries — the explained auth/billing refusal of a turn that produced nothing.</summary>
+    public static readonly AsyncLocal<Action<string>?> StreamSink = new();
+
     /// <summary>File tools the CLI gets when the user's rules let CluadeX's own agent edit in the folder.</summary>
     private const string EditTools = "Edit,Write,MultiEdit,NotebookEdit,TodoWrite";
 
@@ -284,6 +289,7 @@ public class ClaudeDevProvider : IAiProvider
         // big prompt would just be noise on top — send a short wrapper instead (BuildArgs).
         var grant = Grant.Value;
         bool worker = grant is { Edit: true } || grant is { Run: true };
+        var sink = worker ? StreamSink.Value : null;
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
@@ -344,17 +350,20 @@ public class ClaudeDevProvider : IAiProvider
                 if (worker)
                 {
                     string? shown = RenderStreamLine(line, out bool failed, out string? result);
+                    // The structured events (rows, plan, steps) — the agent loop renders them. A UI handler that throws
+                    // must not end a half-hour task.
+                    try { sink?.Invoke(line); } catch { }
                     if (failed)
                     {
                         // An error result (billing, auth, a limit) is the reply when nothing else was said.
                         lastLine = result ?? line;
-                        if (any && !string.IsNullOrWhiteSpace(result)) yield return "\n⚠ " + result + "\n";
+                        if (any && sink == null && !string.IsNullOrWhiteSpace(result)) yield return "\n⚠ " + result + "\n";
                         continue;
                     }
                     if (shown == null) continue;
                     any = true;
                     SetStatus("Claude Dev working…");
-                    yield return shown;
+                    if (sink == null) yield return shown;
                     continue;
                 }
                 // The CLI reports auth/billing refusals on STDOUT with a non-zero exit,

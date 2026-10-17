@@ -99,6 +99,16 @@ public class AgentToolService : IDisposable
     public IReadOnlyList<TodoItem> TodoItems => _todoItems;
     public event Action? TodoChanged;
 
+    /// <summary>The run's whole plan, set from outside the tool — Claude Dev's own TodoWrite/TaskCreate calls, so the
+    /// plan bar and checklist follow a delegated turn the same way they follow todo_write.</summary>
+    public void SetPlan(IEnumerable<TodoItem> items)
+    {
+        var copy = items.Select(t => new TodoItem { Content = t.Content, Status = t.Status }).ToList();
+        _todoItems.Clear();
+        _todoItems.AddRange(copy);
+        TodoChanged?.Invoke();
+    }
+
     // ─── REPL Session State ───
     private readonly Dictionary<string, ReplSession> _replSessions = new();
 

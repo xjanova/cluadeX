@@ -1958,7 +1958,7 @@ public partial class CodeAgentService
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
         if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX)
             return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
-                history, userMessage ?? "", ct);
+                history, userMessage ?? "", ct, progress);
 
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
@@ -1992,7 +1992,7 @@ public partial class CodeAgentService
     /// work in it, Claude Dev's edit/run grant from the user's rules, the reply streamed into the chat.
     /// </summary>
     private async Task<AgentLoopResult> RunDelegatedTurnAsync(Providers.IAiProvider provider, AiProviderType delegated,
-        List<ChatMessage> history, string userMessage, CancellationToken ct)
+        List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
     {
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
         // A chat another model worked in: the new one gets the task, where it stopped and what changed — not the
@@ -2012,22 +2012,89 @@ public partial class CodeAgentService
             + (delegated == AiProviderType.ClaudeDev ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
         var cdResult = new AgentLoopResult { TurnCount = 1 };
         var cdText = new StringBuilder();
+        // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
+        var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
         Providers.ClaudeDevProvider.Grant.Value = grant;
+        Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
         try
         {
             await foreach (var chunk in provider.ChatAsync(sendHistory, sendMessage, null, ct))
             {
                 cdText.Append(chunk);
-                OnAgenticStreamingToken?.Invoke(chunk, 1);
+                OnAgenticStreamingToken?.Invoke(chunk, turn?.Steps.Count + 1 ?? 1);
             }
         }
-        finally { Providers.ClaudeDevProvider.Grant.Value = null; }
+        catch (OperationCanceledException) when (turn != null)
+        {
+            // Stopped mid-task: what it did so far still goes to the brain, as for the native loop.
+            SaveRunToBrain(userMessage, new AgentLoopResult
+            {
+                Steps = turn.Steps, TurnCount = Math.Max(1, turn.Steps.Count), StopReason = "stopped", FinalResponse = turn.FinalText,
+            });
+            throw;
+        }
+        finally
+        {
+            Providers.ClaudeDevProvider.Grant.Value = null;
+            Providers.ClaudeDevProvider.StreamSink.Value = null;
+        }
+        if (turn != null)
+        {
+            // The reply is the model's own last text — the rows already show the tools. An error result after work
+            // (a limit hit mid-task) is said under it; a turn that produced nothing carries the provider's explanation.
+            string text = turn.FinalText;
+            if (turn.ResultIsError && !string.IsNullOrWhiteSpace(turn.ResultText) && cdText.Length == 0)
+                text = (text + "\n\n⚠ " + turn.ResultText.Trim()).Trim();
+            if (cdText.Length > 0) text = (text + "\n\n" + cdText.ToString().Trim()).Trim();
+            cdResult.FinalResponse = text;
+            cdResult.Steps.AddRange(turn.Steps);
+            cdResult.TurnCount = Math.Max(1, turn.Steps.Count);
+            cdResult.Success = !turn.ResultIsError && (text.Length > 0 || cdResult.TotalToolCalls > 0);
+            cdResult.StopReason = turn.ResultIsError || !cdResult.Success ? "error" : "end_turn";
+            if (cdResult.Steps.Count == 0) cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = text });
+            _debugLog?.Info("Agent", $"{delegated} worker turn done · steps={turn.Steps.Count} tools={cdResult.TotalToolCalls}"
+                + $" plan={turn.Plan.Count} error={turn.ResultIsError} textLen={text.Length}"
+                + (turn.CostUsd is { } usd ? $" · CLI-reported ${usd:0.000}" : ""));
+            SaveRunToBrain(userMessage, cdResult);
+            return cdResult;
+        }
         cdResult.FinalResponse = cdText.ToString().Trim();
         cdResult.Success = cdResult.FinalResponse.Length > 0;
         cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
         cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
         _debugLog?.Info("Agent", $"{delegated} passthrough done · textLen={cdResult.FinalResponse.Length}");
         return cdResult;
+    }
+
+    /// <summary>
+    /// A Claude Dev worker turn wired to this service's own events, so the chat renders it the way it renders the native
+    /// loop: reply bubbles per step, a tool row per call (folding, timing, "ดูผลลัพธ์", the editor following each edit),
+    /// the live plan, "ขั้นที่ N" in the status line and AgentRunScope.Step, the sub-agent map.
+    /// </summary>
+    private Providers.ClaudeDevStreamTurn StartClaudeDevTurn(string? folder, IProgress<string>? progress)
+    {
+        var turn = new Providers.ClaudeDevStreamTurn(AgentRunScope.Current?.WorkingDirectory ?? folder);
+        bool isThai = _localizationService.CurrentLanguage == "th";
+        turn.Text += (token, step) => OnAgenticStreamingToken?.Invoke(token, step);
+        turn.Thinking += (text, step) => OnThinkingUpdate?.Invoke(text, step);
+        turn.StepStarted += n =>
+        {
+            if (AgentRunScope.Current is { } scope) scope.Step = n;
+            string status = isThai ? $"ขั้นที่ {n} · {GetRandomSpinnerVerb()}..." : $"Step {n} · {GetRandomSpinnerVerb()}...";
+            progress?.Report(status);
+            OnAgentStatus?.Invoke(status);
+        };
+        turn.ToolStarting += call =>
+        {
+            string status = GetToolStatusMessage(call.ToolName, call.Arguments);
+            OnAgentStatus?.Invoke(status);
+            progress?.Report(status);
+            OnToolStarting?.Invoke(call.ToolName, status);
+        };
+        turn.ToolExecuted += r => OnToolExecuted?.Invoke(r);
+        turn.PlanChanged += items => _agentToolService.SetPlan(items);
+        turn.SubAgent += RaiseSubAgent;
+        return turn;
     }
 
     /// <summary>
