@@ -109,6 +109,13 @@ public class ClaudeDevProvider : IAiProvider
         args.Append(" --allowedTools ").Append(Quote(tools));
         if (grant is { Run: true }) args.Append(" --disallowedTools ").Append(Quote(NeverTools));
         if (grant is { Edit: true }) args.Append(" --permission-mode acceptEdits");
+        // Every worker that may edit or run carries CluadeX's PreToolUse guard (Safety.GuardHook): the CLI's own Bash
+        // never passes through CluadeX's command checks otherwise — the 2026-10-17 `rd /s /q C:\` went through there.
+        if (worker)
+        {
+            try { args.Append(" --settings ").Append(Quote(Safety.GuardHook.SettingsFile())); }
+            catch { args.Append(" --disallowedTools ").Append(Quote("Bash,PowerShell")); }   // no guard → no shell
+        }
         // "default"/"auto"/empty → NO --model flag. An explicit alias routed the call to
         // API-credit billing and died with "Credit balance is too low" on a machine whose
         // Claude login is subscription-based; the CLI's own default rides the subscription.
