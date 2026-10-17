@@ -1966,7 +1966,8 @@ public partial class CodeAgentService
             if (AgentHandoff.HasEarlierWork(history))
             {
                 string git = await AgentHandoff.GitSnapshotAsync(folder, ct);
-                brief = AgentHandoff.Compose(history, folder, git, delegated == AiProviderType.BrainX ? 3600 : 24000);
+                brief = AgentHandoff.Compose(history, folder, git, delegated == AiProviderType.BrainX ? 3600 : 24000,
+                    AgentRunScope.Current?.TaskRequest);
             }
             var sendHistory = brief != null ? new List<ChatMessage>() : history;
             string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage ?? "", brief) : userMessage ?? "";

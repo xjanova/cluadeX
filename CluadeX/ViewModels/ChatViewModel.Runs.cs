@@ -366,6 +366,8 @@ public partial class ChatViewModel
         var run = new ChatRun { Session = session, Messages = messages };
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
+        // The chat's first request in full — the model's view may hold only a compaction summary of it (AgentHandoff).
+        run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
         _runs.Add(run);

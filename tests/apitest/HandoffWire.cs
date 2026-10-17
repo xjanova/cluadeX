@@ -60,6 +60,23 @@ internal static class HandoffWire
         string? small = AgentHandoff.Compose(huge, @"D:\Game", git, 3600);
         check("handoff", "the room's budget is kept (a 50 KB task still fits ~3.6 KB) and git is not crowded out",
             small != null && small.Length <= 3600 && small.Contains("lyra-skills"), $"{small?.Length}");
+        // A compacted chat: the model's first turn is a summary that cuts the request short (the real hive-t2 brief).
+        string fullTask = "Next task on HIVE // BREACH. CONTEXT: build on enemies-spitter-brute: create branch `lyra-skills` from it. " + new string('y', 900) + " END-OF-TASK";
+        var compacted = new List<ChatMessage>
+        {
+            new() { Role = MessageRole.User, Content = AgentHandoff.CompactionMark + " — those messages were compacted out]\nUser requests:\n  - Next task on HIVE // BREACH. CONTEXT: create branch `lyra-s..." },
+            new() { Role = MessageRole.ToolAction, Content = "multi_edit run_tests.gd" },
+            new() { Role = MessageRole.User, Content = "เกมไม่เปิดขึ้นมา" },
+            new() { Role = MessageRole.Assistant, Content = "⏸ paused" },
+        };
+        string? cb = AgentHandoff.Compose(compacted, @"D:\Game", git, 24000, fullTask);
+        int taskAt = cb?.IndexOf("### The task", StringComparison.Ordinal) ?? -1, bgAt = cb?.IndexOf("### Background", StringComparison.Ordinal) ?? -1;
+        check("handoff", "after a compaction the task is the transcript's first request word for word; the summary is background",
+            cb != null && cb.Contains("END-OF-TASK") && taskAt >= 0 && bgAt > taskAt && cb.Contains("- เกมไม่เปิดขึ้นมา"), cb ?? "(null)");
+        string? cbNoTask = AgentHandoff.Compose(compacted, @"D:\Game", git, 24000);
+        check("handoff", "no transcript request at hand: the summary still stands in as the task",
+            cbNoTask != null && cbNoTask.Contains("lyra-s...") && cbNoTask.IndexOf("### The task", StringComparison.Ordinal) >= 0, "");
+
         string sent = AgentHandoff.WithBrief("@codex ทำต่อ", brief!);
         check("handoff", "the user's words lead (an @name target still parses)", BrainXRoomProvider.ParseTarget(sent).To == "codex", "");
         check("handoff", "the room's board card names the task, not just 'ทำต่อ'",

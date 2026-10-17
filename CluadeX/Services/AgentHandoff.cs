@@ -15,16 +15,31 @@ namespace CluadeX.Services;
 /// </summary>
 public static class AgentHandoff
 {
+    /// <summary>How ChatViewModel.BuildModelHistory starts a compaction summary turn.</summary>
+    public const string CompactionMark = "[Summary of the earlier part of this conversation";
+
     /// <summary>Does this history hold earlier work worth handing over (a reply or a tool step)?</summary>
     public static bool HasEarlierWork(IReadOnlyList<ChatMessage> history) =>
         history.Any(m => m.Role is MessageRole.Assistant or MessageRole.ToolAction && !string.IsNullOrWhiteSpace(m.Content));
 
     /// <summary>The brief, or null for a fresh chat. <paramref name="git"/> is the folder's git snapshot ("" = none);
     /// <paramref name="maxChars"/> bounds the whole text (the room's board takes ~4 KB, the CLI far more).</summary>
-    public static string? Compose(IReadOnlyList<ChatMessage> history, string? folder, string git, int maxChars)
+    public static string? Compose(IReadOnlyList<ChatMessage> history, string? folder, string git, int maxChars,
+        string? taskRequest = null)
     {
         if (!HasEarlierWork(history)) return null;
         var users = history.Where(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content)).ToList();
+        // After a compaction the model's first "user" turn is the summary, which cuts the first request off after a few
+        // hundred chars (HIVE // BREACH 2026-10-17: the brief's task ended "create branch `lyra-s..."). The transcript
+        // still has the request word for word: it is the task; the summary stays as background.
+        ChatMessage? summary = users.FirstOrDefault(m => m.Content.StartsWith(CompactionMark, StringComparison.Ordinal));
+        if (summary != null) users.Remove(summary);
+        if (!string.IsNullOrWhiteSpace(taskRequest))
+        {
+            users.RemoveAll(m => string.Equals(m.Content.Trim(), taskRequest.Trim(), StringComparison.Ordinal));
+            users.Insert(0, new ChatMessage { Role = MessageRole.User, Content = taskRequest });
+        }
+        else if (summary != null && users.Count == 0) users.Add(summary);
         var lastReply = history.LastOrDefault(m => m.Role == MessageRole.Assistant && !string.IsNullOrWhiteSpace(m.Content));
         var steps = history.Where(m => m.Role == MessageRole.ToolAction && !string.IsNullOrWhiteSpace(m.Content)).ToList();
 
@@ -42,6 +57,11 @@ public static class AgentHandoff
         {
             sb.AppendLine().AppendLine("### The task (the first request in this chat)");
             sb.AppendLine(Cut(users[0].Content.Trim(), taskBudget));
+        }
+        if (summary != null && users.Count > 0 && !ReferenceEquals(users[0], summary))
+        {
+            sb.AppendLine().AppendLine("### Background: summary of the earlier part of the chat");
+            sb.AppendLine(Cut(summary.Content[CompactionMark.Length..].Trim(), Math.Max(400, maxChars * 12 / 100)));
         }
         if (users.Count > 1)
         {

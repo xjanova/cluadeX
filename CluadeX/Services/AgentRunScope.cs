@@ -69,6 +69,10 @@ public sealed class AgentRunScope
     /// not typed by the owner. The BrainX model never relays such a run back into the room: that is a loop.</summary>
     public bool FromPipe { get; set; }
 
+    /// <summary>The chat's first request, word for word from the transcript (null = none). A model taking the chat
+    /// over gets this as "the task": after a compaction the model's view holds only a summary that cuts it short.</summary>
+    public string? TaskRequest { get; set; }
+
     private readonly List<string> _extraFolders = new();
     /// <summary>Related project folders opened beside <see cref="WorkingDirectory"/> (open_project add=true, or the
     /// chat naming another project). Tools reach them by absolute path; relative paths stay in the main folder.</summary>

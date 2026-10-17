@@ -301,7 +301,9 @@ public class ClaudeDevProvider : IAiProvider
             StandardErrorEncoding = Encoding.UTF8,
         };
 
-        SetLoading(true);
+        // No SetLoading here: "loading" drives the full-window "กำลังโหลดโมเดล" overlay, which then covered the chat for
+        // the whole turn — a worker turn of half an hour hid every step it streamed (owner 2026-10-17). The chat's own
+        // running state shows the turn; loading is for InitializeAsync (finding the CLI) only.
         SetStatus("Claude Dev thinking…");
         Process? proc = null;
         try
@@ -388,7 +390,6 @@ public class ClaudeDevProvider : IAiProvider
         }
         finally
         {
-            SetLoading(false);
             try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
             proc?.Dispose();
         }
