@@ -204,9 +204,13 @@ public partial class CodeAgentService
         for (int step = 1; step <= SubAgentMaxSteps; step++)
         {
             ct.ThrowIfCancellationRequested();
-            bool lastStep = step == SubAgentMaxSteps;
+            // The run's spend guard holds for its sub-agents too: past the budget, report now instead of spending on.
+            bool overBudget = step > 1 && opts != null && RunBudgetSpent();
+            bool lastStep = step == SubAgentMaxSteps || overBudget;
             if (lastStep)
-                messages[^1].Content.Add(new ContentBlock { Type = "text", Text = "[Step budget reached: no more tools. Write your report now.]" });
+                messages[^1].Content.Add(new ContentBlock { Type = "text", Text = overBudget
+                    ? "[The run's spend budget is used: no more tools. Write your report now with what you have.]"
+                    : "[Step budget reached: no more tools. Write your report now.]" });
 
             NativeToolResponse response;
             using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))

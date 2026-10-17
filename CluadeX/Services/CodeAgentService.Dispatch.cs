@@ -43,6 +43,13 @@ public partial class CodeAgentService
         });
     }
 
+    /// <summary>The run in this flow has spent its per-run budget (plus what the user allowed past it).</summary>
+    private bool RunBudgetSpent()
+    {
+        decimal per = _settingsService.Settings.RunBudgetUsd;
+        return per > 0 && RootOf(AgentRunScope.Current) is { } root && root.CostUsd >= per + root.BudgetGrantedUsd;
+    }
+
     private static AgentRunScope? RootOf(AgentRunScope? s)
     {
         while (s?.Parent != null) s = s.Parent;
