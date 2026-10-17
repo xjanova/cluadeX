@@ -261,6 +261,14 @@ internal static class BatchWire
         finally
         {
             try { Directory.Delete(proj, recursive: true); } catch { }
+            // Its project-memory index under the data root's projects\ (named after the path) goes too.
+            try
+            {
+                string projects = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cluadex", "projects");
+                foreach (var d in Directory.GetDirectories(projects, "*" + Path.GetFileName(proj)))
+                    Directory.Delete(d, recursive: true);
+            }
+            catch { }
             try { File.Delete(store); } catch { }
             anthResults = AnthResultOk + "\n" + AnthResultErr + "\n";
         }

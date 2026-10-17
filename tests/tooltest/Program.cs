@@ -662,7 +662,7 @@ internal static partial class Program
             finally
             {
                 Fs.WorkingDirectory = Root;
-                try { Directory.Delete(empty, true); } catch { }
+                ForceDelete(empty);
             }
         });
 
@@ -1495,6 +1495,7 @@ internal static partial class Program
         Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL · {Gap} GAP ═══");
         foreach (var p in Problems) Console.WriteLine("   " + p);
         Console.WriteLine($"\nreport : {reportPath}\nproject: {Root}");
+        ForceDelete(Root);   // the throwaway repo: a harness leaves nothing behind in %TEMP%
         return Fail == 0 ? 0 : 1;
     }
 }

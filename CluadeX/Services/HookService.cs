@@ -118,6 +118,7 @@ public class HookService
         _settingsService = settingsService;
         _pluginService = pluginService;
         _log = debugLog;
+        _ = Task.Run(SweepStalePayloadFolders);
 
         // Reload hooks when plugins change OR the open project changes — the latter so workspace trust
         // is re-evaluated for the new folder and a previous project's hooks don't linger.
@@ -882,8 +883,41 @@ public class HookService
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             foreach (var dir in CreatedPayloadFolders.Keys)
-                try { Directory.Delete(dir, recursive: false); } catch { /* not empty / gone */ }
+                try { Directory.Delete(dir, recursive: true); } catch { /* in use / gone */ }
         };
+    }
+
+    /// <summary>
+    /// Payload folders left by CluadeX processes that are gone: an app closed by the installer or killed never runs
+    /// ProcessExit, and the old cleanup only removed an EMPTY folder — %TEMP% filled with cluadex-hooks-* (owner
+    /// 2026-10-17: "เก็บกวาดให้หมด อย่าให้คั่งค้างเป็นขยะ temp"). A folder of a still-running CluadeX is left alone.
+    /// </summary>
+    internal static int SweepStalePayloadFolders()
+    {
+        int removed = 0;
+        try
+        {
+            foreach (var dir in Directory.GetDirectories(Path.GetTempPath(), "cluadex-hooks-*"))
+            {
+                string rest = Path.GetFileName(dir)["cluadex-hooks-".Length..];
+                string pidText = rest.Split('-')[0];
+                if (!int.TryParse(pidText, out int pid) || pid == Environment.ProcessId) continue;
+                if (IsCluadeXProcess(pid)) continue;
+                try { Directory.Delete(dir, recursive: true); removed++; } catch { }
+            }
+        }
+        catch { }
+        return removed;
+    }
+
+    private static bool IsCluadeXProcess(int pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById(pid);
+            return !p.HasExited && p.ProcessName.StartsWith("CluadeX", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }   // no such process
     }
 
     // ─── Substitution ───
