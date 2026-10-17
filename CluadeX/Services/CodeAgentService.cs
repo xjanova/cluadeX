@@ -1957,43 +1957,8 @@ public partial class CodeAgentService
         // over one task. One call, its answer is the turn.
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
         if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX)
-        {
-            var delegated = _providerManager.ActiveProviderType;
-            string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
-            // A chat another model worked in: the new one gets the task, where it stopped and what changed — not the
-            // bare "ทำต่อ" (AgentHandoff). The brief replaces the replayed transcript, which tool rows had filled.
-            string? brief = null;
-            if (AgentHandoff.HasEarlierWork(history))
-            {
-                string git = await AgentHandoff.GitSnapshotAsync(folder, ct);
-                brief = AgentHandoff.Compose(history, folder, git, delegated == AiProviderType.BrainX ? 3600 : 24000,
-                    AgentRunScope.Current?.TaskRequest);
-            }
-            var sendHistory = brief != null ? new List<ChatMessage>() : history;
-            string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage ?? "", brief) : userMessage ?? "";
-            var grant = delegated == AiProviderType.ClaudeDev ? WorkerGrantFor(folder) : null;
-            _debugLog?.Info("Agent", $"{delegated} passthrough · delegating the turn · folder={folder ?? "(none)"}"
-                + $" · handoff={(brief != null ? brief.Length + " chars" : "no")}"
-                + (delegated == AiProviderType.ClaudeDev ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
-            var cdResult = new AgentLoopResult { TurnCount = 1 };
-            var cdText = new StringBuilder();
-            Providers.ClaudeDevProvider.Grant.Value = grant;
-            try
-            {
-                await foreach (var chunk in _providerManager.ActiveProvider.ChatAsync(sendHistory, sendMessage, null, ct))
-                {
-                    cdText.Append(chunk);
-                    OnAgenticStreamingToken?.Invoke(chunk, 1);
-                }
-            }
-            finally { Providers.ClaudeDevProvider.Grant.Value = null; }
-            cdResult.FinalResponse = cdText.ToString().Trim();
-            cdResult.Success = cdResult.FinalResponse.Length > 0;
-            cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
-            cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
-            _debugLog?.Info("Agent", $"claude-dev passthrough done · textLen={cdResult.FinalResponse.Length}");
-            return cdResult;
-        }
+            return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
+                history, userMessage ?? "", ct);
 
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
@@ -2001,7 +1966,8 @@ public partial class CodeAgentService
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
         {
-            try { return await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct); }
+            AgentLoopResult nativeResult;
+            try { nativeResult = await ExecuteNativeToolLoopAsync(history, userMessage, progress, ct); }
             catch (OperationCanceledException)
             {
                 // Stopped (or the app closing) mid-task: what it did so far still goes to the brain — the owner wants
@@ -2013,11 +1979,118 @@ public partial class CodeAgentService
                 }
                 throw;
             }
+            return await MaybeFailOverAsync(nativeResult, history, userMessage, ct);
         }
 
         _debugLog?.Warn("Agent", "dispatching to LEGACY [ACTION:] loop (provider has no native tool use) — "
             + "local file-edit reliability is much lower on this path");
         return await ExecuteLegacyToolLoopAsync(history, userMessage, progress, ct);
+    }
+
+    /// <summary>
+    /// One delegated turn to a complete agent (Claude Dev, the cowork room): a handoff brief when the chat already has
+    /// work in it, Claude Dev's edit/run grant from the user's rules, the reply streamed into the chat.
+    /// </summary>
+    private async Task<AgentLoopResult> RunDelegatedTurnAsync(Providers.IAiProvider provider, AiProviderType delegated,
+        List<ChatMessage> history, string userMessage, CancellationToken ct)
+    {
+        string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
+        // A chat another model worked in: the new one gets the task, where it stopped and what changed — not the
+        // bare "ทำต่อ" (AgentHandoff). The brief replaces the replayed transcript, which tool rows had filled.
+        string? brief = null;
+        if (AgentHandoff.HasEarlierWork(history))
+        {
+            string git = await AgentHandoff.GitSnapshotAsync(folder, ct);
+            brief = AgentHandoff.Compose(history, folder, git, delegated == AiProviderType.BrainX ? 3600 : 24000,
+                AgentRunScope.Current?.TaskRequest);
+        }
+        var sendHistory = brief != null ? new List<ChatMessage>() : history;
+        string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage;
+        var grant = delegated == AiProviderType.ClaudeDev ? WorkerGrantFor(folder) : null;
+        _debugLog?.Info("Agent", $"{delegated} passthrough · delegating the turn · folder={folder ?? "(none)"}"
+            + $" · handoff={(brief != null ? brief.Length + " chars" : "no")}"
+            + (delegated == AiProviderType.ClaudeDev ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
+        var cdResult = new AgentLoopResult { TurnCount = 1 };
+        var cdText = new StringBuilder();
+        Providers.ClaudeDevProvider.Grant.Value = grant;
+        try
+        {
+            await foreach (var chunk in provider.ChatAsync(sendHistory, sendMessage, null, ct))
+            {
+                cdText.Append(chunk);
+                OnAgenticStreamingToken?.Invoke(chunk, 1);
+            }
+        }
+        finally { Providers.ClaudeDevProvider.Grant.Value = null; }
+        cdResult.FinalResponse = cdText.ToString().Trim();
+        cdResult.Success = cdResult.FinalResponse.Length > 0;
+        cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
+        cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
+        _debugLog?.Info("Agent", $"{delegated} passthrough done · textLen={cdResult.FinalResponse.Length}");
+        return cdResult;
+    }
+
+    /// <summary>
+    /// Does this provider error mean the account cannot pay for more requests (credit, quota, a usage or spend limit)
+    /// — as opposed to a passing rate limit, a bad request or an outage, which a fallback model would not fix?
+    /// </summary>
+    public static bool IsQuotaExhausted(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error)) return false;
+        string e = error.ToLowerInvariant();
+        return e.Contains("credit balance") || e.Contains("insufficient_quota") || e.Contains("exceeded your current quota")
+            || e.Contains("quota exceeded") || e.Contains("resource_exhausted") || e.Contains("usage limit")
+            || e.Contains("spend limit") || e.Contains("spending limit") || e.Contains("billing")
+            || e.Contains("เครดิต") || e.Contains("โควต้า");
+    }
+
+    /// <summary>
+    /// The API ran out mid-task (owner 2026-10-17: "โควต้า api ใกล้จะหมด … เปลี่ยนโมเดลให้ทำงานต่อ"): instead of ending the
+    /// turn on a billing error, the same turn carries on with Claude Dev — the user's own Claude login, no API key —
+    /// with a handoff brief that includes the steps this turn already took. The active model is left as it was: the
+    /// user switches for good if they want to. Off with Settings.AutoFailoverOnQuota.
+    /// </summary>
+    private async Task<AgentLoopResult> MaybeFailOverAsync(AgentLoopResult result, List<ChatMessage> history,
+        string? userMessage, CancellationToken ct)
+    {
+        if (result.StopReason != "error" || !IsQuotaExhausted(result.FinalResponse)) return result;
+        if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX) return result;
+        var fallback = _providerManager.GetProvider(AiProviderType.ClaudeDev);
+        try { await fallback.InitializeAsync(ct); } catch { }
+        if (!fallback.IsReady)
+        {
+            _debugLog?.Warn("Agent", "quota exhausted — no Claude Code CLI to fail over to");
+            return result;
+        }
+        bool isThai = _localizationService.CurrentLanguage == "th";
+        string reason = (result.FinalResponse ?? "").Split('\n')[0].Trim();
+        _debugLog?.Warn("Agent", $"quota exhausted on {_providerManager.ActiveProviderType} after {result.Steps.Count} step(s) — failing over to Claude Dev · {reason}");
+        string note = isThai
+            ? $"\n\n> ⚠ โควต้า/เครดิตของ API หมด ({reason}) — ส่งงานต่อให้ **Claude Dev** (ล็อกอิน Claude ของคุณ) ทำต่อจากขั้นที่ {result.Steps.Count} อัตโนมัติ\n\n"
+            : $"\n\n> ⚠ The API's quota/credit ran out ({reason}) — handing the task to **Claude Dev** (your Claude login) to carry on from step {result.Steps.Count}\n\n";
+        OnAgenticStreamingToken?.Invoke(note, result.Steps.Count + 1);
+
+        // What this turn already did goes into the brief as if it were chat history.
+        var withTurn = new List<ChatMessage>(history);
+        if (!string.IsNullOrWhiteSpace(userMessage)) withTurn.Add(new ChatMessage { Role = MessageRole.User, Content = userMessage });
+        foreach (var st in result.Steps)
+        {
+            foreach (var call in st.ToolCalls)
+            {
+                string arg = call.Arguments.Values.FirstOrDefault() ?? "";
+                if (arg.Length > 160) arg = arg[..160];
+                withTurn.Add(new ChatMessage { Role = MessageRole.ToolAction, Content = $"{call.ToolName} {arg}".Trim() });
+            }
+            if (!string.IsNullOrWhiteSpace(st.ResponseText))
+                withTurn.Add(new ChatMessage { Role = MessageRole.Assistant, Content = st.ResponseText });
+        }
+        string carryOn = isThai ? "ทำงานนี้ต่อจากที่ค้างไว้" : "Carry on with this task from where it stopped";
+        var delegatedResult = await RunDelegatedTurnAsync(fallback, AiProviderType.ClaudeDev, withTurn, carryOn, ct);
+        delegatedResult.FinalResponse = note.Trim() + "\n\n" + delegatedResult.FinalResponse;
+        delegatedResult.TurnCount = result.TurnCount + 1;
+        delegatedResult.Steps.InsertRange(0, result.Steps);
+        return delegatedResult;
     }
 
     /// <summary>

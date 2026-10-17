@@ -105,6 +105,10 @@ public class AppSettings
     public bool EnforceReadBeforeEdit { get; set; } = true;
     /// <summary>When the agent edits a file, auto-open/refresh it in the Code Editor and scroll to the change.</summary>
     public bool LiveEditFollow { get; set; } = true;
+
+    /// <summary>When the API's credit/quota runs out mid-task, carry the same turn on with Claude Dev (the user's
+    /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>
+    public bool AutoFailoverOnQuota { get; set; } = true;
     /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
     /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).</summary>
     public bool AutoOpenEditorOnAgentEdit { get; set; } = true;

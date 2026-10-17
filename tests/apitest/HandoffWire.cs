@@ -126,6 +126,17 @@ internal static class HandoffWire
             ClaudeDevProvider.RenderStreamLine("{\"type\":\"system\",\"subtype\":\"init\"}", out _, out _) == null
             && ClaudeDevProvider.RenderStreamLine("not json", out _, out _) == null, "");
 
+        // ─── quota failover: which errors mean "the account cannot pay" ───
+        check("failover", "credit, quota and usage-limit errors count as exhausted",
+            CodeAgentService.IsQuotaExhausted("Your credit balance is too low to access the Anthropic API")
+            && CodeAgentService.IsQuotaExhausted("HTTP 429: You exceeded your current quota, please check your plan")
+            && CodeAgentService.IsQuotaExhausted("RESOURCE_EXHAUSTED: quota exceeded")
+            && CodeAgentService.IsQuotaExhausted("HTTP 400: You have reached your specified API usage limits"), "");
+        check("failover", "a passing rate limit, an outage or a bad request do not",
+            !CodeAgentService.IsQuotaExhausted("HTTP 429: rate_limit_error: Number of request tokens has exceeded your per-minute rate limit")
+            && !CodeAgentService.IsQuotaExhausted("HTTP 529: Overloaded") && !CodeAgentService.IsQuotaExhausted("HTTP 400: invalid tool schema")
+            && !CodeAgentService.IsQuotaExhausted(null), "");
+
         // ─── the task's chat keeps its folder ───
         bool Has(string p) => p == @"D:\Game";
         check("folder", "a pipe task's chat runs in its own folder when the window shows another project",
