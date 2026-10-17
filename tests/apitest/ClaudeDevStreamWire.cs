@@ -158,6 +158,25 @@ internal static class ClaudeDevStreamWire
         check("cd-stream", "junk lines are ignored; a turn with no message falls back to the result text",
             !silent.HasOutput && silent.Steps.Count == 0 && silent.FinalText == "ok", silent.FinalText);
 
+        // ─── the Stop hook's closing remark (2026-10-17: the pipe got "saved to the brain" instead of the summary) ───
+        string summary = "Done. Changed src/App.cs (x = 2) and src/Lib.cs (null check); dotnet build is green and all 42 tests pass. "
+            + "The flaky test in tests/A.cs:3 is timing-dependent and left as it was.";
+        var hooked = new ClaudeDevStreamTurn(Folder);
+        foreach (var line in new[]
+        {
+            J(Asst("msg_1", new { type = "tool_use", id = "tu_b", name = "Bash", input = new { command = "dotnet build" } })),
+            J(Result("tu_b", "Build succeeded.")),
+            J(Asst("msg_2", new { type = "text", text = summary })),
+            J(Asst("msg_3", new { type = "tool_use", id = "tu_note", name = "mcp__brainx-brain__brain_create_note", input = new { title = "fix" } })),
+            J(Result("tu_note", "saved")),
+            J(Asst("msg_4", new { type = "text", text = "Saved the lesson to the brain." })),
+            J(new { type = "result", subtype = "success", is_error = false, result = "Saved the lesson to the brain." }),
+        }) hooked.Feed(line);
+        check("cd-stream", "a short closing remark after the real summary: the answer keeps the summary, the remark follows it",
+            hooked.FinalText == "Saved the lesson to the brain." && hooked.Answer == summary + "\n\nSaved the lesson to the brain.", hooked.Answer);
+        check("cd-stream", "a closing answer that is the real one (longer than the narration before it) stands alone",
+            turn.Answer == turn.FinalText, turn.Answer);
+
         // ─── a real capture from the CLI ───
         string fixture = Path.Combine(AppContext.BaseDirectory, "fixtures", "claude-dev-real.stream.jsonl");
         if (!File.Exists(fixture)) { check("cd-stream", "real CLI capture present", false, fixture); return Task.CompletedTask; }

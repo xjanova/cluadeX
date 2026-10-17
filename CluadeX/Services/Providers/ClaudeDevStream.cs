@@ -185,6 +185,20 @@ public sealed class ClaudeDevStreamTurn
         Steps.LastOrDefault(s => !string.IsNullOrWhiteSpace(s.ResponseText))?.ResponseText?.Trim()
         ?? (!ResultIsError ? ResultText?.Trim() ?? "" : "");
 
+    /// <summary>The turn's answer for a caller (the pipe, the last bubble): <see cref="FinalText"/>, unless that is a
+    /// short closing remark after a substantive answer one step earlier (the user's Stop hook nudging the CLI to talk
+    /// about the brain at the end, 2026-10-17) — then the earlier answer with the remark under it, the same rule as the
+    /// native loop's <see cref="CodeAgentService.KeepAnswerOverRemark"/>.</summary>
+    public string Answer
+    {
+        get
+        {
+            var spoken = Steps.Where(s => !string.IsNullOrWhiteSpace(s.ResponseText)).ToList();
+            if (spoken.Count < 2) return FinalText;
+            return CodeAgentService.KeepAnswerOverRemark(spoken[^2].ResponseText!.Trim(), FinalText) ?? FinalText;
+        }
+    }
+
     public void Feed(string line)
     {
         if (string.IsNullOrWhiteSpace(line) || line[0] != '{') return;

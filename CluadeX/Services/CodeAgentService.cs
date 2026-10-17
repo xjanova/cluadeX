@@ -2042,7 +2042,8 @@ public partial class CodeAgentService
         {
             // The reply is the model's own last text — the rows already show the tools. An error result after work
             // (a limit hit mid-task) is said under it; a turn that produced nothing carries the provider's explanation.
-            string text = turn.FinalText;
+            // A short closing remark after the real summary (a Stop hook's "saved to the brain") keeps the summary.
+            string text = turn.Answer;
             if (turn.ResultIsError && !string.IsNullOrWhiteSpace(turn.ResultText) && cdText.Length == 0)
                 text = (text + "\n\n⚠ " + turn.ResultText.Trim()).Trim();
             if (cdText.Length > 0) text = (text + "\n\n" + cdText.ToString().Trim()).Trim();
