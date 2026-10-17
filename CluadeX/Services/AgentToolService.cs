@@ -5219,7 +5219,7 @@ public class AgentToolService : IDisposable
     private string? CheckDangerousCommand(string command, DangerousCommandCheck.Dialect dialect)
     {
         if (!_settingsService.Settings.Features.DangerousCommandBlocking) return null;
-        return DangerousCommandCheck.FindBlocked(command, dialect) is { } line ? DangerousCommandCheck.BlockedMessage(line) : null;
+        return DangerousCommandCheck.FindSerious(command, dialect) is { } line ? DangerousCommandCheck.BlockedMessage(line) : null;
     }
 
     private async Task<ToolResult> ExecutePowerShellAsync(ToolCall call, CancellationToken ct)

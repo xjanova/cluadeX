@@ -77,11 +77,18 @@ public class ClaudeDevProvider : IAiProvider
         "mcp__brainx-brain__brain_remember,mcp__brainx-brain__brain_create_note,mcp__brainx-brain__brain_append_note," +
         "mcp__brainx-brain__brain_recall";
 
-    /// <summary>Commands the CLI is never let run headless, whatever the rules say — the same family
-    /// DangerousCommandCheck refuses for CluadeX's own run_command.</summary>
+    /// <summary>Commands the CLI is never let run headless, whatever the rules say: rewriting git history and shutting
+    /// the machine down. Recursive deletes are NOT here any more (owner, 2026-10-18): `rm -rf build` must just run, and a
+    /// delete aimed at a drive / home / system folder is caught by the --cx-guard hook and put to the user on CluadeX's
+    /// red prompt (Safety.DangerApproval) — it runs only on their yes.</summary>
     private const string NeverTools =
-        "Bash(rm -rf:*),Bash(rm -fr:*),Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*)," +
-        "Bash(git clean:*),Bash(format:*),Bash(del /s:*),Bash(rmdir /s:*),Bash(Remove-Item -Recurse:*),Bash(shutdown:*)";
+        "Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*),Bash(git clean:*),Bash(shutdown:*)";
+
+    /// <summary>The CLI's own sub-agent tool (named Task in older CLIs, Agent in newer ones): a worker splits independent
+    /// parts across sub-agents itself. They run inside the same CLI session, so they carry the same --settings guard hook
+    /// and allowed tools; their steps stream with parent_tool_use_id and land on the chat's agent map
+    /// (ClaudeDevStreamTurn). Before 2026-10-18 it was not allowed, so a Claude Dev chat never fanned out.</summary>
+    private const string SubAgentTools = "Task,Agent";
 
     /// <summary>The arguments for one call: read-only advice, or a worker that edits/runs as the grant allows.</summary>
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort)
@@ -92,6 +99,9 @@ public class ClaudeDevProvider : IAiProvider
               $"Project working directory: {cwd}. " +
               (grant!.Edit ? "You may create and edit files inside it. " : "You may not edit files: propose changes as diffs. ") +
               (grant.Run ? "You may run commands (builds, tests, git) in it. " : "You may not run commands. ") +
+              "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
+              "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
+              "and the user watches each one on the agent map. Keep a small task to yourself. " +
               "Stay inside the project folder. Reply in the language the user writes in."
             : "You are 'claude-dev', answering inside the CluadeX desktop app. " +
               $"Project working directory: {cwd}. " +
@@ -101,6 +111,7 @@ public class ClaudeDevProvider : IAiProvider
         string tools = AllowedTools;
         if (grant is { Edit: true }) tools += "," + EditTools;
         if (grant is { Run: true }) tools += ",Bash";
+        if (worker) tools += "," + SubAgentTools;
 
         // Worker turns stream events (stream-json) so the chat shows each step while a long task runs; text mode
         // printed nothing until the very end — a 30-minute task looked hung.

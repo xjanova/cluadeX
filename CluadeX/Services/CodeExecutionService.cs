@@ -26,7 +26,7 @@ public class CodeExecutionService
         // not shell — for those the Auto-run opt-in (or the user clicking Run) is the boundary.
         if (DangerousCommandCheck.IsShellLanguage(language)
             && _settingsService.Settings.Features.DangerousCommandBlocking
-            && DangerousCommandCheck.FindBlocked(code, DangerousCommandCheck.DialectOfLanguage(language)) is { } blocked)
+            && DangerousCommandCheck.FindSerious(code, DangerousCommandCheck.DialectOfLanguage(language)) is { } blocked)
         {
             return new CodeExecutionResult
             {

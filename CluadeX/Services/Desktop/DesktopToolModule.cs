@@ -665,7 +665,7 @@ public sealed class DesktopToolModule : IAgentToolModule
         if (path.Length == 0) throw new ArgumentException("Give the program to start (path).");
         string args = call.GetArg("args");
         string commandLine = (path + " " + args).Trim();
-        if (DangerousCommandCheck.FindBlocked(commandLine) is { } blocked)
+        if (DangerousCommandCheck.FindSerious(commandLine) is { } blocked)
             return Fail(call, DangerousCommandCheck.BlockedMessage(blocked));
         string? cwd = call.GetArg("cwd").Trim().Trim('"');
         if (string.IsNullOrEmpty(cwd)) cwd = context.WorkingDirectory;

@@ -25,7 +25,7 @@ public static class DestructiveCodeScan
 
     /// <summary>Shell and API deletes.</summary>
     private static readonly Regex DeleteVerb = new(
-        @"\b(rd|rmdir)\s+/s\b|\bdel\s+(/[a-z]\s*)*/s\b|\berase\s+(/[a-z]\s*)*/s\b|\brm\s+-[a-z]*(rf|fr|r)[a-z]*\b|\bRemove-Item\b[^\r\n]*-(Recurse|r)\b|\brimraf\b|\bshutil\.rmtree\b|\brmtree\(|\bfs(\.promises)?\.(rm|rmdir)(Sync)?\(|\bDirectory\.Delete\(|\bFileSystem\.DeleteDirectory\(|\bos\.RemoveAll\(|\bremove_dir_all\(|\bRemove-Item\b",
+        @"\b(rd|rmdir)\s+/s\b|\bdel\s+(/[a-z]\s*)*/s\b|\berase\s+(/[a-z]\s*)*/s\b|(?<!\bgit\s+)\brm\s+-[a-z]*(rf|fr|r)[a-z]*\b|\bRemove-Item\b[^\r\n]*-(Recurse|r)\b|\brimraf\b|\bshutil\.rmtree\b|\brmtree\(|\bfs(\.promises)?\.(rm|rmdir)(Sync)?\(|\bDirectory\.Delete\(|\bFileSystem\.DeleteDirectory\(|\bos\.RemoveAll\(|\bremove_dir_all\(|\bRemove-Item\b",
         Opt);
 
     /// <summary>A target that must never be deleted: a drive root, a home, a system folder.</summary>
@@ -34,6 +34,13 @@ public static class DestructiveCodeScan
         @"(?<![\w.%$-])[A-Za-z]:(\\\\|\\|/)?\*?(?=[""'`\s)\];,]|$)" +
         // a profile, Users, Windows, Program Files, ProgramData directly
         @"|(?<![\w.-])[A-Za-z]:(\\\\|\\|/)+(Users|Windows|Program Files( \(x86\))?|ProgramData)((\\\\|\\|/)+[^\\/""'\s]+)?(\\\\|\\|/)?(?=[""'`\s)\];,]|$)" +
+        // The same in Git Bash / WSL form: /c/ (the drive itself — the trailing / tells it from a cmd switch like /c or
+        // /s), /c/Users, /c/Windows, /c/Program Files … and one folder in them, /mnt/c; and `rm … /c` (rm takes no
+        // switches with a slash, so a bare /c there is the drive).
+        @"|(?<![\w.~$-])/(mnt/)?[A-Za-z]/+\*?(?=[""'`\s)\];,]|$)" +
+        @"|(?<![\w.~$-])/(mnt/)?[A-Za-z]/+(Users|Windows|Program Files( \(x86\))?|ProgramData)(/+[^/""'\s]+)?/*\*?(?=[""'`\s)\];,]|$)" +
+        @"|(?<![\w.~$-])/mnt/[A-Za-z](?=[""'`\s)\];,]|$)" +
+        @"|\brm\s+(-\S+\s+)*/[A-Za-z](?=[""'`\s)\];,|&]|$)" +
         // a home or system folder by variable — itself, or one of its vital folders (not any sub-folder: ~/tmp/x is fine)
         @"|(?<![\w.-])(~|\$HOME|\$\{HOME\}|%USERPROFILE%|%HOMEPATH%|%HOMEDRIVE%|%SYSTEMDRIVE%|%SYSTEMROOT%|%WINDIR%|%APPDATA%|%LOCALAPPDATA%|%PROGRAMFILES%|%PROGRAMDATA%|\$env:(USERPROFILE|HOMEPATH|HOMEDRIVE|SystemDrive|SystemRoot|windir|APPDATA|LOCALAPPDATA|ProgramFiles|ProgramData))" +
         @"((\\\\|\\|/)+(AppData|Desktop|Documents|Downloads|Pictures|OneDrive|\.ssh|\.gnupg|\.git|\.config|\.claude|\.cluadex|\.brainx))?(\\\\|\\|/)*\*?(?=[""'`\s)\];,]|$)" +
@@ -42,6 +49,10 @@ public static class DestructiveCodeScan
         // POSIX root
         @"|(?<=\s)/\*?(?=[""'`\s;]|$)|[""']/\*?[""']",
         Opt);
+
+    /// <summary>"Everything here" — ., .., *, ./*, ../* as a delete's target: harmless in a build folder, a wipe in a home
+    /// or a drive root, and the command does not say which. So it is put to the user like a protected target.</summary>
+    private static readonly Regex BroadTarget = new(@"(?<=\s)(\.{1,2}/?\*?|\*|\.\./\*)(?=[""'`\s;|&)]|$)", Opt);
 
     /// <summary>Wipes that are dangerous whatever they point at.</summary>
     private static readonly Regex AlwaysWipe = new(
@@ -60,8 +71,11 @@ public static class DestructiveCodeScan
     {
         if (line.Length > 4000) line = line[..4000];
         if (AlwaysWipe.Match(line) is { Success: true } w) return $"wipes a disk or system state ({w.Value.Trim()})";
-        if (DeleteVerb.Match(line) is { Success: true } v && ProtectedTarget.Match(line) is { Success: true } t)
-            return $"deletes ({v.Value.Trim()}) aimed at {t.Value.Trim()}";
+        if (DeleteVerb.Match(line) is { Success: true } v)
+        {
+            if (ProtectedTarget.Match(line) is { Success: true } t) return $"deletes ({v.Value.Trim()}) aimed at {t.Value.Trim()}";
+            if (BroadTarget.Match(line) is { Success: true } b) return $"deletes ({v.Value.Trim()}) everything in the folder it runs in ({b.Value.Trim()})";
+        }
         return null;
     }
 

@@ -129,6 +129,56 @@ public static class DangerousCommandCheck
         return null;
     }
 
+    /// <summary>A delete word anywhere on the line (rm, del, erase, rmdir / rd, Remove-Item / ri, unlink).</summary>
+    private static readonly System.Text.RegularExpressions.Regex DeleteWord = new(
+        @"(^|[\s;&|`(])(rm|rmdir|rd|del|erase|unlink|remove-item|ri)(\.exe)?(?=\s|$)",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>On a blocked line, the parts of the list that are not deletes: those stay refused whatever is deleted.</summary>
+    private static readonly string[] NonDeleteMarks =
+    [
+        "format ", "format\t", "format-volume", "clear-disk", "format-disk", "shutdown", "restart-computer",
+        "stop-computer", "reg delete", "reg add", "net user", "net localgroup", "takeown", "icacls", "mkfs.",
+        "dd if=", "/dev/", "invoke-webrequest", "invoke-restmethod", "start-bitstransfer", "certutil",
+        "bitsadmin",
+    ];
+
+    /// <summary>
+    /// The owner's rule (2026-10-18): deleting files to clean up must just run — <c>rm -rf .dart_tool build</c>,
+    /// <c>rmdir /s /q .tmp</c>, <c>Remove-Item .\build -Recurse</c>, <c>del /s /q *.tmp</c>, <c>rm -rf /tmp/x</c>.
+    /// So a blocked line that ONLY deletes is not this list's business: Safety.DestructiveCodeScan judges every delete
+    /// by its target, and CodeRunGuard puts the dangerous ones (a drive, a home, a system folder, "everything here")
+    /// to the user on the red prompt — on every path this list guards. What stays here is the rest of the list:
+    /// format / disk, registry, accounts and ACLs, downloads, shutdown.
+    /// </summary>
+    public static bool IsDeleteOnly(string blockedLine)
+    {
+        if (string.IsNullOrWhiteSpace(blockedLine)) return false;
+        string l = blockedLine.ToLowerInvariant();
+        foreach (var m in NonDeleteMarks)
+            if (l.Contains(m, StringComparison.Ordinal)) return false;
+        return DeleteWord.IsMatch(blockedLine);
+    }
+
+    /// <summary><see cref="FindBlocked"/> without the delete-only lines (<see cref="IsDeleteOnly"/>): the first line that
+    /// is still serious, or null. Each delete line is set aside and the rest read again, so it cannot hide a serious one
+    /// after it.</summary>
+    public static string? FindSerious(string? command, Dialect dialect = Dialect.Unknown)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return null;
+        string rest = command;
+        for (int round = 0; round < 64; round++)
+        {
+            string? hit = FindBlocked(rest, dialect);
+            if (hit == null) return null;
+            if (!IsDeleteOnly(hit)) return hit;
+            int at = rest.IndexOf(hit, StringComparison.Ordinal);
+            if (at < 0) return hit;   // cannot set it aside exactly: the strict answer
+            rest = rest.Remove(at, hit.Length);
+        }
+        return FirstLine(command);
+    }
+
     /// <summary>The refusal the agent reads. "Command blocked for safety: &lt;whole command&gt;" left the model guessing
     /// which part of a long chained command tripped the list (Reverse X run, 2026-10-13: it split a working
     /// `npm pack … &amp;&amp; tar …` into pieces until one passed); naming the line and the way around ends the guessing.</summary>

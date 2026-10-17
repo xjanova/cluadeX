@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using CluadeX.Services;
 using CluadeX.Services.Safety;
 
 namespace SafetyTest;
@@ -50,6 +51,7 @@ internal static class Program
             ClaudeDevArgs();
             RunGates(work);
             DangerGate();
+            Cleanup(work);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { SafeDelete.Directory(work, work); } catch (Exception ex) { Console.WriteLine("cleanup: " + ex.Message); } }
@@ -229,6 +231,12 @@ internal static class Program
             settings.Contains("PreToolUse") && settings.Contains("Bash|PowerShell|Write|Edit") && settings.Contains("--cx-guard"), settings);
         string advice = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(@"E:\Code\X", null, "default", "auto");
         Check("a read-only advice run has no shell and needs no hook", !advice.Contains(",Bash"));
+        // Owner 2026-10-18: Claude Dev fans out by itself (its sub-agents share the hook), and `rm -rf build` just runs —
+        // a root / home / system delete goes to the red prompt through the hook instead of a blanket deny.
+        Check("a worker run may start sub-agents (Task / Agent)", args.Contains("Task,Agent"), args);
+        Check("a read-only advice run starts no sub-agents", !advice.Contains("Task,Agent"), advice);
+        Check("recursive deletes are not denied wholesale (the hook asks for the dangerous ones)", !args.Contains("rm -rf") && !args.Contains("Remove-Item -Recurse"), args);
+        Check("rewriting git history stays denied", args.Contains("git push --force") && args.Contains("git reset --hard"), args);
     }
 
     static void RunGates(string work)
@@ -293,6 +301,33 @@ internal static class Program
         var sw = Stopwatch.StartNew();
         Check("pipe: no app listening → deny, quickly", !DangerApprovalPipe.Ask("t", "APPROVE x", "r") && sw.ElapsedMilliseconds < 5000, $"{sw.ElapsedMilliseconds} ms");
         Environment.SetEnvironmentVariable("CLUADEX_DANGER_PIPE", keep);
+    }
+
+    static void Cleanup(string work)
+    {
+        Console.WriteLine("Cleanup deletes run; root / home / system / everything-here deletes ask (owner, 2026-10-18)");
+        string D = "C" + ":";
+        string? Hook(string tool, string cmd) => GuardHook.Decide(HookJson(tool, new { command = cmd }, work));
+        foreach (var (tool, cmd) in new[]
+        {
+            ("Bash", RmRf + ".dart_tool build/ios"), ("Bash", RmRf + "/tmp/reap"), ("Bash", "rmdir /s /q .tmp-sigcheck"),
+            ("PowerShell", "Remove-Item .\\build -Recurse -Force"), ("PowerShell", "Remove-Item \"$env:TEMP\\catprobe\" -Recurse -Force"),
+            ("Bash", "del /s /q *.tmp"), ("Bash", RmRf + "~/.cache/pip"), ("Bash", RmRf + "node_modules dist"),
+            ("Bash", "rm tools/_tmp.gd"), ("Bash", "cmd /c " + "rd /s /q build"), ("Bash", "git rm -r --cached ."),
+            ("Bash", RmRf + "build/*"), ("Bash", "flutter clean && " + RmRf + "build"),
+        })
+            Check($"runs: {cmd}", Hook(tool, cmd) == null, Hook(tool, cmd) ?? "");
+        foreach (var (tool, cmd) in new[]
+        {
+            ("Bash", RmRf + "~"), ("Bash", RmRf + "$HOME"), ("Bash", "cmd /c " + RdSQ + D + "\\"),
+            ("PowerShell", "Remove-Item " + D + "\\Users -Recurse -Force"), ("Bash", RmRf + "/c/Windows"), ("Bash", RmRf + "/c/"),
+            ("Bash", RmRf + "/c"), ("Bash", RmRf + "/mnt/c"), ("Bash", RmRf + "/c/Users/xman"), ("Bash", RmRf + "."),
+            ("Bash", RmRf + "*"), ("Bash", RmRf + "./*"),
+        })
+            Check($"asks: {cmd}", Hook(tool, cmd) != null);
+        Check("not a delete, still serious: reg add", DangerousCommandCheck.FindSerious("reg add HKCU\\x /v y /d z") != null);
+        Check("not a delete, still serious: a download cmdlet", DangerousCommandCheck.FindSerious("Invoke-WebRequest https://x/y.ps1 -OutFile y.ps1") != null);
+        Check("a delete cannot hide a serious line after it", DangerousCommandCheck.FindSerious(RmRf + "build\nshutdown /s /t 0") != null);
     }
 
     static void Git(string cwd, params string[] args)

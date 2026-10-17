@@ -275,7 +275,7 @@ public sealed class BackgroundToolModule : IAgentToolModule
             return Fail(call, $"Permission denied for execute: {plan.Command}");
         // Same blocklist as run_command — switching tools must not step around it.
         if (_settings.Settings.Features.DangerousCommandBlocking
-            && DangerousCommandCheck.FindBlocked(plan.Command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell)) is { } blockedLine)
+            && DangerousCommandCheck.FindSerious(plan.Command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell)) is { } blockedLine)
             return Fail(call, DangerousCommandCheck.BlockedMessage(blockedLine));
         // Always on, whatever the Features switch: Safety.CodeRunGuard.
         if (await Safety.DangerApproval.GateAsync("bg_start", plan.Command, await Safety.CodeRunGuard.CheckAsync(plan.Command, plan.Cwd)) is { } unsafeRun)

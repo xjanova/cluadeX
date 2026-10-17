@@ -92,7 +92,7 @@ public static class GuardHook
             {
                 string command = Str("command");
                 var dialect = tool == "PowerShell" ? DangerousCommandCheck.Dialect.PowerShell : DangerousCommandCheck.Dialect.Unknown;
-                if (DangerousCommandCheck.FindBlocked(command, dialect) is { } line)
+                if (DangerousCommandCheck.FindSerious(command, dialect) is { } line)
                     return "CluadeX safety: " + DangerousCommandCheck.BlockedMessage(line);
                 if (DestructiveCodeScan.JudgeLine(command) is { } direct)
                     return "CluadeX safety: refused — this command " + direct + ".";
