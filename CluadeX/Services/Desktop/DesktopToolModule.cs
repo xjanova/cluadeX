@@ -265,9 +265,14 @@ public sealed class DesktopToolModule : IAgentToolModule
                 if (now != null && !string.Equals(now, judged, StringComparison.OrdinalIgnoreCase))
                     return Fail(call, $"The target changed while permission was asked: it was {judged}, now it is {now}. Call again to act on {now}.");
             }
-            // Typed text can be a command (a console, the Run box): the run_command check first, off the UI thread.
-            if (call.Type == ToolType.DesktopType
-                && await Safety.CodeRunGuard.CheckAsync(call.GetArg("text"), context.WorkingDirectory) is { } unsafeText)
+            // Typed text / a set value can be a command (a console, the Run box): the run_command check first, off the
+            // UI thread; a delete aimed at a drive / home / system folder goes ahead only on the user's yes (red prompt).
+            string? typed = call.Type == ToolType.DesktopType ? call.GetArg("text")
+                : call.Type == ToolType.DesktopAct && call.GetArg("action").Trim().ToLowerInvariant().Replace('-', '_') is "set_value" or "setvalue" or "set" ? call.GetArg("value")
+                : null;
+            if (!string.IsNullOrEmpty(typed)
+                && await Safety.DangerApproval.GateAsync(call.ToolName, typed,
+                       Safety.CodeRunGuard.CheckCode(typed) ?? await Safety.CodeRunGuard.CheckAsync(typed, context.WorkingDirectory)) is { } unsafeText)
                 return Fail(call, unsafeText);
             return call.Type switch
             {
@@ -489,8 +494,6 @@ public sealed class DesktopToolModule : IAgentToolModule
         if (action is "doubleclick") action = "double_click";
         if (action is "rightclick") action = "right_click";
         if (DesktopSafety.GuardRefusal(r.Element) is { } g) throw new InvalidOperationException(g);
-        if (action == "set_value" && DesktopWindows.Describe(r.Window) is { } aw
-            && DesktopSafety.CommandTextRefusal(aw, call.GetArg("value")) is { } cmdNo) throw new InvalidOperationException(cmdNo);
         string name = SafeName(r.Element);
         string done = DesktopAutomation.Act(r, action, call.GetArg("value"), call.GetArg("direction"), IntArg(call, "amount", 3), ct);
         Log("desktop_act", r.ProcessName, action, name);
@@ -551,7 +554,6 @@ public sealed class DesktopToolModule : IAgentToolModule
         if (DesktopSafety.CredentialWindowRefusal(win) is { } cr) throw new InvalidOperationException(cr);
         if (DesktopSafety.GuardRefusal(target) is { } g) throw new InvalidOperationException(g);
         if (DesktopSafety.PasswordRefusal(target) is { } pw) throw new InvalidOperationException(pw);
-        if (DesktopSafety.CommandTextRefusal(win, text) is { } cmdNo) throw new InvalidOperationException(cmdNo);
 
         string how;
         if (text.Length > 0 || clear)
@@ -641,9 +643,6 @@ public sealed class DesktopToolModule : IAgentToolModule
                     throw new InvalidOperationException(NotInFront(window) + $" ({sent} chord(s) were sent before that.)");
                 var focus = AutomationElement.FocusedElement;
                 if (DesktopSafety.GuardRefusal(focus) is { } g) throw new InvalidOperationException(g + $" ({sent} chord(s) were sent before that.)");
-                // Re-read the foreground window each chord: a key can open a console or the Run box mid-sequence.
-                var fg = DesktopWindows.Describe(DesktopNative.GetForegroundWindow()) ?? win;
-                if (DesktopSafety.CommandKeyRefusal(fg, c) is { } keyNo) throw new InvalidOperationException(keyNo + $" ({sent} chord(s) were sent before that.)");
                 if (c.PutsText && focus != null && DesktopSafety.PasswordRefusal(focus) is { } pw) throw new InvalidOperationException(pw);
                 DesktopInput.SendChord(c, hold);
                 sent++;
@@ -675,8 +674,9 @@ public sealed class DesktopToolModule : IAgentToolModule
         if (!Path.IsPathRooted(file) && cwd != null && File.Exists(Path.Combine(cwd, file))) file = Path.Combine(cwd, file);
         // Always on, as for run_command: the command line, the code changed in the project when it runs code, and a
         // script handed straight to the shell (a .bat / .ps1 / .py … is code, not an app).
-        if (await Safety.CodeRunGuard.CheckAsync(commandLine, cwd) is { } unsafeRun) return Fail(call, unsafeRun);
-        if (Safety.CodeRunGuard.CheckScriptFile(file) is { } unsafeScript) return Fail(call, unsafeScript);
+        if (await Safety.DangerApproval.GateAsync("desktop_launch", commandLine,
+                await Safety.CodeRunGuard.CheckAsync(commandLine, cwd) ?? Safety.CodeRunGuard.CheckScriptFile(file)) is { } unsafeRun)
+            return Fail(call, unsafeRun);
         if (Safety.ProcessLaunchPolicy.Blocks(file))
             return Ok(call, Safety.ProcessLaunchPolicy.Report(commandLine));
         bool exe = file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || !Path.HasExtension(file);

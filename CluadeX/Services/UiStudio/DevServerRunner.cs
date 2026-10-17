@@ -45,7 +45,8 @@ public sealed class DevServerRunner : IDisposable
         // Installing and starting run the project's own code (install hooks, the dev script) — code an agent may just
         // have written. The same always-on check as run_command reads what changed first (package.json included).
         string runLine = pm == "npm" ? $"npm run {script}" : $"{pm} {script}";
-        if (await Safety.CodeRunGuard.CheckAsync($"{pm} install && {runLine}", _root) is { } unsafeRun)
+        if (await Safety.DangerApproval.GateAsync("UI Studio", $"{pm} install && {runLine}",
+                await Safety.CodeRunGuard.CheckAsync($"{pm} install && {runLine}", _root)) is { } unsafeRun)
         {
             foreach (var line in unsafeRun.Split('\n')) Output?.Invoke(line);
             return (false, "unsafe");

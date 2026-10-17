@@ -410,22 +410,40 @@
                                 <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
                                 <Border Grid.Row="1" HorizontalAlignment="Left"
                                         Margin="20,4,40,4"
-                                        Background="{DynamicResource Chat.Permission.Background}"
-                                        BorderBrush="{DynamicResource Status.Warning}"
-                                        BorderThickness="2,0,0,0"
                                         CornerRadius="0,6,6,0"
                                         Padding="10,6">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Setter Property="Background" Value="{DynamicResource Chat.Permission.Background}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning}"/>
+                                            <Setter Property="BorderThickness" Value="2,0,0,0"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.PermissionRequest}">
                                                     <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                                <!-- The red prompt: a delete aimed at a drive / home / system folder (Safety.DangerApproval) -->
+                                                <DataTrigger Binding="{Binding IsPermissionDanger}" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource Chat.Diff.Removed.Background}"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger}"/>
+                                                    <Setter Property="BorderThickness" Value="4,2,2,2"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
                                     <StackPanel>
+                                        <!-- Dangerous action: say so in red, in plain words, with the guard's full finding -->
+                                        <StackPanel Margin="0,0,0,8"
+                                                    Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <TextBlock Text="{services:Loc chat.perm.danger.title}" FontSize="14" FontWeight="Bold"
+                                                       Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{services:Loc chat.perm.danger.body}" FontSize="12" Margin="0,4,0,4"
+                                                       Foreground="{DynamicResource Status.Danger.Soft}" TextWrapping="Wrap"/>
+                                            <TextBox Text="{Binding PermissionDanger, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                                                     Background="Transparent" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                     Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap" MaxHeight="180"
+                                                     VerticalScrollBarVisibility="Auto"/>
+                                        </StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                             <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets"
                                                        FontSize="14" Foreground="{DynamicResource Status.Warning}"
@@ -484,6 +502,14 @@
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionAllow"
+                                                    Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
+                                                    Click="PermissionAllow_Click"/>
+                                            <!-- The red prompt's yes says what it is: running something that deletes -->
+                                            <Button Content="{services:Loc chat.perm.danger.allow}" Padding="14,3" Margin="0,0,8,0"
+                                                    FontSize="12" FontWeight="Bold" Foreground="White"
+                                                    Background="{DynamicResource Status.Danger}" BorderBrush="{DynamicResource Status.Danger}"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllowDanger"
+                                                    Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}}"
                                                     Click="PermissionAllow_Click"/>
                                             <!-- An MCP tool no policy judged: allow it for the rest of this chat (one ChatGPT session asked 18×) -->
                                             <Button Content="{services:Loc chat.perm.allowChat}" Padding="14,3" Margin="0,0,8,0"

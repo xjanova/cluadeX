@@ -35,6 +35,11 @@ internal static class Program
         Console.OutputEncoding = Encoding.UTF8;
         string work = Path.Combine(Path.GetTempPath(), "cx-safetytest-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(work);
+        // A private approval pipe, inherited by the CluadeX.exe --cx-guard children below: the owner's running CluadeX
+        // must never get a red prompt from a test. The stand-in "user" says yes only to actions containing APPROVE.
+        Environment.SetEnvironmentVariable("CLUADEX_DANGER_PIPE", "cx-safetytest-" + Guid.NewGuid().ToString("N"));
+        DangerApproval.Handler = req => Task.FromResult(req.Action.Contains("APPROVE"));
+        DangerApprovalPipe.StartServer();
         try
         {
             Protected();
@@ -44,6 +49,7 @@ internal static class Program
             HookProcess();
             ClaudeDevArgs();
             RunGates(work);
+            DangerGate();
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { SafeDelete.Directory(work, work); } catch (Exception ex) { Console.WriteLine("cleanup: " + ex.Message); } }
@@ -200,6 +206,8 @@ internal static class Program
         Check("blocks rd on a drive root (exit 2 + reason on stderr)", no.Code == 2 && no.Err.Contains("CluadeX safety"), $"{no.Code} {no.Err}");
         var broken = Ask("{not json");
         Check("fails closed on a broken payload (exit 2)", broken.Code == 2, $"{broken.Code}");
+        var yes = Ask(HookJson("Bash", new { command = "echo APPROVE && " + RdSQ + Root }, Path.GetTempPath()));
+        Check("the same delete runs once the user says yes on the red prompt (exit 0, via the app's pipe)", yes.Code == 0, $"{yes.Code} {yes.Err}");
     }
 
     static void ClaudeDevArgs()
@@ -226,25 +234,10 @@ internal static class Program
     static void RunGates(string work)
     {
         Console.WriteLine("Run gates: desktop, scripts, dry-run, blanket allow (decisions only)");
-        var console = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "Command Prompt", "ConsoleWindowClass", 0, "cmd", 0, 0, 0, 0, true, false);
-        var terminal = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "PowerShell", "CASCADIA_HOSTING_WINDOW_CLASS", 0, "WindowsTerminal", 0, 0, 0, 0, true, false);
-        var runBox = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "Run", "#32770", 0, "explorer", 0, 0, 0, 0, true, false);
-        var notepad = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "Untitled - Notepad", "Notepad", 0, "notepad", 0, 0, 0, 0, true, false);
-        Check("a console is a command window", CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(console));
-        Check("Windows Terminal is a command window", CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(terminal));
-        Check("the Run box is a command window", CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(runBox));
-        Check("Notepad is not a command window", !CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(notepad));
-        Check("desktop_type: the incident line into a console is refused", CluadeX.Services.Desktop.DesktopSafety.CommandTextRefusal(console, RdSQ + Root) != null);
-        Check("desktop_type: the incident line into the Run box is refused", CluadeX.Services.Desktop.DesktopSafety.CommandTextRefusal(runBox, "cmd /c " + RdSQ + Root) != null);
-        Check("desktop_type: git status into a console is allowed", CluadeX.Services.Desktop.DesktopSafety.CommandTextRefusal(console, "git status") == null);
-        Check("desktop_type: CodeRunGuard refuses the incident line whatever the window", CodeRunGuard.Check(RdSQ + Root, null) != null);
-        var key = CluadeX.Services.Desktop.DesktopInput.Parse("a")!;
-        var paste = CluadeX.Services.Desktop.DesktopInput.Parse("ctrl+v")!;
-        var enter = CluadeX.Services.Desktop.DesktopInput.Parse("Enter")!;
-        Check("desktop_keys: a letter into a console is refused", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(console, key) != null);
-        Check("desktop_keys: a paste into a console is refused", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(console, paste) != null);
-        Check("desktop_keys: Enter into a console is allowed", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(console, enter) == null);
-        Check("desktop_keys: a letter into Notepad is allowed", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(notepad, key) == null);
+        // desktop_type / set_value text goes through the same finding as run_command, then the red prompt.
+        Check("desktop_type: the incident line is a finding", CodeRunGuard.CheckCode(RdSQ + Root) != null);
+        Check("desktop_type: flutter analyze is not", CodeRunGuard.CheckCode("flutter analyze") == null && CodeRunGuard.Check("flutter analyze", null) == null);
+        Check("desktop_type: rm -rf build is not", CodeRunGuard.CheckCode(RmRf + "build") == null);
 
         string bad = Path.Combine(work, "wipe.bat"), clean = Path.Combine(work, "hello.bat");
         File.WriteAllText(bad, "@echo off\r\n" + RdSQ + Root + "\r\n");
@@ -264,16 +257,42 @@ internal static class Program
 
         var blanket = new CluadeX.Models.PermissionRule { Pattern = "*", Scope = "*", Action = CluadeX.Models.PermAction.Allow };
         var rules = new[] { blanket };
-        Check("Allow * does not cover run_command", CluadeX.Services.PermissionService.FirstMatch(rules, "git status", "execute", "run_command") == null);
-        Check("Allow * does not cover repl", CluadeX.Services.PermissionService.FirstMatch(rules, "repl", "execute", "repl") == null);
-        Check("Allow * does not cover desktop_type", CluadeX.Services.PermissionService.FirstMatch(rules, "cmd", "desktop", "desktop_type") == null);
-        Check("Allow * does not cover the desktop family rule for a run tool", CluadeX.Services.PermissionService.FirstMatch(rules, "cmd", "desktop", "desktop", runCall: true) == null);
-        Check("Allow * still covers reading a file", CluadeX.Services.PermissionService.FirstMatch(rules, "a.cs", "file", "read_file") == CluadeX.Models.PermAction.Allow);
-        Check("Allow * still covers desktop_screenshot", CluadeX.Services.PermissionService.FirstMatch(rules, "x", "desktop", "desktop_screenshot") == CluadeX.Models.PermAction.Allow);
+        // CodeAgentService.DecideWorkerGrant gives Claude Dev its shell exactly when this rule answers Allow. On 3.0.127
+        // a blanket Allow stopped covering run tools, the grant came back read-only and flutter / git / gh could not run.
+        Check("Allow * covers run_command (Claude Dev keeps its shell)", CluadeX.Services.PermissionService.FirstMatch(rules, "git status", "execute", "run_command") == CluadeX.Models.PermAction.Allow);
+        Check("Allow * covers repl", CluadeX.Services.PermissionService.FirstMatch(rules, "repl", "execute", "repl") == CluadeX.Models.PermAction.Allow);
+        Check("Allow * covers desktop_type", CluadeX.Services.PermissionService.FirstMatch(rules, "cmd", "desktop", "desktop_type") == CluadeX.Models.PermAction.Allow);
+        Check("Allow * covers reading a file", CluadeX.Services.PermissionService.FirstMatch(rules, "a.cs", "file", "read_file") == CluadeX.Models.PermAction.Allow);
         var named = new CluadeX.Models.PermissionRule { Pattern = "*", Scope = "*", Action = CluadeX.Models.PermAction.Allow, ToolName = "run_command" };
         Check("a rule naming run_command still allows it", CluadeX.Services.PermissionService.FirstMatch(new[] { named }, "git status", "execute", "run_command") == CluadeX.Models.PermAction.Allow);
         var denyAll = new CluadeX.Models.PermissionRule { Pattern = "*", Scope = "*", Action = CluadeX.Models.PermAction.Deny };
         Check("Deny * still denies run_command", CluadeX.Services.PermissionService.FirstMatch(new[] { denyAll }, "git status", "execute", "run_command") == CluadeX.Models.PermAction.Deny);
+    }
+
+    static void DangerGate()
+    {
+        Console.WriteLine("DangerApproval: dangerous runs need the user's explicit yes");
+        string finding = CodeRunGuard.CheckCode(RdSQ + Root)!;
+        var saved = DangerApproval.Handler;
+        DangerApproval.Handler = null;
+        Check("no UI to ask (a harness, headless) → refused", DangerApproval.GateAsync("run_command", RdSQ + Root, finding).GetAwaiter().GetResult() != null);
+        DangerApproval.Handler = _ => Task.FromResult(false);
+        Check("the user says no → refused", DangerApproval.GateAsync("run_command", RdSQ + Root, finding).GetAwaiter().GetResult() != null);
+        DangerApproval.Handler = _ => Task.FromResult(true);
+        Check("the user says yes → it may run", DangerApproval.GateAsync("run_command", RdSQ + Root, finding).GetAwaiter().GetResult() == null);
+        DangerApproval.Handler = _ => throw new InvalidOperationException("prompt failed");
+        Check("the prompt fails → refused", DangerApproval.GateAsync("run_command", RdSQ + Root, finding).GetAwaiter().GetResult() != null);
+        int asked = 0;
+        DangerApproval.Handler = _ => { asked++; return Task.FromResult(true); };
+        Check("nothing dangerous → no prompt at all", DangerApproval.GateAsync("run_command", "flutter test", null).GetAwaiter().GetResult() == null && asked == 0);
+        DangerApproval.Handler = saved;
+        Check("pipe: an approved request comes back allow", DangerApprovalPipe.Ask("t", "APPROVE x", "r"));
+        Check("pipe: a refused request comes back deny", !DangerApprovalPipe.Ask("t", "no", "r"));
+        string keep = Environment.GetEnvironmentVariable("CLUADEX_DANGER_PIPE")!;
+        Environment.SetEnvironmentVariable("CLUADEX_DANGER_PIPE", "cx-nobody-listens-" + Guid.NewGuid().ToString("N"));
+        var sw = Stopwatch.StartNew();
+        Check("pipe: no app listening → deny, quickly", !DangerApprovalPipe.Ask("t", "APPROVE x", "r") && sw.ElapsedMilliseconds < 5000, $"{sw.ElapsedMilliseconds} ms");
+        Environment.SetEnvironmentVariable("CLUADEX_DANGER_PIPE", keep);
     }
 
     static void Git(string cwd, params string[] args)

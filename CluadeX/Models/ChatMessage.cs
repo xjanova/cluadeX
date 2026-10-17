@@ -310,6 +310,13 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The prompt offers "Allow in this chat" (an MCP tool no policy judged, and not one that always asks).</summary>
     public bool PermissionCanAllowForChat { get; set; }
 
+    /// <summary>Non-null = a red, dangerous-action prompt (deletes a drive, a home or a system folder): the guard's
+    /// finding, shown in full under the request so the user sees exactly what would be deleted.</summary>
+    public string? PermissionDanger { get; set; }
+
+    /// <summary>The prompt is the red dangerous-action kind.</summary>
+    public bool IsPermissionDanger => !string.IsNullOrEmpty(PermissionDanger);
+
     /// <summary>It was answered with "Allow in this chat" (the outcome label says so).</summary>
     public bool PermissionAllowedForChat { get; private set; }
 

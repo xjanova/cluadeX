@@ -278,7 +278,7 @@ public sealed class BackgroundToolModule : IAgentToolModule
             && DangerousCommandCheck.FindBlocked(plan.Command, DangerousCommandCheck.DialectOf(ShellRunner.DefaultShell)) is { } blockedLine)
             return Fail(call, DangerousCommandCheck.BlockedMessage(blockedLine));
         // Always on, whatever the Features switch: Safety.CodeRunGuard.
-        if (await Safety.CodeRunGuard.CheckAsync(plan.Command, plan.Cwd) is { } unsafeRun)
+        if (await Safety.DangerApproval.GateAsync("bg_start", plan.Command, await Safety.CodeRunGuard.CheckAsync(plan.Command, plan.Cwd)) is { } unsafeRun)
             return Fail(call, unsafeRun);
         if (Safety.ProcessLaunchPolicy.DryRun)
             return new ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true, Output = Safety.ProcessLaunchPolicy.Report(plan.Command), Summary = "bg_start (dry-run)" };

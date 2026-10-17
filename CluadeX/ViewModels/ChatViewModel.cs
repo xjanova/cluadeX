@@ -919,7 +919,7 @@ public partial class ChatViewModel : ViewModelBase
         // Wire the human-in-the-loop permission prompt. Without this, PermAction.Ask resolved against a
         // null handler → silently DENIED → users were funneled into blanket-allowing "*" (which then
         // never prompts for rm -rf / force-push / overwrite). Now an Ask shows a real confirmation.
-        _agentToolService.OnPermissionRequired += info =>
+        Func<PermissionRequestInfo, Task<bool>> askPermission = info =>
         {
             var dispatcher = App.Current?.Dispatcher;
             if (dispatcher == null) return Task.FromResult(false); // headless / no UI → fail safe (deny)
@@ -941,8 +941,9 @@ public partial class ChatViewModel : ViewModelBase
                 Content = LocF("chat.perm.prompt", info.ToolName, info.Detail),
                 DiffLines = info.Diff?.Lines,
                 DiffStat = info.Diff?.Stat,
-                PermissionAlwaysAsk = info.AlwaysAsk,
-                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk,
+                PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null,
+                PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null,
+                PermissionDanger = info.Danger,
             };
             prompt.PermissionCallback = allow =>
             {
@@ -971,6 +972,18 @@ public partial class ChatViewModel : ViewModelBase
             });
             return tcs.Task;
         };
+        _agentToolService.OnPermissionRequired += askPermission;
+
+        // A delete aimed at a drive / home / system folder runs only after the user's yes on a red prompt — from
+        // CluadeX's own tools and, through the pipe, from Claude Dev's shell (the --cx-guard hook).
+        Services.Safety.DangerApproval.Handler = req => askPermission(new PermissionRequestInfo
+        {
+            ToolName = req.Tool,
+            Detail = req.Action,
+            AlwaysAsk = true,
+            Danger = req.Reason,
+        });
+        Services.Safety.DangerApprovalPipe.StartServer();
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;

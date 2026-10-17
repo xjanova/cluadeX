@@ -256,6 +256,9 @@ public class PermissionRequestInfo
     /// <summary>Asked every time on purpose — the user's own "Ask" rule, or code run in their browser. A chat set to
     /// "allow everything" still asks this one.</summary>
     public bool AlwaysAsk { get; set; }
+    /// <summary>Non-null = the red prompt (Safety.DangerApproval): this would delete a drive, a home or a system folder,
+    /// and here is why. Always asks; never answered by a rule, the chat's "allow everything" or "Allow in this chat".</summary>
+    public string? Danger { get; set; }
     /// <summary>Set when the prompt may be answered "Allow in this chat": the tool's identity (server + tool). One
     /// ChatGPT session through a third-party MCP server asked 18 times for the same javascript_tool (Reverse X run,
     /// 2026-10-13), and the only way out was the chat's "allow everything", which lets every shell command through

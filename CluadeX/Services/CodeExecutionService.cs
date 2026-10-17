@@ -16,8 +16,9 @@ public class CodeExecutionService
 
     public async Task<CodeExecutionResult> ExecuteAsync(string code, string language, CancellationToken ct = default)
     {
-        // Always on, every language: code that deletes a drive / home / system folder is never run (Safety.CodeRunGuard).
-        if (Safety.CodeRunGuard.CheckCode(code) is { } unsafeCode)
+        // Always on, every language: code that deletes a drive / home / system folder runs only after the user's yes
+        // on the red prompt (Safety.CodeRunGuard finds it, Safety.DangerApproval asks).
+        if (await Safety.DangerApproval.GateAsync("code block (" + language + ")", code, Safety.CodeRunGuard.CheckCode(code)) is { } unsafeCode)
             return new CodeExecutionResult { Success = false, Error = unsafeCode };
 
         // A shell code block is a shell command: the same blocklist as run_command / powershell, which the

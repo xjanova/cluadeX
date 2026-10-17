@@ -351,23 +351,16 @@ public class AgentToolService : IDisposable
     }
 
     /// <summary>The user's first matching rule for a module call: URL rules for "browse", path/command rules otherwise.</summary>
-    private PermAction? FindModuleRule(string scope, string resource, string toolName, bool run = false)
+    private PermAction? FindModuleRule(string scope, string resource, string toolName)
     {
         if (string.Equals(scope, "browse", StringComparison.OrdinalIgnoreCase))
             return _permissionService.FindUrlRule(resource, "browse", toolName, legacyResource: toolName);
-        var rule = _permissionService.FindRule(resource, scope, toolName, runCall: run ? true : null);
+        var rule = _permissionService.FindRule(resource, scope, toolName);
         // "desktop(Godot*)" names the whole tool family by its scope, not one desktop_* tool.
         if (rule == null && string.Equals(scope, "desktop", StringComparison.OrdinalIgnoreCase))
-            rule = _permissionService.FindRule(resource, scope, "desktop", runCall: run);
+            rule = _permissionService.FindRule(resource, scope, "desktop");
         return rule;
     }
-
-    /// <summary>A call that runs something — a command, code, a program, keys into another app. A blanket allow
-    /// ("Allow *", the chat's "allow everything", the permission system switched off) never covers it.</summary>
-    private static bool IsRunCall(ToolCall call) =>
-        call.Type is ToolType.RunCommand or ToolType.PowerShell or ToolType.RunBuild or ToolType.RunTests or ToolType.Repl
-            or ToolType.BgStart or ToolType.DesktopLaunch or ToolType.DesktopType or ToolType.DesktopKeys
-        || PermissionService.IsRunTool(call.ToolName);
 
     /// <summary>What the gate decides for a module call before anyone is asked (no prompt, no side effects).</summary>
     private (PermAction Action, string Scope, string Resource, ToolPermission Permission) EvaluateModulePermission(
@@ -376,7 +369,7 @@ public class AgentToolService : IDisposable
         var perm = DescribeModulePermission(module, call);
         string scope = string.IsNullOrWhiteSpace(perm.Scope) ? "execute" : perm.Scope;
         string resource = string.IsNullOrEmpty(perm.Resource) ? call.ToolName : perm.Resource;
-        var rule = FindModuleRule(scope, resource, call.ToolName, IsRunCall(call));
+        var rule = FindModuleRule(scope, resource, call.ToolName);
         PermAction action;
         if (rule == PermAction.Deny) action = PermAction.Deny;
         else if (perm.AlwaysAsk) action = PermAction.Ask;
@@ -392,19 +385,17 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult?> CheckModulePermissionAsync(IAgentToolModule module, ToolCall call)
     {
         var (action, scope, resource, perm) = EvaluateModulePermission(module, call);
-        // Switching the permission system off is a blanket allow too: it never covers a run tool.
-        bool runTool = IsRunCall(call);
-        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff && !runTool) return null;
+        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff) return null;
         if (action == PermAction.Deny) return Fail(call, $"Permission denied for {scope}: {resource}");
         if (action == PermAction.Allow) return null;
 
         string detail = $"{scope}: {resource}";
         if (!string.IsNullOrWhiteSpace(perm.Detail) && perm.Detail != resource) detail += "\n" + perm.Detail;
-        bool askRule = FindModuleRule(scope, resource, call.ToolName, IsRunCall(call)) == PermAction.Ask;
+        bool askRule = FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask;
         var info = new PermissionRequestInfo
         {
             ToolName = call.ToolName, Detail = detail,
-            AlwaysAsk = perm.AlwaysAsk || askRule || runTool,
+            AlwaysAsk = perm.AlwaysAsk || askRule,
             ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
         };
         bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
@@ -787,8 +778,8 @@ public class AgentToolService : IDisposable
                 var refused = await CheckModulePermissionAsync(permModule, call);
                 if (refused != null) return refused;
             }
-            // ── Permission check (respects PermissionSystem toggle — except for run tools, which always go through it) ──
-            else if (_settingsService.Settings.Features.PermissionSystem || IsRunCall(call))
+            // ── Permission check (respects PermissionSystem toggle) ──
+            else if (_settingsService.Settings.Features.PermissionSystem)
             {
                 // Hex tools touching an ABSOLUTE path outside the project get a dedicated, always-on
                 // prompt (user policy 2026-06-04) — hex_patch writes raw bytes to disk. Relative hex
@@ -820,9 +811,7 @@ public class AgentToolService : IDisposable
                                 ToolName = call.ToolName,
                                 Detail = DescribePermissionRequest(call, scope, resource),
                                 Diff = TryComputePreviewDiff(call),
-                                // A run tool always asks: the chat's "allow everything" mode never runs a command unseen.
-                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask
-                                            || IsRunCall(call) || scope == "execute",
+                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask,
                             });
                         if (!allowed)
                             return Fail(call, $"User denied permission for {scope}: {resource}");
@@ -2925,9 +2914,10 @@ public class AgentToolService : IDisposable
         string cwd = root;
         if (useSessionCwd && _shellCwd is { } sc && Directory.Exists(sc) && IsUnder(root, sc)) cwd = sc;
 
-        // Always on (run_command, run_build, run_tests, the verify build): no delete aimed at a drive / home / system
-        // folder, and no running code that was just changed to hold one (Safety.CodeRunGuard, 2026-10-17 incident).
-        if (await Safety.CodeRunGuard.CheckAsync(command, root) is { } unsafeRun)
+        // Always on (run_command, run_build, run_tests, the verify build): a delete aimed at a drive / home / system
+        // folder, or running code that was just changed to hold one, runs only after the user's yes on the red prompt
+        // (Safety.CodeRunGuard finds it, Safety.DangerApproval asks; 2026-10-17 incident, owner's rule 2026-10-18).
+        if (await Safety.DangerApproval.GateAsync("run_command", command, await Safety.CodeRunGuard.CheckAsync(command, root)) is { } unsafeRun)
             return (null, null, unsafeRun);
 
         ShellRunner.Result r;
@@ -3588,8 +3578,9 @@ public class AgentToolService : IDisposable
 
         if (family == null)
             return Fail(call, string.Format(L("chat.repl.unsupported"), language));
-        if (Safety.CodeRunGuard.CheckCode(code) is { } unsafeCode) return Fail(call, unsafeCode);
-        if (await Safety.CodeRunGuard.CheckAsync(code, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null) is { } unsafeRun)
+        if (await Safety.DangerApproval.GateAsync("repl", code,
+                Safety.CodeRunGuard.CheckCode(code)
+                ?? await Safety.CodeRunGuard.CheckAsync(code, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)) is { } unsafeRun)
             return Fail(call, unsafeRun);
         if (Safety.ProcessLaunchPolicy.DryRun)
             return new ToolResult
@@ -5249,7 +5240,8 @@ public class AgentToolService : IDisposable
 
         string cwd = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory;
 
-        if (await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null) is { } unsafeRun)
+        if (await Safety.DangerApproval.GateAsync("powershell", command,
+                await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)) is { } unsafeRun)
             return Fail(call, unsafeRun);
 
         // The script travels as -EncodedCommand (Base64 UTF-16LE) inside ShellRunner — injection-proof,

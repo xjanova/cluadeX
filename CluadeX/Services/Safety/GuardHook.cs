@@ -8,7 +8,9 @@ namespace CluadeX.Services.Safety;
 /// <c>CluadeX.exe --cx-guard</c>: a Claude Code PreToolUse hook that every Claude Dev worker run carries
 /// (<see cref="SettingsFile"/>, passed with <c>--settings</c>). Claude Code runs its own Bash; CluadeX's command
 /// checks never saw those commands — that is how the 2026-10-17 <c>rd /s /q C:\</c> got through. The hook reads the
-/// tool call on stdin and blocks (exit 2, reason on stderr — shown to the agent) when:
+/// tool call on stdin and, for the calls below, asks the user on CluadeX's red prompt (<see cref="DangerApprovalPipe"/>):
+/// a yes lets it run (exit 0); a no, no answer or no running app blocks it (exit 2, reason on stderr — shown to the
+/// agent). The calls:
 /// <list type="bullet">
 /// <item>a shell command is on the dangerous list (always on, whatever the Features switch says);</item>
 /// <item>a Write / Edit puts a delete aimed at a drive, a home or a system folder into a file;</item>
@@ -33,8 +35,32 @@ public static class GuardHook
 
         string? reason;
         try { reason = Decide(input); }
-        catch (Exception ex) { reason = "CluadeX safety: the guard failed (" + ex.GetType().Name + ") — refused to be safe."; }
-        return reason == null ? 0 : Block(reason);
+        catch (Exception ex) { return Block("CluadeX safety: the guard failed (" + ex.GetType().Name + ") — refused to be safe."); }
+        if (reason == null) return 0;
+        // Owner's rule (2026-10-18): it may run — after the user's yes on the red prompt in the running CluadeX.
+        // No app to ask, no answer in time, or a no = blocked, with the reason the agent sees.
+        var (tool, action) = Describe(input);
+        if (DangerApprovalPipe.Ask(tool, action, reason)) return 0;
+        return Block(reason + "\nNot approved: the user did not say yes on CluadeX's red prompt (or CluadeX is not running to ask). "
+                            + "Do not retry or work around this; tell the user what you wanted to run and why.");
+    }
+
+    /// <summary>Which tool and what it would do, for the prompt (the command, or the file it would write).</summary>
+    private static (string Tool, string Action) Describe(string hookJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(hookJson);
+            var root = doc.RootElement;
+            string tool = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
+            if (!root.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return ("Claude Dev " + tool, "");
+            string Str(string name) => ti.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+            string action = Str("command") is { Length: > 0 } c ? c
+                : Str("file_path") is { Length: > 0 } f ? "write " + f
+                : Str("notebook_path");
+            return ("Claude Dev " + tool, action.Length > 4000 ? action[..4000] + "…" : action);
+        }
+        catch { return ("Claude Dev", ""); }
     }
 
     private static int Block(string reason)
@@ -125,7 +151,8 @@ public static class GuardHook
                     new
                     {
                         matcher = "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
-                        hooks = new[] { new { type = "command", command = $"\"{exe}\" {Flag}", timeout = 60 } },
+                        // Long enough for the user to read the red prompt and answer (DangerApprovalPipe waits 280 s).
+                        hooks = new[] { new { type = "command", command = $"\"{exe}\" {Flag}", timeout = 300 } },
                     },
                 },
             },
