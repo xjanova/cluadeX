@@ -1492,6 +1492,25 @@ static class PipeTests
             var list = await c.Ask("{\"jsonrpc\":\"2.0\",\"id\":\"l\",\"method\":\"tools/list\"}");
             check("F2c", "the catalogue describes what is returned (no 'diff plus transcript'; isError; maxSteps + acceptEdits)",
                 list != null && !list.Raw.Contains("diff plus") && list.Raw.Contains("isError") && list.Raw.Contains("maxSteps") && list.Raw.Contains("acceptEdits"), Program_Trunc(list?.Raw));
+            // F2e — the two chat tools are in the catalogue with their schemas (continue_chat needs a message).
+            bool chatTools = false;
+            string chatToolsDetail = Program_Trunc(list?.Raw);
+            try
+            {
+                using var doc = JsonDocument.Parse(list!.Raw);
+                var tools = doc.RootElement.GetProperty("result").GetProperty("tools").EnumerateArray().ToList();
+                JsonElement? Tool(string n) => tools.Where(t => t.GetProperty("name").GetString() == n).Select(t => (JsonElement?)t).FirstOrDefault();
+                var lc = Tool("cluadex.list_chats");
+                var cc = Tool("cluadex.continue_chat");
+                bool Has(JsonElement? t, params string[] props) => t is { } e && e.TryGetProperty("description", out var d) && d.GetString()!.Length > 40
+                    && props.All(p => e.GetProperty("inputSchema").GetProperty("properties").TryGetProperty(p, out _));
+                chatTools = Has(lc, "project", "query", "limit") && Has(cc, "chatId", "title", "message", "maxSteps", "provider", "model")
+                    && cc!.Value.GetProperty("inputSchema").GetProperty("required").EnumerateArray().Select(x => x.GetString()).SequenceEqual(new[] { "message" })
+                    && lc!.Value.GetProperty("description").GetString()!.Contains("Read-only");
+            }
+            catch (Exception ex) { chatToolsDetail = ex.Message + " · " + chatToolsDetail; }
+            check("F2e", "tools/list has cluadex.list_chats (project/query/limit, read-only) and cluadex.continue_chat (chatId/title/message/maxSteps/provider/model, message required)",
+                chatTools, chatToolsDetail);
             check("F2d", "initialize documents the one-request-at-a-time model", ok?.Raw.Contains("one at a time") == true, Program_Trunc(ok?.Raw));
 
             // F3 — a notification gets NO reply; a flood of them neither, and the next request is answered first.

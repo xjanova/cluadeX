@@ -102,6 +102,13 @@ public class ChatPersistenceService
         catch { return true; }
     }
 
+    /// <summary>The stored chat's last assistant reply (null = none, or the read failed).</summary>
+    public string? LastAssistantReply(string sessionId)
+    {
+        try { return _db.LastAssistantReply(sessionId); }
+        catch { return null; }
+    }
+
     /// <summary>Auto-generate a title from the first user message.</summary>
     public static string GenerateTitle(List<ChatMessage> messages)
     {

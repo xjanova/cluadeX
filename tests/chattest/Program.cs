@@ -274,6 +274,7 @@ internal static partial class Program
         await TestNewChatNavigation();        // MINOR: title-bar New chat
         TestPureHelpers();                    // L3 classifier, L8 dedupe, U9 redaction, U2 palette
         await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
+        await TestPipeChats();                // T6: list_chats / continue_chat over the pipe
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail

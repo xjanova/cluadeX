@@ -404,6 +404,24 @@ public sealed class DatabaseService : IDisposable
         return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
     }
 
+    /// <summary>The content of the session's last assistant reply (null = none). Rows that older builds saved as
+    /// Assistant but are status lines are skipped, as LoadSession reads them.</summary>
+    public string? LastAssistantReply(string sessionId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT content FROM messages WHERE session_id = $sid AND role = $role ORDER BY sort_order DESC LIMIT 8;";
+        cmd.Parameters.AddWithValue("$sid", sessionId);
+        cmd.Parameters.AddWithValue("$role", (int)MessageRole.Assistant);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            string content = reader.GetString(0);
+            if (!ChatMessage.IsLegacyStatusLine(content)) return content;
+        }
+        return null;
+    }
+
     /// <summary>Delete a session and all its messages (cascade).</summary>
     public void DeleteSession(string sessionId)
     {

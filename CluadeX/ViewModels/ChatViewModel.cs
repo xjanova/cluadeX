@@ -2704,16 +2704,25 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     // ─── Send Message ───
-    private async Task SendMessage()
+    private Task SendMessage() => SendMessageCore(UserInput?.Trim() ?? "", pipe: null);
+
+    /// <summary>Pressing Send: <paramref name="input"/> is what the box holds. <paramref name="pipe"/> set = the same
+    /// path for a message a pipe caller sent (cluadex.continue_chat): the box and its attached images are the user's
+    /// draft and stay as they are, no batch (the caller waits for the answer), and the turn carries the caller's
+    /// step limit and cancellation.</summary>
+    private async Task SendMessageCore(string input, PipeTurn? pipe)
     {
-        string input = UserInput?.Trim() ?? "";
-        if (string.IsNullOrEmpty(input) && PendingImages.Count == 0) return;
+        bool fromBox = pipe == null;
+        void ClearBox() { if (fromBox) UserInput = string.Empty; }
+        int images = fromBox ? PendingImages.Count : 0;
+        if (string.IsNullOrEmpty(input) && images == 0) return;
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
         // to do nothing at all (the box was even disabled) until the run ended. Attached images wait for the next turn.
         if (IsGenerating)
         {
+            if (!fromBox) return;   // the pipe caller is told the chat is running (ContinueChatForPipeAsync)
             if (input.Length > 0) SendIntoRunningReply(input);
-            if (PendingImages.Count > 0) StatusText = Loc("chat.attach.waitForReply");
+            if (images > 0) StatusText = Loc("chat.attach.waitForReply");
             return;
         }
 
@@ -2722,20 +2731,20 @@ public partial class ChatViewModel : ViewModelBase
         // /compact, /clear and /new were refused with "not configured" whenever the provider wasn't up.
         if (input.Equals("/compact", StringComparison.OrdinalIgnoreCase))
         {
-            UserInput = string.Empty;
+            ClearBox();
             CompactConversation();
             return;
         }
         if (input.Equals("/clear", StringComparison.OrdinalIgnoreCase))
         {
-            UserInput = string.Empty;
+            ClearBox();
             await ClearChatAsync();
             return;
         }
         if (input.Equals("/close", StringComparison.OrdinalIgnoreCase) || input.Equals("/exit", StringComparison.OrdinalIgnoreCase))
         {
             // Close this chat's session: stop what its agent left running, then start a fresh chat (this one is kept).
-            UserInput = string.Empty;
+            ClearBox();
             if (!await EnsureIdleAsync()) return;
             string? closing = CurrentSession?.Id;
             NewSession();
@@ -2744,7 +2753,7 @@ public partial class ChatViewModel : ViewModelBase
         }
         if (input.Equals("/new", StringComparison.OrdinalIgnoreCase))
         {
-            UserInput = string.Empty;
+            ClearBox();
             NewSession();
             return;
         }
@@ -2795,7 +2804,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Batch switch on: a plain question goes out at half price and its answer arrives later (no tools).
         // Skills stay live — they are instructions for the agent loop.
-        if (BatchMode && activeSkill == null && CurrentSession != null)
+        if (fromBox && BatchMode && activeSkill == null && CurrentSession != null)
         {
             await SendAsBatchAsync(input);
             return;
@@ -2803,13 +2812,13 @@ public partial class ChatViewModel : ViewModelBase
 
         _pet?.NoteMessage(input);
         _pet?.NoteTurnStarted();
-        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input, AttachedImages = PendingImages.ToList() };
-        PendingImages.Clear();
+        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input, AttachedImages = fromBox ? PendingImages.ToList() : new() };
+        if (fromBox) PendingImages.Clear();
         Messages.Add(userMsg);
-        UserInput = string.Empty;
+        ClearBox();
         // Only pictures: the model still needs a line of text with them.
         string modelInput = input.Length > 0 ? input : "Look at the attached image(s).";
-        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride));
+        await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe);
     }
 
     /// <summary>
@@ -2898,7 +2907,7 @@ public partial class ChatViewModel : ViewModelBase
     /// by substring — so "prompt is too long: 215000 tokens" matched "500" and was resent 3× with a growing
     /// prompt — and kept counting down after Stop.
     /// </summary>
-    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill)
+    private async Task RunTurnAsync(ChatMessage userMsg, string input, SkillDefinition? activeSkill, bool isSkill, PipeTurn? pipe = null)
     {
         await AutoOpenProjectsAsync(input);
         // Related folders ride along with the message so the model knows they are there (and how to reach them).
@@ -2906,6 +2915,15 @@ public partial class ChatViewModel : ViewModelBase
             input += "\n\n[Open folders — main: " + _fileSystemService.AppWorkingDirectory + "; also open: "
                 + string.Join(", ", withExtras.ExtraFolders) + ". Relative paths are in the main folder; use absolute paths for the others.]";
         var turn = BeginTurn();
+        if (pipe != null && FlowRun is { } pipeRun)
+        {
+            // A message a pipe caller sent (cluadex.continue_chat): marked as such (the BrainX model never relays it
+            // back into the room), with the caller's step limit; the caller reads its outcome from this run.
+            pipeRun.Scope.FromPipe = true;
+            pipeRun.MaxSteps = pipe.MaxSteps;
+            pipe.Run = pipeRun;
+            pipe.UserMessage = userMsg;
+        }
         if (userMsg.HasAttachedImages && AgentRunScope.Current is { } imageScope)
             imageScope.UserImages = await LoadAttachedImagesAsync(userMsg.AttachedImages);
         var session = CurrentSession;
@@ -2914,7 +2932,8 @@ public partial class ChatViewModel : ViewModelBase
         // If the app crashes mid-generation, the conversation up to this point is saved.
         SaveNow();
 
-        _cts = new CancellationTokenSource();
+        // A pipe caller going away (or cancelling) stops the turn like Stop does.
+        _cts = pipe != null ? CancellationTokenSource.CreateLinkedTokenSource(pipe.Ct) : new CancellationTokenSource();
         var ct = _cts.Token;
 
         // Tools are worth running the agentic loop for in TWO cases: a project
@@ -3409,7 +3428,8 @@ public partial class ChatViewModel : ViewModelBase
             // this UI-thread context, every one of those chunks ran ON the dispatcher thread — the
             // window froze for their combined duration. All UI updates inside the loop's event
             // handlers already marshal via Dispatcher, so running the loop on the pool is safe.
-            var result = await Task.Run(() => _agentService.ExecuteAgenticAsync(history, input, progress, ct), CancellationToken.None);
+            var result = await Task.Run(() => _agentService.ExecuteAgenticAsync(history, input, progress, ct, run.MaxSteps), CancellationToken.None);
+            run.LoopResult = result;
 
         // Finalize any remaining inline status
         App.Current?.Dispatcher.Invoke(() =>

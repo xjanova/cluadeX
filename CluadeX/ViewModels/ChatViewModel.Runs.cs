@@ -37,6 +37,10 @@ public partial class ChatViewModel
         public int SavedCount = -1;
         /// <summary>When each running tool started (Stopwatch timestamps, in call order): its row shows how long it took.</summary>
         public readonly System.Collections.Concurrent.ConcurrentQueue<long> ToolStarts = new();
+        /// <summary>A step limit for this run only (a pipe caller's maxSteps); null = the setting.</summary>
+        public int? MaxSteps;
+        /// <summary>The agent loop's result when this turn ran it (null = it answered another way).</summary>
+        public AgentLoopResult? LoopResult;
     }
 
     /// <summary>Runs in progress (UI thread only).</summary>

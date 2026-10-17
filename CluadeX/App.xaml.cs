@@ -341,13 +341,16 @@ public partial class App : Application
             {
                 string Arg(string n) => invocation.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
                     && invocation.Arguments.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+                // The chat a call is about (list_chats / continue_chat) — its id and project, never the message.
+                string chat = invocation.ToolName is "cluadex.list_chats" or "cluadex.continue_chat"
+                    ? $" chatId={Arg("chatId")} project={Arg("project")}" : "";
                 _serviceProvider?.GetService<DebugLogService>()?.Info("Pipe",
-                    $"{invocation.ToolName} taskId={Arg("taskId")} provider={Arg("provider")} model={Arg("model")} dir={Arg("workingDirectory")}");
+                    $"{invocation.ToolName} taskId={Arg("taskId")} provider={Arg("provider")} model={Arg("model")} dir={Arg("workingDirectory")}{chat}");
             }
             // The pipe accepts tasks before the MCP servers finished starting: an agent task waits for them briefly,
             // and when they are still not ready its caller is told (its run may have had no brain / MCP tools).
             string? startupNote = null;
-            if (invocation.ToolName is "cluadex.write_code" or "cluadex.run_skill" or "cluadex.review"
+            if (invocation.ToolName is "cluadex.write_code" or "cluadex.run_skill" or "cluadex.review" or "cluadex.continue_chat"
                 && _serviceProvider?.GetService<McpServerManager>() is { } mcpManager
                 && !await mcpManager.WaitForStartupAsync(McpStartupWait, ct))
                 startupNote = McpServerManager.StartupNotReadyNote;
@@ -360,6 +363,8 @@ public partial class App : Application
                 "cluadex.get_active_model"  => await HandleGetActiveModelAsync(ct),
                 "cluadex.set_model"         => await HandleSetModelAsync(invocation.Arguments, ct),
                 "cluadex.choose_model"      => await HandleChooseModelAsync(invocation.Arguments),
+                "cluadex.list_chats"        => await HandleListChatsAsync(invocation.Arguments),
+                "cluadex.continue_chat"     => await HandleContinueChatAsync(invocation.Arguments, ct),
                 _ => ErrorResult($"Unknown tool '{invocation.ToolName}'"),
             };
             if (startupNote != null)
@@ -788,6 +793,72 @@ public partial class App : Application
             effort = nowEffort,
             reason = reason ?? "",
         }));
+    }
+
+    /// <summary>The chats there are, newest first — for carrying one on with continue_chat. Read-only: nothing on screen
+    /// changes. Returns a JSON array of { id, title, project, updatedAt, running, paused }.</summary>
+    private async Task<McpToolResult> HandleListChatsAsync(System.Text.Json.JsonElement args)
+    {
+        if (_serviceProvider == null) return ErrorResult("DI not initialised");
+        if (!TryReadInt(args, "limit", 1, MaxListChats, out int? limit))
+            return ErrorResult($"'limit' must be an integer from 1 to {MaxListChats}");
+        var chat = _serviceProvider.GetRequiredService<ViewModels.ChatViewModel>();
+        var chats = await chat.ListChatsForPipeAsync(ReadString(args, "project"), ReadString(args, "query"), limit ?? 20);
+        return TextResult(System.Text.Json.JsonSerializer.Serialize(chats.Select(c => new
+        {
+            id = c.Id,
+            title = c.Title,
+            project = c.Project,
+            updatedAt = new DateTimeOffset(c.UpdatedAt).ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            running = c.Running,
+            paused = c.Paused,
+        })));
+    }
+
+    private const int MaxListChats = 200;
+
+    /// <summary>Carry on an existing chat: open it, send the message as the user, return the turn's reply.</summary>
+    private async Task<McpToolResult> HandleContinueChatAsync(System.Text.Json.JsonElement args, CancellationToken ct)
+    {
+        if (_serviceProvider == null) return ErrorResult("DI not initialised");
+        string? chatId = ReadString(args, "chatId");
+        string? title = ReadString(args, "title");
+        string message = ReadString(args, "message") ?? "";
+        string? provider = ReadString(args, "provider");
+        string? model = ReadString(args, "model");
+        if (string.IsNullOrWhiteSpace(chatId) && string.IsNullOrWhiteSpace(title))
+            return ErrorResult("'chatId' (or 'title') is required — cluadex.list_chats lists the chats");
+        if (string.IsNullOrWhiteSpace(message))
+            return ErrorResult("'message' is required");
+        if (!TryReadMaxSteps(args, out int? maxSteps, out string? stepsError))
+            return ErrorResult(stepsError!);
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            if (string.IsNullOrWhiteSpace(model))
+                return ErrorResult("'provider' needs 'model' — a model id from cluadex.get_active_model's options");
+            if (!Enum.TryParse<Models.AiProviderType>(provider.Trim(), ignoreCase: true, out _))
+                return ErrorResult($"Unknown provider '{provider}'. Valid: " + string.Join(", ", Enum.GetNames<Models.AiProviderType>()));
+        }
+
+        var chat = _serviceProvider.GetRequiredService<ViewModels.ChatViewModel>();
+        var outcome = await chat.ContinueChatForPipeAsync(chatId, title, message, maxSteps, provider, model, ct);
+        return ToMcpResult(outcome);
+    }
+
+    /// <summary>Optional integer argument in [min, max] (a numeric string is accepted). Absent/null = null, true.</summary>
+    private static bool TryReadInt(System.Text.Json.JsonElement args, string name, int min, int max, out int? value)
+    {
+        value = null;
+        if (args.ValueKind != System.Text.Json.JsonValueKind.Object || !args.TryGetProperty(name, out var v)
+            || v.ValueKind == System.Text.Json.JsonValueKind.Null)
+            return true;
+        int n;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt32(out n)) { }
+        else if (v.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(v.GetString(), out n)) { }
+        else return false;
+        if (n < min || n > max) return false;
+        value = n;
+        return true;
     }
 
     // ─── Tool result helpers ─────────────────────────────────────────────
