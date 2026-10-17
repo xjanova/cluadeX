@@ -347,7 +347,13 @@ public partial class ChatViewModel
             session = CurrentSession!;
         }
         var run = new ChatRun { Session = session, Messages = Messages };
-        string? folder = _fileSystemService.AppWorkingDirectory;
+        string? taskFolder = TaskFolderFor(session);
+        string? folder = taskFolder ?? _fileSystemService.AppWorkingDirectory;
+        if (taskFolder != null)
+        {
+            Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "📁 " + LocF("chat.resume.inTaskFolder", taskFolder) });
+            _debugLog?.Info("Chat", $"turn runs in the chat's own folder {taskFolder} (window: {_fileSystemService.AppWorkingDirectory})");
+        }
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);

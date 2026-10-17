@@ -542,6 +542,7 @@ internal static class Program
         await PricingWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
+        await HandoffWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
     }
 

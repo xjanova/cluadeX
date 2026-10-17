@@ -350,6 +350,11 @@ internal static class ChatKeys
             ["en"] = "CluadeX is back on your project {0}. This task worked in {1} — a message you send here now works in {0}; to continue the task, open {1} first.",
             ["th"] = "CluadeX กลับมาที่โปรเจกต์ของคุณ {0} แล้ว งานนี้ทำใน {1} — ข้อความที่ส่งในแชทนี้ตอนนี้จะทำงานใน {0} ถ้าจะทำงานนี้ต่อ ให้เปิด {1} ก่อน",
         },
+        ["chat.resume.inTaskFolder"] = new()
+        {
+            ["en"] = "This chat's task carries on in its own folder {0}.",
+            ["th"] = "งานของแชทนี้ทำต่อในโฟลเดอร์ของงานเอง {0}",
+        },
         ["chat.pipe.backToNoProject"] = new()
         {
             ["en"] = "The task's folder {0} is closed again (no project was open before). To continue the task, open {0} first.",
