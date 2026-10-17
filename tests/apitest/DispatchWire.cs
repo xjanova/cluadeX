@@ -171,6 +171,10 @@ internal static class DispatchWire
             && DispatchPolicy.CheckPieces(new[] { new DispatchPolicy.WorkPiece("a", new[] { "src/A.cs" }), new DispatchPolicy.WorkPiece("b", new[] { ".\\src\\a.cs" }) }) is { } dup && dup.Contains("disjoint")
             && DispatchPolicy.CheckPieces(new[] { new DispatchPolicy.WorkPiece("a", new[] { "x" }), new DispatchPolicy.WorkPiece("b", Array.Empty<string>()) }) != null
             && DispatchPolicy.CheckPieces(new[] { new DispatchPolicy.WorkPiece("a", new[] { "x" }) }) != null, "");
+        string msg = "<brainx_recall_ab12>\n- [[Fix CS0103]] add the using\n</brainx_recall_ab12>\n\nfix the build";
+        check("warm-start", "the run's brain recall block is lifted from its message for the sub-agents (searched once)",
+            CodeAgentService.RecallOf(msg) is { } rc && rc.StartsWith("<brainx_recall_ab12>") && rc.EndsWith("</brainx_recall_ab12>")
+            && !rc.Contains("fix the build") && CodeAgentService.RecallOf("plain task") == null, "");
         var cmdResult = new ToolResult { Type = ToolType.RunBuild, Success = false, Output = "$ dotnet build App.sln   (detected: App.sln)\nerror CS0103" };
         check("dispatch", "the failing command is read back from the build row", CodeAgentService.FailingCommandOf(cmdResult) == "dotnet build App.sln",
             CodeAgentService.FailingCommandOf(cmdResult) ?? "");

@@ -517,6 +517,79 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- Effort-aware dispatch: when to fan out, on which model (Services/Agents/DispatchPolicy.cs) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.dispatch}" Style="{StaticResource CardTitle}"/>
+                                <TextBlock Text="{services:Loc settings.dispatchIntro}" Style="{StaticResource SettingDesc}" Margin="0,0,0,12"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.dispatchOn}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.dispatchOnDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding DispatchPolicyEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.maxParallel}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.maxParallelDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding MaxParallelAgents, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.specFix}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.specFixDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding SpeculativeFixEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.specFixCount}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.specFixCountDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding SpeculativeFixCount, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.specFixMinutes}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.specFixMinutesDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding SpeculativeFixMinutes, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <TextBlock Text="{services:Loc settings.modelOverrides}" Style="{StaticResource SettingLabel}" Margin="0,4,0,0"/>
+                                <TextBlock Text="{services:Loc settings.modelOverridesDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,8"/>
+                                <StackPanel Margin="0,0,0,10">
+                                    <TextBlock Text="{services:Loc settings.modelExplore}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding ExploreModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10">
+                                    <TextBlock Text="{services:Loc settings.modelCode}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding CodeModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10">
+                                    <TextBlock Text="{services:Loc settings.modelReview}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding ReviewModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,0,10">
+                                    <TextBlock Text="{services:Loc settings.modelHardFix}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBox Text="{Binding HardFixModelOverride, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Your own Chrome for the agent, through the Claude in Chrome extension -->
                         <Border Style="{StaticResource Card}" Visibility="{Binding HasChromeConnector, Converter={StaticResource BoolVis}}">
                             <StackPanel>

@@ -129,9 +129,15 @@ public partial class CodeAgentService
     /// <summary>The run's message after auto-recall: its recall block is kept for the run's sub-agents.</summary>
     private void RememberRecallForSubAgents(string? messageWithRecall)
     {
-        if (AgentRunScope.Current is not { } scope || string.IsNullOrEmpty(messageWithRecall)) return;
-        var m = RecallBlock.Match(messageWithRecall);
-        if (m.Success) _warm.GetOrCreateValue(scope).Recall = m.Value;
+        if (AgentRunScope.Current is not { } scope || RecallOf(messageWithRecall) is not { } recall) return;
+        _warm.GetOrCreateValue(scope).Recall = recall;
+    }
+
+    /// <summary>The auto-recall block in a message (null = none). Public for the contract harness.</summary>
+    public static string? RecallOf(string? message)
+    {
+        var m = RecallBlock.Match(message ?? "");
+        return m.Success ? m.Value : null;
     }
 
     /// <summary>The context a sub-agent starts with instead of re-reading the project: the repo map (built once per
