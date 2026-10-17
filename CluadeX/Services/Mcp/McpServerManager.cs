@@ -1202,7 +1202,11 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         await Task.WhenAll(names.Select(async name =>
         {
             await slots.WaitAsync(ct);
-            try { await StartServerAsync(name, ct); }
+            try
+            {
+                if (!await StartServerAsync(name, ct) && CommandMissingNow(name))
+                    _ = Task.Run(() => WaitForCommandThenStartAsync(name));
+            }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { Log(name, $"start failed: {ex.GetType().Name}: {ex.Message}"); }
             finally { slots.Release(); }
@@ -1211,6 +1215,38 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         {
             _reloadPendingStart = false;
             RaiseConfigStatusIfChanged();
+        }
+    }
+
+    /// <summary>The server's command is a full path that is not on disk right now — typically its app is updating
+    /// (an installer swaps the "current" folder) at the moment CluadeX starts.</summary>
+    private bool CommandMissingNow(string name)
+    {
+        if (!_configs.TryGetValue(name, out var cfg) || string.IsNullOrWhiteSpace(cfg.Command)) return false;
+        string cmd = cfg.Command.Trim().Trim('"');
+        return System.IO.Path.IsPathRooted(cmd) && !System.IO.File.Exists(cmd);
+    }
+
+    /// <summary>
+    /// A server whose program was missing at startup is tried again once it is back: every 20 s for 15 minutes.
+    /// 2026-10-17: BrainX updated itself while CluadeX started — brainx-mcp.exe was gone for that instant, the one start
+    /// failed, and the brain stayed DOWN for the whole session although the file was back minutes later.
+    /// </summary>
+    private async Task WaitForCommandThenStartAsync(string name)
+    {
+        Log(name, "Its program is not on disk yet (being updated?) — trying again every 20 s for 15 minutes.");
+        for (int i = 0; i < 45; i++)
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(20)); } catch { return; }
+            if (_disposed || !_configs.TryGetValue(name, out var cfg) || !cfg.Enabled) return;
+            if (IsServerRunning(name)) return;
+            if (CommandMissingNow(name)) continue;
+            try { await Task.Delay(TimeSpan.FromSeconds(3)); } catch { return; }   // let the installer finish the folder
+            bool ok;
+            try { ok = await StartServerAsync(name); } catch (Exception ex) { Log(name, $"late start threw: {ex.Message}"); ok = false; }
+            Log(name, ok ? "Started now that its program is back." : "Its program is back but it still did not start.");
+            if (ok) RaiseBrainStatus();
+            return;
         }
     }
 
