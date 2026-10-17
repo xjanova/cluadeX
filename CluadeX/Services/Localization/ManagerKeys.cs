@@ -242,6 +242,7 @@ internal static class ManagerKeys
         ["watch.removeTitle"] = new() { ["en"] = "Stop watching this app?", ["th"] = "เลิกติดตามแอปนี้?" },
         ["watch.removeBody"] = new() { ["en"] = "Its saved results go; the project's files are not touched. If it is running, it is stopped.", ["th"] = "ผลที่บันทึกไว้จะหายไป ไฟล์ของโปรเจคไม่ถูกแตะ ถ้าแอปกำลังทำงานจะถูกปิด" },
         ["tm.project"] = new() { ["en"] = "Project", ["th"] = "โปรเจค" },
+        ["tm.projectFilterTip"] = new() { ["en"] = "Type part of a project's name or path to narrow the list", ["th"] = "พิมพ์บางส่วนของชื่อหรือพาทโปรเจค เพื่อกรองรายการ" },
         ["tm.day"] = new() { ["en"] = "Day", ["th"] = "วันที่" },
         ["tm.allDays"] = new() { ["en"] = "All days", ["th"] = "ทุกวัน" },
         ["tm.restorePoints"] = new() { ["en"] = "Restore points (agent edits)", ["th"] = "จุดย้อนกลับ (ที่เอเจนต์แก้ไฟล์)" },

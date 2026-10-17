@@ -1,0 +1,12 @@
+{
+  "name": "Portfolio",
+  "nameTh": "พอร์ตโฟลิโอ",
+  "description": "Personal portfolio: intro, filterable project grid, skills, experience timeline and a contact form with validation.",
+  "descriptionTh": "พอร์ตโฟลิโอส่วนตัว: แนะนำตัว, ผลงานกรองตามหมวด, ทักษะ, ไทม์ไลน์ประสบการณ์ และฟอร์มติดต่อพร้อมตรวจข้อมูล",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#F472B6",
+  "order": 4,
+  "tags": ["personal", "responsive"]
+}

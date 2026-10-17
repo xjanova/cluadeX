@@ -72,8 +72,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
     private static string BaseUrlOf(ProviderConfig config) =>
         string.IsNullOrWhiteSpace(config.BaseUrl) ? "https://api.openai.com/v1" : config.BaseUrl.TrimEnd('/');
 
-    private static string ModelOf(ProviderConfig config) =>
-        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim();
+    private static string ModelOf(ProviderConfig config) => Agents.SubAgentModel.Pick(
+        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim());
 
     public override async Task InitializeAsync(CancellationToken ct = default)
     {

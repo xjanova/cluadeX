@@ -16,6 +16,10 @@ public class CodeExecutionService
 
     public async Task<CodeExecutionResult> ExecuteAsync(string code, string language, CancellationToken ct = default)
     {
+        // Always on, every language: code that deletes a drive / home / system folder is never run (Safety.CodeRunGuard).
+        if (Safety.CodeRunGuard.CheckCode(code) is { } unsafeCode)
+            return new CodeExecutionResult { Success = false, Error = unsafeCode };
+
         // A shell code block is a shell command: the same blocklist as run_command / powershell, which the
         // auto-run path (Auto-run code, the auto-fix loop) used to skip entirely. Python / JS / C# blocks are
         // not shell — for those the Auto-run opt-in (or the user clicking Run) is the boundary.
@@ -29,6 +33,8 @@ public class CodeExecutionService
                 Error = string.Format(LocalizedResources.Instance["chat.exec.blocked"], blocked),
             };
         }
+        if (Safety.ProcessLaunchPolicy.DryRun)
+            return new CodeExecutionResult { Success = true, Output = Safety.ProcessLaunchPolicy.Report($"{language} code block ({code.Length} chars)") };
 
         return language.ToLowerInvariant() switch
         {
@@ -106,7 +112,7 @@ public class CodeExecutionService
             // Cleanup
             _ = Task.Run(() =>
             {
-                try { Directory.Delete(tempDir, true); } catch { }
+                try { Safety.SafeDelete.Directory(tempDir, tempDir); } catch { }
             });
         }
     }

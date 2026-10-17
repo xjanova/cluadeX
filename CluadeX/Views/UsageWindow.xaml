@@ -288,6 +288,56 @@
                 </Border>
             </Grid>
 
+            <!-- ── Dispatch strategies: cost, time and success per kind of run (tuning DispatchPolicy) ── -->
+            <Border Style="{StaticResource Card}" Margin="0,10,8,0">
+                <StackPanel>
+                    <TextBlock Text="{services:Loc usage.strategyTitle}" Style="{StaticResource Kicker}"/>
+                    <TextBlock Text="{services:Loc usage.strategyDesc}" FontSize="11.5" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Foreground="{DynamicResource Text.Soft.Secondary}"/>
+                    <TextBlock Text="{services:Loc usage.strategyNone}" FontSize="12" Margin="0,8,0,0" Foreground="{DynamicResource Text.Muted}"
+                               Visibility="{Binding HasStrategies, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                    <Grid Margin="0,8,0,2" Visibility="{Binding HasStrategies, Converter={StaticResource BoolVis}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{services:Loc usage.strategyCol}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                        <TextBlock Grid.Column="1" Text="{services:Loc usage.strategyRuns}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                        <TextBlock Grid.Column="2" Text="{services:Loc usage.strategySuccess}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                        <TextBlock Grid.Column="3" Text="{services:Loc usage.strategyPerRun}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                        <TextBlock Grid.Column="4" Text="{services:Loc usage.strategyTime}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                        <TextBlock Grid.Column="5" Text="{services:Loc usage.strategyTotal}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding Strategies}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                    <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource Text.Soft}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Runs}" FontSize="12" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Primary}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Success}" FontSize="12" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Status.Success}"/>
+                                    <TextBlock Grid.Column="3" Text="{Binding CostPerRun}" FontSize="12" FontWeight="SemiBold" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Primary}"/>
+                                    <TextBlock Grid.Column="4" Text="{Binding TimePerRun}" FontSize="12" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Soft}"/>
+                                    <TextBlock Grid.Column="5" Text="{Binding Total}" FontSize="12" FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Soft}"/>
+                                    <Grid Grid.Row="1" Grid.ColumnSpan="6" Height="4" Margin="0,4,0,0">
+                                        <Border Background="{DynamicResource Surface.Raised}" CornerRadius="2"/>
+                                        <Border HorizontalAlignment="Left" CornerRadius="2" Background="{DynamicResource Accent.1}"
+                                                RenderTransformOrigin="0,0.5">
+                                            <Border.Width><Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType=Grid}"/></Border.Width>
+                                            <Border.RenderTransform><ScaleTransform ScaleX="{Binding Fraction}"/></Border.RenderTransform>
+                                        </Border>
+                                    </Grid>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
             <TextBlock Text="{services:Loc usage.note}" FontSize="11" TextWrapping="Wrap" Margin="0,12,8,0"
                        Foreground="{DynamicResource Text.Muted}"/>
         </StackPanel>

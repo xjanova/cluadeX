@@ -57,6 +57,17 @@ public partial class SettingsViewModel : ViewModelBase
             s.EscalationProviderName = nameof(AiProviderType.Anthropic);   // the only provider the native loop can hand off to
         },
         [nameof(BrainAutoRecallEnabled)] = (vm, s) => s.BrainAutoRecallEnabled = vm.BrainAutoRecallEnabled,
+        // Dispatch policy (Services/Agents/DispatchPolicy.cs)
+        [nameof(DispatchPolicyEnabled)] = (vm, s) => s.DispatchPolicyEnabled = vm.DispatchPolicyEnabled,
+        [nameof(DesktopControlEnabled)] = (vm, s) => s.DesktopControlEnabled = vm.DesktopControlEnabled,
+        [nameof(MaxParallelAgents)] = (vm, s) => s.MaxParallelAgents = Math.Clamp(vm.MaxParallelAgents, 1, Services.Agents.DispatchPolicy.MaxParallelCap),
+        [nameof(SpeculativeFixEnabled)] = (vm, s) => s.SpeculativeFixEnabled = vm.SpeculativeFixEnabled,
+        [nameof(SpeculativeFixCount)] = (vm, s) => s.SpeculativeFixCount = Math.Clamp(vm.SpeculativeFixCount, 2, 3),
+        [nameof(SpeculativeFixMinutes)] = (vm, s) => s.SpeculativeFixMinutes = Math.Clamp(vm.SpeculativeFixMinutes, 1, 30),
+        [nameof(ExploreModelOverride)] = (vm, s) => SetOverride(s, "explore", vm.ExploreModelOverride),
+        [nameof(CodeModelOverride)] = (vm, s) => SetOverride(s, "code", vm.CodeModelOverride),
+        [nameof(ReviewModelOverride)] = (vm, s) => SetOverride(s, "review", vm.ReviewModelOverride),
+        [nameof(HardFixModelOverride)] = (vm, s) => SetOverride(s, "hardfix", vm.HardFixModelOverride),
         [nameof(SemanticSearchEnabled)] = (vm, s) => s.SemanticSearchEnabled = vm.SemanticSearchEnabled,
         [nameof(EmbeddingModel)] = (vm, s) => s.EmbeddingModel = vm.EmbeddingModel?.Trim() ?? "",
         [nameof(InstinctLearningEnabled)] = (vm, s) => s.InstinctLearningEnabled = vm.InstinctLearningEnabled,
@@ -137,6 +148,30 @@ public partial class SettingsViewModel : ViewModelBase
     public int MaxAutoFixAttempts { get => _maxAutoFixAttempts; set => SetProperty(ref _maxAutoFixAttempts, value); }
     public bool EscalationEnabled { get => _escalationEnabled; set => SetProperty(ref _escalationEnabled, value); }
     public bool BrainAutoRecallEnabled { get => _brainAutoRecallEnabled; set => SetProperty(ref _brainAutoRecallEnabled, value); }
+
+    // ── Agent ▸ dispatch policy ──
+    private bool _dispatchPolicyEnabled = true, _speculativeFixEnabled = true;
+    private int _maxParallelAgents = 3, _speculativeFixCount = 3, _speculativeFixMinutes = 6;
+    private string _exploreModel = "", _codeModel = "", _reviewModel = "", _hardFixModel = "";
+    public bool DispatchPolicyEnabled { get => _dispatchPolicyEnabled; set => SetProperty(ref _dispatchPolicyEnabled, value); }
+    private bool _desktopControlEnabled = true;
+    public bool DesktopControlEnabled { get => _desktopControlEnabled; set => SetProperty(ref _desktopControlEnabled, value); }
+    public int MaxParallelAgents { get => _maxParallelAgents; set => SetProperty(ref _maxParallelAgents, value); }
+    public bool SpeculativeFixEnabled { get => _speculativeFixEnabled; set => SetProperty(ref _speculativeFixEnabled, value); }
+    public int SpeculativeFixCount { get => _speculativeFixCount; set => SetProperty(ref _speculativeFixCount, value); }
+    public int SpeculativeFixMinutes { get => _speculativeFixMinutes; set => SetProperty(ref _speculativeFixMinutes, value); }
+    /// <summary>Model per sub-agent kind; empty = the policy's choice (explore → cheapest, code/review → the run's, hard fix → one up).</summary>
+    public string ExploreModelOverride { get => _exploreModel; set => SetProperty(ref _exploreModel, value); }
+    public string CodeModelOverride { get => _codeModel; set => SetProperty(ref _codeModel, value); }
+    public string ReviewModelOverride { get => _reviewModel; set => SetProperty(ref _reviewModel, value); }
+    public string HardFixModelOverride { get => _hardFixModel; set => SetProperty(ref _hardFixModel, value); }
+
+    private static void SetOverride(AppSettings s, string kind, string? model)
+    {
+        var map = new Dictionary<string, string>(s.SubAgentModelOverrides ?? new());
+        if (string.IsNullOrWhiteSpace(model)) map.Remove(kind); else map[kind] = model.Trim();
+        s.SubAgentModelOverrides = map;
+    }
     public bool SemanticSearchEnabled { get => _semanticSearchEnabled; set => SetProperty(ref _semanticSearchEnabled, value); }
     public string EmbeddingModel { get => _embeddingModel; set => SetProperty(ref _embeddingModel, value); }
     public bool InstinctLearningEnabled { get => _instinctLearningEnabled; set => SetProperty(ref _instinctLearningEnabled, value); }
@@ -591,6 +626,17 @@ public partial class SettingsViewModel : ViewModelBase
         MaxAutoFixAttempts = src.MaxAutoFixAttempts;
         EscalationEnabled = src.EscalationEnabled;
         BrainAutoRecallEnabled = src.BrainAutoRecallEnabled;
+        DispatchPolicyEnabled = src.DispatchPolicyEnabled;
+        DesktopControlEnabled = src.DesktopControlEnabled;
+        MaxParallelAgents = src.MaxParallelAgents;
+        SpeculativeFixEnabled = src.SpeculativeFixEnabled;
+        SpeculativeFixCount = src.SpeculativeFixCount;
+        SpeculativeFixMinutes = src.SpeculativeFixMinutes;
+        var ov = src.SubAgentModelOverrides ?? new();
+        ExploreModelOverride = ov.GetValueOrDefault("explore") ?? "";
+        CodeModelOverride = ov.GetValueOrDefault("code") ?? "";
+        ReviewModelOverride = ov.GetValueOrDefault("review") ?? "";
+        HardFixModelOverride = ov.GetValueOrDefault("hardfix") ?? "";
         SemanticSearchEnabled = src.SemanticSearchEnabled;
         EmbeddingModel = src.EmbeddingModel ?? "";
         InstinctLearningEnabled = src.InstinctLearningEnabled;

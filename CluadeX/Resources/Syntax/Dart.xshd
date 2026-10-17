@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dart (Flutter).
+     AvalonEdit ships no Dart definition, so .dart files opened as plain white text (2026-10-17, a Flutter project).
+     Colour NAMES are the contract, not the colours: NeonHighlighting re-tints each one to a Syntax.* token by
+     name (Function -> Syntax.Function, ControlKeyword -> Syntax.Control, Property -> Syntax.Variable, ...).
+     A new colour must use a name PickThemed maps; tests/syntaxtest fails otherwise.
+     Rules: the earliest match wins; at the same column the span / rule listed first does. -->
+<SyntaxDefinition name="Dart" extensions=".dart" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" exampleText="// comment" />
+  <Color name="DocComment" foreground="#808080" exampleText="/// doc comment" />
+  <Color name="String" foreground="#CE9178" exampleText="'text'" />
+  <Color name="InterpolationVariable" foreground="#9CDCFE" exampleText="$name" />
+  <Color name="Number" foreground="#B5CEA8" exampleText="0.10" />
+  <Color name="Keyword" foreground="#569CD6" exampleText="final" />
+  <Color name="ControlKeyword" foreground="#C586C0" exampleText="return" />
+  <Color name="ConstantKeyword" foreground="#569CD6" exampleText="null" />
+  <Color name="Type" foreground="#4EC9B0" exampleText="String" />
+  <Color name="Function" foreground="#DCDCAA" exampleText="build()" />
+  <Color name="Annotation" foreground="#D7BA7D" exampleText="@override" />
+  <Color name="ConstantVariable" foreground="#4FC1FF" exampleText="MAX_RETRIES" />
+  <Color name="Property" foreground="#9CDCFE" exampleText="widget.title" />
+
+  <!-- Inside a normal string: escapes, and $name / ${expression} interpolation. -->
+  <RuleSet name="Interpolated">
+    <Span begin="\\" end="." />
+    <Span color="InterpolationVariable" begin="\$\{" end="\}" />
+    <Rule color="InterpolationVariable">\$[A-Za-z_]\w*</Rule>
+  </RuleSet>
+
+  <RuleSet>
+    <!-- /// documents the next declaration; /** */ too. -->
+    <Span color="DocComment" begin="///" />
+    <Span color="DocComment" multiline="true" begin="/\*\*(?!/)" end="\*/" />
+    <Span color="Comment" begin="//" />
+    <Span color="Comment" multiline="true" begin="/\*" end="\*/" />
+
+    <!-- Raw strings first (no escapes, no interpolation), then triple quotes before single ones. -->
+    <Span color="String" multiline="true" begin="r'''" end="'''" />
+    <Span color="String" multiline="true" begin="r&quot;&quot;&quot;" end="&quot;&quot;&quot;" />
+    <Span color="String" begin="r'" end="'" />
+    <Span color="String" begin="r&quot;" end="&quot;" />
+    <Span color="String" multiline="true" begin="'''" end="'''" ruleSet="Interpolated" />
+    <Span color="String" multiline="true" begin="&quot;&quot;&quot;" end="&quot;&quot;&quot;" ruleSet="Interpolated" />
+    <Span color="String" begin="'" end="'" ruleSet="Interpolated" />
+    <Span color="String" begin="&quot;" end="&quot;" ruleSet="Interpolated" />
+
+    <Rule color="Annotation">@[A-Za-z_][\w.]*</Rule>
+    <!-- Keywords and types come before the call rule: if (x) is control flow, List<int>() a type. -->
+    <Keywords color="ControlKeyword">
+      <Word>if</Word><Word>else</Word><Word>for</Word><Word>while</Word><Word>do</Word><Word>switch</Word>
+      <Word>case</Word><Word>default</Word><Word>break</Word><Word>continue</Word><Word>return</Word>
+      <Word>throw</Word><Word>rethrow</Word><Word>try</Word><Word>catch</Word><Word>finally</Word>
+      <Word>yield</Word><Word>await</Word><Word>assert</Word>
+    </Keywords>
+    <Keywords color="Keyword">
+      <Word>abstract</Word><Word>as</Word><Word>async</Word><Word>base</Word><Word>class</Word><Word>const</Word>
+      <Word>covariant</Word><Word>deferred</Word><Word>enum</Word><Word>export</Word><Word>extends</Word>
+      <Word>extension</Word><Word>external</Word><Word>factory</Word><Word>final</Word><Word>implements</Word>
+      <Word>import</Word><Word>in</Word><Word>interface</Word><Word>is</Word><Word>late</Word><Word>library</Word>
+      <Word>mixin</Word><Word>new</Word><Word>operator</Word><Word>part</Word><Word>required</Word>
+      <Word>sealed</Word><Word>static</Word><Word>super</Word><Word>sync</Word><Word>this</Word>
+      <Word>typedef</Word><Word>var</Word><Word>with</Word><Word>when</Word>
+    </Keywords>
+    <Keywords color="ConstantKeyword">
+      <Word>true</Word><Word>false</Word><Word>null</Word>
+    </Keywords>
+    <Keywords color="Type">
+      <Word>void</Word><Word>dynamic</Word><Word>int</Word><Word>double</Word><Word>num</Word><Word>bool</Word>
+    </Keywords>
+    <!-- A Capitalised identifier with a lower-case letter is a class (String, Future, StatelessWidget, AutoUpdater). -->
+    <Rule color="Type">\b_?[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*\b</Rule>
+    <!-- ALL_CAPS: constants and enum-like values. -->
+    <Rule color="ConstantVariable">\b[A-Z][A-Z0-9_]+\b</Rule>
+    <Rule color="Number">(?&lt;![\w.])(?:0[xX][0-9A-Fa-f_]+|(?:\d[\d_]*(?:\.\d[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?)(?!\w)</Rule>
+    <!-- Definitions and calls alike: an identifier followed by ( or by type arguments and ( -->
+    <Rule color="Function">\b[a-z_$][\w$]*(?=\s*(?:&lt;[\w\s,&lt;&gt;?]*&gt;)?\s*\()</Rule>
+    <!-- obj.member / obj?.member that is not a call -->
+    <Rule color="Property">(?&lt;=\.)[a-z_$][\w$]*\b(?!\s*(?:&lt;[\w\s,&lt;&gt;?]*&gt;)?\s*\()</Rule>
+  </RuleSet>
+</SyntaxDefinition>

@@ -39,6 +39,9 @@ internal static class Program
 
     static int Main(string[] args)
     {
+        // This harness checks real command output, so it opts out of the default dry-run on purpose (ProcessLaunchPolicy).
+        // A new harness must not copy this line unless real runs are its point; the guards still check every command.
+        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
         // Child-process mode for McpConfigSafety: a "server" that never answers (must run before anything else).
         if (args.Length > 0 && args[0] == McpConfigSafety.SleepStubFlag) return McpConfigSafety.SleepStub(args);
         if (args.Length > 0 && args[0] == McpConfigSafety.ServerStubFlag) return McpConfigSafety.ServerStub(args);
@@ -542,6 +545,9 @@ internal static class Program
         await PricingWire.Run(Check, Section);
         await AgentReplyWire.Run(Check, Section);
         await EffortWire.Run(Check, Section);
+        await HandoffWire.Run(Check, Section);
+        await ClaudeDevStreamWire.Run(Check, Section);
+        await DispatchWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
     }
 

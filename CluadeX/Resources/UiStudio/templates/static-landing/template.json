@@ -1,0 +1,12 @@
+{
+  "name": "Landing page",
+  "nameTh": "แลนดิ้งเพจ",
+  "description": "Product landing: hero, logos, features, pricing with a monthly/yearly switch, testimonials, FAQ, footer. Responsive with a mobile menu.",
+  "descriptionTh": "หน้าขายสินค้า: Hero, โลโก้ลูกค้า, ฟีเจอร์, ราคาสลับรายเดือน/รายปี, รีวิว, คำถามที่พบบ่อย, ฟุตเตอร์ รองรับมือถือพร้อมเมนู",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#7C5CFF",
+  "order": 2,
+  "tags": ["marketing", "responsive"]
+}

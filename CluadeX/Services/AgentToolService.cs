@@ -99,6 +99,16 @@ public class AgentToolService : IDisposable
     public IReadOnlyList<TodoItem> TodoItems => _todoItems;
     public event Action? TodoChanged;
 
+    /// <summary>The run's whole plan, set from outside the tool — Claude Dev's own TodoWrite/TaskCreate calls, so the
+    /// plan bar and checklist follow a delegated turn the same way they follow todo_write.</summary>
+    public void SetPlan(IEnumerable<TodoItem> items)
+    {
+        var copy = items.Select(t => new TodoItem { Content = t.Content, Status = t.Status }).ToList();
+        _todoItems.Clear();
+        _todoItems.AddRange(copy);
+        TodoChanged?.Invoke();
+    }
+
     // ─── REPL Session State ───
     private readonly Dictionary<string, ReplSession> _replSessions = new();
 
@@ -341,10 +351,23 @@ public class AgentToolService : IDisposable
     }
 
     /// <summary>The user's first matching rule for a module call: URL rules for "browse", path/command rules otherwise.</summary>
-    private PermAction? FindModuleRule(string scope, string resource, string toolName) =>
-        string.Equals(scope, "browse", StringComparison.OrdinalIgnoreCase)
-            ? _permissionService.FindUrlRule(resource, "browse", toolName, legacyResource: toolName)
-            : _permissionService.FindRule(resource, scope, toolName);
+    private PermAction? FindModuleRule(string scope, string resource, string toolName, bool run = false)
+    {
+        if (string.Equals(scope, "browse", StringComparison.OrdinalIgnoreCase))
+            return _permissionService.FindUrlRule(resource, "browse", toolName, legacyResource: toolName);
+        var rule = _permissionService.FindRule(resource, scope, toolName, runCall: run ? true : null);
+        // "desktop(Godot*)" names the whole tool family by its scope, not one desktop_* tool.
+        if (rule == null && string.Equals(scope, "desktop", StringComparison.OrdinalIgnoreCase))
+            rule = _permissionService.FindRule(resource, scope, "desktop", runCall: run);
+        return rule;
+    }
+
+    /// <summary>A call that runs something — a command, code, a program, keys into another app. A blanket allow
+    /// ("Allow *", the chat's "allow everything", the permission system switched off) never covers it.</summary>
+    private static bool IsRunCall(ToolCall call) =>
+        call.Type is ToolType.RunCommand or ToolType.PowerShell or ToolType.RunBuild or ToolType.RunTests or ToolType.Repl
+            or ToolType.BgStart or ToolType.DesktopLaunch or ToolType.DesktopType or ToolType.DesktopKeys
+        || PermissionService.IsRunTool(call.ToolName);
 
     /// <summary>What the gate decides for a module call before anyone is asked (no prompt, no side effects).</summary>
     private (PermAction Action, string Scope, string Resource, ToolPermission Permission) EvaluateModulePermission(
@@ -353,12 +376,14 @@ public class AgentToolService : IDisposable
         var perm = DescribeModulePermission(module, call);
         string scope = string.IsNullOrWhiteSpace(perm.Scope) ? "execute" : perm.Scope;
         string resource = string.IsNullOrEmpty(perm.Resource) ? call.ToolName : perm.Resource;
-        var rule = FindModuleRule(scope, resource, call.ToolName);
+        var rule = FindModuleRule(scope, resource, call.ToolName, IsRunCall(call));
         PermAction action;
         if (rule == PermAction.Deny) action = PermAction.Deny;
         else if (perm.AlwaysAsk) action = PermAction.Ask;
         else action = rule ?? (perm.IsFree ? PermAction.Allow : PermAction.Ask);
-        if (action == PermAction.Ask && !perm.AlwaysAsk && IsOnceApproved(perm.OnceKey)) action = PermAction.Allow;
+        if (action == PermAction.Ask && !perm.AlwaysAsk
+            && (IsOnceApproved(perm.OnceKey) || (rule != PermAction.Ask && IsOnceApproved(perm.ChatScopeKey))))
+            action = PermAction.Allow;
         return (action, scope, resource, perm);
     }
 
@@ -367,20 +392,25 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult?> CheckModulePermissionAsync(IAgentToolModule module, ToolCall call)
     {
         var (action, scope, resource, perm) = EvaluateModulePermission(module, call);
-        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk) return null;
+        // Switching the permission system off is a blanket allow too: it never covers a run tool.
+        bool runTool = IsRunCall(call);
+        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff && !runTool) return null;
         if (action == PermAction.Deny) return Fail(call, $"Permission denied for {scope}: {resource}");
         if (action == PermAction.Allow) return null;
 
         string detail = $"{scope}: {resource}";
         if (!string.IsNullOrWhiteSpace(perm.Detail) && perm.Detail != resource) detail += "\n" + perm.Detail;
-        bool allowed = OnPermissionRequired != null
-            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
-            {
-                ToolName = call.ToolName, Detail = detail,
-                AlwaysAsk = perm.AlwaysAsk || FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask,
-            });
+        bool askRule = FindModuleRule(scope, resource, call.ToolName, IsRunCall(call)) == PermAction.Ask;
+        var info = new PermissionRequestInfo
+        {
+            ToolName = call.ToolName, Detail = detail,
+            AlwaysAsk = perm.AlwaysAsk || askRule || runTool,
+            ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
+        };
+        bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
         if (!allowed) return Fail(call, $"User denied permission for {scope}: {resource}");
         if (!perm.AlwaysAsk) RememberOnceApproval(perm.OnceKey);
+        if (info.AllowedForChat && info.ChatScopeKey != null) RememberOnceApproval(info.ChatScopeKey);
         return null;
     }
 
@@ -757,8 +787,8 @@ public class AgentToolService : IDisposable
                 var refused = await CheckModulePermissionAsync(permModule, call);
                 if (refused != null) return refused;
             }
-            // ── Permission check (respects PermissionSystem toggle) ──
-            else if (_settingsService.Settings.Features.PermissionSystem)
+            // ── Permission check (respects PermissionSystem toggle — except for run tools, which always go through it) ──
+            else if (_settingsService.Settings.Features.PermissionSystem || IsRunCall(call))
             {
                 // Hex tools touching an ABSOLUTE path outside the project get a dedicated, always-on
                 // prompt (user policy 2026-06-04) — hex_patch writes raw bytes to disk. Relative hex
@@ -790,7 +820,9 @@ public class AgentToolService : IDisposable
                                 ToolName = call.ToolName,
                                 Detail = DescribePermissionRequest(call, scope, resource),
                                 Diff = TryComputePreviewDiff(call),
-                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask,
+                                // A run tool always asks: the chat's "allow everything" mode never runs a command unseen.
+                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask
+                                            || IsRunCall(call) || scope == "execute",
                             });
                         if (!allowed)
                             return Fail(call, $"User denied permission for {scope}: {resource}");
@@ -1102,7 +1134,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
-        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default) or general (may edit files)", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "string", "workers only: JSON array [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
@@ -2893,6 +2925,11 @@ public class AgentToolService : IDisposable
         string cwd = root;
         if (useSessionCwd && _shellCwd is { } sc && Directory.Exists(sc) && IsUnder(root, sc)) cwd = sc;
 
+        // Always on (run_command, run_build, run_tests, the verify build): no delete aimed at a drive / home / system
+        // folder, and no running code that was just changed to hold one (Safety.CodeRunGuard, 2026-10-17 incident).
+        if (await Safety.CodeRunGuard.CheckAsync(command, root) is { } unsafeRun)
+            return (null, null, unsafeRun);
+
         ShellRunner.Result r;
         try { r = await ShellRunner.RunAsync(ShellRunner.DefaultShell, command, cwd, timeoutMs, ct); }
         catch (Exception ex) { return (null, null, $"Failed to start the shell: {ex.Message}"); }
@@ -3519,9 +3556,9 @@ public class AgentToolService : IDisposable
         string action = call.GetArg("action", "exec").ToLowerInvariant();
 
         // Only the two interpreters the tool advertises. The old fallback started ANY program named in
-        // 'language' — "cmd", "powershell", "bash" — and piped the code into it as a shell. The shell
-        // blocklist (CheckDangerousCommand) covers the shell tools; for repl the boundary is the permission
-        // prompt, which shows the code. One session per interpreter, whatever spelling named it.
+        // 'language' — "cmd", "powershell", "bash" — and piped the code into it as a shell. The code also gets
+        // CodeRunGuard (always on, like run_command): a permission prompt alone is no boundary once a rule
+        // approves it. One session per interpreter, whatever spelling named it.
         string? family = language switch
         {
             "python" or "python3" or "py" => "python",
@@ -3551,6 +3588,16 @@ public class AgentToolService : IDisposable
 
         if (family == null)
             return Fail(call, string.Format(L("chat.repl.unsupported"), language));
+        if (Safety.CodeRunGuard.CheckCode(code) is { } unsafeCode) return Fail(call, unsafeCode);
+        if (await Safety.CodeRunGuard.CheckAsync(code, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null) is { } unsafeRun)
+            return Fail(call, unsafeRun);
+        if (Safety.ProcessLaunchPolicy.DryRun)
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = Safety.ProcessLaunchPolicy.Report($"{family} REPL code ({code.Length} chars)"),
+                Summary = $"{family} REPL (dry-run)",
+            };
         string exe = family == "python"
             ? (OperatingSystem.IsWindows() ? "python" : "python3")
             : "node";
@@ -3662,7 +3709,8 @@ public class AgentToolService : IDisposable
         {
             try
             {
-                string? result = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, call.GetArg("type", "explore")), ct);
+                string? result = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, call.GetArg("type", "explore"),
+                    Pieces: call.GetArg("pieces", "")), ct);
                 if (result != null)
                     return new ToolResult
                     {
@@ -5200,6 +5248,9 @@ public class AgentToolService : IDisposable
             return intercepted;
 
         string cwd = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory;
+
+        if (await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null) is { } unsafeRun)
+            return Fail(call, unsafeRun);
 
         // The script travels as -EncodedCommand (Base64 UTF-16LE) inside ShellRunner — injection-proof,
         // unlike inlining into -Command "..." — with output forced to UTF-8 and progress records off,

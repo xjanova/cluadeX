@@ -357,6 +357,7 @@
                                                                         Foreground="{DynamicResource Text.Primary}" Background="{DynamicResource Surface.Chip}"
                                                                         BorderBrush="{DynamicResource Accent.1}" BorderThickness="1"
                                                                         Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        AutomationProperties.AutomationId="CxGuard.QuestionOption"
                                                                         Click="QuestionOption_Click">
                                                                     <Button.Template>
                                                                         <ControlTemplate TargetType="Button">
@@ -395,10 +396,10 @@
                                                     </ItemsControl>
                                                     <Grid>
                                                         <Grid.ColumnDefinitions><ColumnDefinition MinWidth="200"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                                        <TextBox Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
+                                                        <TextBox AutomationProperties.AutomationId="CxGuard.QuestionAnswer" Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
                                                                  ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
                                                         <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="14,4" Margin="8,0,0,0"
-                                                                FontSize="12.5" Style="{StaticResource PrimaryButton}" Click="QuestionSend_Click"/>
+                                                                FontSize="12.5" Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CxGuard.QuestionSend" Click="QuestionSend_Click"/>
                                                     </Grid>
                                                 </StackPanel>
                                             </StackPanel>
@@ -482,6 +483,7 @@
                                             <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllow"
                                                     Click="PermissionAllow_Click"/>
                                             <!-- An MCP tool no policy judged: allow it for the rest of this chat (one ChatGPT session asked 18×) -->
                                             <Button Content="{services:Loc chat.perm.allowChat}" Padding="14,3" Margin="0,0,8,0"
@@ -489,10 +491,12 @@
                                                     FontSize="12"
                                                     ToolTip="{services:Loc chat.perm.allowChat.tip}"
                                                     Visibility="{Binding PermissionCanAllowForChat, Converter={StaticResource BoolVis}}"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllowChat"
                                                     Click="PermissionAllowChat_Click"/>
                                             <Button Content="{services:Loc chat.deny}" Padding="14,3"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionDeny"
                                                     Click="PermissionDeny_Click"/>
                                         </StackPanel>
                                         <Grid Margin="22,0,0,0"
@@ -2396,6 +2400,13 @@
                                         Visibility="{Binding EstimateShortText, Converter={StaticResource BoolVis}}">
                                     <TextBlock x:Name="EstimateLabel" Text="{Binding EstimateShortText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12"/>
                                 </Border>
+
+                                <!-- Follow edits: this chat's edits open in the editor while it is on screen (per chat) -->
+                                <CheckBox x:Name="FollowEditsBox" IsChecked="{Binding FollowEditsHere}" VerticalAlignment="Center" Margin="0,2,10,2"
+                                          ToolTip="{services:Loc chat.follow.tip}">
+                                    <TextBlock Text="{services:Loc chat.follow.label}" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                </CheckBox>
 
                                 <!-- Batch: the next questions go out at half price through the provider's batch API and the
                                      answer lands in this chat later. Only shown when the active provider has one. -->

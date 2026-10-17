@@ -60,7 +60,7 @@ public sealed class MarqueeScroller : ScrollViewer
     {
         if (newContent is UIElement el and not FitPanel)
         {
-            Content = new FitPanel(this) { Child = el };
+            Content = new FitPanel(this, el);
             return;
         }
         base.OnContentChanged(oldContent, newContent);
@@ -69,12 +69,24 @@ public sealed class MarqueeScroller : ScrollViewer
     private sealed class FitPanel : Decorator
     {
         private readonly MarqueeScroller _owner;
-        public FitPanel(MarqueeScroller owner)
+        private double _measuredWidth = double.NaN;
+
+        public FitPanel(MarqueeScroller owner, UIElement child)
         {
             _owner = owner;
+            Child = child;
             // A chip that changes size or takes focus asks to be scrolled into view; the bar moves only by its own
             // glide or the mouse, never jumps.
             RequestBringIntoView += (_, e) => e.Handled = true;
+            // The row is measured at a FINITE width (below), so when an item grows later (a longer stats text, a spend
+            // chip appearing) its DesiredSize stays clipped to that width and WPF never re-measures this panel: the
+            // extent went stale and the glide stopped short of the row's end until the window was resized. The row's
+            // arranged width does change, so that is the signal to measure again.
+            if (child is FrameworkElement fe)
+                fe.SizeChanged += (_, e) =>
+                {
+                    if (e.WidthChanged && Math.Abs(e.NewSize.Width - _measuredWidth) > 0.5) InvalidateMeasure();
+                };
         }
 
         protected override Size MeasureOverride(Size constraint)
@@ -87,6 +99,7 @@ public sealed class MarqueeScroller : ScrollViewer
             Child.Measure(new Size(double.PositiveInfinity, h));
             double width = Math.Max(MinimumWidth(Child), _owner.ActualWidth);
             Child.Measure(new Size(width, h));
+            _measuredWidth = width;
             return new Size(width, Child.DesiredSize.Height);
         }
 

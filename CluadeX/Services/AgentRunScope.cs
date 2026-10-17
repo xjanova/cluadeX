@@ -37,9 +37,41 @@ public sealed class AgentRunScope
     /// <summary>Whoever started the run (the chat page's run record), for routing its events back.</summary>
     public object? Owner { get; }
 
+    /// <summary>Accept edits for THIS run only (a pipe task approved for its folder that runs in the background): the
+    /// user's own switch stays on their project. Checked by PermissionService.AcceptsEditsIn; set only for a folder
+    /// IsUnsafeAcceptEditsRoot allows.</summary>
+    public string? AcceptEditsRoot { get; set; }
+
+    /// <summary>Told while the model is still writing a tool call's input: (tool, characters so far, file path once
+    /// the input names one). A provider that streams tool input calls <see cref="ReportToolDraft"/>.</summary>
+    public Action<string, int, string?>? ToolDrafting { get; set; }
+
+    /// <summary>Report a tool call being written in the current run (no-op outside a run or without a listener).</summary>
+    public static void ReportToolDraft(string tool, int chars, string? path)
+    {
+        try { Current?.ToolDrafting?.Invoke(tool, chars, path); }
+        catch { /* the chat's status row must never break the stream */ }
+    }
+
+    /// <summary>The file path a tool input names, read from the JSON streamed so far (null until that value is whole).</summary>
+    public static string? DraftPath(string partialJson)
+    {
+        var m = DraftPathRx.Match(partialJson.Length > 2000 ? partialJson[..2000] : partialJson);
+        if (!m.Success) return null;
+        try { return System.Text.RegularExpressions.Regex.Unescape(m.Groups[1].Value); }
+        catch { return m.Groups[1].Value; }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex DraftPathRx =
+        new(@"""(?:path|file_path|filePath|notebook_path)""\s*:\s*""((?:[^""\\]|\\.)*)""");
+
     /// <summary>The run was started by another program over the cluadex-mcp pipe (BrainX's cowork room, a script) —
     /// not typed by the owner. The BrainX model never relays such a run back into the room: that is a loop.</summary>
     public bool FromPipe { get; set; }
+
+    /// <summary>The chat's first request, word for word from the transcript (null = none). A model taking the chat
+    /// over gets this as "the task": after a compaction the model's view holds only a summary that cuts it short.</summary>
+    public string? TaskRequest { get; set; }
 
     private readonly List<string> _extraFolders = new();
     /// <summary>Related project folders opened beside <see cref="WorkingDirectory"/> (open_project add=true, or the
@@ -140,7 +172,47 @@ public sealed class AgentRunScope
             _inTok += input; _outTok += output; _cacheReadTok += cacheRead; _cacheWriteTok += cacheWrite;
             if (newRequest) _requests++;
         }
+        // A sub-agent's own scope: the run that spawned it pays too (its budget guard and its total see the spend).
+        Parent?.AddUsage(usd, input, output, cacheRead, cacheWrite, newRequest, baselineUsd);
     }
+
+    /// <summary>The run a sub-agent's scope belongs to (null for a run itself).</summary>
+    public AgentRunScope? Parent { get; private set; }
+
+    /// <summary>
+    /// A scope for one sub-agent of this run: same chat, owner and related folders, its own cost (which also adds up in
+    /// this run), its own folder when it works in a git worktree — then Accept edits covers that worktree only.
+    /// </summary>
+    public AgentRunScope CreateChild(string? workingDirectory = null, bool acceptEditsInFolder = false)
+    {
+        var child = new AgentRunScope(SessionKey, workingDirectory ?? WorkingDirectory, Owner)
+        {
+            Parent = this,
+            AcceptEditsRoot = acceptEditsInFolder ? workingDirectory : AcceptEditsRoot,
+            FromPipe = FromPipe,
+            TaskRequest = TaskRequest,
+            ActiveSkillAllowedTools = ActiveSkillAllowedTools,
+            StepEffort = StepEffort,
+        };
+        foreach (var f in ExtraFolders) child.AddExtraFolder(f);
+        return child;
+    }
+
+    private int _strategy;
+    /// <summary>The furthest the run fanned out (Agents.DispatchStrategy as int): what its cost is recorded under.</summary>
+    public int Strategy => Volatile.Read(ref _strategy);
+
+    /// <summary>The run used <paramref name="strategy"/>; keeps the highest (a sub-agent's scope reports to its run).</summary>
+    public void MarkStrategy(int strategy)
+    {
+        int seen;
+        do { seen = Volatile.Read(ref _strategy); if (strategy <= seen) break; }
+        while (Interlocked.CompareExchange(ref _strategy, strategy, seen) != seen);
+        Parent?.MarkStrategy(strategy);
+    }
+
+    /// <summary>When the run started (its wall time for the strategy ledger).</summary>
+    public DateTime StartedAt { get; } = DateTime.Now;
 
     /// <summary>Share of the prompt read back from the cache (0–1): the higher, the cheaper each step.</summary>
     public double CacheHitShare

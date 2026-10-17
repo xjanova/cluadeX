@@ -234,6 +234,8 @@ public class MainViewModel : ViewModelBase
     public SecurityShieldViewModel SecurityShieldVM { get; }
     public HookLibraryViewModel HookLibraryVM { get; }
     public HexEditorViewModel HexEditorVM { get; }
+    public UiStudioViewModel? UiStudioVM { get; }
+    public NodeGraphViewModel? NodeGraphVM { get; }
 
     public ICommand NavigateToCommand { get; }
 
@@ -256,6 +258,7 @@ public class MainViewModel : ViewModelBase
             ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
             ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
             ("McpServers", "MCP Servers", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
+            ("UiStudio", "UI Studio", ""), ("NodeGraph", "Node Graph", ""),
             ("Permissions", "Permissions", ""), ("Features", "Features", ""),
             ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
             ("Instincts", "Instincts", ""), ("DebugLog", "Debug Log", ""),
@@ -374,7 +377,9 @@ public class MainViewModel : ViewModelBase
         DgxSparkService? spark = null,
         CodeWorkspaceService? workspace = null,
         DebugLogService? log = null,
-        WatchViewModel? watchVM = null)
+        WatchViewModel? watchVM = null,
+        UiStudioViewModel? uiStudioVM = null,
+        NodeGraphViewModel? nodeGraphVM = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
@@ -394,6 +399,11 @@ public class MainViewModel : ViewModelBase
         PermissionsVM = permissionsVM;
         TaskManagerVM = taskManagerVM;
         WatchVM = watchVM;
+        UiStudioVM = uiStudioVM;
+        NodeGraphVM = nodeGraphVM;
+        // The Studio and the Graph ask for other pages (open the code at a line, the chat, each other).
+        if (uiStudioVM != null) uiStudioVM.OpenPageRequested += NavigateTo;
+        if (nodeGraphVM != null) nodeGraphVM.OpenPageRequested += NavigateTo;
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
         TimeMachineVM = timeMachineVM;
@@ -796,6 +806,8 @@ public class MainViewModel : ViewModelBase
             "Permissions" => PermissionsVM,
             "Tasks" => TaskManagerVM,
             "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
+            "UiStudio" => (ViewModelBase?)UiStudioVM ?? ChatVM,
+            "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,
             "Features" => FeaturesVM,
             "McpServers" => McpServersVM,
             "TimeMachine" => TimeMachineVM,

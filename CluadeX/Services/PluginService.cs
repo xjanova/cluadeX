@@ -220,13 +220,13 @@ public class PluginService
         }
         catch
         {
-            try { if (Directory.Exists(tempPath)) Directory.Delete(tempPath, true); } catch { }
+            try { if (Directory.Exists(tempPath)) Safety.SafeDelete.Directory(tempPath, staging); } catch { }
             // Put the previous version back if the swap got half-way.
             try { if (oldPath != null && Directory.Exists(oldPath) && !Directory.Exists(destPath)) Directory.Move(oldPath, destPath); } catch { }
             throw;
         }
         if (oldPath != null)
-            try { Directory.Delete(oldPath, true); } catch { /* left in the staging folder, outside plugins\ */ }
+            try { Safety.SafeDelete.Directory(oldPath, staging); } catch { /* left in the staging folder, outside plugins\ */ }
         PluginsChanged?.Invoke();
     }
 
@@ -247,7 +247,7 @@ public class PluginService
         if (plugin != null && Directory.Exists(plugin.Path))
         {
             DisablePlugin(name);
-            Directory.Delete(plugin.Path, true);
+            Safety.SafeDelete.Directory(plugin.Path, _pluginsDir);   // only ever a folder inside plugins\
             PluginsChanged?.Invoke();
         }
     }

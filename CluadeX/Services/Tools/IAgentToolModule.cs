@@ -86,6 +86,15 @@ public sealed record ToolPermission
     /// external site: "click:example.com"). Cleared when the chat changes.</summary>
     public string? OnceKey { get; init; }
 
+    /// <summary>When set, the prompt also offers "Allow in this chat": that answer lets every later call with the
+    /// same key run without asking for the rest of the chat (e.g. "desktop-chat:Godot"). A plain "Allow" still
+    /// only answers <see cref="OnceKey"/>. Not offered when the user's own Ask rule decided.</summary>
+    public string? ChatScopeKey { get; init; }
+
+    /// <summary>Asked even with the permission system switched off (a blanket switch is not consent to driving
+    /// other programs on the PC). Rules and earlier approvals still decide as usual.</summary>
+    public bool AskEvenWhenPermissionsOff { get; init; }
+
     /// <summary>Extra lines for the prompt: the code about to run, the target folder, the risky items.</summary>
     public string? Detail { get; init; }
 

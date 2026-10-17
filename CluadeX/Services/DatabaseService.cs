@@ -122,7 +122,20 @@ public sealed class DatabaseService : IDisposable
             Execute(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path);");
             Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
         }
+
+        // Pipe chats were titled "[ObsidianX] <task>": the same word on every row of the sidebar (owner 2026-10-17:
+        // "หัวข้อแชท ให้ล้างที่มันซ้ำออกให้หมด"). Now just the task; old titles lose the prefix. Every start (cheap,
+        // idempotent): a CluadeX still running an older build may save one with the prefix again.
+        Execute(conn, StripPipeTitlePrefixSql);
     }
+
+    /// <summary>The prefix old pipe chats carry in their title.</summary>
+    public const string PipeTitlePrefix = "[ObsidianX]";
+
+    /// <summary>Removes <see cref="PipeTitlePrefix"/> from stored titles (a title that is only the prefix is kept).</summary>
+    public const string StripPipeTitlePrefixSql =
+        "UPDATE sessions SET title = ltrim(substr(title, 12)) " +
+        "WHERE substr(title, 1, 11) = '[ObsidianX]' AND length(ltrim(substr(title, 12))) > 0;";
 
     // ──────────────────────────── Sessions CRUD ────────────────────────────
 
@@ -389,6 +402,24 @@ public sealed class DatabaseService : IDisposable
         cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM messages WHERE session_id = $id);";
         cmd.Parameters.AddWithValue("$id", sessionId);
         return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
+    }
+
+    /// <summary>The content of the session's last assistant reply (null = none). Rows that older builds saved as
+    /// Assistant but are status lines are skipped, as LoadSession reads them.</summary>
+    public string? LastAssistantReply(string sessionId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT content FROM messages WHERE session_id = $sid AND role = $role ORDER BY sort_order DESC LIMIT 8;";
+        cmd.Parameters.AddWithValue("$sid", sessionId);
+        cmd.Parameters.AddWithValue("$role", (int)MessageRole.Assistant);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            string content = reader.GetString(0);
+            if (!ChatMessage.IsLegacyStatusLine(content)) return content;
+        }
+        return null;
     }
 
     /// <summary>Delete a session and all its messages (cascade).</summary>

@@ -30,7 +30,7 @@ public sealed class PageHost : Grid
     public PageHost() => Children.Add(_rebuilt);
 
     /// <summary>Pages worth keeping: heavy to build, visited back and forth.</summary>
-    public static bool Keeps(object? page) => page is ChatViewModel or CodeEditorViewModel;
+    public static bool Keeps(object? page) => page is ChatViewModel or CodeEditorViewModel or UiStudioViewModel;   // the Studio keeps its running page
 
     /// <summary>The views kept so far (for the harness).</summary>
     public IReadOnlyCollection<FrameworkElement> KeptViews => _kept.Values;

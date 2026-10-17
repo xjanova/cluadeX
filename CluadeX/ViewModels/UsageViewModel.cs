@@ -27,6 +27,12 @@ public sealed class UsageViewModel : ViewModelBase
     public ObservableCollection<Bar> Bars { get; } = new();
     public ObservableCollection<SavingRow> Savings { get; } = new();
 
+    /// <summary>One dispatch strategy over the last 14 days (CostTrackingService.StrategyBreakdown): runs, success share,
+    /// cost per run, time per run — the numbers DispatchPolicy's thresholds are tuned from.</summary>
+    public sealed record StrategyRow(string Name, string Runs, string Success, string CostPerRun, string TimePerRun, string Total, double Fraction);
+    public ObservableCollection<StrategyRow> Strategies { get; } = new();
+    public bool HasStrategies => Strategies.Count > 0;
+
     // ── Cumulative line chart: paid vs without savings, the gap between them is what the savings saved ──
     public const double LineWidth = 620, LineHeight = 170;
     public sealed record LinePoint(double X, double Y, string Tip);
@@ -169,6 +175,19 @@ public sealed class UsageViewModel : ViewModelBase
         Savings.Clear();
         foreach (var (key, usd) in parts)
             Savings.Add(new SavingRow(L(key), Usd(usd), top > 0 ? (double)(Math.Max(0, usd) / top) : 0));
+
+        Strategies.Clear();
+        var rows = _cost.StrategyBreakdown(14);
+        decimal topPerRun = rows.Count == 0 ? 0 : rows.Max(r => r.UsdPerRun);
+        foreach (var r in rows)
+        {
+            var t = TimeSpan.FromSeconds(r.SecondsPerRun);
+            string time = t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s" : $"{t.Seconds}s";
+            Strategies.Add(new StrategyRow(L("usage.strategy." + r.Strategy),
+                r.Runs.ToString("N0", CultureInfo.InvariantCulture), (r.SuccessShare * 100).ToString("0", CultureInfo.InvariantCulture) + "%",
+                Usd(r.UsdPerRun), time, Usd(r.Usd), topPerRun > 0 ? (double)(r.UsdPerRun / topPerRun) : 0));
+        }
+        OnPropertyChanged(nameof(HasStrategies));
 
         var s = _settings.Settings;
         HasBalance = s.CreditBalanceUsd is not null && s.CreditBalanceSetAt is not null;

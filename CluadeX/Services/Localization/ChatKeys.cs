@@ -254,7 +254,11 @@ internal static class ChatKeys
         ["plan.rewind.note"] = new() { ["en"] = "Files went back to before step {0} ({1}) — {2} file(s). The previous state is a restore point in the plan window.", ["th"] = "ไฟล์ย้อนกลับไปก่อนขั้น {0} ({1}) แล้ว — {2} ไฟล์ สภาพก่อนย้อนเก็บเป็นจุดย้อนกลับในหน้าต่างแผน" },
         ["chat.tools.groupContent"] = new() { ["en"] = "{0} operations ({1})", ["th"] = "{0} การทำงาน ({1})" },
         ["chat.tools.groupName"] = new() { ["en"] = "{0} tools", ["th"] = "{0} เครื่องมือ" },
-        ["chat.tools.groupVerb"] = new() { ["en"] = "Worked", ["th"] = "ทำงานเบื้องหลัง" },
+        // Not "ทำงานเบื้องหลัง": these calls ran in the foreground of this turn; "background" read as a separate process.
+        ["chat.tools.groupVerb"] = new() { ["en"] = "Used tools", ["th"] = "ใช้เครื่องมือ" },
+        ["chat.tool.drafting"] = new() { ["en"] = "{0} — writing the call… {1} chars", ["th"] = "{0} — กำลังเขียนคำสั่ง… {1} ตัวอักษร" },
+        ["chat.follow.label"] = new() { ["en"] = "Follow edits", ["th"] = "ตามดูโค้ด" },
+        ["chat.follow.tip"] = new() { ["en"] = "On: when this chat's agent edits a file of the open project, the editor opens it (only while this chat is on screen). Off: the agent keeps working, the screen stays where you are.", ["th"] = "ติ๊กไว้: เมื่อแชทนี้แก้ไฟล์ในโปรเจคที่เปิดอยู่ editor จะเปิดไฟล์นั้นให้ดู (เฉพาะตอนแชทนี้อยู่บนจอ) · เอาติ๊กออก: งานยังทำต่อตามปกติ แค่ไม่สลับหน้าจอ" },
         ["chat.skill.notInvocable"] = new() { ["en"] = "Skill '/{0}' can't be run directly.", ["th"] = "สกิล '/{0}' เรียกใช้โดยตรงไม่ได้" },
         ["chat.skill.unknown"] = new() { ["en"] = "Unknown skill '/{0}'. Available: {1}", ["th"] = "ไม่รู้จักสกิล '/{0}' — ที่ใช้ได้: {1}" },
         ["chat.skill.unknownNone"] = new() { ["en"] = "Unknown skill '/{0}'. No skills are available.", ["th"] = "ไม่รู้จักสกิล '/{0}' และยังไม่มีสกิลให้ใช้" },
@@ -349,6 +353,11 @@ internal static class ChatKeys
         {
             ["en"] = "CluadeX is back on your project {0}. This task worked in {1} — a message you send here now works in {0}; to continue the task, open {1} first.",
             ["th"] = "CluadeX กลับมาที่โปรเจกต์ของคุณ {0} แล้ว งานนี้ทำใน {1} — ข้อความที่ส่งในแชทนี้ตอนนี้จะทำงานใน {0} ถ้าจะทำงานนี้ต่อ ให้เปิด {1} ก่อน",
+        },
+        ["chat.resume.inTaskFolder"] = new()
+        {
+            ["en"] = "This chat's task carries on in its own folder {0}.",
+            ["th"] = "งานของแชทนี้ทำต่อในโฟลเดอร์ของงานเอง {0}",
         },
         ["chat.pipe.backToNoProject"] = new()
         {

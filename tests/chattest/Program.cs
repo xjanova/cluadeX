@@ -55,6 +55,9 @@ internal static partial class Program
     [STAThread]
     static int Main()
     {
+        // This harness checks real command output, so it opts out of the default dry-run on purpose (ProcessLaunchPolicy).
+        // A new harness must not copy this line unless real runs are its point; the guards still check every command.
+        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
 
@@ -153,6 +156,25 @@ internal static partial class Program
 
     static void SetField(object o, string name, object value) =>
         o.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(o, value);
+
+    /// <summary>The harness types and runs back to back: tell the screen guard nobody is using the window, so a pipe run
+    /// brings its chat on screen (the behaviour these checks are about). ScreenTests covers the guard itself.</summary>
+    static void ScreenFree()
+    {
+        SetField(Vm, "_lastUserActivityUtc", DateTime.MinValue);
+        SetField(Vm, "_lastScreenTakeUtc", DateTime.MinValue);
+    }
+
+    static ChatViewModel FreeVm() { ScreenFree(); return Vm; }
+
+    /// <summary>The window shows the project of the chat on screen: the VM's folder and the app's folder are that chat's.</summary>
+    static bool WindowMatchesChat()
+    {
+        var fs = Sp.GetRequiredService<FileSystemService>();
+        string? chat = Vm.CurrentSession?.ProjectPath;
+        if (string.IsNullOrWhiteSpace(chat) || !Directory.Exists(chat)) return true;   // no folder of its own: nothing to match
+        return SamePath(Vm.WorkingDirectory, chat) && SamePath(fs.AppWorkingDirectory, chat);
+    }
 
     static async Task Send(string text)
     {
@@ -255,6 +277,7 @@ internal static partial class Program
         await TestNewChatNavigation();        // MINOR: title-bar New chat
         TestPureHelpers();                    // L3 classifier, L8 dedupe, U9 redaction, U2 palette
         await TestPipeRuns();                 // T5: pipe runs watched live, isError, project restored
+        await TestPipeChats();                // T6: list_chats / continue_chat over the pipe
         await TestAcceptEdits();              // T5: Accept edits switch
         await TestAutonomousBuildGate();      // T5: the Autonomous loop's build/test after unseen edits
         await TestThumbnail();                // T5: tool-row image thumbnail
@@ -266,6 +289,7 @@ internal static partial class Program
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
         await TestToolGrouping();             // G: tool rows fold together
+        await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
@@ -1446,6 +1470,7 @@ internal static partial class Program
     /// <summary>App.HandleMcpToolAsync — the pipe's real dispatcher — on this harness's container.</summary>
     static async Task<McpToolResult> Dispatch(string tool, string argsJson, CancellationToken ct = default)
     {
+        ScreenFree();
         var app = (CluadeX.App)Application.Current;
         typeof(CluadeX.App).GetField("_serviceProvider", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(app, Sp);
         var handler = typeof(CluadeX.App).GetMethod("HandleMcpToolAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -1476,7 +1501,7 @@ internal static partial class Program
             var gate = new SemaphoreSlim(0);
             Fake.Script.Clear();
             Fake.Script.Enqueue(FakeStep.Gated(["Hello", " from", " the", " pipe"], gate, [" — the task is complete."]));
-            var run = Task.Run(() => Vm.RunMcpTaskAsync("t5-live", "Say hello.", null, null, ProjB, CancellationToken.None, maxSteps: 5));
+            var run = Task.Run(() => FreeVm().RunMcpTaskAsync("t5-live", "Say hello.", null, null, ProjB, CancellationToken.None, maxSteps: 5));
             bool streaming = await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.Assistant && m.IsStreaming && m.Content.StartsWith("Hello")), 20000);
             await Render();
             var bubble = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.Assistant);
@@ -1493,15 +1518,13 @@ internal static partial class Program
             Check("P1 the streamed bubble becomes the final reply in place (no duplicate answer)",
                 Vm.Messages.Count(m => m.Role == MessageRole.Assistant && m.Content.Contains("task is complete")) == 1 && bubble is { IsStreaming: false },
                 string.Join(" | ", Vm.Messages.Where(m => m.Role == MessageRole.Assistant).Select(m => m.Content)));
-            Check("P2 afterwards the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA) && SamePath(fs.WorkingDirectory, ProjA), $"{Vm.WorkingDirectory} / {fs.WorkingDirectory}");
+            // The window shows the project of the chat on screen (owner 2026-10-17): the task's chat is still on screen,
+            // so the task's project stays open — switching the project back under it put the user's folder in the title.
+            Check("P2 afterwards the task's chat is still on screen with ITS project in the window (title, tree, tools agree)",
+                Vm.CurrentSession != null && SamePath(Vm.CurrentSession.ProjectPath, ProjB) && WindowMatchesChat(), $"{Vm.WorkingDirectory} / {fs.AppWorkingDirectory}");
             Check("P2 neither switch dragged the user to the editor", toEditor == 0, $"{toEditor} editor navigations");
             var stored = Persist.LoadSession(Vm.CurrentSession!.Id);
             Check("P2 the run's chat is saved with its project tag", stored != null && SamePath(stored.ProjectPath, ProjB) && stored.Messages.Any(m => m.Content.Contains("task is complete")), stored?.ProjectPath);
-            // UX (review): the task's chat stayed open after the switch back, tagged with the task's folder — a message typed
-            // there then worked in the user's project with nothing saying so.
-            var back = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.System && m.Content.Contains(ProjA) && m.Content.Contains(ProjB));
-            Check("P2 the task's chat says which project is open now (the user's) and where the task worked", back != null && back.Content.Contains(LocF("chat.pipe.backToProject", ProjA, ProjB)),
-                back?.Content ?? string.Join(" | ", Vm.Messages.Where(m => m.Role == MessageRole.System).Select(m => m.Content)));
             // UX (review): maxSteps was ignored silently until T1's per-run limit is in the build.
             bool limitInBuild = typeof(CodeAgentService).GetMethods().Any(m => m.Name == "ExecuteAgenticAsync" && m.GetParameters().Any(p => p.Name == "maxIterations"));
             Check("P2 maxSteps: applied when this build's agent loop takes a per-run limit, otherwise the caller is TOLD it was not applied",
@@ -1515,11 +1538,11 @@ internal static partial class Program
             Vm.StopGenerationCommand.Execute(null);
             var stopped = await Task.WhenAny(call, Task.Delay(20000)) == call ? await call : null;
             Check("P3 Stop during a pipe run returns isError=true to the caller", running && stopped is { IsError: true } && stopped.GetTextOutput().Contains("Stopped"), stopped?.GetTextOutput() ?? "no result");
-            Check("P3 …and the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA) && !Vm.IsGenerating);
+            Check("P3 …and the window shows the project of the chat on screen", WindowMatchesChat() && !Vm.IsGenerating);
             var bad = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"maxSteps\":-1}");
             var missing = await Dispatch("cluadex.write_code", "{\"taskId\":\"t5-bad\",\"spec\":\"x\",\"workingDirectory\":\"Z:\\\\no\\\\such\\\\folder\"}");
             Check("P3 a bad maxSteps or a folder that does not exist is refused as isError (it ran in the open project before)",
-                bad.IsError && bad.GetTextOutput().Contains("maxSteps") && missing.IsError && missing.GetTextOutput().Contains("does not exist") && SamePath(Vm.WorkingDirectory, ProjA),
+                bad.IsError && bad.GetTextOutput().Contains("maxSteps") && missing.IsError && missing.GetTextOutput().Contains("does not exist") && WindowMatchesChat(),
                 bad.GetTextOutput() + " / " + missing.GetTextOutput());
 
             // P4 — the caller going away (the pipe closes) stops the run.
@@ -1527,19 +1550,19 @@ internal static partial class Program
             Fake.Script.Enqueue(FakeStep.Hang());
             using (var gone = new CancellationTokenSource())
             {
-                var t = Task.Run(() => Vm.RunMcpTaskAsync("t5-gone", "wait", null, null, ProjB, gone.Token));
+                var t = Task.Run(() => FreeVm().RunMcpTaskAsync("t5-gone", "wait", null, null, ProjB, gone.Token));
                 await WaitUntil(() => Vm.IsGenerating, 10000);
                 gone.Cancel();
                 var o = await Task.WhenAny(t, Task.Delay(20000)) == t ? await t : null;
                 await Render();
                 Check("P4 the caller disconnecting mid-run stops it: isError, and the chat says why",
-                    o is { IsError: true } && Vm.Messages.Any(m => m.Content.Contains(L("chat.pipe.callerGone"))) && !Vm.IsGenerating && SamePath(Vm.WorkingDirectory, ProjA), o?.Text ?? "no outcome");
+                    o is { IsError: true } && Vm.Messages.Any(m => m.Content.Contains(L("chat.pipe.callerGone"))) && !Vm.IsGenerating && WindowMatchesChat(), o?.Text ?? "no outcome");
             }
 
             // P5 — Stop while a permission prompt is open: the prompt is retired, the run returns isError.
             Fake.Script.Clear();
             Fake.Script.Enqueue(FakeStep.Reply("I will run it.\n[ACTION: run_command]\ncommand: echo hi\n[/ACTION]"));
-            var t5 = Task.Run(() => Vm.RunMcpTaskAsync("t5-prompt", "run echo hi", null, null, ProjB, CancellationToken.None));
+            var t5 = Task.Run(() => FreeVm().RunMcpTaskAsync("t5-prompt", "run echo hi", null, null, ProjB, CancellationToken.None));
             bool prompted = await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered), 20000);
             var prompt = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.PermissionRequest);
             Vm.StopGenerationCommand.Execute(null);
@@ -1567,7 +1590,7 @@ internal static partial class Program
         var gate = new SemaphoreSlim(0);
         Fake.Script.Clear();
         Fake.Script.Enqueue(FakeStep.Gated(["Working"], gate, [" — done."]));
-        var run = Task.Run(() => Vm.RunMcpTaskAsync(taskId, "Edit something.", null, null, folder, CancellationToken.None, acceptEdits: acceptEdits));
+        var run = Task.Run(() => FreeVm().RunMcpTaskAsync(taskId, "Edit something.", null, null, folder, CancellationToken.None, acceptEdits: acceptEdits));
         bool started = await WaitUntil(() => Vm.IsGenerating && Vm.Messages.Any(m => m.Role == MessageRole.Assistant && m.IsStreaming), 20000);
         bool on = started && perms.AcceptsEditsIn(folder) && Vm.AcceptEdits;
         var lines = Vm.Messages.Where(m => m.Role == MessageRole.System).Select(m => m.Content).ToList();
@@ -1601,7 +1624,7 @@ internal static partial class Program
         Check("P6 approved → on during the run, and the task's chat says the caller turned it on",
             on2 && lines2.Any(l => l.Contains(LocF("chat.acceptEdits.pipeOn", ProjB))) && !o2.IsError, $"on={on2} lines={string.Join(" | ", lines2)}");
         Check("P6 the approval holds for that folder for this session: a second run asks nothing", on3 && ConfirmTitles.Count == 1, $"on={on3} confirms={ConfirmTitles.Count}");
-        Check("P6 afterwards the app is back on the user's project with the user's own state (off)", SamePath(Vm.WorkingDirectory, ProjA) && !Vm.AcceptEdits && !perms.AcceptsEditsIn(ProjB));
+        Check("P6 afterwards the user's own state is back (off), and the window shows the project of the chat on screen", WindowMatchesChat() && !Vm.AcceptEdits && !perms.AcceptsEditsIn(ProjB));
 
         // Negative control: no acceptEdits → no question, off.
         ConfirmTitles.Clear();
@@ -1615,7 +1638,7 @@ internal static partial class Program
         Check("P6 a drive / user / system / data folder is refused without asking: off, a ⚠ line, and the caller is told",
             !on5 && ConfirmTitles.Count == 0 && lines5.Any(l => l.Contains(LocF("chat.acceptEdits.unsafeFolder", unsafeDir))) && o5.Text.Contains("refused"),
             $"on={on5} confirms={ConfirmTitles.Count} result={o5.Text}");
-        Check("P6 …and the app is back on the user's project", SamePath(Vm.WorkingDirectory, ProjA));
+        Check("P6 …and the window shows the project of the chat on screen", WindowMatchesChat());
 
         // MINOR (re-review): when the user had Accept edits on for that folder themselves, the folder was remembered as
         // approved for pipe callers for the rest of the session — after the user turned it off, the next acceptEdits:true

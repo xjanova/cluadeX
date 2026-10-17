@@ -18,6 +18,13 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // The safety hook Claude Dev runs before every tool call: headless, before Velopack and WPF, never a window.
+        if (args.Length > 0 && args[0] == Services.Safety.GuardHook.Flag)
+        {
+            Environment.Exit(Services.Safety.GuardHook.Run());
+            return;
+        }
+
         try { Velopack.VelopackApp.Build().Run(); }
         catch (Exception ex) { Debug.WriteLine($"Velopack init: {ex.Message}"); }
 

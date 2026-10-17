@@ -1,0 +1,12 @@
+{
+  "name": "Sign in / Sign up",
+  "nameTh": "หน้าเข้าสู่ระบบ / สมัครสมาชิก",
+  "description": "Three auth pages — sign in, create account with a password-strength meter, forgot password — sharing one stylesheet and validation script.",
+  "descriptionTh": "3 หน้า: เข้าสู่ระบบ, สมัครสมาชิก (มีตัววัดความแข็งแรงรหัสผ่าน), ลืมรหัสผ่าน ใช้สไตล์และสคริปต์ตรวจฟอร์มร่วมกัน",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#10B981",
+  "order": 6,
+  "tags": ["auth", "forms"]
+}
