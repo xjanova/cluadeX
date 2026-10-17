@@ -70,8 +70,12 @@ public class ClaudeDevProvider : IAiProvider
     /// event carries — the explained auth/billing refusal of a turn that produced nothing.</summary>
     public static readonly AsyncLocal<Action<string>?> StreamSink = new();
 
-    /// <summary>File tools the CLI gets when the user's rules let CluadeX's own agent edit in the folder.</summary>
-    private const string EditTools = "Edit,Write,MultiEdit,NotebookEdit,TodoWrite";
+    /// <summary>File tools the CLI gets when the user's rules let CluadeX's own agent edit in the folder. The brain's
+    /// write tools come with them: a worker that learned something must be able to save it (cx-self-2, 2026-10-17:
+    /// brain_remember was refused and six lessons from the run were lost). Task* is how CLI 2.1.29x keeps its plan.</summary>
+    private const string EditTools = "Edit,Write,MultiEdit,NotebookEdit,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet," +
+        "mcp__brainx-brain__brain_remember,mcp__brainx-brain__brain_create_note,mcp__brainx-brain__brain_append_note," +
+        "mcp__brainx-brain__brain_recall";
 
     /// <summary>Commands the CLI is never let run headless, whatever the rules say — the same family
     /// DangerousCommandCheck refuses for CluadeX's own run_command.</summary>

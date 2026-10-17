@@ -111,7 +111,7 @@ internal static class HandoffWire
         string rw = ClaudeDevProvider.BuildArgs(@"D:\Game", new ClaudeDevProvider.WorkerGrant(true, true), "", "auto");
         check("args", "advice turn: read-only tools, text output", ro.Contains("--output-format text") && !ro.Contains("Edit,") && !ro.Contains("Bash"), ro);
         check("args", "worker turn: edit tools, Bash, acceptEdits, stream-json, dangerous commands denied",
-            rw.Contains("stream-json") && rw.Contains("Edit,Write") && rw.Contains(",Bash") && rw.Contains("--permission-mode acceptEdits")
+            rw.Contains("stream-json") && rw.Contains("Edit,Write") && rw.Contains("brain_remember") && rw.Contains(",Bash") && rw.Contains("--permission-mode acceptEdits")
             && rw.Contains("--disallowedTools") && rw.Contains("git push --force"), rw);
         string runOnly = ClaudeDevProvider.BuildArgs(@"D:\Game", new ClaudeDevProvider.WorkerGrant(false, true), "", "auto");
         check("args", "run without edit: no edit tools, no acceptEdits", !runOnly.Contains("Edit,Write") && !runOnly.Contains("acceptEdits"), runOnly);
