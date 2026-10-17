@@ -1,0 +1,12 @@
+{
+  "name": "Admin dashboard",
+  "nameTh": "แดชบอร์ดแอดมิน",
+  "description": "Sidebar app shell with KPI cards, an SVG revenue chart, a sortable/searchable orders table, activity feed and dark mode.",
+  "descriptionTh": "โครงแอปมีแถบข้าง การ์ด KPI กราฟรายได้ (SVG) ตารางคำสั่งซื้อค้นหา/เรียงได้ ฟีดกิจกรรม และโหมดมืด",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#22D3EE",
+  "order": 3,
+  "tags": ["app", "admin", "dark-mode"]
+}

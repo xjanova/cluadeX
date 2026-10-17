@@ -1,0 +1,12 @@
+{
+  "name": "Svelte",
+  "nameTh": "Svelte",
+  "description": "Vite + Svelte 5 (runes) weather-style widget board: reactive cards, a unit switch and a search — tiny bundle, exact click-to-source.",
+  "descriptionTh": "Vite + Svelte 5 (runes) บอร์ดวิดเจ็ตแบบพยากรณ์อากาศ: การ์ดตอบสนองทันที สลับหน่วย และค้นหา บันเดิลเล็ก คลิกไปซอร์สได้แม่นยำ",
+  "kind": "vite",
+  "stack": "Vite · Svelte",
+  "icon": "",
+  "accent": "#FF3E00",
+  "order": 13,
+  "tags": ["svelte", "node"]
+}

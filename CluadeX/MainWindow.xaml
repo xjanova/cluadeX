@@ -72,6 +72,12 @@
         <DataTemplate DataType="{x:Type vm:WatchViewModel}">
             <views:WatchView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:UiStudioViewModel}">
+            <views:UiStudioView/>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:NodeGraphViewModel}">
+            <views:NodeGraphView/>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:TaskManagerViewModel}">
             <views:TaskManagerView/>
         </DataTemplate>
@@ -603,6 +609,20 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Watch"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.watchTip}" AutomationProperties.Name="Watch"/>
+
+                                <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
+
+                                <!-- UI Studio: edit the app's UI live, down to the exact source line; Node Graph: the project as nodes -->
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="uistudio" Content="&#xE790;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=UiStudio, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="UiStudio"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.uiStudioTip}" AutomationProperties.Name="UI Studio"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="nodegraph" Content="&#xE9D2;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=NodeGraph, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="NodeGraph"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.nodeGraphTip}" AutomationProperties.Name="Node Graph"/>
                             </StackPanel>
                             </ScrollViewer>
 

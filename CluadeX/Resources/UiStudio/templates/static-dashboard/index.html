@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{PROJECT_TITLE}} · Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="logo"><span class="logo-mark">▲</span><span>{{PROJECT_TITLE}}</span></div>
+      <nav class="menu">
+        <a class="menu-item active" href="#"><span class="mi">◧</span>Overview</a>
+        <a class="menu-item" href="#"><span class="mi">◎</span>Analytics</a>
+        <a class="menu-item" href="#"><span class="mi">☰</span>Orders <span class="badge">12</span></a>
+        <a class="menu-item" href="#"><span class="mi">◍</span>Customers</a>
+        <a class="menu-item" href="#"><span class="mi">▣</span>Products</a>
+        <p class="menu-title">Settings</p>
+        <a class="menu-item" href="#"><span class="mi">⚙</span>General</a>
+        <a class="menu-item" href="#"><span class="mi">⛨</span>Security</a>
+      </nav>
+      <div class="upgrade">
+        <p class="upgrade-title">Upgrade to Pro</p>
+        <p class="upgrade-text">Unlock reports, exports and unlimited seats.</p>
+        <button class="btn btn-primary btn-sm">Upgrade</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menuBtn" aria-label="Toggle menu">☰</button>
+        <div class="search"><span>⌕</span><input id="search" type="search" placeholder="Search orders…"></div>
+        <div class="topbar-right">
+          <button class="icon-btn" id="themeBtn" aria-label="Toggle dark mode">◐</button>
+          <button class="icon-btn" aria-label="Notifications">🔔<span class="dot"></span></button>
+          <div class="user"><span class="avatar">JD</span><span class="user-name">Jane Doe</span></div>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">Overview</h1>
+            <p class="page-sub">Here's what happened in your store this month.</p>
+          </div>
+          <div class="page-actions">
+            <select class="select" id="range">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+            <button class="btn btn-primary">+ New order</button>
+          </div>
+        </div>
+
+        <section class="kpis">
+          <article class="kpi">
+            <p class="kpi-label">Revenue</p>
+            <p class="kpi-value">$48,290</p>
+            <p class="kpi-delta up">▲ 12.4% <span>vs last month</span></p>
+          </article>
+          <article class="kpi">
+            <p class="kpi-label">Orders</p>
+            <p class="kpi-value">1,284</p>
+            <p class="kpi-delta up">▲ 8.1% <span>vs last month</span></p>
+          </article>
+          <article class="kpi">
+            <p class="kpi-label">New customers</p>
+            <p class="kpi-value">326</p>
+            <p class="kpi-delta down">▼ 2.3% <span>vs last month</span></p>
+          </article>
+          <article class="kpi">
+            <p class="kpi-label">Conversion</p>
+            <p class="kpi-value">3.62%</p>
+            <p class="kpi-delta up">▲ 0.4% <span>vs last month</span></p>
+          </article>
+        </section>
+
+        <section class="grid-2">
+          <article class="card">
+            <div class="card-head">
+              <h2 class="card-title">Revenue</h2>
+              <div class="legend"><span class="lg lg-a"></span>This period <span class="lg lg-b"></span>Previous</div>
+            </div>
+            <svg class="chart" id="chart" viewBox="0 0 600 240" preserveAspectRatio="none" role="img" aria-label="Revenue chart"></svg>
+          </article>
+          <article class="card">
+            <div class="card-head"><h2 class="card-title">Recent activity</h2></div>
+            <ul class="feed">
+              <li><span class="feed-dot green"></span><div><b>Order #1042</b> paid by Somchai<p>2 min ago</p></div></li>
+              <li><span class="feed-dot blue"></span><div><b>New customer</b> Anna Kim signed up<p>18 min ago</p></div></li>
+              <li><span class="feed-dot amber"></span><div><b>Refund</b> requested for #1031<p>1 hour ago</p></div></li>
+              <li><span class="feed-dot green"></span><div><b>Order #1041</b> shipped<p>3 hours ago</p></div></li>
+              <li><span class="feed-dot red"></span><div><b>Payment failed</b> for #1039<p>Yesterday</p></div></li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2 class="card-title">Orders</h2>
+            <span class="muted" id="rowCount"></span>
+          </div>
+          <div class="table-wrap">
+            <table class="table" id="orders">
+              <thead>
+                <tr>
+                  <th data-key="id">Order</th>
+                  <th data-key="customer">Customer</th>
+                  <th data-key="date">Date</th>
+                  <th data-key="status">Status</th>
+                  <th data-key="total" class="num">Total</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

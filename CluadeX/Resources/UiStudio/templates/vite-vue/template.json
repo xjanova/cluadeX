@@ -1,0 +1,12 @@
+{
+  "name": "Vue 3",
+  "nameTh": "Vue 3",
+  "description": "Vite + Vue 3 single-file components: a notes app with a sidebar list, search, an editor panel and local storage. Template elements map to their exact line.",
+  "descriptionTh": "Vite + Vue 3 (SFC): แอปโน้ตมีรายการด้านข้าง ค้นหา แผงแก้ไข และบันทึกในเครื่อง ทุก element ในเทมเพลตชี้ไปยังบรรทัดของมันได้แม่นยำ",
+  "kind": "vite",
+  "stack": "Vite · Vue 3",
+  "icon": "",
+  "accent": "#42B883",
+  "order": 12,
+  "tags": ["vue", "node"]
+}

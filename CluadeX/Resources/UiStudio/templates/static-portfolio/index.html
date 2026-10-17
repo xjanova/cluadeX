@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{PROJECT_TITLE}} — Designer &amp; Developer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="wrap header-inner">
+      <a class="logo" href="#">{{PROJECT_TITLE}}<span>.</span></a>
+      <nav class="links">
+        <a href="#work">Work</a>
+        <a href="#about">About</a>
+        <a href="#contact" class="link-cta">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="intro wrap">
+    <p class="hello">👋 Hi, I'm</p>
+    <h1 class="name">{{PROJECT_TITLE}}</h1>
+    <p class="role">Product designer &amp; front-end developer crafting calm, fast interfaces.</p>
+    <div class="intro-actions">
+      <a class="btn btn-dark" href="#work">View my work</a>
+      <a class="btn btn-line" href="#contact">Let's talk</a>
+    </div>
+    <ul class="stats">
+      <li><b>8+</b><span>years</span></li>
+      <li><b>60+</b><span>projects</span></li>
+      <li><b>25</b><span>happy clients</span></li>
+    </ul>
+  </section>
+
+  <section class="section wrap" id="work">
+    <div class="section-head">
+      <h2 class="section-title">Selected work</h2>
+      <div class="filters" id="filters">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="web">Web</button>
+        <button class="chip" data-filter="mobile">Mobile</button>
+        <button class="chip" data-filter="brand">Branding</button>
+      </div>
+    </div>
+    <div class="projects">
+      <article class="project" data-cat="web">
+        <div class="thumb t1"></div>
+        <div class="project-body"><h3>Fintech dashboard</h3><p>Web · Design system &amp; React app</p></div>
+      </article>
+      <article class="project" data-cat="mobile">
+        <div class="thumb t2"></div>
+        <div class="project-body"><h3>Habit tracker</h3><p>Mobile · iOS &amp; Android</p></div>
+      </article>
+      <article class="project" data-cat="brand">
+        <div class="thumb t3"></div>
+        <div class="project-body"><h3>Café identity</h3><p>Branding · Logo, packaging</p></div>
+      </article>
+      <article class="project" data-cat="web">
+        <div class="thumb t4"></div>
+        <div class="project-body"><h3>Travel marketplace</h3><p>Web · UX research &amp; UI</p></div>
+      </article>
+      <article class="project" data-cat="mobile">
+        <div class="thumb t5"></div>
+        <div class="project-body"><h3>Food delivery</h3><p>Mobile · Prototype &amp; motion</p></div>
+      </article>
+      <article class="project" data-cat="brand">
+        <div class="thumb t6"></div>
+        <div class="project-body"><h3>Music festival</h3><p>Branding · Posters &amp; web</p></div>
+      </article>
+    </div>
+  </section>
+
+  <section class="section wrap about" id="about">
+    <div>
+      <h2 class="section-title">About me</h2>
+      <p class="about-text">I help startups turn rough ideas into products people love. I care about accessible design, performance and the small details that make an interface feel effortless.</p>
+      <div class="skills">
+        <span>Figma</span><span>HTML/CSS</span><span>JavaScript</span><span>React</span><span>Design systems</span><span>Prototyping</span><span>User research</span>
+      </div>
+    </div>
+    <ol class="timeline">
+      <li><span class="when">2022 — now</span><b>Lead designer</b><p>Northwind Labs</p></li>
+      <li><span class="when">2019 — 2022</span><b>Front-end developer</b><p>Globex Studio</p></li>
+      <li><span class="when">2016 — 2019</span><b>UI designer</b><p>Freelance</p></li>
+    </ol>
+  </section>
+
+  <section class="section wrap" id="contact">
+    <div class="contact">
+      <div>
+        <h2 class="section-title">Let's work together</h2>
+        <p class="about-text">Have a project in mind? Send a message and I'll reply within a day.</p>
+        <p class="mail">hello@example.com</p>
+      </div>
+      <form class="form" id="contactForm" novalidate>
+        <label>Name<input name="name" required placeholder="Your name"></label>
+        <label>Email<input name="email" type="email" required placeholder="you@example.com"></label>
+        <label>Message<textarea name="message" rows="4" required placeholder="Tell me about your project"></textarea></label>
+        <button class="btn btn-dark" type="submit">Send message</button>
+        <p class="form-status" id="formStatus" role="status"></p>
+      </form>
+    </div>
+  </section>
+
+  <footer class="footer wrap">© <span id="year"></span> {{PROJECT_TITLE}} · Made with care</footer>
+  <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{PROJECT_TITLE}} · Shop</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="announce">Free shipping on orders over $50 · 30-day returns</div>
+  <header class="header">
+    <div class="wrap header-inner">
+      <a class="logo" href="#">{{PROJECT_TITLE}}</a>
+      <nav class="cats" id="cats">
+        <button class="cat active" data-cat="all">All</button>
+        <button class="cat" data-cat="home">Home</button>
+        <button class="cat" data-cat="kitchen">Kitchen</button>
+        <button class="cat" data-cat="outdoor">Outdoor</button>
+      </nav>
+      <button class="cart-btn" id="cartBtn" aria-label="Open cart">🛒 <span class="cart-count" id="cartCount">0</span></button>
+    </div>
+  </header>
+
+  <section class="banner wrap">
+    <div class="banner-text">
+      <p class="tag">Autumn collection</p>
+      <h1 class="banner-title">Simple things, made to last.</h1>
+      <p class="banner-sub">Thoughtfully designed goods for everyday living.</p>
+      <a class="btn" href="#products">Shop now</a>
+    </div>
+    <div class="banner-art"></div>
+  </section>
+
+  <main class="wrap" id="products">
+    <div class="toolbar">
+      <h2 class="title">Products <span class="muted" id="resultCount"></span></h2>
+      <select class="sort" id="sort">
+        <option value="featured">Featured</option>
+        <option value="price-asc">Price: low to high</option>
+        <option value="price-desc">Price: high to low</option>
+        <option value="name">Name</option>
+      </select>
+    </div>
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2>Your cart</h2>
+      <button class="close" id="closeCart" aria-label="Close cart">✕</button>
+    </div>
+    <ul class="lines" id="lines"></ul>
+    <div class="drawer-foot">
+      <div class="row"><span>Subtotal</span><b id="subtotal">$0.00</b></div>
+      <div class="row muted"><span>Shipping</span><span id="shipping">—</span></div>
+      <div class="row total"><span>Total</span><b id="total">$0.00</b></div>
+      <button class="btn btn-block" id="checkout">Checkout</button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <footer class="footer wrap">© <span id="year"></span> {{PROJECT_TITLE}}</footer>
+  <script src="script.js"></script>
+</body>
+</html>

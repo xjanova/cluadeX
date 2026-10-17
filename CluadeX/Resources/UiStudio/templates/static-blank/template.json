@@ -1,0 +1,12 @@
+{
+  "name": "Blank page",
+  "nameTh": "หน้าเปล่า",
+  "description": "One HTML page, one stylesheet, one script — the cleanest start. No Node needed.",
+  "descriptionTh": "HTML หนึ่งหน้า สไตล์หนึ่งไฟล์ สคริปต์หนึ่งไฟล์ — เริ่มแบบสะอาดที่สุด ไม่ต้องใช้ Node",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#94A3B8",
+  "order": 1,
+  "tags": ["starter"]
+}

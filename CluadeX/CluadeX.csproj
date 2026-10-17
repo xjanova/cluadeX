@@ -54,6 +54,13 @@
     <EmbeddedResource Include="Resources\Syntax\*.xshd" />
   </ItemGroup>
 
+  <!-- UI Studio: the page overlay, the Vite locator plugin and the starter templates, read by
+       Services/UiStudio/StudioTemplates.cs as "UiStudio/<path>" (portable: nothing is downloaded). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\UiStudio\**\*" LogicalName="UiStudio/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Remove="Resources\UiStudio\**\*" />
+  </ItemGroup>
+
   <!-- Embed the git commit hash into AssemblyInformationalVersion (read at runtime for the
        title-bar version chip) so every build is traceable to its exact commit — "which build
        am I actually running?" stops being a guessing game. -->

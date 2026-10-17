@@ -1,0 +1,41 @@
+:root {
+  --bg: #f6f8f7;
+  --panel: #ffffff;
+  --fg: #12221a;
+  --muted: #6b7c73;
+  --line: #e1e8e4;
+  --primary: #42b883;
+  font-family: "Inter", "Noto Sans Thai", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+p, h1 { margin: 0; }
+
+.app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+.sidebar { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 20px; gap: 14px; min-height: 0; }
+.side-head { display: flex; justify-content: space-between; align-items: center; }
+.logo { font-size: 20px; }
+.search { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.btn { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+.btn-primary { background: var(--primary); color: #fff; }
+
+.list { list-style: none; margin: 0; padding: 0; overflow: auto; display: grid; gap: 4px; align-content: start; }
+.item { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+.item:hover { background: var(--bg); }
+.item.active { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.item-text { flex: 1; min-width: 0; }
+.item-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-del { border: 0; background: none; color: var(--muted); cursor: pointer; opacity: 0; }
+.item:hover .item-del { opacity: 1; }
+.none { color: var(--muted); padding: 12px; }
+
+.main { min-width: 0; display: flex; }
+.editor { flex: 1; display: flex; flex-direction: column; padding: 32px 48px; gap: 12px; }
+.title-input { font: inherit; font-size: 32px; font-weight: 800; border: 0; outline: none; background: none; color: var(--fg); }
+.body-input { flex: 1; font: inherit; font-size: 17px; line-height: 1.7; border: 0; outline: none; resize: none; background: none; color: var(--fg); }
+.editor-foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 10px; }
+.empty { margin: auto; text-align: center; display: grid; gap: 16px; }
+.empty-title { color: var(--muted); font-size: 18px; }
+
+@media (max-width: 760px) { .app { grid-template-columns: 1fr; height: auto; } .editor { padding: 20px; min-height: 60vh; } }
