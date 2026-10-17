@@ -512,6 +512,7 @@ internal static class Program
         await MockLicense.Run(Check, Section);
         await MockSpark.Run(Check, Section);
         await McpConfigSafety.Run(Check, Section);
+        await BrainLaunchPath.Run(Check, Section);
 
         Section("offline · assistant turn rebuild");
         var resp = new NativeToolResponse

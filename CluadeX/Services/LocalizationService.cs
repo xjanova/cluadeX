@@ -418,6 +418,11 @@ public class LocalizationService
             ["en"] = "Could not prepare \"{0}\" to start. Press Restart on the MCP Servers page to try again — details are in the Debug Log.",
             ["th"] = "เตรียมเริ่ม \"{0}\" ไม่สำเร็จ — กด Restart ในหน้าเซิร์ฟเวอร์ MCP เพื่อลองใหม่ (รายละเอียดอยู่ใน Debug Log)",
         },
+        ["mcp.brain.mirrorMissing"] = new()
+        {
+            ["en"] = "\"{0}\" is set to run from BrainX's install folder, which would block BrainX from updating, and BrainX's own copy for apps (~\\.brainx\\mcp) is not there yet. Open BrainX once so it sets that copy up, then press Restart on the MCP Servers page.",
+            ["th"] = "\"{0}\" ถูกตั้งให้รันจากโฟลเดอร์ติดตั้งของ BrainX ซึ่งจะทำให้ BrainX อัปเดตไม่ได้ และยังไม่มีสำเนาสำหรับแอปอื่นของ BrainX (~\\.brainx\\mcp) — เปิด BrainX หนึ่งครั้งให้มันสร้างสำเนานั้น แล้วกด Restart ในหน้าเซิร์ฟเวอร์ MCP",
+        },
         ["devPreview.off"] = new()
         {
             ["en"] = "{0} is part of Dev Preview, which is switched off. Turn on \"{1}\" on the Features page to use it.",
