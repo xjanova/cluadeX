@@ -1962,6 +1962,7 @@ public partial class CodeAgentService
 
         // ─── Auto-recall: pull relevant lessons from BrainX into this task (best-effort, gated) ───
         userMessage = await MaybePrependBrainContextAsync(userMessage ?? "", progress, ct);
+        RememberRecallForSubAgents(userMessage);   // sub-agents start warm with it (CodeAgentService.Dispatch.cs)
 
         // ─── Dual-mode dispatch: Native tool_use vs legacy [ACTION:] ───
         if (_providerManager.ActiveProvider.SupportsNativeToolUse)
@@ -1979,7 +1980,9 @@ public partial class CodeAgentService
                 }
                 throw;
             }
-            return await MaybeFailOverAsync(nativeResult, history, userMessage, ct);
+            var finalResult = await MaybeFailOverAsync(nativeResult, history, userMessage, ct);
+            RecordRunStrategy(finalResult);
+            return finalResult;
         }
 
         _debugLog?.Warn("Agent", "dispatching to LEGACY [ACTION:] loop (provider has no native tool use) — "
@@ -2122,6 +2125,7 @@ public partial class CodeAgentService
         string? userMessage, CancellationToken ct)
     {
         if (result.StopReason != "error" || !IsQuotaExhausted(result.FinalResponse)) return result;
+        NoteQuotaExhausted();   // sub-agents started from here on go to Claude Dev too
         if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
         if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX) return result;
         var fallback = _providerManager.GetProvider(AiProviderType.ClaudeDev);
@@ -2900,6 +2904,10 @@ public partial class CodeAgentService
         string lastBuildPath = "build";          // "build" or "tests" — for the message wording
         int repeatedBuildNoEdit = 0;             // consecutive failing builds with no edit in between
         int redBuildGuards = 0;                  // how many times we've blocked a finish on a red build
+        bool redSeen = false;                    // the last build/test run was red …
+        bool editedSinceRed = false;             // … and the model has edited since: its fix, judged by the next run
+        int mainFixFailures = 0;                 // the model's own fixes that left the build red (speculative fix trigger)
+        var racedFailures = new HashSet<string>(StringComparer.Ordinal); // failures speculative fixers already raced on
         int falseFinishGuards = 0;               // times we've blocked a "done" with zero successful changes (cap 2)
         int brainFirstGuards = 0;                // times we've refused a finish that never consulted the brain (cap 1)
         bool anyBrainToolCalled = false;         // a brain MCP tool actually ran this turn
@@ -4098,6 +4106,10 @@ public partial class CodeAgentService
             {
                 var last = buildResults[^1];
                 bool nowFailing = !last.Success;
+                if (nowFailing && redSeen && (editedSinceRed || mutatedThisStep)) mainFixFailures++;
+                else if (!nowFailing) mainFixFailures = 0;
+                redSeen = nowFailing;
+                editedSinceRed = false;
                 if (nowFailing && lastBuildFailed && !mutatedThisStep) repeatedBuildNoEdit++;
                 else if (!nowFailing || mutatedThisStep) repeatedBuildNoEdit = 0;
                 lastBuildFailed = nowFailing;
@@ -4111,6 +4123,27 @@ public partial class CodeAgentService
                 // The file changed, so whatever the previous build said is now stale.
                 lastBuildFailed = false;
                 repeatedBuildNoEdit = 0;
+                if (redSeen) editedSinceRed = true;
+            }
+
+            // ─── Speculative fix (Agents/SpeculativeFixer.cs) ───
+            // Red, and the model's own fix already failed once (or the effort is xhigh/max): 2–3 fixers race in their own
+            // worktrees with only the failing command, its output and the files it names. The first green one's diff is
+            // applied here; otherwise the model gets what they found.
+            if (buildResults.Count > 0 && lastBuildFailed && !loopIsLocal)
+            {
+                var (specNote, specFixed) = await MaybeSpeculativeFixAsync(buildResults[^1], mainFixFailures, racedFailures, ct);
+                if (specNote != null)
+                {
+                    userResultMsg.Content.Add(new Services.Providers.ContentBlock { Type = "text", Text = specNote });
+                    if (specFixed)
+                    {
+                        lastBuildFailed = false;
+                        repeatedBuildNoEdit = 0;
+                        anyWriteSucceeded = true;
+                        stepsSinceMutation = 0;
+                    }
+                }
             }
 
             // Re-running a build that can't have changed wastes the whole step budget. Say so.

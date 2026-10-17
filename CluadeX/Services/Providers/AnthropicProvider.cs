@@ -284,8 +284,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     private static string BaseUrlOf(ProviderConfig config) =>
         string.IsNullOrWhiteSpace(config.BaseUrl) ? "https://api.anthropic.com" : config.BaseUrl.TrimEnd('/');
 
-    private static string ModelOf(ProviderConfig config) =>
-        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim();
+    private static string ModelOf(ProviderConfig config) => Agents.SubAgentModel.Pick(
+        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim());
 
     /// <summary>The workspace to run in: the configured one, else ANTHROPIC_WORKSPACE_ID.</summary>
     internal static string? ResolveWorkspaceId(ProviderConfig config)

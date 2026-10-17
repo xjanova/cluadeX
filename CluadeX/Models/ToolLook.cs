@@ -141,7 +141,15 @@ public sealed class AgentNode : System.ComponentModel.INotifyPropertyChanged
     public int Steps { get => _steps; set { _steps = value; Raise(nameof(Steps)); Raise(nameof(StatsText)); } }
     public int ToolCalls { get => _tools; set { _tools = value; Raise(nameof(ToolCalls)); Raise(nameof(StatsText)); } }
     public string Elapsed { get => _elapsed; set { _elapsed = value; Raise(nameof(Elapsed)); Raise(nameof(StatsText)); } }
-    public string StatsText => $"{_tools} tools · {_elapsed}";
+    private string _model = "";
+    private decimal _cost;
+    /// <summary>The model it runs on (routed by the dispatch policy; empty = the run's own).</summary>
+    public string Model { get => _model; set { _model = value ?? ""; Raise(nameof(Model)); Raise(nameof(StatsText)); } }
+    /// <summary>What its requests cost so far (USD).</summary>
+    public decimal CostUsd { get => _cost; set { _cost = value; Raise(nameof(CostUsd)); Raise(nameof(StatsText)); } }
+    public string StatsText => $"{_tools} tools · {_elapsed}"
+        + (_model.Length > 0 ? $" · {_model.Replace("claude-", "")}" : "")
+        + (_cost > 0 ? $" · ${_cost:0.000}" : "");
     public bool IsRunning => _state == "running";
     public bool IsDone => _state == "done";
     public bool IsFailed => _state is "failed" or "stopped";

@@ -275,4 +275,4 @@ public class TodoItem
 /// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
 /// name, with its Persona and AllowedTools).</summary>
 public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
-    IReadOnlyCollection<string>? AllowedTools = null);
+    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null);

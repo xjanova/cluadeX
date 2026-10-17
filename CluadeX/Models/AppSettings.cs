@@ -109,6 +109,20 @@ public class AppSettings
     /// <summary>When the API's credit/quota runs out mid-task, carry the same turn on with Claude Dev (the user's
     /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>
     public bool AutoFailoverOnQuota { get; set; } = true;
+
+    // ─── Dispatch policy (Services/Agents/DispatchPolicy.cs) ───
+    /// <summary>Effort decides when the agent fans out: low none, medium read-only sub-agents on the cheapest model,
+    /// high workers in git worktrees with a reviewer, xhigh/max also speculative fixes. Off = sub-agents as before.</summary>
+    public bool DispatchPolicyEnabled { get; set; } = true;
+    /// <summary>Sub-agents, workers and fixers one run may have going at the same time.</summary>
+    public int MaxParallelAgents { get; set; } = 3;
+    /// <summary>Race 2–3 fixers in their own worktrees on a red build the main loop could not fix.</summary>
+    public bool SpeculativeFixEnabled { get; set; } = true;
+    public int SpeculativeFixCount { get; set; } = 3;
+    /// <summary>How long a speculative-fix race may take before the main loop gets the build back.</summary>
+    public int SpeculativeFixMinutes { get; set; } = 6;
+    /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix"); empty = the policy's choice.</summary>
+    public Dictionary<string, string> SubAgentModelOverrides { get; set; } = new();
     /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
     /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).</summary>
     public bool AutoOpenEditorOnAgentEdit { get; set; } = true;

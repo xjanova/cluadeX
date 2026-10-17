@@ -172,7 +172,47 @@ public sealed class AgentRunScope
             _inTok += input; _outTok += output; _cacheReadTok += cacheRead; _cacheWriteTok += cacheWrite;
             if (newRequest) _requests++;
         }
+        // A sub-agent's own scope: the run that spawned it pays too (its budget guard and its total see the spend).
+        Parent?.AddUsage(usd, input, output, cacheRead, cacheWrite, newRequest, baselineUsd);
     }
+
+    /// <summary>The run a sub-agent's scope belongs to (null for a run itself).</summary>
+    public AgentRunScope? Parent { get; private set; }
+
+    /// <summary>
+    /// A scope for one sub-agent of this run: same chat, owner and related folders, its own cost (which also adds up in
+    /// this run), its own folder when it works in a git worktree — then Accept edits covers that worktree only.
+    /// </summary>
+    public AgentRunScope CreateChild(string? workingDirectory = null, bool acceptEditsInFolder = false)
+    {
+        var child = new AgentRunScope(SessionKey, workingDirectory ?? WorkingDirectory, Owner)
+        {
+            Parent = this,
+            AcceptEditsRoot = acceptEditsInFolder ? workingDirectory : AcceptEditsRoot,
+            FromPipe = FromPipe,
+            TaskRequest = TaskRequest,
+            ActiveSkillAllowedTools = ActiveSkillAllowedTools,
+            StepEffort = StepEffort,
+        };
+        foreach (var f in ExtraFolders) child.AddExtraFolder(f);
+        return child;
+    }
+
+    private int _strategy;
+    /// <summary>The furthest the run fanned out (Agents.DispatchStrategy as int): what its cost is recorded under.</summary>
+    public int Strategy => Volatile.Read(ref _strategy);
+
+    /// <summary>The run used <paramref name="strategy"/>; keeps the highest (a sub-agent's scope reports to its run).</summary>
+    public void MarkStrategy(int strategy)
+    {
+        int seen;
+        do { seen = Volatile.Read(ref _strategy); if (strategy <= seen) break; }
+        while (Interlocked.CompareExchange(ref _strategy, strategy, seen) != seen);
+        Parent?.MarkStrategy(strategy);
+    }
+
+    /// <summary>When the run started (its wall time for the strategy ledger).</summary>
+    public DateTime StartedAt { get; } = DateTime.Now;
 
     /// <summary>Share of the prompt read back from the cache (0–1): the higher, the cheaper each step.</summary>
     public double CacheHitShare

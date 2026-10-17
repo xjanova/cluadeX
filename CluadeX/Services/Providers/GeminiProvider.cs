@@ -97,7 +97,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
 
     private static string ModelOf(ProviderConfig config)
     {
-        string m = string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim();
+        string m = Agents.SubAgentModel.Pick(string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim());
         return m.StartsWith("models/") ? m["models/".Length..] : m;
     }
 

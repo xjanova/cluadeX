@@ -427,6 +427,8 @@ public partial class ChatViewModel
         var took = DateTime.Now - node.StartedAt;
         node.Elapsed = took.TotalMinutes >= 1 ? $"{(int)took.TotalMinutes}m {took.Seconds}s" : $"{Math.Max(0, took.Seconds)}s";
         if (e.Steps > 0) node.Steps = e.Steps;
+        if (!string.IsNullOrEmpty(e.Model)) node.Model = e.Model;
+        if (e.CostUsd > node.CostUsd) node.CostUsd = e.CostUsd;
         switch (e.Phase)
         {
             case "start": node.Action = Loc("agentmap.starting"); break;
