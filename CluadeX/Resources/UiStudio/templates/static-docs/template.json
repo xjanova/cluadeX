@@ -1,0 +1,12 @@
+{
+  "name": "Docs site",
+  "nameTh": "เว็บเอกสาร (Docs)",
+  "description": "Documentation layout: searchable sidebar, article with callouts and code blocks with copy buttons, on-this-page table of contents that tracks scrolling.",
+  "descriptionTh": "เลย์เอาต์เอกสาร: เมนูข้างค้นหาได้, บทความมีกล่องเตือนและโค้ดพร้อมปุ่มคัดลอก, สารบัญที่ไฮไลต์ตามการเลื่อน",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#3B82F6",
+  "order": 7,
+  "tags": ["docs", "content"]
+}

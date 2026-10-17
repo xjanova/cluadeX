@@ -1,0 +1,155 @@
+<UserControl x:Class="CluadeX.Views.NodeGraphView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:services="clr-namespace:CluadeX.Services"
+             xmlns:ui="clr-namespace:CluadeX.Views.UiStudio">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="UiStudio/StudioStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <DataTemplate x:Key="LinkTemplate">
+                <DockPanel Margin="0,0,0,4">
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding Kind}" FontSize="10" Foreground="{DynamicResource Text.Faint}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    <Button Style="{StaticResource StudioLinkBtn}" Content="{Binding Label}" FontFamily="{DynamicResource Font.Mono}"
+                            Command="{Binding DataContext.GoToLinkCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"/>
+                </DockPanel>
+            </DataTemplate>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid Background="{DynamicResource Page.Background}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- toolbar -->
+        <Border Background="{DynamicResource Page.Toolbar.Background}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,0,0,1" Padding="12,8">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE9D2;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <StackPanel VerticalAlignment="Center" Margin="0,0,14,0">
+                        <TextBlock Text="{services:Loc graph.title}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
+                        <TextBlock FontSize="10.5" Foreground="{DynamicResource Text.Muted}">
+                            <Run Text="{Binding RootName, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding Summary, Mode=OneWay}"/>
+                        </TextBlock>
+                    </StackPanel>
+                    <Border Style="{StaticResource StudioSegmentHost}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource StudioSegment}" GroupName="GraphMode" Content="{services:Loc graph.modeProject}"
+                                         IsChecked="{Binding Mode, Converter={StaticResource NavConverter}, ConverterParameter=project}"/>
+                            <RadioButton Style="{StaticResource StudioSegment}" GroupName="GraphMode" Content="{services:Loc graph.modeLive}"
+                                         IsChecked="{Binding Mode, Converter={StaticResource NavConverter}, ConverterParameter=live}"/>
+                        </StackPanel>
+                    </Border>
+                    <CheckBox Content="{services:Loc graph.packages}" IsChecked="{Binding ShowPackages}" VerticalAlignment="Center" Margin="4,0,12,0"
+                              Foreground="{DynamicResource Text.Secondary}" FontSize="12" Visibility="{Binding IsProject, Converter={StaticResource BoolVis}}"/>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding RefreshCommand}" ToolTip="{services:Loc graph.refreshTip}">
+                        <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding AutoLayoutCommand}" ToolTip="{services:Loc graph.layoutTip}">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc graph.layout}"/></StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding FitCommand}" ToolTip="{services:Loc graph.fitTip}">
+                        <TextBlock Text="&#xE9A6;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding OpenStudioCommand}">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.title}"/></StackPanel>
+                    </Button>
+                </StackPanel>
+                <Grid VerticalAlignment="Center" MaxWidth="360" HorizontalAlignment="Left">
+                    <TextBox Style="{StaticResource StudioBox}" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged, Delay=200}" Padding="28,5,8,5" MinWidth="220"/>
+                    <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="10,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                    <TextBlock Text="{Binding MatchText}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0" IsHitTestVisible="False"/>
+                </Grid>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="300"/>
+            </Grid.ColumnDefinitions>
+
+            <ui:NodeGraphCanvas x:Name="Canvas"/>
+
+            <!-- legend -->
+            <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12" Padding="10,6" CornerRadius="8"
+                    Background="{DynamicResource Surface.Panel}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1" IsHitTestVisible="False">
+                <StackPanel Orientation="Horizontal">
+                    <StackPanel Orientation="Horizontal" Visibility="{Binding IsProject, Converter={StaticResource BoolVis}}">
+                        <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#F59E0B" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.page}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#7C5CFF" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.component}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#22D3EE" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.script}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#F472B6" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.style}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                    </StackPanel>
+                    <TextBlock Text="{services:Loc graph.hint}" FontSize="11" Foreground="{DynamicResource Text.Faint}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- empty / busy -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440">
+                <TextBlock Text="{Binding EmptyText}" TextWrapping="Wrap" TextAlignment="Center" FontSize="13" Foreground="{DynamicResource Text.Muted}"/>
+                <TextBlock Text="{services:Loc graph.busy}" FontSize="13" Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center"
+                           Visibility="{Binding IsBusy, Converter={StaticResource BoolVis}}"/>
+            </StackPanel>
+
+            <!-- details -->
+            <Border Grid.Column="1" Background="{DynamicResource Surface.Panel}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14,12">
+                    <StackPanel>
+                        <TextBlock Text="{services:Loc graph.details}" Style="{StaticResource StudioPanelHeader}"/>
+                        <TextBlock Text="{services:Loc graph.noSelection}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,10,0,0"
+                                   Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                        <StackPanel Visibility="{Binding HasSelection, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{Binding SelectedTitle}" FontFamily="{DynamicResource Font.Mono}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
+                                       TextWrapping="Wrap" Margin="0,10,0,2"/>
+                            <TextBlock Text="{Binding SelectedKind}" FontSize="11" Foreground="{DynamicResource Accent.1}"/>
+                            <TextBlock Text="{Binding SelectedPath}" FontFamily="{DynamicResource Font.Mono}" FontSize="11" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                            <WrapPanel Margin="0,12,0,0">
+                                <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding OpenFileCommand}" Margin="0,0,6,6">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc graph.openCode}"/></StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ShowInStudioCommand}" Margin="0,0,6,6"
+                                        Visibility="{Binding IsLive, Converter={StaticResource BoolVis}}" Content="{services:Loc graph.showInStudio}"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToggleCollapseCommand}" Margin="0,0,6,6"
+                                        Visibility="{Binding IsLive, Converter={StaticResource BoolVis}}" Content="{services:Loc graph.collapse}"/>
+                            </WrapPanel>
+
+                            <!-- live element: structure edits go to the source -->
+                            <StackPanel Visibility="{Binding IsLive, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc graph.edit}" Style="{StaticResource StudioKicker}"/>
+                                <WrapPanel>
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding StructureCommand}" CommandParameter="moveUp" ToolTip="{services:Loc studio.moveUpTip}" Padding="7,4" Margin="0,0,4,4">
+                                        <TextBlock Text="&#xE70E;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding StructureCommand}" CommandParameter="moveDown" ToolTip="{services:Loc studio.moveDownTip}" Padding="7,4" Margin="0,0,4,4">
+                                        <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding StructureCommand}" CommandParameter="duplicate" ToolTip="{services:Loc studio.duplicateTip}" Padding="7,4" Margin="0,0,4,4">
+                                        <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <Button Style="{StaticResource StudioDangerBtn}" Command="{Binding StructureCommand}" CommandParameter="delete" ToolTip="{services:Loc studio.deleteTip}" Padding="7,4" Margin="0,0,4,4">
+                                        <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding StructureCommand}" CommandParameter="undo" ToolTip="{services:Loc studio.undoTip}" Padding="7,4" Margin="0,0,4,4">
+                                        <TextBlock Text="&#xE7A7;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                </WrapPanel>
+                                <TextBlock Text="{services:Loc graph.editHint}" TextWrapping="Wrap" FontSize="10.5" Foreground="{DynamicResource Text.Faint}"/>
+                            </StackPanel>
+
+                            <TextBlock Text="{services:Loc graph.outgoing}" Style="{StaticResource StudioKicker}"/>
+                            <ItemsControl ItemsSource="{Binding Outgoing}" ItemTemplate="{StaticResource LinkTemplate}"/>
+                            <TextBlock Text="{services:Loc graph.incoming}" Style="{StaticResource StudioKicker}"/>
+                            <ItemsControl ItemsSource="{Binding Incoming}" ItemTemplate="{StaticResource LinkTemplate}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

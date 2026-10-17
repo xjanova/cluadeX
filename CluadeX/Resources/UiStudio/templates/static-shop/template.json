@@ -1,0 +1,12 @@
+{
+  "name": "Online shop",
+  "nameTh": "ร้านค้าออนไลน์",
+  "description": "Storefront: category filter, sort, product cards, a cart drawer that remembers items, quantity controls and a checkout summary.",
+  "descriptionTh": "หน้าร้าน: กรองหมวด, เรียงราคา, การ์ดสินค้า, ตะกร้าแบบลิ้นชักที่จำสินค้าไว้, ปรับจำนวน และสรุปยอดชำระ",
+  "kind": "static",
+  "stack": "HTML · CSS · JS",
+  "icon": "",
+  "accent": "#F59E0B",
+  "order": 5,
+  "tags": ["e-commerce", "cart"]
+}

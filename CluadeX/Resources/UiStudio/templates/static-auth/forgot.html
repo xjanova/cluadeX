@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reset password · {{PROJECT_TITLE}}</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="center">
+  <div class="card card-solo">
+    <a class="brand" href="index.html"><span class="mark">●</span>{{PROJECT_TITLE}}</a>
+    <h1 class="title">Forgot your password?</h1>
+    <p class="sub">Enter your email and we'll send you a link to reset it.</p>
+    <form class="form" data-validate data-success="If that email has an account, a reset link is on its way." novalidate>
+      <label class="field">
+        <span>Email</span>
+        <input type="email" name="email" autocomplete="email" required placeholder="you@company.com">
+        <small class="error">Enter a valid email address.</small>
+      </label>
+      <button class="btn btn-primary" type="submit">Send reset link</button>
+      <p class="form-msg" role="status"></p>
+    </form>
+    <p class="switch"><a class="link" href="index.html">← Back to sign in</a></p>
+  </div>
+  <script src="auth.js"></script>
+</body>
+</html>

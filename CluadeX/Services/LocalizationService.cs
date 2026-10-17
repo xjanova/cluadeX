@@ -20,7 +20,8 @@ public class LocalizationService
                                       Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
                                       Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys,
                                       Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys,
-                                      Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys })
+                                      Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys,
+                                      Localization.StudioKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }

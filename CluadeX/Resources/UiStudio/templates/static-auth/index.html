@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · {{PROJECT_TITLE}}</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="split">
+    <section class="panel">
+      <a class="brand" href="index.html"><span class="mark">●</span>{{PROJECT_TITLE}}</a>
+      <div class="card">
+        <h1 class="title">Welcome back</h1>
+        <p class="sub">Sign in to continue to your workspace.</p>
+        <div class="social">
+          <button class="btn btn-social" type="button">Continue with Google</button>
+          <button class="btn btn-social" type="button">Continue with GitHub</button>
+        </div>
+        <div class="divider"><span>or</span></div>
+        <form class="form" data-validate novalidate>
+          <label class="field">
+            <span>Email</span>
+            <input type="email" name="email" autocomplete="email" required placeholder="you@company.com">
+            <small class="error">Enter a valid email address.</small>
+          </label>
+          <label class="field">
+            <span class="field-row">Password <a class="link" href="forgot.html">Forgot?</a></span>
+            <span class="pw">
+              <input type="password" name="password" autocomplete="current-password" required minlength="8" placeholder="••••••••">
+              <button class="pw-toggle" type="button" aria-label="Show password">Show</button>
+            </span>
+            <small class="error">At least 8 characters.</small>
+          </label>
+          <label class="check"><input type="checkbox" name="remember"> Keep me signed in</label>
+          <button class="btn btn-primary" type="submit">Sign in</button>
+          <p class="form-msg" role="status"></p>
+        </form>
+        <p class="switch">New here? <a class="link" href="register.html">Create an account</a></p>
+      </div>
+    </section>
+    <aside class="art">
+      <blockquote class="art-quote">“The fastest way from idea to shipped. Our team lives in it.”<cite>— Product lead, Globex</cite></blockquote>
+    </aside>
+  </div>
+  <script src="auth.js"></script>
+</body>
+</html>

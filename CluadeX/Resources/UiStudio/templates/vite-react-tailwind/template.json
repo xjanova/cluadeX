@@ -1,0 +1,12 @@
+{
+  "name": "React + Tailwind",
+  "nameTh": "React + Tailwind",
+  "description": "Vite + React 19 + Tailwind CSS 4 SaaS starter: navbar, hero, stats, pricing cards and a modal. Class edits in UI Studio write Tailwind classes straight into the JSX.",
+  "descriptionTh": "สตาร์ทเตอร์ SaaS ด้วย Vite + React 19 + Tailwind 4: เมนู, Hero, สถิติ, ราคา และโมดัล แก้คลาสใน UI Studio แล้วเขียน Tailwind ลง JSX ตรงจุด",
+  "kind": "vite",
+  "stack": "Vite · React · Tailwind",
+  "icon": "",
+  "accent": "#38BDF8",
+  "order": 11,
+  "tags": ["react", "tailwind", "node"]
+}
