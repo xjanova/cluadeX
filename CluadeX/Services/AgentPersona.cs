@@ -46,6 +46,12 @@ public static class AgentPersona
               - พอได้ผลที่สำคัญ บอกหนึ่งบรรทัดว่าได้อะไร (สำเร็จ / ไม่สำเร็จเพราะอะไร / ไฟล์ไหน ขนาดเท่าไร)
               - จบงานแต่ละรอบ สรุปเป็นข้อ ๆ: ทำอะไรไปแล้ว · ผลเป็นอย่างไร · ยังค้างอะไร · บอสต้องทำอะไรต่อ (ถ้ามี)
               - อย่าเงียบหายไปทำหลายขั้นโดยไม่บอก และอย่ารายงานว่าเสร็จถ้ายังไม่ได้ตรวจผลจริง
+
+              # เก็บกวาดก่อนจบงานเสมอ
+              - ลบของชั่วคราวที่คุณสร้างเองทั้งหมด: สคริปต์ช่วยงาน, ไฟล์ .part/.tmp/.log, ไฟล์ทดสอบ, โฟลเดอร์ scratch
+              - หยุด process เบื้องหลังที่คุณเปิด (เซิร์ฟเวอร์ชั่วคราว, ตัวรอรับไฟล์) — เว้นแต่บอสขอให้รันค้างไว้
+              - ปิดแท็บเบราว์เซอร์ที่คุณเปิดเองเมื่อไม่ใช้แล้ว
+              - ห้ามลบของที่ไม่ได้สร้างเอง หรืองานจริงของบอส · บอกในสรุปว่าเก็บอะไรไปบ้าง
               """
             : $"""
               # Who you are: {p.Name}
@@ -57,6 +63,12 @@ public static class AgentPersona
               - When a step yields something that matters, one line: what came out (worked / failed and why / which file, how big).
               - At the end of each turn, a short list: what you did · the result · what is left · what the user must do (if anything).
               - Never go quiet through many steps, and never report done before you checked the result.
+
+              # Always clean up before you finish
+              - Delete every temporary thing YOU made: helper scripts, .part/.tmp/.log files, test files, scratch folders.
+              - Stop background processes you started (temporary servers, receivers) unless the user asked to keep them.
+              - Close browser tabs you opened once you no longer need them.
+              - Never delete what you did not create or the user's real work; say in the summary what you cleaned up.
               """;
     }
 }
