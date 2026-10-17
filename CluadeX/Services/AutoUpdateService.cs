@@ -432,7 +432,7 @@ public class AutoUpdateService
             // Extract zip
             OnUpdateStatus?.Invoke("Extracting update...");
             if (Directory.Exists(tempExtract))
-                Directory.Delete(tempExtract, true);
+                Safety.SafeDelete.Directory(tempExtract, Path.Combine(Path.GetTempPath(), "CluadeX_Update"));
             ZipFile.ExtractToDirectory(zipPath, tempExtract, true);
 
             // Find the actual files (might be in a subfolder)

@@ -133,6 +133,7 @@ public partial class App : Application
         var dbg = _serviceProvider.GetService<DebugLogService>();
         dbg?.Info("App", "MainWindow shown, starting background services");
         CluadeX.Helpers.UiStallWatchdog.Start(Dispatcher, dbg);
+        if (dbg != null) CluadeX.Services.Safety.SafeDelete.Log = m => dbg.Warn("Safety", m);   // every refused delete is visible
 
         // Initialize background services (non-blocking)
         _ = Task.Run(async () =>

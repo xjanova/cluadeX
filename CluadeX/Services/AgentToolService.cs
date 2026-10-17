@@ -2893,6 +2893,11 @@ public class AgentToolService : IDisposable
         string cwd = root;
         if (useSessionCwd && _shellCwd is { } sc && Directory.Exists(sc) && IsUnder(root, sc)) cwd = sc;
 
+        // Always on (run_command, run_build, run_tests, the verify build): no delete aimed at a drive / home / system
+        // folder, and no running code that was just changed to hold one (Safety.CodeRunGuard, 2026-10-17 incident).
+        if (await Safety.CodeRunGuard.CheckAsync(command, root) is { } unsafeRun)
+            return (null, null, unsafeRun);
+
         ShellRunner.Result r;
         try { r = await ShellRunner.RunAsync(ShellRunner.DefaultShell, command, cwd, timeoutMs, ct); }
         catch (Exception ex) { return (null, null, $"Failed to start the shell: {ex.Message}"); }
@@ -5200,6 +5205,9 @@ public class AgentToolService : IDisposable
             return intercepted;
 
         string cwd = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory;
+
+        if (await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null) is { } unsafeRun)
+            return Fail(call, unsafeRun);
 
         // The script travels as -EncodedCommand (Base64 UTF-16LE) inside ShellRunner — injection-proof,
         // unlike inlining into -Command "..." — with output forced to UTF-8 and progress records off,
