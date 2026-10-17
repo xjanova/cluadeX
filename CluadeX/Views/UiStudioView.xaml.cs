@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using CluadeX.Services.UiStudio;
 using CluadeX.ViewModels;
+using CluadeX.Views.UiStudio;
 using Microsoft.Web.WebView2.Core;
 
 namespace CluadeX.Views;
@@ -24,6 +25,10 @@ public partial class UiStudioView : UserControl
     private string? _reselectSelector;
     private readonly List<(System.ComponentModel.INotifyPropertyChanged Source, System.ComponentModel.PropertyChangedEventHandler Handler)> _overlayWatch = new();
     private bool _covered;
+    private CoreWebView2Environment? _env;
+    private PageShooter? _shooter;
+    private ScrollViewer? _pagesScroll;
+    private bool _visibleQueued;
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private struct LastInputInfo { public uint cbSize; public uint dwTime; }
@@ -61,6 +66,59 @@ public partial class UiStudioView : UserControl
         {
             if (LogList.Items.Count > 0) LogList.ScrollIntoView(LogList.Items[^1]);
         };
+
+        // the page gallery: rows are virtualised, so only the cards on screen load their pictures and get shot
+        PagesList.Loaded += (_, _) =>
+        {
+            PagesList.ApplyTemplate();
+            if (_pagesScroll == null && PagesList.Template?.FindName("PagesScroll", PagesList) is ScrollViewer sv)
+            {
+                _pagesScroll = sv;
+                sv.ScrollChanged += (_, _) => QueueVisible();
+            }
+            UpdateColumns();
+        };
+        PagesList.SizeChanged += (_, _) => { UpdateColumns(); QueueVisible(); };
+        StageView.NodeClicked += n => _vm?.PickStageNode(n, open: System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control));
+    }
+
+    private void UpdateColumns()
+    {
+        if (_vm == null || PagesList.ActualWidth <= 0) return;
+        _vm.GalleryColumns = Math.Max(1, (int)((PagesList.ActualWidth - 18) / (_vm.CardWidth + 12)));
+    }
+
+    private void QueueVisible()
+    {
+        if (_visibleQueued) return;
+        _visibleQueued = true;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => { _visibleQueued = false; ReportVisible(); }));
+    }
+
+    /// <summary>Tell the view model which cards are on screen (realised rows inside the viewport, plus a little below).</summary>
+    private void ReportVisible()
+    {
+        if (_vm is not { ShowPages: true } || _pagesScroll == null) return;
+        var cards = new List<PageCard>();
+        double bottom = _pagesScroll.ViewportHeight + 240;
+        for (int i = 0; i < PagesList.Items.Count; i++)
+        {
+            if (PagesList.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement row || !row.IsVisible) continue;
+            var at = row.TranslatePoint(new Point(0, 0), _pagesScroll);
+            if (at.Y + row.ActualHeight < -40 || at.Y > bottom) continue;
+            if (row.DataContext is PageRow r) cards.AddRange(r.Cards);
+        }
+        _vm.NoteVisible(cards);
+    }
+
+    /// <summary>Take a page's thumbnail with a hidden browser that shares the Studio's profile.</summary>
+    private async Task<PageShot?> ShootAsync(string url, int width, int height, CancellationToken ct)
+    {
+        _init ??= InitWebAsync();
+        try { await _init; } catch { }
+        if (_env == null) return null;
+        _shooter ??= new PageShooter(_env);
+        return await _shooter.ShootAsync(url, width, height, ct);
     }
 
     private void Attach(UiStudioViewModel? vm)
@@ -72,11 +130,22 @@ public partial class UiStudioView : UserControl
         _studio.ScriptRequested += Run;
         _studio.ReloadRequested += OnReloadRequested;
         _studio.Evaluate = EvaluateAsync;
+        vm.Shooter = ShootAsync;
         vm.NavigateTo += Navigate;
+        vm.AddressFocusRequested += param =>
+        {
+            Address.Focus();
+            int at = param == null ? -1 : Address.Text.IndexOf(param, StringComparison.Ordinal);
+            if (at >= 0) Address.Select(at, param!.Length); else Address.SelectAll();
+        };
+        vm.PageRows.CollectionChanged += (_, _) => QueueVisible();
         vm.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is nameof(UiStudioViewModel.HasProject) or nameof(UiStudioViewModel.NoProject) or nameof(UiStudioViewModel.ShowGallery))
+            if (e.PropertyName is nameof(UiStudioViewModel.HasProject) or nameof(UiStudioViewModel.NoProject) or nameof(UiStudioViewModel.ShowGallery)
+                or nameof(UiStudioViewModel.ShowPages) or nameof(UiStudioViewModel.IsSimulated))
                 UpdateWebVisibility();
+            if (e.PropertyName is nameof(UiStudioViewModel.ShowPages) && vm.ShowPages) { UpdateColumns(); QueueVisible(); }
+            if (e.PropertyName is nameof(UiStudioViewModel.CardWidth)) UpdateColumns();
         };
         UpdateWebVisibility();
         if (IsVisible) vm.PageShown();
@@ -87,7 +156,7 @@ public partial class UiStudioView : UserControl
     /// <summary>The page shows only when nothing WPF draws should be on top of it.</summary>
     private void UpdateWebVisibility()
     {
-        bool show = _vm is { HasProject: true, ShowGallery: false } && !_covered;
+        bool show = _vm is { HasProject: true, ShowGallery: false, ShowPages: false, IsSimulated: false } && !_covered;
         Frame.Visibility = show ? Visibility.Visible : Visibility.Hidden;   // Hidden keeps the page alive and laid out
     }
 
@@ -155,6 +224,7 @@ public partial class UiStudioView : UserControl
         {
             System.IO.Directory.CreateDirectory(_studio.WebDataFolder);
             var env = await CoreWebView2Environment.CreateAsync(null, _studio.WebDataFolder, new CoreWebView2EnvironmentOptions());
+            _env = env;   // the page gallery's hidden browser shares it (same profile: the same logins)
             await Web.EnsureCoreWebView2Async(env);
             var core = Web.CoreWebView2;
             core.Settings.IsStatusBarEnabled = false;

@@ -3,7 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
-             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf">
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             xmlns:sk="clr-namespace:CluadeX.Views.UiStudio">
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -46,6 +47,108 @@
                     </DataTrigger>
                 </DataTemplate.Triggers>
             </DataTemplate>
+
+            <!-- a small label over a thumbnail -->
+            <Style x:Key="ThumbChip" TargetType="Border">
+                <Setter Property="CornerRadius" Value="7"/>
+                <Setter Property="Padding" Value="7,2"/>
+                <Setter Property="Margin" Value="0,0,4,4"/>
+                <Setter Property="Background" Value="{DynamicResource Dialog.Card.Background}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource Border.Default}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+            </Style>
+
+            <!-- one page of the gallery: its thumbnail (a real shot or a simulated screen), then its name, route and file -->
+            <DataTemplate x:Key="PageCardTemplate" DataType="{x:Type vm:PageCard}">
+                <Button x:Name="CardButton" Margin="0,0,12,12" Cursor="Hand" Focusable="False" ToolTip="{Binding StateText}"
+                        Width="{Binding DataContext.CardWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                        Command="{Binding DataContext.OpenCardCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Card" CornerRadius="12" BorderThickness="1.5" Background="{DynamicResource Surface.Card}" BorderBrush="{DynamicResource Border.Subtle}">
+                                <ContentPresenter/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Border.Strong}"/>
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                    <Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                    <Setter TargetName="Card" Property="Background" Value="{DynamicResource Accent.1.Tint.Faint}"/>
+                                </DataTrigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Bottom" Margin="11,8,11,10">
+                            <TextBlock Text="{Binding Title}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding RouteText}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Accent.1}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                            <TextBlock Text="{Binding SourceText}" FontFamily="{DynamicResource Font.Mono}" FontSize="10" Foreground="{DynamicResource Text.Faint}" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
+                        </StackPanel>
+                        <Grid Height="{Binding DataContext.ThumbHeight, RelativeSource={RelativeSource AncestorType=UserControl}}" ClipToBounds="True">
+                            <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="10,10,0,0"/>
+                            <Image Source="{Binding Thumb}" Stretch="UniformToFill" VerticalAlignment="Top" HorizontalAlignment="Center"
+                                   RenderOptions.BitmapScalingMode="HighQuality" Visibility="{Binding HasThumb, Converter={StaticResource BoolVis}}"/>
+                            <sk:SketchView Sketch="{Binding Sketch}" Margin="10,10,10,4" Visibility="{Binding HasSketch, Converter={StaticResource BoolVis}}"/>
+                            <StackPanel VerticalAlignment="Center" Margin="14" Visibility="{Binding ShowPlaceholder, Converter={StaticResource BoolVis}}">
+                                <TextBlock x:Name="PlaceIcon" Text="&#xE91B;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding StateText}" FontSize="11" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0"/>
+                            </StackPanel>
+                            <!-- labels -->
+                            <WrapPanel VerticalAlignment="Top" HorizontalAlignment="Left" Margin="6,6,40,0">
+                                <Border Style="{StaticResource ThumbChip}" Visibility="{Binding IsCurrent, Converter={StaticResource BoolVis}}" BorderBrush="{DynamicResource Accent.1}">
+                                    <TextBlock Text="{services:Loc studio.pages.current}" FontSize="10" Foreground="{DynamicResource Accent.1}"/>
+                                </Border>
+                                <Border Style="{StaticResource ThumbChip}" Visibility="{Binding NeedsLogin, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{services:Loc studio.pages.login}" FontSize="10" Foreground="{DynamicResource Text.Secondary}"/>
+                                </Border>
+                                <Border Style="{StaticResource ThumbChip}" Visibility="{Binding IsStale, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="{services:Loc studio.pages.stale}" FontSize="10" Foreground="{DynamicResource Status.Warning}"/>
+                                </Border>
+                            </WrapPanel>
+                            <!-- busy -->
+                            <Border VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="6" Style="{StaticResource ThumbChip}" Visibility="{Binding IsBusy, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{Binding StateText}" FontSize="10" Foreground="{DynamicResource Text.Secondary}"/>
+                            </Border>
+                            <!-- tools (on hover) -->
+                            <StackPanel x:Name="Tools" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,6,0" Visibility="Hidden">
+                                <Button Style="{StaticResource StudioToolBtn}" Padding="6,3" Margin="0,0,4,0" Background="{DynamicResource Dialog.Card.Background}" ToolTip="{services:Loc studio.pages.shootOne}"
+                                        Command="{Binding DataContext.ShootCardCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                                        Visibility="{Binding IsScreen, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                    <TextBlock Text="&#xE722;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                                </Button>
+                                <Button Style="{StaticResource StudioToolBtn}" Padding="6,3" Margin="0,0,4,0" Background="{DynamicResource Dialog.Card.Background}" ToolTip="{services:Loc studio.pages.openCode}"
+                                        Command="{Binding DataContext.CardSourceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                                        Visibility="{Binding IsExternal, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                    <TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                                </Button>
+                                <Button Style="{StaticResource StudioToolBtn}" Padding="6,3" Margin="0" Background="{DynamicResource Dialog.Card.Background}" ToolTip="{services:Loc studio.pages.remove}"
+                                        Command="{Binding DataContext.RemoveWebPageCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                                        Visibility="{Binding IsExternal, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </DockPanel>
+                </Button>
+                <DataTemplate.Triggers>
+                    <Trigger SourceName="CardButton" Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Tools" Property="Visibility" Value="Visible"/>
+                    </Trigger>
+                    <DataTrigger Binding="{Binding State}" Value="risky">
+                        <Setter TargetName="PlaceIcon" Property="Text" Value="&#xE7BA;"/>
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding State}" Value="params">
+                        <Setter TargetName="PlaceIcon" Property="Text" Value="&#xE943;"/>
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding State}" Value="manual">
+                        <Setter TargetName="PlaceIcon" Property="Text" Value="&#xE722;"/>
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding State}" Value="failed">
+                        <Setter TargetName="PlaceIcon" Property="Text" Value="&#xE783;"/>
+                    </DataTrigger>
+                </DataTemplate.Triggers>
+            </DataTemplate>
         </ResourceDictionary>
     </UserControl.Resources>
 
@@ -73,6 +176,20 @@
                     </Button>
                     <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ShowGalleryCommand}" ToolTip="{services:Loc studio.newTip}">
                         <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.new}"/></StackPanel>
+                    </Button>
+                    <Button x:Name="PagesButton" Command="{Binding ShowPagesCommand}" ToolTip="{services:Loc studio.pages.tip}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource StudioToolBtn}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ShowPages}" Value="True">
+                                        <Setter Property="Background" Value="{DynamicResource Accent.1.Tint}"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                        <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.pages.button}"/></StackPanel>
                     </Button>
                     <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding StartCommand}" Visibility="{Binding ShowStartButton, Converter={StaticResource BoolVis}}">
                         <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.start}"/></StackPanel>
@@ -152,9 +269,26 @@
                     <DockPanel DockPanel.Dock="Top" Margin="12,10,10,6">
                         <TextBlock DockPanel.Dock="Right" Text="{services:Loc studio.truncated}" FontSize="10" Foreground="{DynamicResource Status.Warning}"
                                    Visibility="{Binding TreeTruncated, Converter={StaticResource BoolVis}}"/>
-                        <TextBlock Text="{services:Loc studio.layers}" Style="{StaticResource StudioPanelHeader}"/>
+                        <Grid>
+                            <TextBlock Text="{services:Loc studio.layers}" Style="{StaticResource StudioPanelHeader}" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                            <TextBlock Text="{services:Loc studio.stage.screens}" Style="{StaticResource StudioPanelHeader}" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}}"/>
+                        </Grid>
                     </DockPanel>
+                    <!-- a simulated app: its screens -->
+                    <ListBox DockPanel.Dock="Top" ItemsSource="{Binding ScreenCards}" SelectedItem="{Binding StageCard}" Background="Transparent" BorderThickness="0" Padding="4,0,4,8"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}}"
+                             VirtualizingPanel.IsVirtualizing="True">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:PageCard}">
+                                <StackPanel Margin="4,3">
+                                    <TextBlock Text="{Binding Title}" FontSize="12" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding RouteText}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                     <TreeView x:Name="LayersTree" ItemsSource="{Binding Layers}" Background="Transparent" BorderThickness="0" Padding="4,0,4,8"
+                              Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
                               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <TreeView.ItemContainerStyle>
@@ -236,6 +370,33 @@
                 <Border x:Name="EngineError" Grid.Row="1" Background="{DynamicResource Surface.Sunken}" Visibility="Collapsed">
                     <TextBlock x:Name="EngineErrorText" TextWrapping="Wrap" MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="{DynamicResource Status.Danger}" FontSize="13" TextAlignment="Center"/>
+                </Border>
+
+                <!-- a simulated app screen (Flutter): drawn from its code; click a part to see / open its line -->
+                <Border x:Name="Stage" Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Surface.Sunken}" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Background="{DynamicResource Surface.Panel}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,0,0,1" Padding="14,8">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ShowPagesCommand}" Margin="0">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.pages.button}"/></StackPanel>
+                                </Button>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding StageTitle}" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
+                                        <Run Text="{Binding StageRoute, Mode=OneWay}" Foreground="{DynamicResource Accent.1}"/><Run Text="   "/><Run Text="{Binding StageFile, Mode=OneWay}"/>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.approx}" FontSize="11" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center" Margin="12,6,12,8" TextWrapping="Wrap"/>
+                        <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.hint}" FontSize="11.5" Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center" Margin="12,0" TextWrapping="Wrap"/>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,18,0,12" CornerRadius="30" Padding="9" Background="#FF101014"
+                                    Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
+                                <sk:SketchView x:Name="StageView" Width="378" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True"/>
+                            </Border>
+                        </ScrollViewer>
+                    </DockPanel>
                 </Border>
 
                 <!-- empty state -->
@@ -390,11 +551,189 @@
                 </Border>
             </Border>
 
+            <!-- the page gallery (over the page area and the inspector) -->
+            <Border x:Name="PagesPanel" Grid.Column="0" Grid.ColumnSpan="5" Background="{DynamicResource Page.Background}"
+                    Visibility="{Binding ShowPages, Converter={StaticResource BoolVis}}">
+                <DockPanel Margin="20,14,8,0">
+                    <!-- header -->
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,12,10">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                            <Grid Width="230" Margin="0,0,8,0">
+                                <TextBox x:Name="PageSearchBox" Style="{StaticResource StudioBox}" Text="{Binding PageSearch, UpdateSourceTrigger=PropertyChanged}" Padding="28,5,8,5"/>
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" Margin="10,0,0,0" IsHitTestVisible="False"/>
+                                <TextBlock Text="{services:Loc studio.pages.search}" FontSize="11.5" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" Margin="29,0,0,0" IsHitTestVisible="False"
+                                           Visibility="{Binding PageSearch, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                            </Grid>
+                            <Button Style="{StaticResource StudioToolBtn}" Command="{Binding RefreshPagesCommand}" ToolTip="{services:Loc studio.pages.refreshTip}">
+                                <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/>
+                            </Button>
+                            <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ShootAllCommand}" ToolTip="{services:Loc studio.pages.shootAllTip}"
+                                    Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE722;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.pages.shootAll}"/></StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ClosePagesCommand}" Padding="8,4">
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets"/>
+                            </Button>
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock FontSize="19" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}">
+                                <Run Text="{services:Loc studio.pages.title}"/><Run Text="  "/><Run Text="{Binding PagesSummary, Mode=OneWay}" FontSize="12" FontWeight="Normal" Foreground="{DynamicResource Text.Muted}"/>
+                            </TextBlock>
+                            <Grid Margin="0,3,0,0">
+                                <TextBlock Text="{services:Loc studio.pages.subtitle.web}" FontSize="12" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSimulated}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding IsServerSite}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{services:Loc studio.pages.subtitle.sim}" FontSize="12" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}}"/>
+                                <TextBlock Text="{services:Loc studio.pages.subtitle.server}" FontSize="12" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" Visibility="{Binding IsServerSite, Converter={StaticResource BoolVis}}"/>
+                            </Grid>
+                        </StackPanel>
+                    </DockPanel>
+
+                    <!-- where a server-rendered site runs -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,12,10" Padding="12,9" CornerRadius="10" Background="{DynamicResource Surface.Inset}"
+                            Visibility="{Binding IsServerSite, Converter={StaticResource BoolVis}}">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Left" Text="{services:Loc studio.pages.base}" Style="{StaticResource StudioKicker}" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Content="{services:Loc studio.pages.baseApply}" Command="{Binding ApplyBaseUrlCommand}" Margin="8,0,0,0"/>
+                                <TextBox Style="{StaticResource StudioMonoBox}" Text="{Binding BaseUrlText, UpdateSourceTrigger=PropertyChanged}" ToolTip="{services:Loc studio.pages.baseHint}">
+                                    <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyBaseUrlCommand}"/></TextBox.InputBindings>
+                                </TextBox>
+                            </DockPanel>
+                            <TextBlock Text="{services:Loc studio.pages.baseHint}" FontSize="11" Foreground="{DynamicResource Text.Faint}" Margin="0,5,0,0" TextWrapping="Wrap"/>
+                            <TextBlock Text="{services:Loc studio.pages.remoteNote}" FontSize="11" Foreground="{DynamicResource Status.Warning}" Margin="0,3,0,0" TextWrapping="Wrap"
+                                       Visibility="{Binding IsRemoteSite, Converter={StaticResource BoolVis}}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- a dev server is needed for the shots -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,12,10" Padding="12,7" CornerRadius="10" Background="{DynamicResource Status.Info.Tint}" BorderBrush="{DynamicResource Status.Info.Border}" BorderThickness="1"
+                            Visibility="{Binding NeedsServerForShots, Converter={StaticResource BoolVis}}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Command="{Binding StartCommand}" Margin="8,0,0,0"
+                                    Visibility="{Binding ShowStartButton, Converter={StaticResource BoolVis}}">
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.start}"/></StackPanel>
+                            </Button>
+                            <TextBlock Text="{services:Loc studio.pages.startForShots}" FontSize="12" Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- sections + add a web page -->
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,12,10">
+                        <DockPanel DockPanel.Dock="Right" Width="330" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding AddWebPageCommand}" Margin="6,0,0,0">
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" Margin="0,1,5,0"/><TextBlock Text="{services:Loc studio.pages.add}"/></StackPanel>
+                            </Button>
+                            <Grid>
+                                <TextBox Style="{StaticResource StudioMonoBox}" Text="{Binding NewWebUrl, UpdateSourceTrigger=PropertyChanged}" ToolTip="{services:Loc studio.pages.addWeb}">
+                                    <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding AddWebPageCommand}"/></TextBox.InputBindings>
+                                </TextBox>
+                                <TextBlock Text="{services:Loc studio.pages.addWebHint}" FontSize="11" Foreground="{DynamicResource Text.Faint}" VerticalAlignment="Center" Margin="9,0,0,0" IsHitTestVisible="False"
+                                           Visibility="{Binding NewWebUrl, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                            </Grid>
+                        </DockPanel>
+                        <ItemsControl ItemsSource="{Binding PageSections}" VerticalAlignment="Center">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:PageSection}">
+                                    <Button Command="{Binding DataContext.PickSectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}" Margin="0,0,6,4" Padding="10,3">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource StudioToolBtn}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource Accent.1.Tint}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <TextBlock FontSize="11.5"><Run Text="{Binding Label, Mode=OneWay}"/><Run Text=" "/><Run Text="{Binding Count, Mode=OneWay}" Foreground="{DynamicResource Text.Faint}"/></TextBlock>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </DockPanel>
+
+                    <!-- the cards, one virtualised row at a time -->
+                    <Grid>
+                        <ItemsControl x:Name="PagesList" ItemsSource="{Binding PageRows}" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                                      VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="1,1" VirtualizingPanel.CacheLengthUnit="Item" ScrollViewer.CanContentScroll="True">
+                            <ItemsControl.Template>
+                                <ControlTemplate TargetType="ItemsControl">
+                                    <ScrollViewer x:Name="PagesScroll" CanContentScroll="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False" Padding="0,0,0,12">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </ControlTemplate>
+                            </ItemsControl.Template>
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:PageRow}">
+                                    <ItemsControl ItemsSource="{Binding Cards}" ItemTemplate="{StaticResource PageCardTemplate}" Focusable="False">
+                                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                    </ItemsControl>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="{Binding ShowDiscovering, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="{DynamicResource Accent.1}" HorizontalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc studio.pages.discovering}" FontSize="13" Foreground="{DynamicResource Text.Muted}" Margin="0,10,0,0"/>
+                        </StackPanel>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="{Binding ShowPagesEmpty, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" FontSize="26" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center"/>
+                            <TextBlock Text="{services:Loc studio.pages.empty}" FontSize="13" Foreground="{DynamicResource Text.Muted}" Margin="0,10,0,0" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Grid>
+                </DockPanel>
+            </Border>
+
             <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" Background="Transparent" ResizeBehavior="PreviousAndNext"/>
 
             <!-- Inspector -->
             <Border Grid.Column="4" Background="{DynamicResource Surface.Panel}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0">
                 <Grid>
+                <!-- a simulated screen: the block picked on it, its line, and the AI -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}}">
+                    <StackPanel Margin="16,14,14,14">
+                        <TextBlock Text="{services:Loc studio.inspector}" Style="{StaticResource StudioPanelHeader}"/>
+                        <TextBlock Text="{services:Loc studio.stage.noNode}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Text.Muted}" Margin="0,10,0,0"
+                                   Visibility="{Binding HasStageNode, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                        <StackPanel Visibility="{Binding HasStageNode, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc studio.stage.widget}" Style="{StaticResource StudioKicker}"/>
+                            <TextBlock Text="{Binding StageNodeLabel}" FontFamily="{DynamicResource Font.Mono}" FontSize="13" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding StageNodeText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       Visibility="{Binding StageNodeText, Converter={StaticResource BoolVis}}"/>
+                            <Button Style="{StaticResource StudioLinkBtn}" Content="{Binding StageNodeWhere}" Command="{Binding OpenStageNodeCommand}" FontFamily="{DynamicResource Font.Mono}" Margin="0,8,0,0" HorizontalAlignment="Left"/>
+                            <TextBlock Text="{Binding StageNodeUse}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" Margin="0,3,0,0"
+                                       Visibility="{Binding StageNodeUse, Converter={StaticResource BoolVis}}"/>
+                            <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding OpenStageNodeCommand}" HorizontalAlignment="Left" Margin="0,10,0,0" Padding="12,5">
+                                <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.stage.openCode}"/></StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <TextBlock Text="{services:Loc studio.stage.aiTitle}" Style="{StaticResource StudioKicker}" Margin="0,20,0,6"/>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Command="{Binding AskAiStageCommand}" Margin="6,0,0,0" Padding="9,5" VerticalAlignment="Top">
+                                <TextBlock Text="&#xE724;" FontFamily="Segoe MDL2 Assets"/>
+                            </Button>
+                            <TextBox Style="{StaticResource StudioBox}" Text="{Binding StageRequest, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="False" MinHeight="30" MaxHeight="90" VerticalScrollBarVisibility="Auto">
+                                <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding AskAiStageCommand}"/></TextBox.InputBindings>
+                            </TextBox>
+                        </DockPanel>
+                        <TextBlock Text="{services:Loc studio.stage.aiHint}" FontSize="10.5" Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <Grid Visibility="{Binding IsSimulated, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                     <!-- nothing selected -->
                     <StackPanel Margin="16" Visibility="{Binding NoSelection, Converter={StaticResource BoolVis}}">
                         <TextBlock Text="{services:Loc studio.inspector}" Style="{StaticResource StudioPanelHeader}"/>
@@ -533,10 +872,12 @@
                         </ScrollViewer>
                     </DockPanel>
                 </Grid>
+                </Grid>
             </Border>
         </Grid>
 
         <!-- ░░░ STATUS ░░░ -->
+
         <Border Grid.Row="2" Background="{DynamicResource Page.StatusBar.Background}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="12,4">
             <DockPanel>
                 <Button DockPanel.Dock="Right" Style="{StaticResource StudioLinkBtn}" Content="{services:Loc studio.openChat}" Command="{Binding OpenChatCommand}" Margin="12,0,0,0"/>

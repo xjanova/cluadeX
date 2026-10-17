@@ -10,7 +10,7 @@ namespace StudioTest;
 /// Svelte), the locator (instrumenting and resolving, path safety), the local static server, every starter
 /// template (created, detected, served) and the project graph. No network, no Node — temp folders only.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
 
@@ -20,6 +20,28 @@ internal static class Program
         Fail++;
         Console.WriteLine($"  FAIL {name}");
         if (detail.Length > 0) Console.WriteLine("       " + detail.Replace("\n", "\n       "));
+    }
+
+    /// <summary>Render a wireframe with the real SketchView (off-screen) to a PNG; returns the pixels for checks.</summary>
+    static System.Windows.Media.Imaging.BitmapSource SaveSketch(CluadeX.Services.UiStudio.Sketch.ScreenSketch sk, string? file, double scale = 1, bool fullHeight = false)
+    {
+        var view = new CluadeX.Views.UiStudio.SketchView { Sketch = sk, FullHeight = fullHeight };
+        double w = CluadeX.Views.UiStudio.SketchView.ScreenWidth * scale;
+        view.Measure(new System.Windows.Size(w, fullHeight ? double.PositiveInfinity : CluadeX.Views.UiStudio.SketchView.ScreenHeight * scale));
+        var size = view.DesiredSize;
+        view.Arrange(new System.Windows.Rect(size));
+        view.UpdateLayout();
+        var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap((int)Math.Ceiling(size.Width), (int)Math.Ceiling(size.Height), 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+        bmp.Render(view);
+        bmp.Freeze();
+        if (file != null)
+        {
+            var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+            using var fs = File.Create(file);
+            enc.Save(fs);
+        }
+        return bmp;
     }
 
     static SourceTag Tag(string text, string marker, SourceDialect d)
@@ -49,6 +71,68 @@ internal static class Program
             Console.WriteLine(s.BaseUrl);
             Thread.Sleep(Timeout.Infinite);
         }
+        // studiotest pages <folder> — list a project's pages as the page gallery finds them (read-only).
+        if (args.Length == 2 && args[0] == "pages")
+        {
+            var info = StudioProject.Detect(args[1]);
+            var found = CluadeX.Services.UiStudio.Pages.PageCatalog.Discover(info, "th");
+            Console.WriteLine($"{info.Kind} {info.Framework} via {found.Source} · {found.Pages.Count} pages · base {found.SuggestedBaseUrl}");
+            foreach (var pg in found.Pages)
+                Console.WriteLine($"  {pg.Kind,-8} {pg.Route ?? "-",-34} {pg.Title,-30} {(pg.NeedsParams ? "[params] " : "")}{(pg.Risky ? "[risky] " : "")}{(pg.NeedsLogin ? "[login] " : "")}{(pg.InShell ? "[shell] " : "")}{pg.Detail} {(pg.SourcePath != null ? Path.GetRelativePath(args[1], pg.SourcePath) + ":" + pg.SourceLine : "")}");
+            return 0;
+        }
+        // studiotest tree <flutter folder> <route or class> — print one screen's wireframe blocks (to see what the sketch read).
+        if (args.Length == 3 && args[0] == "tree")
+        {
+            var found = CluadeX.Services.UiStudio.Pages.PageCatalog.Discover(StudioProject.Detect(args[1]), "th");
+            var pg = found.Pages.FirstOrDefault(p => p.Route == args[2] || p.Detail == args[2]);
+            var sk = pg == null ? null : found.Flutter?.Sketch(pg);
+            if (sk == null) { Console.WriteLine("no such screen"); return 1; }
+            void Dump(CluadeX.Services.UiStudio.Sketch.SketchNode n, int d)
+            {
+                Console.WriteLine($"{new string(' ', d * 2)}{n.Kind} <{n.Widget}> {(n.Text != null ? "\"" + n.Text + "\"" : "")}{(n.Text2 != null ? " / \"" + n.Text2 + "\"" : "")}{(n.Icon != null ? " icon=" + n.Icon : "")}{(n.Items.Count > 0 ? " [" + string.Join("|", n.Items) + "]" : "")} {Path.GetFileName(n.File)}:{n.Line}{(n.UseFile != null ? " use " + Path.GetFileName(n.UseFile) + ":" + n.UseLine : "")}");
+                foreach (var c in n.Children) Dump(c, d + 1);
+            }
+            Dump(sk.Root, 0);
+            return 0;
+        }
+        // studiotest sketch <flutter folder> <out folder> — draw every screen's wireframe to a PNG (read-only on the project).
+        if (args.Length == 3 && args[0] == "sketch")
+        {
+            var info = StudioProject.Detect(args[1]);
+            var found = CluadeX.Services.UiStudio.Pages.PageCatalog.Discover(info, "th");
+            Directory.CreateDirectory(args[2]);
+            int i = 0;
+            var thumbs = new List<System.Windows.Media.Imaging.BitmapSource>();
+            foreach (var pg in found.Pages)
+            {
+                var sk = found.Flutter?.Sketch(pg);
+                if (sk == null) { Console.WriteLine($"  no sketch: {pg.Id}"); continue; }
+                string file = Path.Combine(args[2], $"{i++:00}-{string.Concat((pg.Route ?? pg.Detail ?? "x").Select(c => char.IsLetterOrDigit(c) ? c : '_'))}.png");
+                SaveSketch(sk, file, 2);
+                thumbs.Add(SaveSketch(sk, null, 0.5));
+                Console.WriteLine($"  {pg.Route ?? pg.Detail,-28} {sk.Title,-24} nodes={sk.Root.Count(),4} unknown={sk.Unknown} → {Path.GetFileName(file)}");
+            }
+            // one contact sheet of every screen, the way the page gallery shows them
+            if (thumbs.Count > 0)
+            {
+                int cols = 8, tw = thumbs[0].PixelWidth, th = thumbs[0].PixelHeight, rows = (thumbs.Count + cols - 1) / cols;
+                var dv = new System.Windows.Media.DrawingVisual();
+                using (var dc = dv.RenderOpen())
+                {
+                    dc.DrawRectangle(System.Windows.Media.Brushes.DimGray, null, new System.Windows.Rect(0, 0, cols * (tw + 8), rows * (th + 8)));
+                    for (int k = 0; k < thumbs.Count; k++)
+                        dc.DrawImage(thumbs[k], new System.Windows.Rect(k % cols * (tw + 8) + 4, k / cols * (th + 8) + 4, tw, th));
+                }
+                var sheet = new System.Windows.Media.Imaging.RenderTargetBitmap(cols * (tw + 8), rows * (th + 8), 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                sheet.Render(dv);
+                var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(sheet));
+                using var fs = File.Create(Path.Combine(args[2], "sheet.png"));
+                enc.Save(fs);
+            }
+            return 0;
+        }
         string temp = Path.Combine(Path.GetTempPath(), "cx-studiotest-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(temp);
         try
@@ -57,6 +141,11 @@ internal static class Program
             Locator(temp);
             Server(temp).GetAwaiter().GetResult();
             Templates(temp);
+            PageDiscovery(temp);
+            LaravelSite(temp);
+            ShotStore(temp);
+            DartReading();
+            FlutterScreens(temp);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { Directory.Delete(temp, true); } catch { } }

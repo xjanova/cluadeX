@@ -46,9 +46,22 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     public DomNode? Tree { get; private set; }
     public bool TreeTruncated { get; private set; }
 
-    public bool IsServing => _static?.IsRunning == true || _dev?.IsRunning == true;
+    public bool IsServing => _static?.IsRunning == true || _dev?.IsRunning == true || _external;
+    private bool _external;
+
+    /// <summary>Where a server-rendered site (Laravel) runs — set from the page gallery (default: APP_URL).</summary>
+    public string? ServerBaseUrl { get; set; }
+
+    /// <summary>The root URL the project's pages are served under now (null while nothing serves them).</summary>
+    public string? CurrentBaseUrl =>
+        _static?.IsRunning == true ? _static.BaseUrl
+        : _dev is { IsRunning: true, Url: { } u } && Uri.TryCreate(u, UriKind.Absolute, out var du) ? du.GetLeftPart(UriPartial.Authority) + "/"
+        : _external ? ServerBaseUrl
+        : null;
     public bool IsStarting { get; private set; }
     public string WebDataFolder => Path.Combine(_settings.DataRoot, "UiStudio", "WebView2");
+    /// <summary>The app's data folder (the page gallery keeps its thumbnails under it, never in the project).</summary>
+    public string DataRoot => _settings.DataRoot;
 
     public event Action? ProjectChanged;
     public event Action? SelectionChanged;
@@ -77,6 +90,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         StopServing();
         _undo.Clear();
         Project = StudioProject.Detect(root);
+        ServerBaseUrl = null;
         Selection = null;
         Tree = null;
         _log?.Info("UiStudio", $"project {root} → {Project.Kind} ({Project.Framework})");
@@ -131,7 +145,12 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                     var dev = new DevServerRunner(Root);
                     var dispatcher = Application.Current?.Dispatcher;
                     dev.Output += line => dispatcher?.BeginInvoke(() => ServerOutput?.Invoke(line));
-                    dev.UrlFound += url => dispatcher?.BeginInvoke(() => { if (ReferenceEquals(_dev, dev)) NavigateRequested?.Invoke(url); });
+                    dev.UrlFound += url => dispatcher?.BeginInvoke(() =>
+                    {
+                        if (!ReferenceEquals(_dev, dev)) return;
+                        NavigateRequested?.Invoke(url);
+                        ServingChanged?.Invoke();   // the base URL is known now: the page gallery can shoot
+                    });
                     dev.Exited += code => dispatcher?.BeginInvoke(() =>
                     {
                         if (!ReferenceEquals(_dev, dev)) return;
@@ -154,6 +173,18 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                     }
                     return null;
                 }
+                case StudioProjectKind.Server:
+                {
+                    // Nothing is started: the site already runs somewhere (Laragon, php artisan serve, the live site).
+                    string? baseUrl = ServerBaseUrl ?? Pages.LaravelPages.AppUrl(Root) ?? "http://localhost:8000/";
+                    if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var b) || b.Scheme is not ("http" or "https")) return "studio.err.badUrl";
+                    ServerBaseUrl = baseUrl;
+                    _external = true;
+                    NavigateRequested?.Invoke(baseUrl);
+                    return null;
+                }
+                case StudioProjectKind.Simulated:
+                    return null;   // simulated screens: nothing to run
                 case StudioProjectKind.Unsupported:
                     return Project.UnsupportedReason ?? "studio.unsupported.none";
                 default:
@@ -177,6 +208,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         _static = null;
         _dev?.Dispose();
         _dev = null;
+        _external = false;
         ServingChanged?.Invoke();
     }
 

@@ -135,7 +135,7 @@ internal static class CssColor
 /// the edit lands in the exact source line that rendered it. Talks to the page through <see cref="StudioService"/>
 /// (the view owns the WebView2 and forwards overlay messages here).
 /// </summary>
-public sealed class UiStudioViewModel : ViewModelBase
+public sealed partial class UiStudioViewModel : ViewModelBase
 {
     private readonly StudioService _studio;
     private readonly LocalizationService _loc;
@@ -168,7 +168,7 @@ public sealed class UiStudioViewModel : ViewModelBase
         studio.ProjectChanged += OnProjectChanged;
         studio.SelectionChanged += OnSelectionChanged;
         studio.TreeChanged += RebuildLayers;
-        studio.ServingChanged += () => { OnPropertyChanged(nameof(IsServing)); OnPropertyChanged(nameof(IsStarting)); OnPropertyChanged(nameof(ShowStartButton)); };
+        studio.ServingChanged += () => { OnPropertyChanged(nameof(IsServing)); OnPropertyChanged(nameof(IsStarting)); OnPropertyChanged(nameof(ShowStartButton)); OnServingForPages(); };
         studio.ServerOutput += line =>
         {
             ServerLog.Add(line);
@@ -198,6 +198,7 @@ public sealed class UiStudioViewModel : ViewModelBase
             string u = Url.Trim();
             if (u.Length == 0) return;
             if (!u.Contains("://", StringComparison.Ordinal)) u = (u.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) || u.StartsWith("127.", StringComparison.Ordinal) ? "http://" : "https://") + u;
+            NoteTypedUrl(u);
             NavigateTo?.Invoke(u);
         });
         SetDeviceCommand = new RelayCommand<string>(d => Device = d ?? "desktop");
@@ -251,6 +252,8 @@ public sealed class UiStudioViewModel : ViewModelBase
         StudioProjectKind.Vite => T("studio.kind.vite", _studio.Project.Framework),
         StudioProjectKind.NodeOther => T("studio.kind.node", _studio.Project.Framework),
         StudioProjectKind.Unsupported => T("studio.kind.unsupported"),
+        StudioProjectKind.Server => T("studio.kind.server", _studio.Project.Framework),
+        StudioProjectKind.Simulated => T("studio.kind.simulated", _studio.Project.Framework),
         _ => "",
     };
     public bool IsUnsupported => _studio.Project.Kind == StudioProjectKind.Unsupported;
@@ -262,7 +265,7 @@ public sealed class UiStudioViewModel : ViewModelBase
 
     public bool IsServing => _studio.IsServing;
     public bool IsStarting => _studio.IsStarting;
-    public bool ShowStartButton => HasProject && !IsUnsupported && !IsServing && !IsStarting;
+    public bool ShowStartButton => HasProject && !IsUnsupported && !IsSimulated && !IsServing && !IsStarting;
 
     /// <summary>Called the first time the page is shown (and on later visits): follow the app's open project when
     /// the Studio has none yet. A static site starts at once; a Node project waits for Start (npm install may be big).</summary>
@@ -288,6 +291,7 @@ public sealed class UiStudioViewModel : ViewModelBase
         try { _chat.OpenProjectQuietly(path); }
         catch (Exception ex) { _log?.Warn("UiStudio", "could not switch the app project", ex); }
         ShowGallery = false;
+        if (_studio.Project.Kind == StudioProjectKind.Simulated) { ShowPages = true; return; }   // a native app: its screens are the view
         if (autoStart && !IsUnsupported) _ = StartAsync();
         else if (IsUnsupported) Status(UnsupportedText, error: true);
     }
@@ -306,10 +310,12 @@ public sealed class UiStudioViewModel : ViewModelBase
 
     private void OnProjectChanged()
     {
+        ResetPages();
         ServerLog.Clear();
         LastLogLine = "";
         foreach (var name in new[] { nameof(HasProject), nameof(NoProject), nameof(ProjectName), nameof(ProjectPath), nameof(ProjectKindText),
-                     nameof(IsUnsupported), nameof(UnsupportedText), nameof(ShowLocatorBanner), nameof(ShowApproxBanner), nameof(ShowStartButton), nameof(CanUndo) })
+                     nameof(IsUnsupported), nameof(UnsupportedText), nameof(ShowLocatorBanner), nameof(ShowApproxBanner), nameof(ShowStartButton), nameof(CanUndo),
+                     nameof(IsSimulated), nameof(IsServerSite), nameof(IsLiveView) })
             OnPropertyChanged(name);
     }
 
@@ -347,6 +353,7 @@ public sealed class UiStudioViewModel : ViewModelBase
         {
             if (!SetProperty(ref _device, value)) return;
             OnPropertyChanged(nameof(DeviceWidth));
+            OnDeviceChangedForPages();
         }
     }
     /// <summary>The page frame's width: NaN fills the page area.</summary>
@@ -362,6 +369,7 @@ public sealed class UiStudioViewModel : ViewModelBase
     public void NotePage(string? url)
     {
         _studio.NotePage(url);
+        MarkCurrentPage(url);
         Url = url ?? "";
         OnPropertyChanged(nameof(IsRemotePage));
         OnPropertyChanged(nameof(CanEditSource));

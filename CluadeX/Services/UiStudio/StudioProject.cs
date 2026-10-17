@@ -15,8 +15,14 @@ public enum StudioProjectKind
     /// <summary>Another Node dev server (Next, Nuxt, Astro, CRA, Angular…) — previewed and inspected; React 18 apps
     /// still map through React's own dev source info, the rest fall back to searching the source.</summary>
     NodeOther,
-    /// <summary>A UI the Studio cannot render in a browser view (Flutter, WPF, native) — shown with the reason.</summary>
+    /// <summary>A UI the Studio cannot render in a browser view (WPF, native) — shown with the reason.</summary>
     Unsupported,
+    /// <summary>A server-rendered site (Laravel): the Studio opens it where it already runs (APP_URL, Laragon,
+    /// php artisan serve, or the live site) — nothing is started, and its pages are read from routes/web.php.</summary>
+    Server,
+    /// <summary>A native app (Flutter): it can't run in the Studio's browser, so its screens are simulated from the
+    /// source — wireframes read from each screen's widget tree, click a block to open its line.</summary>
+    Simulated,
 }
 
 public sealed class StudioProjectInfo
@@ -40,6 +46,11 @@ public static class StudioProject
     {
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
             return new StudioProjectInfo { Root = root ?? "", Kind = StudioProjectKind.None };
+
+        // Laravel first: its package.json "dev" script is Vite for the CSS/JS only — running it shows Vite's
+        // placeholder page, never the site.
+        if (Pages.LaravelPages.IsLaravel(root))
+            return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Server, Framework = "laravel" };
 
         string pkgPath = Path.Combine(root, "package.json");
         if (File.Exists(pkgPath))
@@ -70,7 +81,9 @@ public static class StudioProject
         }
 
         if (File.Exists(Path.Combine(root, "pubspec.yaml")))
-            return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Unsupported, Framework = "flutter", UnsupportedReason = "studio.unsupported.flutter" };
+            return Sketch.FlutterProject.IsFlutter(root)
+                ? new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Simulated, Framework = "flutter" }
+                : new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Unsupported, Framework = "dart", UnsupportedReason = "studio.unsupported.none" };
 
         string? entry = FindEntryHtml(root);
         if (entry != null)
