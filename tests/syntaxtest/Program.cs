@@ -69,8 +69,9 @@ internal static class Program
         Yaml();
         Toml();
         Shell();
+        Dart();
 
-        foreach (string theme in new[] { "Midnight", "Classic", "NeonCyber" })
+        foreach (string theme in new[] { "Midnight", "Classic", "NeonCyber", "Lavender" })
         {
             Console.WriteLine($"\n## P — palette: {theme}");
             UseTheme(app, theme);
@@ -97,7 +98,7 @@ internal static class Program
     {
         Directory.CreateDirectory(dir);
         var shots = new List<System.Windows.Media.Imaging.BitmapSource>();
-        foreach (string theme in new[] { "Midnight", "NeonCyber", "Classic" })
+        foreach (string theme in new[] { "Midnight", "NeonCyber", "Classic", "Lavender" })
         {
             UseTheme(app, theme);
             var shot = RenderEditors(theme);
@@ -179,13 +180,13 @@ internal static class Program
 
     // ═══════════════════════════════════════════ X ═══════════════════════════════════════════
 
-    static readonly string[] BundledNames = { "GDScript", "Godot Shader", "Godot Resource", "JSONC", "YAML", "TOML", "Shell" };
+    static readonly string[] BundledNames = { "GDScript", "Godot Shader", "Godot Resource", "JSONC", "YAML", "TOML", "Shell", "Dart" };
 
     static void BundledDefinitions()
     {
         var asm = typeof(NeonHighlighting).Assembly;
         var resources = asm.GetManifestResourceNames().Where(n => n.StartsWith("CluadeX.Resources.Syntax.") && n.EndsWith(".xshd")).OrderBy(n => n).ToList();
-        Check("X1", $"7 .xshd files embedded as CluadeX.Resources.Syntax.*", resources.Count == 7, string.Join(", ", resources));
+        Check("X1", $"8 .xshd files embedded as CluadeX.Resources.Syntax.*", resources.Count == 8, string.Join(", ", resources));
         foreach (var res in resources)
         {
             // Load each one the strict way (schema-validated) so a broken file names its own error here; the app
@@ -209,7 +210,7 @@ internal static class Program
             (".gd", "GDScript"), (".gdshader", "Godot Shader"), (".gdshaderinc", "Godot Shader"),
             (".tscn", "Godot Resource"), (".tres", "Godot Resource"), (".godot", "Godot Resource"),
             (".import", "Godot Resource"), (".cfg", "Godot Resource"), (".json", "JSONC"), (".jsonc", "JSONC"),
-            (".yml", "YAML"), (".yaml", "YAML"), (".toml", "TOML"), (".sh", "Shell"), (".bash", "Shell"), (".zsh", "Shell"),
+            (".yml", "YAML"), (".yaml", "YAML"), (".toml", "TOML"), (".sh", "Shell"), (".bash", "Shell"), (".zsh", "Shell"), (".dart", "Dart"),
             ("GD", "GDScript"),
             // the built-ins still resolve as before
             (".cs", "C#"), (".py", "Python"), (".ts", "JavaScript"), (".xaml", "XML"), (".ps1", "PowerShell"),
@@ -755,6 +756,83 @@ internal static class Program
             ("# trailing comment", "# trailing comment", "Comment"));
     }
 
+    static void Dart()
+    {
+        // The file that opened as plain white text on 2026-10-17 (a Flutter project), plus the usual Flutter shapes.
+        const string src =
+            "/// Parses an install error into a Thai message.\n" +
+            "import 'package:flutter/material.dart';\n" +
+            "// a line comment\n" +
+            "/* block */\n" +
+            "@override\n" +
+            "class UpdateDialog extends StatelessWidget {\n" +
+            "  const UpdateDialog({super.key, required this.title});\n" +
+            "  final String title;\n" +
+            "  static const MAX_RETRIES = 3;\n" +
+            "  Future<void> run(int n) async {\n" +
+            "    final m = AutoUpdater.installErrorMessage(null);\n" +
+            "    var count = 0x1F + 2.5e-3;\n" +
+            "    if (n > 0 && widget.title.isEmpty) {\n" +
+            "      return;\n" +
+            "    } else {\n" +
+            "      await Future.delayed(Duration(seconds: 1));\n" +
+            "    }\n" +
+            "    for (final x in items) { print('hi $name and ${x.id}'); }\n" +
+            "    throw StateError(r'raw $notInterpolated');\n" +
+            "    expect(s.isHandedOff, isTrue);\n" +
+            "    final ok = true ?? false;\n" +
+            "    final list = <String>[];\n" +
+            "    setState(() {});\n" +
+            "  }\n" +
+            "}\n";
+        Lang("L-dart", ".dart", src,
+            ("/// Parses an install error into a Thai message.", "/// Parses an install error into a Thai message.", "DocComment"),
+            ("import 'package:flutter/material.dart';", "import", "Keyword"),
+            ("import 'package:flutter/material.dart';", "'package:flutter/material.dart'", "String"),
+            ("// a line comment", "// a line comment", "Comment"),
+            ("/* block */", "/* block */", "Comment"),
+            ("@override", "@override", "Annotation"),
+            ("class UpdateDialog extends", "class", "Keyword"),
+            ("class UpdateDialog extends", "UpdateDialog", "Type"),
+            ("extends StatelessWidget", "extends", "Keyword"),
+            ("extends StatelessWidget", "StatelessWidget", "Type"),
+            ("required this.title", "required", "Keyword"),
+            ("required this.title", "this", "Keyword"),
+            ("final String title;", "final", "Keyword"),
+            ("final String title;", "String", "Type"),
+            ("MAX_RETRIES = 3", "MAX_RETRIES", "ConstantVariable"),
+            ("MAX_RETRIES = 3", "3", "Number"),
+            ("Future<void> run(", "Future", "Type"),
+            ("Future<void> run(", "void", "Type"),
+            ("Future<void> run(", "run", "Function"),
+            ("run(int n)", "int", "Type"),
+            ("async {", "async", "Keyword"),
+            ("AutoUpdater.installErrorMessage(null)", "AutoUpdater", "Type"),
+            ("AutoUpdater.installErrorMessage(null)", "installErrorMessage", "Function"),
+            ("installErrorMessage(null)", "null", "ConstantKeyword"),
+            ("0x1F + 2.5e-3", "0x1F", "Number"),
+            ("0x1F + 2.5e-3", "2.5e-3", "Number"),
+            ("if (n > 0", "if", "ControlKeyword"),
+            ("widget.title.isEmpty", "title", "Property"),
+            ("widget.title.isEmpty", "isEmpty", "Property"),
+            ("      return;", "return", "ControlKeyword"),
+            ("} else {", "else", "ControlKeyword"),
+            ("await Future.delayed", "await", "ControlKeyword"),
+            ("Future.delayed(", "delayed", "Function"),
+            ("for (final x in items)", "for", "ControlKeyword"),
+            ("for (final x in items)", "in", "Keyword"),
+            ("print('hi", "print", "Function"),
+            ("'hi $name and ${x.id}'", "'hi ", "String"),
+            ("'hi $name and ${x.id}'", "$name", "InterpolationVariable"),
+            ("'hi $name and ${x.id}'", "${x.id}", "InterpolationVariable"),
+            ("throw StateError", "throw", "ControlKeyword"),
+            ("r'raw $notInterpolated'", "r'raw $notInterpolated'", "String"),
+            ("expect(s.isHandedOff, isTrue)", "isHandedOff", "Property"),
+            ("true ?? false", "true", "ConstantKeyword"),
+            ("<String>[]", "String", "Type"),
+            ("setState(() {})", "setState", "Function"));
+    }
+
     // ═══════════════════════════════════════════ P ═══════════════════════════════════════════
 
     /// <summary>Which Syntax.* token each colour name of the bundled definitions must end up as.</summary>
@@ -766,6 +844,7 @@ internal static class Program
         ["Function"] = "Syntax.Function", ["Annotation"] = "Syntax.Preprocessor", ["Preprocessor"] = "Syntax.Preprocessor",
         ["Variable"] = "Syntax.Variable", ["NodeVariable"] = "Syntax.Variable", ["ConstantVariable"] = "Syntax.Variable",
         ["BuiltinVariable"] = "Syntax.Variable", ["Property"] = "Syntax.Variable", ["PropertyName"] = "Syntax.Variable",
+        ["InterpolationVariable"] = "Syntax.Variable",
     };
 
     static readonly Color Missing = Color.FromArgb(1, 2, 3, 4);
@@ -832,7 +911,7 @@ internal static class Program
     static string ExtOf(string name) => name switch
     {
         "GDScript" => ".gd", "Godot Shader" => ".gdshader", "Godot Resource" => ".tscn", "JSONC" => ".json",
-        "YAML" => ".yaml", "TOML" => ".toml", "Shell" => ".sh", _ => ".none",
+        "YAML" => ".yaml", "TOML" => ".toml", "Shell" => ".sh", "Dart" => ".dart", _ => ".none",
     };
 
     static void RoundTrip(Application app)

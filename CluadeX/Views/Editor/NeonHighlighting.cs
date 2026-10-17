@@ -16,7 +16,7 @@ namespace CluadeX.Views.Editor;
 /// palette and re-tinted — always from its ORIGINAL xshd colours — the next time it is asked for after the
 /// theme changed, so switching themes back and forth never compounds a tint.
 ///
-/// AvalonEdit ships nothing for GDScript, Godot shaders / scenes, YAML, TOML or shell, so those files rendered
+/// AvalonEdit ships nothing for GDScript, Godot shaders / scenes, YAML, TOML, shell or Dart, so those files rendered
 /// as plain white text. Our own definitions (Resources/Syntax/*.xshd, embedded) fill the gap; every colour they
 /// name lands in a Syntax.* token through <see cref="PickThemed"/>, so the xshd colours are only fallbacks.
 /// </summary>
@@ -37,6 +37,7 @@ public static class NeonHighlighting
         ("Yaml.xshd", "YAML", [".yml", ".yaml"]),
         ("Toml.xshd", "TOML", [".toml"]),
         ("Shell.xshd", "Shell", [".sh", ".bash", ".zsh"]),
+        ("Dart.xshd", "Dart", [".dart"]),
     ];
 
     /// <summary>Registers <see cref="Bundled"/> once, on the first lookup from any thread.</summary>
@@ -107,6 +108,7 @@ public static class NeonHighlighting
             "yml" or "yaml" => "YAML",
             "toml" => "TOML",
             "sh" or "bash" or "zsh" => "Shell",
+            "dart" => "Dart",
             "xml" or "xaml" or "csproj" or "props" or "targets" or "config" or "svg" or "resx" or "plist" => "XML",
             "html" or "htm" or "cshtml" or "razor" => "HTML",
             "css" or "scss" or "less" => "CSS",
