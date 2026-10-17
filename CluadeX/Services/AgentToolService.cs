@@ -351,16 +351,23 @@ public class AgentToolService : IDisposable
     }
 
     /// <summary>The user's first matching rule for a module call: URL rules for "browse", path/command rules otherwise.</summary>
-    private PermAction? FindModuleRule(string scope, string resource, string toolName)
+    private PermAction? FindModuleRule(string scope, string resource, string toolName, bool run = false)
     {
         if (string.Equals(scope, "browse", StringComparison.OrdinalIgnoreCase))
             return _permissionService.FindUrlRule(resource, "browse", toolName, legacyResource: toolName);
-        var rule = _permissionService.FindRule(resource, scope, toolName);
+        var rule = _permissionService.FindRule(resource, scope, toolName, runCall: run ? true : null);
         // "desktop(Godot*)" names the whole tool family by its scope, not one desktop_* tool.
         if (rule == null && string.Equals(scope, "desktop", StringComparison.OrdinalIgnoreCase))
-            rule = _permissionService.FindRule(resource, scope, "desktop");
+            rule = _permissionService.FindRule(resource, scope, "desktop", runCall: run);
         return rule;
     }
+
+    /// <summary>A call that runs something — a command, code, a program, keys into another app. A blanket allow
+    /// ("Allow *", the chat's "allow everything", the permission system switched off) never covers it.</summary>
+    private static bool IsRunCall(ToolCall call) =>
+        call.Type is ToolType.RunCommand or ToolType.PowerShell or ToolType.RunBuild or ToolType.RunTests or ToolType.Repl
+            or ToolType.BgStart or ToolType.DesktopLaunch or ToolType.DesktopType or ToolType.DesktopKeys
+        || PermissionService.IsRunTool(call.ToolName);
 
     /// <summary>What the gate decides for a module call before anyone is asked (no prompt, no side effects).</summary>
     private (PermAction Action, string Scope, string Resource, ToolPermission Permission) EvaluateModulePermission(
@@ -369,7 +376,7 @@ public class AgentToolService : IDisposable
         var perm = DescribeModulePermission(module, call);
         string scope = string.IsNullOrWhiteSpace(perm.Scope) ? "execute" : perm.Scope;
         string resource = string.IsNullOrEmpty(perm.Resource) ? call.ToolName : perm.Resource;
-        var rule = FindModuleRule(scope, resource, call.ToolName);
+        var rule = FindModuleRule(scope, resource, call.ToolName, IsRunCall(call));
         PermAction action;
         if (rule == PermAction.Deny) action = PermAction.Deny;
         else if (perm.AlwaysAsk) action = PermAction.Ask;
@@ -385,17 +392,19 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult?> CheckModulePermissionAsync(IAgentToolModule module, ToolCall call)
     {
         var (action, scope, resource, perm) = EvaluateModulePermission(module, call);
-        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff) return null;
+        // Switching the permission system off is a blanket allow too: it never covers a run tool.
+        bool runTool = IsRunCall(call);
+        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff && !runTool) return null;
         if (action == PermAction.Deny) return Fail(call, $"Permission denied for {scope}: {resource}");
         if (action == PermAction.Allow) return null;
 
         string detail = $"{scope}: {resource}";
         if (!string.IsNullOrWhiteSpace(perm.Detail) && perm.Detail != resource) detail += "\n" + perm.Detail;
-        bool askRule = FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask;
+        bool askRule = FindModuleRule(scope, resource, call.ToolName, IsRunCall(call)) == PermAction.Ask;
         var info = new PermissionRequestInfo
         {
             ToolName = call.ToolName, Detail = detail,
-            AlwaysAsk = perm.AlwaysAsk || askRule,
+            AlwaysAsk = perm.AlwaysAsk || askRule || runTool,
             ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
         };
         bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
@@ -778,8 +787,8 @@ public class AgentToolService : IDisposable
                 var refused = await CheckModulePermissionAsync(permModule, call);
                 if (refused != null) return refused;
             }
-            // ── Permission check (respects PermissionSystem toggle) ──
-            else if (_settingsService.Settings.Features.PermissionSystem)
+            // ── Permission check (respects PermissionSystem toggle — except for run tools, which always go through it) ──
+            else if (_settingsService.Settings.Features.PermissionSystem || IsRunCall(call))
             {
                 // Hex tools touching an ABSOLUTE path outside the project get a dedicated, always-on
                 // prompt (user policy 2026-06-04) — hex_patch writes raw bytes to disk. Relative hex
@@ -811,7 +820,9 @@ public class AgentToolService : IDisposable
                                 ToolName = call.ToolName,
                                 Detail = DescribePermissionRequest(call, scope, resource),
                                 Diff = TryComputePreviewDiff(call),
-                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask,
+                                // A run tool always asks: the chat's "allow everything" mode never runs a command unseen.
+                                AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask
+                                            || IsRunCall(call) || scope == "execute",
                             });
                         if (!allowed)
                             return Fail(call, $"User denied permission for {scope}: {resource}");
@@ -3545,9 +3556,9 @@ public class AgentToolService : IDisposable
         string action = call.GetArg("action", "exec").ToLowerInvariant();
 
         // Only the two interpreters the tool advertises. The old fallback started ANY program named in
-        // 'language' — "cmd", "powershell", "bash" — and piped the code into it as a shell. The shell
-        // blocklist (CheckDangerousCommand) covers the shell tools; for repl the boundary is the permission
-        // prompt, which shows the code. One session per interpreter, whatever spelling named it.
+        // 'language' — "cmd", "powershell", "bash" — and piped the code into it as a shell. The code also gets
+        // CodeRunGuard (always on, like run_command): a permission prompt alone is no boundary once a rule
+        // approves it. One session per interpreter, whatever spelling named it.
         string? family = language switch
         {
             "python" or "python3" or "py" => "python",
@@ -3577,6 +3588,16 @@ public class AgentToolService : IDisposable
 
         if (family == null)
             return Fail(call, string.Format(L("chat.repl.unsupported"), language));
+        if (Safety.CodeRunGuard.CheckCode(code) is { } unsafeCode) return Fail(call, unsafeCode);
+        if (await Safety.CodeRunGuard.CheckAsync(code, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null) is { } unsafeRun)
+            return Fail(call, unsafeRun);
+        if (Safety.ProcessLaunchPolicy.DryRun)
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true,
+                Output = Safety.ProcessLaunchPolicy.Report($"{family} REPL code ({code.Length} chars)"),
+                Summary = $"{family} REPL (dry-run)",
+            };
         string exe = family == "python"
             ? (OperatingSystem.IsWindows() ? "python" : "python3")
             : "node";

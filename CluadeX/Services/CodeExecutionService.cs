@@ -33,6 +33,8 @@ public class CodeExecutionService
                 Error = string.Format(LocalizedResources.Instance["chat.exec.blocked"], blocked),
             };
         }
+        if (Safety.ProcessLaunchPolicy.DryRun)
+            return new CodeExecutionResult { Success = true, Output = Safety.ProcessLaunchPolicy.Report($"{language} code block ({code.Length} chars)") };
 
         return language.ToLowerInvariant() switch
         {

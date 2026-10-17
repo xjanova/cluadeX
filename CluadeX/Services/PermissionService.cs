@@ -445,13 +445,37 @@ public class PermissionService
         catch { return false; }
     }
 
-    /// <summary>The action of the first rule that matches, or null when no rule does — so a caller can
-    /// apply its own default (e.g. reading inside the open project) without overriding a user rule.</summary>
-    public PermAction? FindRule(string resource, string scope, string? toolName)
+    /// <summary>Tools that run something: a shell command, code, a program, or keys into another app.</summary>
+    private static readonly HashSet<string> RunTools = new(StringComparer.OrdinalIgnoreCase)
     {
-        foreach (var rule in SnapshotRules())
+        "run_command", "powershell", "run_build", "run_tests", "bg_start", "repl", "python", "node", "repl_exec",
+        "execute_code", "run_code", "desktop_launch", "desktop_type", "desktop_keys",
+    };
+
+    /// <summary>True for a tool that runs something (see <see cref="RunTools"/>).</summary>
+    public static bool IsRunTool(string? toolName) => toolName != null && RunTools.Contains(toolName);
+
+    /// <summary>A rule that names no tool and whose pattern matches anything ("Allow *").</summary>
+    private static bool IsBlanket(PermissionRule rule) =>
+        string.IsNullOrWhiteSpace(rule.ToolName) && (rule.Pattern ?? "").Trim().Trim('*', '/', '\\').Length == 0;
+
+    /// <summary>The action of the first rule that matches, or null when no rule does — so a caller can
+    /// apply its own default (e.g. reading inside the open project) without overriding a user rule.
+    /// A blanket Allow ("Allow *") never approves running something — a command, code, a program, keys into an app
+    /// (scope "execute", or a <see cref="IsRunTool">run tool</see>): only a rule that names the tool does. On
+    /// 2026-10-17 an "Allow *" rule let an agent's own test run <c>rd /s /q C:\</c> unasked. A blanket Deny still denies.
+    /// <paramref name="runCall"/> overrides the run test when the caller looks a rule up under a family name.</summary>
+    public PermAction? FindRule(string resource, string scope, string? toolName, bool? runCall = null)
+        => FirstMatch(SnapshotRules(), resource, scope, toolName, runCall);
+
+    /// <summary><see cref="FindRule"/> over a given rule list (pure — no file, no state).</summary>
+    public static PermAction? FirstMatch(IEnumerable<PermissionRule> rules, string resource, string scope, string? toolName, bool? runCall = null)
+    {
+        bool running = runCall ?? (string.Equals(scope, "execute", StringComparison.OrdinalIgnoreCase) || IsRunTool(toolName));
+        foreach (var rule in rules)
         {
             if (!ScopeMatches(rule, scope)) continue;
+            if (running && rule.Action == PermAction.Allow && IsBlanket(rule)) continue;
             if (RuleMatches(rule, resource, toolName))
                 return rule.Action;
         }

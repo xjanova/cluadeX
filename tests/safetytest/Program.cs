@@ -43,6 +43,7 @@ internal static class Program
             Hook(work);
             HookProcess();
             ClaudeDevArgs();
+            RunGates(work);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { SafeDelete.Directory(work, work); } catch (Exception ex) { Console.WriteLine("cleanup: " + ex.Message); } }
@@ -218,6 +219,59 @@ internal static class Program
             settings.Contains("PreToolUse") && settings.Contains("Bash|PowerShell|Write|Edit") && settings.Contains("--cx-guard"), settings);
         string advice = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(@"E:\Code\X", null, "default", "auto");
         Check("a read-only advice run has no shell and needs no hook", !advice.Contains(",Bash"));
+    }
+
+    static void RunGates(string work)
+    {
+        Console.WriteLine("Run gates: desktop, scripts, dry-run, blanket allow (decisions only)");
+        var console = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "Command Prompt", "ConsoleWindowClass", 0, "cmd", 0, 0, 0, 0, true, false);
+        var terminal = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "PowerShell", "CASCADIA_HOSTING_WINDOW_CLASS", 0, "WindowsTerminal", 0, 0, 0, 0, true, false);
+        var runBox = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "Run", "#32770", 0, "explorer", 0, 0, 0, 0, true, false);
+        var notepad = new CluadeX.Services.Desktop.DesktopWindow(IntPtr.Zero, "Untitled - Notepad", "Notepad", 0, "notepad", 0, 0, 0, 0, true, false);
+        Check("a console is a command window", CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(console));
+        Check("Windows Terminal is a command window", CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(terminal));
+        Check("the Run box is a command window", CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(runBox));
+        Check("Notepad is not a command window", !CluadeX.Services.Desktop.DesktopSafety.IsCommandWindow(notepad));
+        Check("desktop_type: the incident line into a console is refused", CluadeX.Services.Desktop.DesktopSafety.CommandTextRefusal(console, RdSQ + Root) != null);
+        Check("desktop_type: the incident line into the Run box is refused", CluadeX.Services.Desktop.DesktopSafety.CommandTextRefusal(runBox, "cmd /c " + RdSQ + Root) != null);
+        Check("desktop_type: git status into a console is allowed", CluadeX.Services.Desktop.DesktopSafety.CommandTextRefusal(console, "git status") == null);
+        Check("desktop_type: CodeRunGuard refuses the incident line whatever the window", CodeRunGuard.Check(RdSQ + Root, null) != null);
+        var key = CluadeX.Services.Desktop.DesktopInput.Parse("a")!;
+        var paste = CluadeX.Services.Desktop.DesktopInput.Parse("ctrl+v")!;
+        var enter = CluadeX.Services.Desktop.DesktopInput.Parse("Enter")!;
+        Check("desktop_keys: a letter into a console is refused", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(console, key) != null);
+        Check("desktop_keys: a paste into a console is refused", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(console, paste) != null);
+        Check("desktop_keys: Enter into a console is allowed", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(console, enter) == null);
+        Check("desktop_keys: a letter into Notepad is allowed", CluadeX.Services.Desktop.DesktopSafety.CommandKeyRefusal(notepad, key) == null);
+
+        string bad = Path.Combine(work, "wipe.bat"), clean = Path.Combine(work, "hello.bat");
+        File.WriteAllText(bad, "@echo off\r\n" + RdSQ + Root + "\r\n");
+        File.WriteAllText(clean, "@echo off\r\necho hello\r\n");
+        Check("desktop_launch: a script that wipes a drive is refused", CodeRunGuard.CheckScriptFile(bad) != null);
+        Check("desktop_launch: a clean script is allowed", CodeRunGuard.CheckScriptFile(clean) == null);
+        Check("desktop_launch: an app is not read as a script", CodeRunGuard.CheckScriptFile(Environment.ProcessPath) == null);
+        Check("repl: code that wipes home is refused", CodeRunGuard.CheckCode("import shutil\nshutil.rmtree(\"" + Root.Replace("\\", "/") + "\")") != null);
+
+        Check("dry-run is on by default in a harness", ProcessLaunchPolicy.DryRun);
+        Check("dry-run blocks a program that is not allowed", ProcessLaunchPolicy.Blocks("cmd.exe"));
+        ProcessLaunchPolicy.Allowed.Add("cx-allowed-child.exe");
+        Check("dry-run lets the harness's own named child start", !ProcessLaunchPolicy.Blocks("C:\\x\\cx-allowed-child.exe"));
+        ProcessLaunchPolicy.Allowed.Remove("cx-allowed-child.exe");
+        var r = CluadeX.Services.ShellRunner.RunAsync(CluadeX.Services.ShellRunner.Shell.Cmd, "echo CX-REAL-RUN", work, 10_000, CancellationToken.None).GetAwaiter().GetResult();
+        Check("dry-run: run_command's shell starts nothing", r.Output.StartsWith("[dry-run]"), r.Output);
+
+        var blanket = new CluadeX.Models.PermissionRule { Pattern = "*", Scope = "*", Action = CluadeX.Models.PermAction.Allow };
+        var rules = new[] { blanket };
+        Check("Allow * does not cover run_command", CluadeX.Services.PermissionService.FirstMatch(rules, "git status", "execute", "run_command") == null);
+        Check("Allow * does not cover repl", CluadeX.Services.PermissionService.FirstMatch(rules, "repl", "execute", "repl") == null);
+        Check("Allow * does not cover desktop_type", CluadeX.Services.PermissionService.FirstMatch(rules, "cmd", "desktop", "desktop_type") == null);
+        Check("Allow * does not cover the desktop family rule for a run tool", CluadeX.Services.PermissionService.FirstMatch(rules, "cmd", "desktop", "desktop", runCall: true) == null);
+        Check("Allow * still covers reading a file", CluadeX.Services.PermissionService.FirstMatch(rules, "a.cs", "file", "read_file") == CluadeX.Models.PermAction.Allow);
+        Check("Allow * still covers desktop_screenshot", CluadeX.Services.PermissionService.FirstMatch(rules, "x", "desktop", "desktop_screenshot") == CluadeX.Models.PermAction.Allow);
+        var named = new CluadeX.Models.PermissionRule { Pattern = "*", Scope = "*", Action = CluadeX.Models.PermAction.Allow, ToolName = "run_command" };
+        Check("a rule naming run_command still allows it", CluadeX.Services.PermissionService.FirstMatch(new[] { named }, "git status", "execute", "run_command") == CluadeX.Models.PermAction.Allow);
+        var denyAll = new CluadeX.Models.PermissionRule { Pattern = "*", Scope = "*", Action = CluadeX.Models.PermAction.Deny };
+        Check("Deny * still denies run_command", CluadeX.Services.PermissionService.FirstMatch(new[] { denyAll }, "git status", "execute", "run_command") == CluadeX.Models.PermAction.Deny);
     }
 
     static void Git(string cwd, params string[] args)

@@ -280,6 +280,8 @@ public sealed class BackgroundToolModule : IAgentToolModule
         // Always on, whatever the Features switch: Safety.CodeRunGuard.
         if (await Safety.CodeRunGuard.CheckAsync(plan.Command, plan.Cwd) is { } unsafeRun)
             return Fail(call, unsafeRun);
+        if (Safety.ProcessLaunchPolicy.DryRun)
+            return new ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true, Output = Safety.ProcessLaunchPolicy.Report(plan.Command), Summary = "bg_start (dry-run)" };
 
         var kind = LongRunningCommand.Classify(plan.Command, ShellRunner.DefaultShell, plan.Cwd);
         int? port = plan.Port ?? kind.Port;

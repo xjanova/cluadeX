@@ -101,6 +101,8 @@ public static class ShellRunner
     public static async Task<Result> RunAsync(Shell shell, string command, string cwd, int timeoutMs,
         CancellationToken ct, int captureChars = 2_000_000)
     {
+        if (Safety.ProcessLaunchPolicy.DryRun)
+            return new Result(0, Safety.ProcessLaunchPolicy.Report($"{shell}: {command}"), false, false, null, shell);
         string? tempScript = null;
         var psi = new ProcessStartInfo
         {

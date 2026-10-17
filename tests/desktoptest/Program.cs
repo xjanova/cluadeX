@@ -37,6 +37,9 @@ internal static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // Dry-run (the harness default): no tool starts a process, except this harness's own child window.
+        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add(Path.GetFileName(Environment.ProcessPath ?? "desktoptest.exe"));
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
         // Child mode (desktop_launch target): a window titled args[1] after args[2] ms, closed after 60 s.

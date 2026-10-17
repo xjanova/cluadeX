@@ -58,6 +58,49 @@ public static partial class DesktopSafety
         || CredentialClasses.Contains(className ?? "")
         || CredentialTitle().IsMatch((title ?? "").Trim());
 
+    // Windows where typed text runs as a command: consoles and terminals, the Run box (Win+R), Task Manager's
+    // "Create new task". Text sent there gets the same checks as run_command; single keys and pastes are refused
+    // there outright, because they would slip a command past those checks one character (or one clipboard) at a time.
+    private static readonly HashSet<string> TerminalProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cmd", "powershell", "powershell_ise", "pwsh", "WindowsTerminal", "wt", "OpenConsole", "conhost", "bash", "sh",
+        "mintty", "wsl", "wslhost", "ubuntu", "alacritty", "wezterm-gui", "Hyper", "Tabby", "ConEmu", "ConEmu64",
+        "ConEmuC", "ConEmuC64", "git-bash", "putty", "kitty",
+    };
+
+    private static readonly HashSet<string> TerminalClasses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "mintty", "VirtualConsoleClass", "PuTTY",
+    };
+
+    [GeneratedRegex(@"^(run|create new task|เรียกใช้|สร้างงานใหม่)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex RunBoxTitle();
+
+    /// <summary>A window where typed text is run as a command (a console, a terminal, the Run box, Task Manager's new task).</summary>
+    public static bool IsCommandWindow(DesktopWindow w) =>
+        TerminalProcesses.Contains(w.ProcessName ?? "")
+        || TerminalClasses.Contains(w.ClassName ?? "")
+        || (w.ClassName == "#32770"
+            && (string.Equals(w.ProcessName, "explorer", StringComparison.OrdinalIgnoreCase) || string.Equals(w.ProcessName, "Taskmgr", StringComparison.OrdinalIgnoreCase))
+            && RunBoxTitle().IsMatch((w.Title ?? "").Trim()));
+
+    /// <summary>The refusal for text about to go into <paramref name="w"/> when it is a command window and the text is
+    /// on the dangerous list or deletes something it must never touch; null otherwise.</summary>
+    public static string? CommandTextRefusal(DesktopWindow w, string text)
+    {
+        if (text.Length == 0 || !IsCommandWindow(w)) return null;
+        if (DangerousCommandCheck.FindBlocked(text) is { } line)
+            return $"\"{DesktopWindows.Trunc(w.Title, 60)}\" ({w.ProcessName}) runs what is typed — " + DangerousCommandCheck.BlockedMessage(line);
+        return Safety.CodeRunGuard.CheckCode(text);
+    }
+
+    /// <summary>The refusal for a key chord that would put text (a printable key, a paste) into a command window.</summary>
+    public static string? CommandKeyRefusal(DesktopWindow w, DesktopChord c) =>
+        c.PutsText && IsCommandWindow(w)
+            ? $"\"{DesktopWindows.Trunc(w.Title, 60)}\" ({w.ProcessName}) runs what is typed. Single keys and pastes are refused there; "
+              + "send the whole command with desktop_type, which checks it the way run_command does."
+            : null;
+
     /// <summary>The refusal for a password field, or null.</summary>
     public static string? PasswordRefusal(AutomationElement e)
     {
