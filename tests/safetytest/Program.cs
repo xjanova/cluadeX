@@ -177,8 +177,10 @@ internal static class Program
     static void HookProcess()
     {
         Console.WriteLine("CluadeX.exe --cx-guard (the real hook process; it only parses)");
+        // A CluadeX.exe in this harness's own bin is runnable only with its runtimeconfig beside it: a stray copy without
+        // one (left by a build pointed at another CluadeXBin) starts as "self-contained" and fails before Main.
         string exe = Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
-        if (!File.Exists(exe)) exe = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe"));
+        if (!File.Exists(exe) || !File.Exists(Path.Combine(AppContext.BaseDirectory, "CluadeX.runtimeconfig.json"))) exe =Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe"));
         if (!File.Exists(exe)) { Check("CluadeX.exe found", false, exe); return; }
         (int Code, string Err) Ask(string json)
         {

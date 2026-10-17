@@ -149,7 +149,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                         dev.Dispose();
                         if (error == "cancelled") return null;
                         _log?.Warn("UiStudio", "dev server failed: " + error);
-                        return error != null && error.StartsWith("noNode", StringComparison.Ordinal) ? "studio.err.noNode" : "studio.err.install";
+                        return error == "unsafe" ? "studio.err.unsafe"
+                            : error != null && error.StartsWith("noNode", StringComparison.Ordinal) ? "studio.err.noNode" : "studio.err.install";
                     }
                     return null;
                 }

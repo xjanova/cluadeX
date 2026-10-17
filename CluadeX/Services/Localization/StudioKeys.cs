@@ -118,6 +118,7 @@ internal static class StudioKeys
         ["studio.err.noFolder"] = E("That folder no longer exists", "ไม่พบโฟลเดอร์นั้นแล้ว"),
         ["studio.err.server"] = E("Could not start the local preview server", "เริ่มเซิร์ฟเวอร์พรีวิวในเครื่องไม่สำเร็จ"),
         ["studio.err.noNode"] = E("Node.js was not found. Install Node.js 18+ (nodejs.org) and press Start again.", "ไม่พบ Node.js ติดตั้ง Node.js 18 ขึ้นไป (nodejs.org) แล้วกดเริ่มรันอีกครั้ง"),
+        ["studio.err.unsafe"] = E("Not started — code changed in this project would delete a drive, a home or a system folder. See the server log.", "ไม่ได้เริ่มรัน — โค้ดที่เปลี่ยนในโปรเจกต์นี้จะลบไดรฟ์ โฟลเดอร์ผู้ใช้ หรือโฟลเดอร์ระบบ ดูรายละเอียดในบันทึกเซิร์ฟเวอร์"),
         ["studio.err.install"] = E("Installing or starting the project failed — see the server log", "ติดตั้งหรือเริ่มโปรเจกต์ไม่สำเร็จ — ดูบันทึกเซิร์ฟเวอร์"),
         ["studio.err.remotePage"] = E("This page isn't served from your project, so nothing can be written to source", "หน้านี้ไม่ได้มาจากโปรเจกต์ในเครื่อง จึงเขียนลงซอร์สไม่ได้"),
         ["studio.err.noSource"] = E("This element has no exact source location", "element นี้ไม่มีตำแหน่งซอร์สที่แม่นยำ"),
