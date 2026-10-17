@@ -25,6 +25,8 @@ public partial class ChatViewModel
         public ChatMessage? ActiveStatus;
         /// <summary>The running balloon: the background-work row the current calls fold into (IsLive while they run).</summary>
         public ChatMessage? LiveRow;
+        /// <summary>"⏵ writing file x — 3,200 chars…" while the model still streams a long tool input.</summary>
+        public ChatMessage? DraftRow;
         public ChatMessage? TodoMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
@@ -114,6 +116,7 @@ public partial class ChatViewModel
         OnPropertyChanged(nameof(CanResume));
         RaiseOpenFolders();
         RefreshSessionBadges();
+        RebuildSidebarIfActiveChanged();
     }
 
     /// <summary>Each chat in the sidebar shows how its run stands: working (with the step), waiting for the owner, or
@@ -346,7 +349,6 @@ public partial class ChatViewModel
             NewSession();
             session = CurrentSession!;
         }
-        var run = new ChatRun { Session = session, Messages = Messages };
         string? taskFolder = TaskFolderFor(session);
         string? folder = taskFolder ?? _fileSystemService.AppWorkingDirectory;
         if (taskFolder != null)
@@ -354,7 +356,16 @@ public partial class ChatViewModel
             Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "📁 " + LocF("chat.resume.inTaskFolder", taskFolder) });
             _debugLog?.Info("Chat", $"turn runs in the chat's own folder {taskFolder} (window: {_fileSystemService.AppWorkingDirectory})");
         }
+        return BeginTurnFor(session, Messages, folder);
+    }
+
+    /// <summary>Start a run in <paramref name="session"/> writing into <paramref name="messages"/> (its live list, on
+    /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
+    private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
+    {
+        var run = new ChatRun { Session = session, Messages = messages };
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
+        run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
         _runs.Add(run);
@@ -374,6 +385,7 @@ public partial class ChatViewModel
             PostRunCostSummary(run);
             leftover = run.Scope?.DrainUserNotes();
             _runs.Remove(run);
+            DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
             // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
             run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";

@@ -305,10 +305,15 @@ public class PermissionService
     /// <summary>Is Accept edits on for this project folder?</summary>
     public bool AcceptsEditsIn(string? projectRoot)
     {
-        string? on = AcceptEditsProject;
-        if (on == null || string.IsNullOrWhiteSpace(projectRoot)) return false;
-        try { return string.Equals(on, Path.GetFullPath(projectRoot).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
-        catch { return false; }
+        if (string.IsNullOrWhiteSpace(projectRoot)) return false;
+        return Same(AcceptEditsProject, projectRoot) || Same(AgentRunScope.Current?.AcceptEditsRoot, projectRoot);
+
+        static bool Same(string? on, string root)
+        {
+            if (string.IsNullOrWhiteSpace(on)) return false;
+            try { return string.Equals(Path.GetFullPath(on).TrimEnd('\\', '/'), Path.GetFullPath(root).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
     }
 
     /// <summary>

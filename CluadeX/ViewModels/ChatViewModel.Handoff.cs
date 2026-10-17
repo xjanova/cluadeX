@@ -20,8 +20,13 @@ public partial class ChatViewModel
         string window = _fileSystemService.AppWorkingDirectory ?? "";
         bool paused = Messages.LastOrDefault(m => m.Role == MessageRole.Assistant) is { } last
                       && (last.Content ?? "").StartsWith(AgentRunScope.PausedMarker, StringComparison.Ordinal);
-        return PickTaskFolder(own, window, session.Title ?? "", paused, Directory.Exists);
+        // Pipe chats are no longer titled "[ObsidianX] …" (one repeated word in the sidebar): they are remembered by id.
+        string title = _pipeChatIds.Contains(session.Id) ? "[ObsidianX] " + session.Title : session.Title ?? "";
+        return PickTaskFolder(own, window, title, paused, Directory.Exists);
     }
+
+    /// <summary>Chats started by a pipe task in this run of the app.</summary>
+    private readonly HashSet<string> _pipeChatIds = new();
 
     public static string? PickTaskFolder(string chatProject, string windowProject, string chatTitle, bool lastReplyPaused,
         Func<string, bool> dirExists)

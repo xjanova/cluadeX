@@ -335,6 +335,15 @@ public partial class App : Application
     {
         try
         {
+            // Every call in the debug log (not its spec — that can hold anything): when a chat starts or the model changes
+            // with nobody at the keyboard, the log says whether a pipe caller did it (owner 2026-10-17: "แชทถูกปลุกกลับมา").
+            if (invocation.ToolName != "cluadex.get_active_model")
+            {
+                string Arg(string n) => invocation.Arguments.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && invocation.Arguments.TryGetProperty(n, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() ?? "" : "";
+                _serviceProvider?.GetService<DebugLogService>()?.Info("Pipe",
+                    $"{invocation.ToolName} taskId={Arg("taskId")} provider={Arg("provider")} model={Arg("model")} dir={Arg("workingDirectory")}");
+            }
             // The pipe accepts tasks before the MCP servers finished starting: an agent task waits for them briefly,
             // and when they are still not ready its caller is told (its run may have had no brain / MCP tools).
             string? startupNote = null;

@@ -91,7 +91,12 @@ public partial class ChatViewModel : ViewModelBase
     public string UserInput
     {
         get => _userInput;
-        set { if (SetProperty(ref _userInput, value) && string.IsNullOrEmpty(value)) OnInputCleared(); }
+        set
+        {
+            if (!SetProperty(ref _userInput, value)) return;
+            if (string.IsNullOrEmpty(value)) OnInputCleared();
+            else NoteUserActivity();   // typing: the screen is in use (ScreenGuard)
+        }
     }
 
     /// <summary>Run code blocks the AI writes, on this PC, without asking. Security-relevant: off by default and
@@ -190,7 +195,7 @@ public partial class ChatViewModel : ViewModelBase
     public ChatSession? CurrentSession
     {
         get => _currentSession;
-        set { if (SetProperty(ref _currentSession, value)) { RaiseRunStateChanged(); RefreshStickyPlan(); } }
+        set { if (SetProperty(ref _currentSession, value)) { RaiseRunStateChanged(); RefreshStickyPlan(); OnPropertyChanged(nameof(FollowEditsHere)); } }
     }
     public string WorkingDirectory
     {
@@ -226,8 +231,16 @@ public partial class ChatViewModel : ViewModelBase
         bool filter = HasProject && !ShowAllProjectSessions;
         string currentProject = WorkingDirectory ?? "";
 
+        // Chats with work going on (running, waiting for the owner, finished unseen) always show, first, whatever the
+        // project filter (owner 2026-10-17: the sidebar must keep the working projects in view) — a background task in
+        // another project was otherwise nowhere in the list.
+        var active = Sessions.Where(IsActiveChat).ToList();
+        foreach (var s in active) VisibleSessions.Add(s);
+        _activeChatsShown = string.Join("|", active.Select(s => s.Id));
+
         foreach (var s in Sessions)
         {
+            if (active.Contains(s)) continue;
             if (filter)
             {
                 // Match sessions for this project. Legacy rows (empty ProjectPath) also pass so
@@ -243,6 +256,18 @@ public partial class ChatViewModel : ViewModelBase
     }
 
     public int VisibleSessionsCount => VisibleSessions.Count;
+
+    /// <summary>A chat with a run going, waiting for the owner, or finished while the owner looked elsewhere.</summary>
+    private bool IsActiveChat(ChatSession s) => RunOf(s) != null || s.RunStatus is "working" or "waiting" or "done";
+
+    /// <summary>The active chats the sidebar was last built with: rebuilt only when that set changes.</summary>
+    private string _activeChatsShown = "";
+
+    private void RebuildSidebarIfActiveChanged()
+    {
+        string now = string.Join("|", Sessions.Where(IsActiveChat).Select(s => s.Id));
+        if (now != _activeChatsShown) RebuildVisibleSessions();
+    }
 
     private static bool PathEquals(string a, string b)
     {
@@ -1235,6 +1260,7 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         if (CurrentSession?.Id == sessionId) return;
+        NoteUserActivity();   // opening a chat: the screen is in use
         CluadeX.Helpers.UiStallWatchdog.Note("switching chat");
         var switchWatch = System.Diagnostics.Stopwatch.StartNew();
         long tSave = 0, tLoad = 0, tList = 0, tFollow = 0, tCtx = 0;
@@ -2059,11 +2085,45 @@ public partial class ChatViewModel : ViewModelBase
         string previousDir = "";       // the project to come back to ("" = none was open)
         string? switchedTo = null;     // the folder this run opened (null = it ran in the open project)
         string? previousAccept = null; // the user's own Accept-edits state, restored afterwards
+        bool ranOffScreen = false;     // the screen was in use: the task ran in its own chat in the background
         while (true)
         {
             Task? busy = await dispatcher.InvokeAsync<Task?>(() =>
             {
                 // No waiting for a reply running in another chat: this task gets its own chat and runs beside it.
+
+                // The screen belongs to the user: busy (typing, just switched chats, watching a run) or taken over a
+                // moment ago → the task runs in its own chat in the background and nothing on screen moves.
+                if (!MayTakeScreen(DateTime.UtcNow, _lastUserActivityUtc, _lastScreenTakeUtc, RunOf(CurrentSession) != null))
+                {
+                    string folder = runDir ?? _fileSystemService.AppWorkingDirectory;
+                    var bg = new ChatSession { ProjectPath = folder, Title = taskId };
+                    _pipeChatIds.Add(bg.Id);
+                    var bgList = new ObservableCollection<ChatMessage>();
+                    var bgMsg = new ChatMessage { Role = MessageRole.User, Content = prompt };
+                    bgList.Add(bgMsg);
+                    Sessions.Insert(0, bg);
+                    turn = BeginTurnFor(bg, bgList, folder);
+                    taskSession = bg;
+                    taskScope = AgentRunScope.Current;
+                    if (taskScope != null)
+                    {
+                        taskScope.FromPipe = true;
+                        // Accept edits for this run only (the user's own switch is left alone: it is for their project).
+                        if (acceptTarget != null && PathEquals(folder, acceptTarget) && !PermissionService.IsUnsafeAcceptEditsRoot(folder))
+                            taskScope.AcceptEditsRoot = folder;
+                    }
+                    if (acceptLine != null) bgList.Add(new ChatMessage { Role = MessageRole.System, Content = acceptLine });
+                    ranOffScreen = true;
+                    RebuildVisibleSessions();
+                    RefreshSessionBadges();
+                    linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    if (RunOf(bg) is { } bgRun) bgRun.Cts = linked;
+                    historySnapshot = BuildModelHistory(bgList, before: bgMsg, includeTools: true);
+                    _debugLog?.Info("Chat", $"pipe task {taskId} runs in the background (screen in use) in {folder}");
+                    return null;
+                }
+                _lastScreenTakeUtc = DateTime.UtcNow;
 
                 previousDir = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
                 previousAccept = _permissionService?.AcceptEditsProject;
@@ -2079,7 +2139,8 @@ public partial class ChatViewModel : ViewModelBase
                 string project = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
                 if (CurrentSession != null)
                 {
-                    CurrentSession.Title = $"[ObsidianX] {taskId}";
+                    CurrentSession.Title = taskId;
+                    _pipeChatIds.Add(CurrentSession.Id);
                     // Tagged with the run's real project: an "obsidianx-task::" tag hid it from the sidebar's
                     // project filter, so the run the user was meant to watch was nowhere in the list.
                     CurrentSession.ProjectPath = project;
@@ -2211,28 +2272,15 @@ public partial class ChatViewModel : ViewModelBase
             void Release()
             {
                 live.Close();
-                // Back to the project the user had open — unless they opened another one meanwhile.
-                if (switchedTo != null && PathEquals(CurrentProjectFolder(), switchedTo))
-                {
-                    ApplyWorkingDirectory(previousDir, announce: false, showEditor: false);
-                    // The task's chat may still be on screen, tagged with the task's folder: say which project is open
-                    // NOW, or a message typed here would quietly work in the user's project while the chat talks
-                    // about the task's.
-                    if (taskSession != null && ReferenceEquals(CurrentSession, taskSession))
-                    {
-                        PostTurnMessage(taskSession, new ChatMessage
-                        {
-                            Role = MessageRole.System,
-                            Content = "📁 " + (previousDir.Length > 0
-                                ? LocF("chat.pipe.backToProject", previousDir, switchedTo)
-                                : LocF("chat.pipe.backToNoProject", switchedTo)),
-                        });
-                        _isDirty = true;
-                        ScrollToBottom?.Invoke();
-                    }
-                }
-                // The user's own Accept-edits state comes back with their project (never onto another folder).
-                if (_permissionService != null && PathEquals(CurrentProjectFolder(), previousDir))
+                // The window shows the project of the chat on screen — nothing else (owner 2026-10-17: the title said
+                // thaipromptadminapp while the window showed another project). The task's chat still on screen keeps its
+                // project: switching the project back under it put the user's folder in the title over the task's chat.
+                // Another chat on screen: its project, which opening it already set — made sure of here.
+                if (!ranOffScreen && (taskSession == null || !ReferenceEquals(CurrentSession, taskSession)))
+                    FollowChatProject(CurrentSession);
+                // The user's own Accept-edits state comes back (the task's grant ends with it). A background task never
+                // touched it: its grant lived in its own run scope.
+                if (!ranOffScreen && _permissionService != null)
                 {
                     _permissionService.SetAcceptEdits(previousAccept);
                     OnPropertyChanged(nameof(AcceptEdits));
@@ -3541,6 +3589,7 @@ public partial class ChatViewModel : ViewModelBase
         if (toolName != "agent") run.ToolStarts.Enqueue(System.Diagnostics.Stopwatch.GetTimestamp());
         App.Current?.Dispatcher.BeginInvoke(async () =>
         {
+            DropDraft(run);   // the call it was writing is now running: its own row/status takes over
             if (run.ActiveStatus?.Content == $"⏵ {statusMessage}")
                 return;
 
@@ -3703,8 +3752,8 @@ public partial class ChatViewModel : ViewModelBase
     /// a different tool of the same family included — except the rows that must stay visible on their own.</summary>
     private static bool Groupable(string category) => !NeverGrouped.Contains(category);
 
-    /// <summary>Raised (on the UI thread) when the agent mutates a file: (relativePath, firstChangedLine, diff — null
-    /// when none was computed). The Code Editor subscribes to open/refresh that file live, scroll to the change and
+    /// <summary>Raised (on the UI thread) when the agent mutates a file: (full path — or a path relative to the window's
+    /// project, firstChangedLine, diff — null when none was computed). The Code Editor subscribes to open/refresh that file live, scroll to the change and
     /// type the new lines in.</summary>
     public event Action<string, int, EditDiffResult?>? FileMutatedByAgent;
 
@@ -3739,12 +3788,17 @@ public partial class ChatViewModel : ViewModelBase
                 list.Add(new ChatMessage { Role = MessageRole.System, IsSideNote = true, Content = Services.Chrome.ChromeHelp.Advice(chromeProblem, thai) });
             }
 
-            // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit.
+            if (run != null) DropDraft(run);
+
+            // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit — for the chat on
+            // screen with its "ตามดูโค้ด" tick on, in the window's project. Other chats keep working off screen.
+            string? runFolder = run?.Scope?.WorkingDirectory;
             if (toolResult.Success
-                && _settingsService.Settings.LiveEditFollow
-                && !string.IsNullOrEmpty(toolResult.FilePath))
+                && !string.IsNullOrEmpty(toolResult.FilePath)
+                && ShouldFollowEdit(IsOnScreen(target), FollowsEdits(target ?? CurrentSession), runFolder, _fileSystemService.AppWorkingDirectory))
             {
-                FileMutatedByAgent?.Invoke(toolResult.FilePath!, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
+                string full = Path.GetFullPath(Path.Combine(runFolder ?? _fileSystemService.AppWorkingDirectory, toolResult.FilePath!));
+                FileMutatedByAgent?.Invoke(full, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
             }
 
             // Format arguments for display

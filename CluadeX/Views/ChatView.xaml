@@ -2397,6 +2397,13 @@
                                     <TextBlock x:Name="EstimateLabel" Text="{Binding EstimateShortText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12"/>
                                 </Border>
 
+                                <!-- Follow edits: this chat's edits open in the editor while it is on screen (per chat) -->
+                                <CheckBox x:Name="FollowEditsBox" IsChecked="{Binding FollowEditsHere}" VerticalAlignment="Center" Margin="0,2,10,2"
+                                          ToolTip="{services:Loc chat.follow.tip}">
+                                    <TextBlock Text="{services:Loc chat.follow.label}" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                </CheckBox>
+
                                 <!-- Batch: the next questions go out at half price through the provider's batch API and the
                                      answer lands in this chat later. Only shown when the active provider has one. -->
                                 <CheckBox IsChecked="{Binding BatchMode}" Foreground="{DynamicResource Status.Success}"
