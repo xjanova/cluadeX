@@ -122,7 +122,20 @@ public sealed class DatabaseService : IDisposable
             Execute(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_project_path ON sessions(project_path);");
             Execute(conn, $"PRAGMA user_version = {SchemaVersion};");
         }
+
+        // Pipe chats were titled "[ObsidianX] <task>": the same word on every row of the sidebar (owner 2026-10-17:
+        // "หัวข้อแชท ให้ล้างที่มันซ้ำออกให้หมด"). Now just the task; old titles lose the prefix. Every start (cheap,
+        // idempotent): a CluadeX still running an older build may save one with the prefix again.
+        Execute(conn, StripPipeTitlePrefixSql);
     }
+
+    /// <summary>The prefix old pipe chats carry in their title.</summary>
+    public const string PipeTitlePrefix = "[ObsidianX]";
+
+    /// <summary>Removes <see cref="PipeTitlePrefix"/> from stored titles (a title that is only the prefix is kept).</summary>
+    public const string StripPipeTitlePrefixSql =
+        "UPDATE sessions SET title = ltrim(substr(title, 12)) " +
+        "WHERE substr(title, 1, 11) = '[ObsidianX]' AND length(ltrim(substr(title, 12))) > 0;";
 
     // ──────────────────────────── Sessions CRUD ────────────────────────────
 

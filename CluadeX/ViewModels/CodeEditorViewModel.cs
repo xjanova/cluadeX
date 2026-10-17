@@ -945,8 +945,13 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     {
         try
         {
+            // Raised from a run's flow: drop its scope here (restored for the caller when this async method returns), or
+            // the git panel refreshed below reads the RUN's repo instead of the window's.
+            AgentRunScope.Enter(null);
             if (string.IsNullOrEmpty(relPath) || !_workspace.HasWorkingDirectory) return;
             string full = Path.GetFullPath(Path.Combine(_workspace.WorkingDirectory, relPath));
+            // A file of another project never opens here: the window shows one project (title, tree, tabs).
+            if (!ChatViewModel.IsInsideFolder(full, _workspace.WorkingDirectory)) return;
             var perf = System.Diagnostics.Stopwatch.StartNew();
             CluadeX.Helpers.UiStallWatchdog.Note("the editor following an agent edit");
             long tOpen = 0, tShow = 0;

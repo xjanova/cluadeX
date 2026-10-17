@@ -1115,9 +1115,11 @@ public partial class CodeAgentService
         RepoMapService? repoMap = null,
         DebugLogService? debugLog = null,
         IEnumerable<Tools.IPromptSectionProvider>? promptSections = null,
-        Mcp.McpServerManager? mcpManager = null)
+        Mcp.McpServerManager? mcpManager = null,
+        PermissionService? permissionService = null)
     {
         _mcpManager = mcpManager;
+        _permissionService = permissionService;
         _promptSections = promptSections?.Where(p => p != null).ToArray() ?? Array.Empty<Tools.IPromptSectionProvider>();
         _debugLog = debugLog;
         _brainSync = brainSync;
@@ -1149,6 +1151,7 @@ public partial class CodeAgentService
 
     /// <summary>For the OpenAI/Gemini tool cap only: which MCP servers CluadeX manages itself (ManagedBy set).</summary>
     private readonly Mcp.McpServerManager? _mcpManager;
+    private readonly PermissionService? _permissionService;
 
     // ─── Tool images (vision) ───
 
@@ -1955,14 +1958,34 @@ public partial class CodeAgentService
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
         if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX)
         {
-            _debugLog?.Info("Agent", $"{_providerManager.ActiveProviderType} passthrough · delegating the turn");
+            var delegated = _providerManager.ActiveProviderType;
+            string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
+            // A chat another model worked in: the new one gets the task, where it stopped and what changed — not the
+            // bare "ทำต่อ" (AgentHandoff). The brief replaces the replayed transcript, which tool rows had filled.
+            string? brief = null;
+            if (AgentHandoff.HasEarlierWork(history))
+            {
+                string git = await AgentHandoff.GitSnapshotAsync(folder, ct);
+                brief = AgentHandoff.Compose(history, folder, git, delegated == AiProviderType.BrainX ? 3600 : 24000);
+            }
+            var sendHistory = brief != null ? new List<ChatMessage>() : history;
+            string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage ?? "", brief) : userMessage ?? "";
+            var grant = delegated == AiProviderType.ClaudeDev ? WorkerGrantFor(folder) : null;
+            _debugLog?.Info("Agent", $"{delegated} passthrough · delegating the turn · folder={folder ?? "(none)"}"
+                + $" · handoff={(brief != null ? brief.Length + " chars" : "no")}"
+                + (delegated == AiProviderType.ClaudeDev ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
             var cdResult = new AgentLoopResult { TurnCount = 1 };
             var cdText = new StringBuilder();
-            await foreach (var chunk in _providerManager.ActiveProvider.ChatAsync(history, userMessage ?? "", null, ct))
+            Providers.ClaudeDevProvider.Grant.Value = grant;
+            try
             {
-                cdText.Append(chunk);
-                OnAgenticStreamingToken?.Invoke(chunk, 1);
+                await foreach (var chunk in _providerManager.ActiveProvider.ChatAsync(sendHistory, sendMessage, null, ct))
+                {
+                    cdText.Append(chunk);
+                    OnAgenticStreamingToken?.Invoke(chunk, 1);
+                }
             }
+            finally { Providers.ClaudeDevProvider.Grant.Value = null; }
             cdResult.FinalResponse = cdText.ToString().Trim();
             cdResult.Success = cdResult.FinalResponse.Length > 0;
             cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
@@ -1994,6 +2017,27 @@ public partial class CodeAgentService
         _debugLog?.Warn("Agent", "dispatching to LEGACY [ACTION:] loop (provider has no native tool use) — "
             + "local file-edit reliability is much lower on this path");
         return await ExecuteLegacyToolLoopAsync(history, userMessage, progress, ct);
+    }
+
+    /// <summary>
+    /// What Claude Dev may do in this agent turn: exactly what CluadeX's own agent could do here without asking. Edits
+    /// when the user's rules allow write_file in the folder (or Accept edits is on for it), commands when they allow
+    /// run_command — a headless CLI cannot show a prompt, so "Ask" means no. No folder, or a folder Accept edits may
+    /// never cover (a drive root, the profile), = read-only. Before 2026-10-17 it was read-only always: switching a
+    /// running task to Claude Dev left a model that could only "propose diffs", and nothing applied them.
+    /// </summary>
+    internal Providers.ClaudeDevProvider.WorkerGrant? WorkerGrantFor(string? folder) =>
+        DecideWorkerGrant(_permissionService, folder);
+
+    public static Providers.ClaudeDevProvider.WorkerGrant? DecideWorkerGrant(PermissionService? perms, string? folder)
+    {
+        if (perms == null || string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return null;
+        if (PermissionService.IsUnsafeAcceptEditsRoot(folder)) return null;
+        string probe = Path.Combine(folder, "file.txt");
+        var writeRule = perms.FindRule(probe, "write", "write_file");
+        bool edit = writeRule == PermAction.Allow || (writeRule == null && perms.AcceptsEditsIn(folder));
+        bool run = perms.FindRule("git status", "execute", "run_command") == PermAction.Allow;
+        return edit || run ? new Providers.ClaudeDevProvider.WorkerGrant(edit, run) : null;
     }
 
     /// <summary>

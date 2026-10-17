@@ -37,6 +37,34 @@ public sealed class AgentRunScope
     /// <summary>Whoever started the run (the chat page's run record), for routing its events back.</summary>
     public object? Owner { get; }
 
+    /// <summary>Accept edits for THIS run only (a pipe task approved for its folder that runs in the background): the
+    /// user's own switch stays on their project. Checked by PermissionService.AcceptsEditsIn; set only for a folder
+    /// IsUnsafeAcceptEditsRoot allows.</summary>
+    public string? AcceptEditsRoot { get; set; }
+
+    /// <summary>Told while the model is still writing a tool call's input: (tool, characters so far, file path once
+    /// the input names one). A provider that streams tool input calls <see cref="ReportToolDraft"/>.</summary>
+    public Action<string, int, string?>? ToolDrafting { get; set; }
+
+    /// <summary>Report a tool call being written in the current run (no-op outside a run or without a listener).</summary>
+    public static void ReportToolDraft(string tool, int chars, string? path)
+    {
+        try { Current?.ToolDrafting?.Invoke(tool, chars, path); }
+        catch { /* the chat's status row must never break the stream */ }
+    }
+
+    /// <summary>The file path a tool input names, read from the JSON streamed so far (null until that value is whole).</summary>
+    public static string? DraftPath(string partialJson)
+    {
+        var m = DraftPathRx.Match(partialJson.Length > 2000 ? partialJson[..2000] : partialJson);
+        if (!m.Success) return null;
+        try { return System.Text.RegularExpressions.Regex.Unescape(m.Groups[1].Value); }
+        catch { return m.Groups[1].Value; }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex DraftPathRx =
+        new(@"""(?:path|file_path|filePath|notebook_path)""\s*:\s*""((?:[^""\\]|\\.)*)""");
+
     /// <summary>The run was started by another program over the cluadex-mcp pipe (BrainX's cowork room, a script) —
     /// not typed by the owner. The BrainX model never relays such a run back into the room: that is a loop.</summary>
     public bool FromPipe { get; set; }

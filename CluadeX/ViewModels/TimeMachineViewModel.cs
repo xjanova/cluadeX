@@ -164,12 +164,42 @@ public class TimeMachineViewModel : ViewModelBase
 
     public ObservableCollection<ProjectOption> Projects { get; } = new();
 
+    // A list, not a drop-down (owner 2026-10-17: "ถ้าโปรเจคเยอะ แล้วจะแน่นและงง"): every project in a column, newest
+    // first, with a box that narrows it by name or path.
+    public ObservableCollection<ProjectOption> VisibleProjects { get; } = new();
+
+    private string _projectFilter = "";
+    public string ProjectFilter
+    {
+        get => _projectFilter;
+        set { if (SetProperty(ref _projectFilter, value ?? "")) RebuildVisibleProjects(); }
+    }
+
+    public static bool ProjectMatches(ProjectOption p, string filter) =>
+        string.IsNullOrWhiteSpace(filter)
+        || p.Name.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase)
+        || p.Path.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private void RebuildVisibleProjects()
+    {
+        VisibleProjects.Clear();
+        foreach (var p in Projects) if (ProjectMatches(p, _projectFilter)) VisibleProjects.Add(p);
+        OnPropertyChanged(nameof(SelectedProject));   // the list re-selects the open project when it is still shown
+        OnPropertyChanged(nameof(ProjectCountText));
+    }
+
+    public string ProjectCountText => VisibleProjects.Count == Projects.Count
+        ? Projects.Count.ToString(CultureInfo.InvariantCulture)
+        : $"{VisibleProjects.Count} / {Projects.Count}";
+
     private ProjectOption? _selectedProject;
     public ProjectOption? SelectedProject
     {
         get => _selectedProject;
         set
         {
+            // Filtering the list away from the open project clears the list's selection: that is not a choice.
+            if (value == null && !_loadingProjects) { OnPropertyChanged(); return; }
             if (SetProperty(ref _selectedProject, value) && !_loadingProjects && value != null)
             {
                 _tm.Project = value.Path;
@@ -345,6 +375,7 @@ public class TimeMachineViewModel : ViewModelBase
                 : Projects.FirstOrDefault(p => string.Equals(p.Path, open.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
         }
         finally { _loadingProjects = false; }
+        RebuildVisibleProjects();   // after the flag: the list clearing its selection while it refills is not a choice
     }
 
     private List<ProjectOption> CollectProjects(string? open)
