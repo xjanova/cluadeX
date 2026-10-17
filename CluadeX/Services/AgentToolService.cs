@@ -351,10 +351,16 @@ public class AgentToolService : IDisposable
     }
 
     /// <summary>The user's first matching rule for a module call: URL rules for "browse", path/command rules otherwise.</summary>
-    private PermAction? FindModuleRule(string scope, string resource, string toolName) =>
-        string.Equals(scope, "browse", StringComparison.OrdinalIgnoreCase)
-            ? _permissionService.FindUrlRule(resource, "browse", toolName, legacyResource: toolName)
-            : _permissionService.FindRule(resource, scope, toolName);
+    private PermAction? FindModuleRule(string scope, string resource, string toolName)
+    {
+        if (string.Equals(scope, "browse", StringComparison.OrdinalIgnoreCase))
+            return _permissionService.FindUrlRule(resource, "browse", toolName, legacyResource: toolName);
+        var rule = _permissionService.FindRule(resource, scope, toolName);
+        // "desktop(Godot*)" names the whole tool family by its scope, not one desktop_* tool.
+        if (rule == null && string.Equals(scope, "desktop", StringComparison.OrdinalIgnoreCase))
+            rule = _permissionService.FindRule(resource, scope, "desktop");
+        return rule;
+    }
 
     /// <summary>What the gate decides for a module call before anyone is asked (no prompt, no side effects).</summary>
     private (PermAction Action, string Scope, string Resource, ToolPermission Permission) EvaluateModulePermission(
@@ -368,7 +374,9 @@ public class AgentToolService : IDisposable
         if (rule == PermAction.Deny) action = PermAction.Deny;
         else if (perm.AlwaysAsk) action = PermAction.Ask;
         else action = rule ?? (perm.IsFree ? PermAction.Allow : PermAction.Ask);
-        if (action == PermAction.Ask && !perm.AlwaysAsk && IsOnceApproved(perm.OnceKey)) action = PermAction.Allow;
+        if (action == PermAction.Ask && !perm.AlwaysAsk
+            && (IsOnceApproved(perm.OnceKey) || (rule != PermAction.Ask && IsOnceApproved(perm.ChatScopeKey))))
+            action = PermAction.Allow;
         return (action, scope, resource, perm);
     }
 
@@ -377,20 +385,23 @@ public class AgentToolService : IDisposable
     private async Task<ToolResult?> CheckModulePermissionAsync(IAgentToolModule module, ToolCall call)
     {
         var (action, scope, resource, perm) = EvaluateModulePermission(module, call);
-        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk) return null;
+        if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff) return null;
         if (action == PermAction.Deny) return Fail(call, $"Permission denied for {scope}: {resource}");
         if (action == PermAction.Allow) return null;
 
         string detail = $"{scope}: {resource}";
         if (!string.IsNullOrWhiteSpace(perm.Detail) && perm.Detail != resource) detail += "\n" + perm.Detail;
-        bool allowed = OnPermissionRequired != null
-            && await OnPermissionRequired.Invoke(new PermissionRequestInfo
-            {
-                ToolName = call.ToolName, Detail = detail,
-                AlwaysAsk = perm.AlwaysAsk || FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask,
-            });
+        bool askRule = FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask;
+        var info = new PermissionRequestInfo
+        {
+            ToolName = call.ToolName, Detail = detail,
+            AlwaysAsk = perm.AlwaysAsk || askRule,
+            ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
+        };
+        bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
         if (!allowed) return Fail(call, $"User denied permission for {scope}: {resource}");
         if (!perm.AlwaysAsk) RememberOnceApproval(perm.OnceKey);
+        if (info.AllowedForChat && info.ChatScopeKey != null) RememberOnceApproval(info.ChatScopeKey);
         return null;
     }
 

@@ -590,6 +590,21 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- Desktop control: the desktop_* tools drive other programs on this PC (Services/Desktop) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.desktop}" Style="{StaticResource CardTitle}"/>
+                                <Grid Style="{StaticResource Row}" Margin="0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.desktop}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.desktopDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding DesktopControlEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Your own Chrome for the agent, through the Claude in Chrome extension -->
                         <Border Style="{StaticResource Card}" Visibility="{Binding HasChromeConnector, Converter={StaticResource BoolVis}}">
                             <StackPanel>

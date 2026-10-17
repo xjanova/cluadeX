@@ -114,6 +114,11 @@ public class AppSettings
     /// <summary>Effort decides when the agent fans out: low none, medium read-only sub-agents on the cheapest model,
     /// high workers in git worktrees with a reviewer, xhigh/max also speculative fixes. Off = sub-agents as before.</summary>
     public bool DispatchPolicyEnabled { get; set; } = true;
+
+    // ─── Desktop control (Services/Desktop) ───
+    /// <summary>The desktop_* tools: see and drive other programs on this PC (testing a desktop app, a game window,
+    /// an installer). On by default — every app still asks once per run (or "Allow in this chat").</summary>
+    public bool DesktopControlEnabled { get; set; } = true;
     /// <summary>Sub-agents, workers and fixers one run may have going at the same time.</summary>
     public int MaxParallelAgents { get; set; } = 3;
     /// <summary>Race 2–3 fixers in their own worktrees on a red build the main loop could not fix.</summary>

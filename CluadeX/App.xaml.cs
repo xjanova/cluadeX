@@ -7,6 +7,7 @@ using CluadeX.Services;
 using CluadeX.Services.Background;
 using CluadeX.Services.Browser;
 using CluadeX.Services.Chrome;
+using CluadeX.Services.Desktop;
 using CluadeX.Services.Mcp;
 using CluadeX.ViewModels;
 
@@ -1011,6 +1012,7 @@ public partial class App : Application
         // exit work as IAppShutdownHook) — this list is the only line here that names them.
         services.AddBackgroundModule();
         services.AddBrowserModule();
+        services.AddDesktopModule();
         services.AddSingleton<SessionCleanupService>();
         services.AddSingleton(sp => new ProjectRegistryService(sp.GetService<FileSystemService>(), sp.GetService<SettingsService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));

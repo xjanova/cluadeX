@@ -141,6 +141,17 @@ public enum ToolType
 
     // App lifecycle (Services/Tools/AppRestartToolModule)
     RestartApp,        // Close CluadeX and start it again (optionally from a new build)
+
+    // Desktop control (Services/Desktop — UI Automation + Win32, Windows only)
+    DesktopWindows,    // List top-level windows
+    DesktopScreenshot, // Capture a window or a screen region (PNG + image for vision models)
+    DesktopInspect,    // A window's UI Automation tree with element refs
+    DesktopFind,       // Elements matching a query, as refs
+    DesktopAct,        // invoke / select / toggle / expand / set_value / scroll / focus / click on a ref
+    DesktopType,       // Type text into the focused element (or a ref)
+    DesktopKeys,       // Press key chords
+    DesktopLaunch,     // Start a program and wait for its main window
+    DesktopWait,       // Wait until a window / element appears or disappears
 }
 
 /// <summary>
@@ -178,7 +189,8 @@ public class ToolCall
         or ToolType.ListSymbols or ToolType.FindSymbol
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
-        or ToolType.BrowserRead or ToolType.BrowserFind => true,
+        or ToolType.BrowserRead or ToolType.BrowserFind
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind => true,
         _ => false,
     };
 
@@ -196,7 +208,8 @@ public class ToolCall
         or ToolType.ListSymbols or ToolType.FindSymbol
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
-        or ToolType.BrowserRead or ToolType.BrowserFind => true,
+        or ToolType.BrowserRead or ToolType.BrowserFind
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind => true,
         _ => false,
     };
 }
