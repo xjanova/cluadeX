@@ -229,6 +229,7 @@ public sealed partial class UiStudioViewModel
         OnPropertyChanged(nameof(IsFlutterApp));
         OnPropertyChanged(nameof(ShowPalette));
         _store = null;
+        RefreshSampleInfo();
         _openWhenServing = null;
         StageCard = null;
         PagesSummary = "";

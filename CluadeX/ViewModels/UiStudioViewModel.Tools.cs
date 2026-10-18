@@ -49,9 +49,11 @@ public sealed partial class UiStudioViewModel
     private L10nText? _toolTr;
     /// <summary>Why the picked Text's translation can't be typed over (a key): a placeholder, a key no .arb has.</summary>
     private string? _toolTrNote;
-    /// <summary>The picked Text shows a parameter of its widget (<c>Text(label)</c> in class _Tag) and the use that drew
-    /// it passes a literal (<c>_Tag(label: 'ยอดขาย')</c>): that literal is what the text tool types over.</summary>
-    private sealed record ToolArg(string File, int Line, int Column, FlutterParamText Param, string Literal);
+    /// <summary>The picked Text shows a parameter of its widget (<c>Text(label)</c> in class _Tag) or of a helper function
+    /// (<c>Text(label)</c> in <c>Widget _row(String label)</c>) and the use that drew it passes a literal
+    /// (<c>_Tag(label: 'ยอดขาย')</c>, <c>_row('ชื่อ')</c>): that literal is what the text tool types over. Added: the use
+    /// leaves it out and its default literal shows — Enter writes the argument at that use.</summary>
+    private sealed record ToolArg(string File, int Line, int Column, FlutterParamText Param, string Literal, bool Added = false);
     private ToolArg? _toolArg;
     /// <summary>Why a text passed in through a parameter can't be typed over (already localized: it names the use).</summary>
     private string? _toolArgWhy;
@@ -82,7 +84,9 @@ public sealed partial class UiStudioViewModel
     /// widget's use), else why the text can't be typed over.</summary>
     public string ToolTextNote =>
         _toolTr is { } tr ? T("studio.fedit.text.arb", tr.Key, Path.GetFileName(tr.ArbPath)) + (tr.FromTemplate ? " " + T("studio.fedit.text.arbNew") : "")
-        : _toolArg is { } arg ? T("studio.fedit.text.param", Rel(arg.File) + ":" + arg.Line)
+        : _toolArg is { } arg ? (arg.Added ? T("studio.fedit.text.paramAdd", Rel(arg.File) + ":" + arg.Line)
+            : arg.Param.Helper is { } h ? T("studio.fedit.text.helperParam", h.Name, Rel(arg.File) + ":" + arg.Line)
+            : T("studio.fedit.text.param", Rel(arg.File) + ":" + arg.Line))
         : _tool is { CanText: false } t ? _toolArgWhy ?? ((_toolTrNote ?? t.TextNote) is { } k ? T(k) : "")
         : "";
     public bool HasToolTextNote => ToolTextNote.Length > 0;
@@ -211,7 +215,10 @@ public sealed partial class UiStudioViewModel
     /// <summary>The picked Text shows a parameter of its widget (<c>Text(label)</c> in class _Tag): follow it to the use
     /// that drew this one — on the real picture the _Tag box around the picked box says which call created it — and offer
     /// the literal that use passes (<c>_Tag(label: 'ยอดขาย')</c>). A text passed on from further up (<c>_Tag(label: title)</c>
-    /// inside _Section) is followed to where _Section is used; a translation there is typed over in its .arb file.</summary>
+    /// inside _Section) is followed to where _Section is used; a translation there is typed over in its .arb file. A
+    /// parameter of a helper function (<c>Text(label)</c> in <c>Widget _row(String label)</c>, in a function declared in
+    /// build) is followed to the call that drew it (<see cref="FlutterCodeEdit.HelperUse"/> says how calls are told
+    /// apart). A use that leaves the text out offers the default it shows, when that is a plain literal.</summary>
     private void ResolveUse(FlutterWidgetInfo? info)
     {
         _toolArg = null;
@@ -233,7 +240,7 @@ public sealed partial class UiStudioViewModel
         // (a few widgets deep at most: each one passes the text on to the next)
         for (int hop = 0; hop < 6; hop++)
         {
-            var use = UseOf(p, classFile, from, out var why);
+            var use = p.Helper != null ? HelperUseOf(p, classFile, from, out var why) : UseOf(p, classFile, from, out why);
             if (use == null) { _toolArgWhy = why; return; }
             string where = Rel(use.File) + ":" + use.Line;
             var arg = IsEditable(use.File) && ReadSource(use.File) is { } text
@@ -251,10 +258,14 @@ public sealed partial class UiStudioViewModel
                 case FlutterArgKind.PassedOn:
                     p = arg.PassedOn!;
                     classFile = use.File;
-                    from = use.Box;
+                    // the use's own box goes on (a helper's call has none: the box around it, else the one before)
+                    from = use.Box ?? from;
                     continue;
+                case FlutterArgKind.Default when arg.Literal != null && arg.Addable:
+                    _toolArg = new ToolArg(use.File, use.Line, use.Column, p, arg.Literal, Added: true);
+                    return;
                 case FlutterArgKind.Default:
-                    _toolArgWhy = T("studio.fedit.text.paramDefault", where);
+                    _toolArgWhy = T(arg.Literal != null ? "studio.fedit.text.paramGap" : "studio.fedit.text.paramDefault", where);
                     return;
                 case FlutterArgKind.Stale:
                     _toolArgWhy = T("studio.fedit.stale");
@@ -296,6 +307,25 @@ public sealed partial class UiStudioViewModel
         }
         if (found.Count == 1) return found[0];
         why = found.Count == 0 ? T("studio.fedit.text.paramNone") : T("studio.fedit.text.paramMany", found.Count);
+        return null;
+    }
+
+    /// <summary>The call of a helper function that drew the widget at <paramref name="from"/> (its box: the widget whose
+    /// argument holds that call, when the picture told it). Null, with the reason, when there is none or the calls
+    /// can't be told apart for certain.</summary>
+    private WidgetUse? HelperUseOf(FlutterParamText p, string file, WidgetBox? from, out string? why)
+    {
+        why = null;
+        string name = p.Helper!.Name;
+        if (!IsEditable(file) || ReadSource(file) is not { } text) { why = T("studio.fedit.text.data"); return null; }
+        var r = FlutterCodeEdit.HelperUse(text, file, p, _stageBoxes, from);
+        if (r.Line > 0) return new WidgetUse(file, r.Line, r.Column, r.Anchor);
+        why = r.Why switch
+        {
+            "none" => T("studio.fedit.text.helperNone", name),
+            "many" => T("studio.fedit.text.helperMany", name, r.Calls),
+            _ => T("studio.fedit.text.helperUnsure", name, r.Calls),
+        };
         return null;
     }
 
@@ -378,7 +408,13 @@ public sealed partial class UiStudioViewModel
             var at = SameFile(picked.File, edited) ? r.Map(picked.Line, picked.Column) : (picked.Line, picked.Column);
             var now = at is { } p ? SameBox(picked with { Line = p.Line, Column = p.Column }) : null;
             if (now == null) { StageBox = null; StageNode = null; return; }
-            if (!ReferenceEquals(now, _stageBox)) { StageBox = now; return; }
+            if (!ReferenceEquals(now, _stageBox))
+            {
+                if (!Equals(now, _stageBox)) { StageBox = now; return; }   // moved: the setter reads the tools again
+                // the same place and size: a record equals the old box, so the setter would change nothing — keep the
+                // list's own box (what tells a helper's calls apart looks it up there) and read the tools below
+                _stageBox = now;
+            }
         }
         RefreshTools();
     }
@@ -441,7 +477,13 @@ public sealed partial class UiStudioViewModel
         {
             // the same widget on the new picture (its new size and place) — the same use of a widget drawn twice
             var same = SameBox(cur);
-            if (same != null && !ReferenceEquals(same, cur)) { StageBox = same; return; }
+            // not drawn any more (a row of data with the sample data switched off): no mark left over other things
+            if (same == null && _stageBoxes.Count > 0) { StageBox = null; return; }
+            if (same != null && !ReferenceEquals(same, cur))
+            {
+                if (!Equals(same, cur)) { StageBox = same; return; }
+                _stageBox = same;   // drawn exactly as before (an equal record): the new picture's own box all the same
+            }
         }
         RefreshTools();
     }
@@ -637,7 +679,8 @@ public sealed partial class UiStudioViewModel
         return choice == 0;
     }
 
-    /// <summary>Set by a harness to answer the Studio's confirmations (delete a widget, undo every change) without a dialog.</summary>
+    /// <summary>Set by a harness to answer the Studio's confirmations (delete a widget, undo every change, write the AI's
+    /// sample values again, delete them) without a dialog.</summary>
     public bool? ToolConfirmOverride { get; set; }
 
     // ───────────────────────────── commands ─────────────────────────────
@@ -652,10 +695,14 @@ public sealed partial class UiStudioViewModel
         string v = ToolText;
         if (_toolArg is { } use)
         {
-            // written where the widget is used: only the literal that one use passes changes, and the Text stays picked
+            // written where the widget is used (the helper is called): only the literal that one use passes changes — or
+            // a use that left it out gets it — and the Text stays picked
+            string where = Rel(use.File) + ":" + use.Line;
             if (v != use.Literal)
                 RunTool("text", (t, l, c) => FlutterCodeEdit.SetArgText(t, l, c, use.Param, v, expect: use.Literal), (use.File, use.Line, use.Column), keepPick: true,
-                        done: T("studio.fedit.appliedParam", Rel(use.File) + ":" + use.Line));
+                        done: use.Added ? T("studio.fedit.appliedParamAdd", where)
+                            : use.Param.Helper is { } h ? T("studio.fedit.appliedHelper", h.Name, where)
+                            : T("studio.fedit.appliedParam", where));
             return;
         }
         if (_tool?.CanText != true || v == _tool.Text) return;

@@ -462,6 +462,481 @@ class _Badge extends StatelessWidget {
         }
     }
 
+    // ═══════════════════════════════════════════ text passed in through a helper function ═══════════════════════════════════════════
+
+    const string HelperHome = @"import 'package:flutter/material.dart';
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget line(String text) => Padding(
+          padding: const EdgeInsets.all(4),
+          child: Text(text),
+        );
+    return Scaffold(
+      appBar: AppBar(title: const Text('หน้าแรก')),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          line('บรรทัดแรก'),
+          line('บรรทัดที่สอง'),
+          line('บรรทัดที่สาม'),
+          Row(children: [_cell('ซ้าย'), _cell('ขวา')]),
+          const _Mood(),
+          const _Mood(mood: 'ดีใจ'),
+        ],
+      ),
+    );
+  }
+
+  Widget _cell(String label) => Padding(padding: const EdgeInsets.all(4), child: Text(label));
+}
+
+class _Mood extends StatelessWidget {
+  const _Mood({this.mood = 'ปกติ'});
+
+  final String mood;
+
+  @override
+  Widget build(BuildContext context) => Text(mood);
+}
+";
+
+    /// <summary>Text a helper function gets through its parameter, and a widget's default, on a REAL Flutter app (the
+    /// flutter-real fixture): a function declared in build called three times in one Column and a method called twice in
+    /// one Row draw their Text from one line each — the boxes carry the widget tree, and picking any of those Texts
+    /// offers the literal THAT call passes and says where it is written. Enter changes only that call, the Text stays
+    /// picked, Flutter draws again — that call's box gets wider, the others don't — and Undo puts it back. A widget used
+    /// without its text shows its default; typing over it adds the argument at that use only (the const stays).</summary>
+    static async Task FlutterHelpers(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## Text passed in through a helper function, and a widget's default, typed over at the call that drew it");
+        string root = Path.Combine(fx, "flutter-real");
+        if (!File.Exists(Path.Combine(root, ".dart_tool", "package_config.json"))) { Log("  (skipped: the real Flutter fixture is not set up)"); return; }
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("flutter.bat");
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("dart.bat");
+        vm.RenderConsentOverride = true;
+        vm.ToolConfirmOverride = true;
+        string home = Path.Combine(root, "lib", "home_screen.dart");
+        int lineText = LineOf(HelperHome, "child: Text(text)"), cellText = LineOf(HelperHome, "child: Text(label)"), moodText = LineOf(HelperHome, "=> Text(mood)");
+        int call2 = LineOf(HelperHome, "line('บรรทัดที่สอง')"), rowLine = LineOf(HelperHome, "Row(children: [_cell("), mood1 = LineOf(HelperHome, "const _Mood(),");
+        List<WidgetBox> Texts(int line) => vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == line && b.File.EndsWith("home_screen.dart", StringComparison.OrdinalIgnoreCase))
+                                                        .OrderBy(b => b.Y).ThenBy(b => b.X).ToList();
+        string W0(List<WidgetBox> l, int i) => l.Count > i ? l[i].W.ToString("0") : "-";
+        try
+        {
+            await WaitUntil(() => !vm.IsRendering, 120000);
+            var store = (PageShotStore)GetField(vm, "_store")!;
+            var card = Card(vm, "/")!;
+            File.WriteAllText(home, HelperHome);
+            DateTime t0 = DateTime.UtcNow;
+            vm.OpenCardCommand.Execute(card);
+            vm.RenderStageCommand.Execute(null);
+            bool drawn = await Redrawn(vm, store, card.Page.Id, t0);
+            // (the watcher's own redraw of the saved file may follow: let it end)
+            await Idle(1800);
+            await WaitUntil(() => !vm.IsRendering, 240000);
+            var lines = Texts(lineText);
+            var cells = Texts(cellText);
+            var moods = Texts(moodText);
+            Check("helpers: a function declared in build draws its Text three times, a method twice — one line of code each",
+                  drawn && lines.Count == 3 && cells.Count == 2 && moods.Count == 2, $"{drawn} {vm.CompileError} · {lines.Count} {cells.Count} {moods.Count}");
+            if (lines.Count != 3 || cells.Count != 2 || moods.Count != 2) return;
+            Check("helpers: every box knows the box around it (the renderer records Flutter's widget tree)",
+                  vm.StageBoxes.All(b => b.Id >= 0) && lines.All(b => b.Parent >= 0) && lines.Select(b => b.Parent).Distinct().Count() == 3,
+                  string.Join(", ", lines.Select(b => $"{b.Id}<{b.Parent}")));
+
+            // ── each call offers its own text ──
+            vm.PickStageBox(lines[1], open: false);
+            Check("helpers: the second line() call's Text offers what that call passes", vm.HasTools && vm.CanToolText && vm.ToolText == "บรรทัดที่สอง",
+                  $"can={vm.CanToolText} '{vm.ToolText}' '{vm.ToolTextNote}'");
+            Check("helpers: it says the text is set where line() is called (file:line)", vm.ToolTextNote == T(vm, "studio.fedit.text.helperParam", "line", $"lib/home_screen.dart:{call2}"), vm.ToolTextNote);
+            await Idle(300);
+            SavePng(MainWin.Content as FrameworkElement ?? view, "studio-helpers.png");
+            vm.PickStageBox(lines[2], open: false);
+            Check("helpers: the third call's Text offers its own text", vm.CanToolText && vm.ToolText == "บรรทัดที่สาม", $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            vm.PickStageBox(cells[1], open: false);
+            Check("helpers: a method called twice in one Row — the right-hand call's text", vm.CanToolText && vm.ToolText == "ขวา" && vm.ToolTextNote.Contains($"lib/home_screen.dart:{rowLine}"),
+                  $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            vm.PickStageBox(moods[0], open: false);
+            Check("default: a use that leaves the text out offers the widget's default", vm.CanToolText && vm.ToolText == "ปกติ", $"can={vm.CanToolText} '{vm.ToolText}' '{vm.ToolTextNote}'");
+            Check("default: it says Enter adds it at that use", vm.ToolTextNote == T(vm, "studio.fedit.text.paramAdd", $"lib/home_screen.dart:{mood1}"), vm.ToolTextNote);
+            vm.PickStageBox(moods[1], open: false);
+            Check("default: … the use that passes one offers that", vm.CanToolText && vm.ToolText == "ดีใจ", vm.ToolText);
+
+            // ── typing over the second call ──
+            vm.PickStageBox(Texts(lineText)[1], open: false);
+            double w0 = Texts(lineText)[0].W, w1 = Texts(lineText)[1].W, w2 = Texts(lineText)[2].W;
+            string longer = "บรรทัดที่สองที่ยาวขึ้นอีกหลายคำ";
+            vm.ToolText = longer;
+            DateTime t1 = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("helpers: only that call's literal changed", File.ReadAllText(home) == HelperHome.Replace("line('บรรทัดที่สอง')", $"line('{longer}')"), FirstLine(home, "line('บรรทัดที่ส"));
+            Check("helpers: the Text stays picked, showing what was written", vm.StageBox?.Line == lineText && vm.CanToolText && vm.ToolText == longer,
+                  $"{vm.StageBox?.Widget}:{vm.StageBox?.Line} '{vm.ToolText}'");
+            Check("helpers: the change joins the review round", vm.HasSession && vm.SessionReview, vm.SessionText);
+            // typed again at once, before Flutter has drawn it: the tools read the call again (not refused as changed meanwhile)
+            string longest = longer + "จริงๆ";
+            vm.ToolText = longest;
+            DateTime t1b = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("helpers: a second change before the picture is drawn again is written too", File.ReadAllText(home) == HelperHome.Replace("line('บรรทัดที่สอง')", $"line('{longest}')"),
+                  $"{FirstLine(home, "line('บรรทัดที่ส")} · {vm.StatusText}");
+            drawn = await Redrawn(vm, store, card.Page.Id, t1b);
+            await WaitUntil(() => !vm.IsRendering, 240000);
+            var after = Texts(lineText);
+            Check("helpers: drawn again — that call's text is wider, the other two are as they were",
+                  drawn && after.Count == 3 && after[1].W > w1 + 40 && Math.Abs(after[0].W - w0) < 1 && Math.Abs(after[2].W - w2) < 1,
+                  $"{w0:0}/{w1:0}/{w2:0} → {W0(after, 0)}/{W0(after, 1)}/{W0(after, 2)} {vm.CompileError}");
+            Check("helpers: the same call's Text stays picked on the new picture", after.Count == 3 && ReferenceEquals(vm.StageBox, after[1]) && vm.ToolText == longest,
+                  $"picked y={vm.StageBox?.Y:0} '{vm.ToolText}'");
+            SavePng((FrameworkElement)view.FindName("Stage"), "stage-helpers.png");
+
+            vm.UndoCommand.Execute(null);
+            Check("undo: one step back — the first change", File.ReadAllText(home) == HelperHome.Replace("line('บรรทัดที่สอง')", $"line('{longer}')"), FirstLine(home, "line('บรรทัดที่ส"));
+            DateTime t2 = DateTime.UtcNow;
+            vm.UndoCommand.Execute(null);
+            Check("undo: the call's literal is back", File.ReadAllText(home) == HelperHome);
+            drawn = await Redrawn(vm, store, card.Page.Id, t2);
+            var back = Texts(lineText);
+            Check("undo: drawn again — the second line is as narrow as before", drawn && back.Count == 3 && Math.Abs(back[1].W - w1) < 1, $"{w1:0} → {W0(back, 1)}");
+
+            // ── a default: typing over it adds the argument at that use ──
+            vm.PickStageBox(Texts(moodText)[0], open: false);
+            double m0 = Texts(moodText)[0].W, m1 = Texts(moodText)[1].W;
+            string mood = "อารมณ์ดีมากเป็นพิเศษวันนี้";
+            vm.ToolText = mood;
+            DateTime t3 = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("default: the argument is added at that use only — the const stays", File.ReadAllText(home) == HelperHome.Replace("const _Mood(),", $"const _Mood(mood: '{mood}'),"),
+                  FirstLine(home, "const _Mood("));
+            Check("default: the Text stays picked, its use now passing what was written", vm.CanToolText && vm.ToolText == mood && vm.ToolTextNote == T(vm, "studio.fedit.text.param", $"lib/home_screen.dart:{mood1}"),
+                  $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            drawn = await Redrawn(vm, store, card.Page.Id, t3);
+            var moodsAfter = Texts(moodText);
+            Check("default: drawn again — that use's text is wider, the other use's isn't", drawn && moodsAfter.Count == 2 && moodsAfter[0].W > m0 + 40 && Math.Abs(moodsAfter[1].W - m1) < 1,
+                  $"{m0:0}/{m1:0} → {W0(moodsAfter, 0)}/{W0(moodsAfter, 1)} {vm.CompileError}");
+            DateTime t4 = DateTime.UtcNow;
+            vm.UndoCommand.Execute(null);
+            Check("undo: the use leaves it out again", File.ReadAllText(home) == HelperHome);
+            drawn = await Redrawn(vm, store, card.Page.Id, t4);
+            var moodsBack = Texts(moodText);
+            Check("undo: drawn again with the default", drawn && moodsBack.Count == 2 && Math.Abs(moodsBack[0].W - m0) < 1, $"{m0:0} → {W0(moodsBack, 0)}");
+            vm.UndoAllCommand.Execute(null);
+            Check("round: undo all ends it with the screen as it began", !vm.HasSession && File.ReadAllText(home) == HelperHome, vm.SessionText);
+        }
+        finally
+        {
+            vm.RenderConsentOverride = null;
+            vm.ToolConfirmOverride = null;
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
+        }
+    }
+
+    // ═══════════════════════════════════════════ a screen that loads data ═══════════════════════════════════════════
+
+    const string ShopApiDart = @"import 'dart:convert';
+import 'dart:io';
+
+Map<String, dynamic> _m(dynamic v) => v is Map ? v.cast<String, dynamic>() : const {};
+
+/// The app's client: GETs a path and gives back what the reply's envelope carries ({ success, data }).
+class Api {
+  Api(this.base);
+  final String base;
+
+  Future<dynamic> get(String path) async {
+    final client = HttpClient();
+    final req = await client.getUrl(Uri.parse('$base$path'));
+    final res = await req.close();
+    final body = _m(json.decode(await res.transform(utf8.decoder).join()));
+    if (res.statusCode != 200 || body['success'] != true) {
+      throw Exception('โหลดไม่สำเร็จ (${res.statusCode})');
+    }
+    return body['data'];
+  }
+}
+
+class ShopStats {
+  const ShopStats(this.orders, this.revenue, this.items);
+  final int orders;
+  final double revenue;
+  final List<ShopItem> items;
+
+  factory ShopStats.fromJson(Map<String, dynamic> j) => ShopStats(
+        (j['orders_count'] as num? ?? 0).toInt(),
+        (j['revenue_thb'] as num? ?? 0).toDouble(),
+        [for (final e in (j['items'] as List? ?? const [])) ShopItem.fromJson(_m(e))],
+      );
+}
+
+class ShopItem {
+  const ShopItem(this.title, this.sold);
+  final String title;
+  final int sold;
+
+  factory ShopItem.fromJson(Map<String, dynamic> j) => ShopItem(j['title'] as String? ?? '', (j['sold'] as num? ?? 0).toInt());
+}
+
+class ShopRepository {
+  final _api = Api('https://shop.example.test/api');
+
+  Future<ShopStats> stats() async {
+    final data = await _api.get('/shop/stats');
+    return ShopStats.fromJson(_m(data));
+  }
+}
+";
+
+    const string ShopScreenDart = @"import 'package:flutter/material.dart';
+import 'shop_api.dart';
+
+class ShopScreen extends StatefulWidget {
+  const ShopScreen({super.key});
+
+  @override
+  State<ShopScreen> createState() => _ShopScreenState();
+}
+
+class _ShopScreenState extends State<ShopScreen> {
+  late final Future<ShopStats> _stats = ShopRepository().stats();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget line(String label, String value) => Padding(
+          padding: const EdgeInsets.all(4),
+          child: Row(children: [Text(label), const SizedBox(width: 8), Text(value)]),
+        );
+    return Scaffold(
+      appBar: AppBar(title: const Text('ร้านค้า')),
+      body: FutureBuilder<ShopStats>(
+        future: _stats,
+        builder: (context, snap) {
+          if (snap.hasError) return Center(child: Text('${snap.error}'));
+          final s = snap.data;
+          if (s == null) return const Center(child: Text('กำลังโหลด'));
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              line('ออเดอร์', '${s.orders}'),
+              line('ยอดขาย', s.revenue.toStringAsFixed(2)),
+              for (final it in s.items) Text(it.title),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+";
+
+    /// <summary>A screen that loads its data over HTTP — through the app's own client and envelope, the way
+    /// thaipromptadminapp does — drawn for real: the renderer feeds the request the sample reply read from the app's
+    /// code (sample_data.json beside the generated test), so the screen draws its loaded state (a row per sample item,
+    /// the amounts) instead of its error; the card says it was drawn with sample data; and a helper's text on it can be
+    /// picked and typed over like any other.</summary>
+    static async Task FlutterSampleScreens(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## A screen that loads data, drawn with sample replies read from the app's own code");
+        string? flutter = FlutterRenderer.FindFlutter();
+        if (flutter == null) { Log("  (skipped: Flutter is not installed on this PC)"); return; }
+        string root = Path.Combine(fx, "flutter-data");
+        W(root, "pubspec.yaml", "name: cxdata\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\ndependencies:\n  flutter:\n    sdk: flutter\ndev_dependencies:\n  flutter_test:\n    sdk: flutter\nflutter:\n  uses-material-design: true\n");
+        W(root, "lib/main.dart", "import 'package:flutter/material.dart';\nimport 'shop_screen.dart';\n\nvoid main() => runApp(const MaterialApp(home: ShopScreen()));\n");
+        W(root, "lib/shop_api.dart", ShopApiDart);
+        W(root, "lib/shop_screen.dart", ShopScreenDart);
+        var pub = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/d /s /c \"\"{flutter}\" pub get --offline\"")
+        { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var pubOut = pub.StandardOutput.ReadToEndAsync();
+        var pubErr = pub.StandardError.ReadToEndAsync();
+        await pub.WaitForExitAsync();
+        if (pub.ExitCode != 0 || !File.Exists(Path.Combine(root, ".dart_tool", "package_config.json")))
+        {
+            Log("  (skipped: `flutter pub get --offline` could not resolve the SDK's packages from the cache) " + (await pubErr).Trim().Split('\n').LastOrDefault());
+            return;
+        }
+        _ = await pubOut;
+
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("flutter.bat");
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("dart.bat");
+        vm.RenderConsentOverride = true;
+        vm.ToolConfirmOverride = true;
+        int titleLine = LineOf(ShopScreenDart, "Text(it.title)"), errorLine = LineOf(ShopScreenDart, "Text('${snap.error}')"), labelLine = LineOf(ShopScreenDart, "Row(children: [Text(label)");
+        int revenueCall = LineOf(ShopScreenDart, "line('ยอดขาย'");
+        // (Text(label) and Text(value) share that line: the label's column tells them apart)
+        int at = ShopScreenDart.IndexOf("[Text(label)", StringComparison.Ordinal) + 1;
+        int labelCol = at - ShopScreenDart.LastIndexOf('\n', at);
+        try
+        {
+            vm.OpenProject(root, autoStart: true);
+            bool drawn = await WaitUntil(() => Cards(vm).Count == 1 && Cards(vm).All(c => c.State == "done" && c.HasThumb), 300000);
+            Check("sample: Flutter draws the data screen", drawn, string.Join(", ", Cards(vm).Select(c => $"{c.Page.Detail}:{c.State} '{c.StateText}'")) + (vm.CompileError != null ? " COMPILE " + vm.CompileError : ""));
+            if (!drawn) return;
+            var card = Cards(vm)[0];
+            string samples = Path.Combine(root, ".dart_tool", "cluadex_studio", FlutterSampleData.FileName);
+            string fed = File.Exists(samples) ? File.ReadAllText(samples) : "";
+            Check("sample: the reply for /shop/stats was read from the app's code, in its envelope, beside the generated test",
+                  fed.Contains("\"pattern\":\"(^|/)shop/stats/?$\"", StringComparison.Ordinal) && fed.Contains("\"success\":true", StringComparison.Ordinal) && fed.Contains("\"items\":[", StringComparison.Ordinal),
+                  fed.Length > 400 ? fed[..400] : fed);
+            Check("sample: the card says the screen was drawn with sample data", card.StateText.Contains(T(vm, "studio.render.drawnSample", "", 1).Split('·')[1].Trim(), StringComparison.Ordinal), card.StateText);
+            vm.OpenCardCommand.Execute(card);
+            await Idle(400);
+            var titles = vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == titleLine).ToList();
+            Check("sample: the screen drew its loaded state — a row for each of the three sample items", titles.Count == 3,
+                  $"{titles.Count} · " + string.Join(", ", vm.StageBoxes.Where(b => b.File.EndsWith("shop_screen.dart", StringComparison.OrdinalIgnoreCase)).Select(b => $"{b.Widget}:{b.Line}")));
+            Check("sample: … not its error", !vm.StageBoxes.Any(b => b.Line == errorLine && b.File.EndsWith("shop_screen.dart", StringComparison.OrdinalIgnoreCase)));
+            var store = (PageShotStore)GetField(vm, "_store")!;
+            string side = store.ReadSidecar(store.Get(card.Page.Id, "app")!) ?? "";
+            Check("sample: the screen's request was answered (kept with the picture)", side.Contains("\"GET /api/shop/stats\"", StringComparison.Ordinal), side.Length > 300 ? side[^300..] : side);
+            await Idle(300);
+            SavePng((FrameworkElement)view.FindName("Stage"), "stage-sample.png");
+
+            // a helper's text on a data screen is picked and offered like any other
+            var labels = vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == labelLine && b.Column == labelCol).OrderBy(b => b.Y).ToList();
+            if (labels.Count == 2)
+            {
+                vm.PickStageBox(labels[1], open: false);
+                Check("sample: a helper's label on the data screen offers what its call passes", vm.CanToolText && vm.ToolText == "ยอดขาย" && vm.ToolTextNote.Contains($"lib/shop_screen.dart:{revenueCall}"),
+                      $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            }
+            else Check("sample: the helper drew its two labels", false, $"{labels.Count}");
+
+            await SampleSwitchAndAi(vm, view, root, card, store, samples, titleLine, errorLine);
+        }
+        finally
+        {
+            vm.RenderConsentOverride = null;
+            vm.ToolConfirmOverride = null;
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
+        }
+    }
+
+    /// <summary>The owner's control over the sample data, on the same real data screen: the stage's switch
+    /// ("ข้อมูลตัวอย่าง: เปิด/ปิด", kept in the project's PageShotStore state) — off draws the screen's error text, on its
+    /// rows again; then "ให้ AI ทำข้อมูลให้สมจริง" with a scripted AI: it gets the requests, their models' files and the
+    /// sample replies, writes realistic Thai values into the Studio's own store (never the app), and the screen is drawn
+    /// again with them merged in (four rows, the AI's titles); asked again it asks first; and the AI's values can be
+    /// deleted (asked first) to draw the made-up ones again.</summary>
+    static async Task SampleSwitchAndAi(UiStudioViewModel vm, UiStudioView view, string root, PageCard card, PageShotStore store, string samples, int titleLine, int errorLine)
+    {
+        var stage = (FrameworkElement)view.FindName("Stage");
+        bool Screen(string file) => file.EndsWith("shop_screen.dart", StringComparison.OrdinalIgnoreCase);
+        int Rows() => vm.StageBoxes.Count(b => b.Widget == "Text" && b.Line == titleLine && Screen(b.File));
+        bool ErrorShown() => vm.StageBoxes.Any(b => b.Line == errorLine && Screen(b.File));
+
+        // ── the switch ──
+        Check("switch: the sample-data bar shows for an app whose code makes requests — on by default",
+              await WaitUntil(() => vm.ShowSampleBar, 30000) && vm.SampleDataOn && vm.SampleRequestCount == 1 && !store.State.SampleDataOff, $"{vm.ShowSampleBar} {vm.SampleRequestCount}");
+        await Idle(200);
+        var bar = (FrameworkElement)view.FindName("SampleBar");
+        var texts = Find<System.Windows.Controls.TextBlock>(bar).Select(t => t.Text).ToList();
+        Check("switch: the bar reads ข้อมูลตัวอย่าง: เปิด | ปิด, with the AI's button and what the requests get, in Thai",
+              bar.IsVisible && texts.Contains("ข้อมูลตัวอย่าง:") && texts.Contains("เปิด") && texts.Contains("ปิด") && texts.Contains("ให้ AI ทำข้อมูลให้สมจริง") && texts.Contains("ตอบ 1 คำขอด้วยข้อมูลตัวอย่าง"),
+              string.Join(" | ", texts));
+        var radios = Find<System.Windows.Controls.RadioButton>(bar).ToList();
+        if (radios.Count != 2) { Check("switch: two segments", false, $"{radios.Count}"); return; }
+        // (the helper's label picked above is a row of data: it won't be on the error screen)
+        var picked = vm.StageBox;
+        DateTime t1 = DateTime.UtcNow;
+        radios[1].IsChecked = true;   // the ปิด segment, as a click sets it
+        Check("switch: ปิด turns it off — kept in the project's PageShotStore state",
+              !vm.SampleDataOn && store.State.SampleDataOff && File.ReadAllText(Path.Combine(store.Folder, "index.json")).Contains("\"SampleDataOff\":true", StringComparison.Ordinal));
+        bool drawn = await Redrawn(vm, store, card.Page.Id, t1);
+        await Idle(300);
+        string fed = File.Exists(samples) ? File.ReadAllText(samples) : "";
+        Check("switch: off — the screen is drawn again, the generated test is given no sample reply", drawn && fed == "[]", fed.Length > 120 ? fed[..120] : fed);
+        Check("switch: off — the screen draws its error text, no sample row", ErrorShown() && Rows() == 0,
+              string.Join(", ", vm.StageBoxes.Where(b => Screen(b.File)).Select(b => $"{b.Widget}:{b.Line}")));
+        Check("switch: off — the label picked on the data rows isn't drawn now: no pick is left marking another place", picked != null && vm.StageBox == null && !vm.HasTools,
+              $"{picked?.Widget}:{picked?.Line} → {vm.StageBox?.Widget}:{vm.StageBox?.Line}");
+        string side = store.ReadSidecar(store.Get(card.Page.Id, "app")!) ?? "";
+        Check("switch: off — the request went unanswered; the card and the note under the stage say sample data is off",
+              side.Contains("\"GET /api/shop/stats -\"", StringComparison.Ordinal) && side.Contains("\"samples\":\"off\"", StringComparison.Ordinal)
+              && card.StateText.Contains("ปิดข้อมูลตัวอย่าง", StringComparison.Ordinal) && Find<System.Windows.Controls.TextBlock>(stage).Any(t => t.Text == T(vm, "studio.render.realNoteNoSample"))
+              && vm.SampleSummary == T(vm, "studio.samples.summaryOff") && radios[1].IsChecked == true && radios[0].IsChecked == false,
+              $"'{card.StateText}' · {(side.Length > 200 ? side[^200..] : side)}");
+        SavePng(stage, "stage-sample-off.png");
+        Check("switch: the AI's button waits while sample data is off", !vm.MakeSamplesRealCommand.CanExecute(null));
+
+        DateTime t2 = DateTime.UtcNow;
+        vm.SampleDataOn = true;
+        drawn = await Redrawn(vm, store, card.Page.Id, t2);
+        await Idle(300);
+        Check("switch: on — drawn again with the three sample rows, no error text", drawn && Rows() == 3 && !ErrorShown() && !store.State.SampleDataOff && radios[0].IsChecked == true,
+              $"{Rows()} rows, error={ErrorShown()}");
+
+        // ── realistic values by the AI (a scripted stand-in: it writes the file the way the chat's AI would) ──
+        var ai = new ScriptedAi();
+        var chatAi = vm.StudioAi;
+        vm.StudioAi = ai;
+        string apiFile = Path.Combine(root, "lib", "shop_api.dart"), screenFile = Path.Combine(root, "lib", "shop_screen.dart");
+        string api = File.ReadAllText(apiFile), screen = File.ReadAllText(screenFile);
+        string? wrote = null;
+        try
+        {
+            ai.Script = async p =>
+            {
+                await Task.Delay(800);
+                wrote = System.Text.RegularExpressions.Regex.Match(p, @"Write exactly one file: (?<f>[^\r\n]+)").Groups["f"].Value.Trim();
+                File.WriteAllText(wrote, "{\n  \"GET /shop/stats\": {\"data\": {\"orders_count\": 48, \"revenue_thb\": 15890, \"items\": [" +
+                                         "{\"title\": \"ข้าวมันไก่ตอน\", \"sold\": 31}, {\"title\": \"ชาไทยเย็น\", \"sold\": 27}, {\"title\": \"ขนมครก\", \"sold\": 12}, {\"title\": \"ผัดไทยกุ้งสด\", \"sold\": \"สิบ\"}]}}\n}\n");
+                await Task.Delay(400);
+            };
+            Check("ai: the button is ready — sample data on, a request to make realistic", vm.MakeSamplesRealCommand.CanExecute(null));
+            DateTime t3 = DateTime.UtcNow;
+            vm.MakeSamplesRealCommand.Execute(null);
+            await WaitUntil(() => ai.Prompts.Count > 0, 20000);
+            string prompt = ai.Prompts.LastOrDefault() ?? "";
+            Check("ai: the AI gets the requests, their models' files, the sample replies and the one file to write — in the Studio's store",
+                  prompt.Contains("[UI Studio — sample data]", StringComparison.Ordinal) && prompt.Contains("- GET /shop/stats → ShopStats · lib/shop_api.dart · lib/shop_api.dart:", StringComparison.Ordinal)
+                  && prompt.Contains("\"GET /shop/stats\": {\"success\":true,\"data\":{\"orders_count\":12,", StringComparison.Ordinal)
+                  && prompt.Contains("Write exactly one file: " + store.SampleOverridesPath, StringComparison.Ordinal) && prompt.Contains("Do not create or change any file of the app", StringComparison.Ordinal),
+                  Clip(prompt));
+            Check("ai: the stage says the AI is writing the sample data", vm.AiWorking && vm.IsMakingSamples && vm.SessionText == T(vm, "studio.samples.working") && vm.SampleSummary == T(vm, "studio.samples.working"),
+                  $"{vm.AiWorking} {vm.IsMakingSamples} '{vm.SessionText}'");
+            bool done = await WaitUntil(() => vm.SampleOverrideCount == 1 && !vm.IsMakingSamples, 60000);
+            Check("ai: when it is done the file is checked — one request made realistic, one value of another kind kept its sample",
+                  done && vm.StatusText == T(vm, "studio.samples.doneKept", 1, 1) && vm.HasSampleOverrides, $"{vm.SampleOverrideCount} '{vm.StatusText}'");
+            Check("ai: the file is in the Studio's own store, not in the app",
+                  wrote == store.SampleOverridesPath && File.Exists(wrote) && !wrote!.StartsWith(root, StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(root, PageShotStore.SampleOverridesFile)), wrote ?? "(none)");
+            drawn = await Redrawn(vm, store, card.Page.Id, t3);
+            await Idle(300);
+            fed = File.Exists(samples) ? File.ReadAllText(samples) : "";
+            Check("ai: drawn again with the AI's values merged in — four rows now", drawn && Rows() == 4, $"{Rows()} rows");
+            Check("ai: what the test fed is the merged reply — the AI's Thai titles, the whole amount as a fraction, the word for a number left out",
+                  fed.Contains("ข้าวมันไก่ตอน", StringComparison.Ordinal) && fed.Contains("\"revenue_thb\":15890.0", StringComparison.Ordinal) && !fed.Contains("สิบ", StringComparison.Ordinal)
+                  && fed.Contains("\"sold\":22", StringComparison.Ordinal), fed.Length > 400 ? fed[..400] : fed);
+            Check("ai: the bar counts the AI's values; the card still says sample data",
+                  vm.SampleSummary == T(vm, "studio.samples.summaryAi", 1, 1) && card.StateText.Contains("ใช้ข้อมูลตัวอย่าง", StringComparison.Ordinal), $"'{vm.SampleSummary}' '{card.StateText}'");
+            Check("ai: the app's files are untouched and no round is left to review", File.ReadAllText(apiFile) == api && File.ReadAllText(screenFile) == screen && !vm.HasSession && !vm.ShowSessionBar);
+            SavePng(stage, "stage-sample-ai.png");
+            SavePng(MainWin.Content as FrameworkElement ?? view, "studio-sample-ai.png");
+
+            // asked again: the AI's values are there — it asks before they are written over
+            vm.ToolConfirmOverride = false;
+            int asked = ai.Prompts.Count;
+            vm.MakeSamplesRealCommand.Execute(null);
+            await Idle(1500);
+            Check("ai: asked again it asks first — declined, nothing goes to the AI", ai.Prompts.Count == asked && File.Exists(store.SampleOverridesPath));
+
+            // back to the made-up values: asked first, then the file goes and the screen is drawn again
+            vm.ClearSampleOverridesCommand.Execute(null);
+            Check("clear: declined — the AI's values stay", File.Exists(store.SampleOverridesPath) && vm.HasSampleOverrides);
+            vm.ToolConfirmOverride = true;
+            DateTime t4 = DateTime.UtcNow;
+            vm.ClearSampleOverridesCommand.Execute(null);
+            Check("clear: confirmed — the AI's file is deleted", !File.Exists(store.SampleOverridesPath) && !vm.HasSampleOverrides && vm.StatusText == T(vm, "studio.samples.cleared"));
+            drawn = await Redrawn(vm, store, card.Page.Id, t4);
+            await Idle(300);
+            Check("clear: drawn again with the made-up values — three rows", drawn && Rows() == 3 && vm.SampleOverrideCount == 0, $"{Rows()} rows");
+        }
+        finally { vm.StudioAi = chatAi; }
+    }
+
     // ═══════════════════════════════════════════ translated text ═══════════════════════════════════════════
 
     const string L10nThArb = "{\n  \"@@locale\": \"th\",\n  \"welcome\": \"ยินดีต้อนรับสู่แอปพลิเคชันของเรา\",\n  \"@welcome\": { \"description\": \"The greeting on the home screen\" },\n\n" +

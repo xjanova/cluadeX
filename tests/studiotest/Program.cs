@@ -99,8 +99,15 @@ internal static partial class Program
                 Console.WriteLine($"  {pg.Route ?? pg.Detail,-28} {(s.PngPath != null ? "png" : "---")} boxes={s.Boxes.Count,4} noise={s.Noise,3} {s.Skipped}{(s.Problems.Count > 0 ? " PROBLEMS: " + string.Join(" | ", s.Problems.Take(3)) : "")}");
             return run.Ok ? 0 : 1;
         }
-        // studiotest texts <flutter folder> — every Text that shows a parameter of its widget and what each use passes (read-only).
+        // studiotest texts <flutter folder> — every Text that shows a parameter of its widget or of a helper function, and what each
+        // use / call passes (read-only).
         if (args.Length == 2 && args[0] == "texts") return ParamReport(args[1]);
+        // studiotest picks <flutter folder> <out folder> [route…] — draw the screens for real (as `render` does), then for every
+        // Text drawn from a helper function's parameter, the call the text tool would type over, told from the real boxes.
+        if (args.Length >= 3 && args[0] == "picks") return HelperPickReport(args[1], args[2], args.Skip(3).ToHashSet());
+        // studiotest samples <flutter folder> [path filter] — the sample replies the renderer feeds the app's requests, read from
+        // its code (read-only): each request, what its reply is read into, and the reply.
+        if (args.Length >= 2 && args[0] == "samples") return SampleReport(args[1], args.Length > 2 ? args[2] : null);
         // studiotest tree <app folder> <route or class> — print one screen's wireframe blocks (to see what the sketch read).
         if (args.Length == 3 && args[0] == "tree")
         {
@@ -171,6 +178,8 @@ internal static partial class Program
             FlutterScreens(temp);
             FlutterEdits(temp);
             ArbEdits(temp);
+            SampleDatas(temp);
+            SampleOverrides(temp);
             WpfViews(temp);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }

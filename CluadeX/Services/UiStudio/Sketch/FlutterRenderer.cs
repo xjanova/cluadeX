@@ -7,8 +7,10 @@ using CluadeX.Services.UiStudio.Pages;
 
 namespace CluadeX.Services.UiStudio.Sketch;
 
-/// <summary>Where one widget written in the project sits on a rendered screen (logical pixels).</summary>
-public sealed record WidgetBox(string Widget, string File, int Line, int Column, double X, double Y, double W, double H, int Depth);
+/// <summary>Where one widget written in the project sits on a rendered screen (logical pixels). <see cref="Id"/> is its
+/// place in the renderer's list, <see cref="Parent"/> the Id of the nearest box around it in Flutter's widget tree (-1:
+/// none); both are -1 in a picture taken before they were recorded.</summary>
+public sealed record WidgetBox(string Widget, string File, int Line, int Column, double X, double Y, double W, double H, int Depth, int Id = -1, int Parent = -1);
 
 /// <summary>One screen as Flutter drew it.</summary>
 public sealed class ScreenRender
@@ -24,6 +26,9 @@ public sealed class ScreenRender
     /// <summary>Why it was not drawn at all (a constructor value the renderer can't make up).</summary>
     public string? Skipped { get; set; }
     public long Millis { get; set; }
+    /// <summary>The requests the screen made while it was drawn ("GET /api/admin/ops/summary"; a trailing " -" when no
+    /// sample reply answered it).</summary>
+    public List<string> Requests { get; } = new();
 }
 
 /// <summary>One finding of `dart analyze` (Severity: ERROR, WARNING or INFO; Code: the analyzer's, e.g. UNDEFINED_IDENTIFIER).</summary>
@@ -46,6 +51,8 @@ public sealed class RenderRun
     /// <summary>A reason it did not run (no Flutter SDK, refused by the safety check, dry-run).</summary>
     public string? Error { get; set; }
     public TimeSpan Took { get; set; }
+    /// <summary>The app's requests the screens were fed sample replies for (read from its code).</summary>
+    public int SampleReplies { get; set; }
 }
 
 /// <summary>
@@ -53,9 +60,10 @@ public sealed class RenderRun
 /// <c>.dart_tool/cluadex_studio/</c>, never in the sources) pumps each screen inside the app's own theme,
 /// translations and router, then saves a PNG and the place of every widget the project wrote (file:line:column from
 /// the widget inspector, the same data DevTools uses) — so a click on the picture opens the exact line.
-/// It runs under <c>flutter test</c>: no device, no window, and no network (the test binding answers every HTTP
-/// request with 400 and this renderer answers every plugin call with an empty reply), so nothing the app does while
-/// drawing reaches a server or the phone's storage.
+/// It runs under <c>flutter test</c>: no device, no window, and no network — every HTTP request is answered inside the
+/// test (with a sample reply read from the app's own code, <see cref="FlutterSampleData"/>, so a screen that loads data
+/// draws it; anything else — everything, when the owner switches sample data off — with 400), and every plugin call
+/// with an empty reply — so nothing the app does while drawing reaches a server or the phone's storage.
 /// </summary>
 public static class FlutterRenderer
 {
@@ -199,11 +207,11 @@ public static class FlutterRenderer
 
     // ───────────────────────────── the generated test ─────────────────────────────
 
-    internal static string Generate(Setup s, IReadOnlyList<(int Id, string Import, string Ctor)> screens, string outDir, int width, int height)
+    internal static string Generate(Setup s, IReadOnlyList<(int Id, string Import, string Ctor)> screens, string outDir, int width, int height, string samplesFile = "")
     {
         var imp = new SortedSet<string>(StringComparer.Ordinal)
         {
-            "dart:async", "dart:convert", "dart:io", "package:flutter/material.dart", "package:flutter/rendering.dart",
+            "dart:async", "dart:convert", "dart:io", "dart:typed_data", "package:flutter/material.dart", "package:flutter/rendering.dart",
             "package:flutter/services.dart", "package:flutter_test/flutter_test.dart",
         };
         if (s.Riverpod) imp.Add("package:flutter_riverpod/flutter_riverpod.dart");
@@ -221,6 +229,7 @@ public static class FlutterRenderer
         foreach (var (id, import, _) in screens) sb.AppendLine($"import '{import}' as s{id};");
         sb.AppendLine();
         sb.AppendLine($"const _out = r'{outDir.TrimEnd('\\', '/')}';");
+        sb.AppendLine($"const _samplesFile = r'{samplesFile}';");
         sb.AppendLine($"const _size = Size({width}, {height});");
         sb.Append(Runtime);
         string l10n = s.L10nClass != null
@@ -304,6 +313,228 @@ ByteData? _empty(ByteData? message) {
 
 String _first(Object e) => e.toString().split('\n').first.trim();
 
+// The app's requests are answered here, never by the network: a request its code names gets the sample reply read
+// from that code (sample_data.json, beside this test), anything else 400 like flutter_test's own mock.
+class _Sample {
+  _Sample(this.method, this.pattern, this.weight, this.body);
+  final String method;
+  final RegExp pattern;
+  final int weight;
+  final Uint8List body;
+}
+
+final _samples = <_Sample>[];
+var _samplesRead = false;
+final _asked = <String>[];
+
+void _readSamples() {
+  if (_samplesRead) return;
+  _samplesRead = true;
+  try {
+    final f = File(_samplesFile);
+    if (_samplesFile.isEmpty || !f.existsSync()) return;
+    for (final r in json.decode(f.readAsStringSync()) as List<dynamic>) {
+      final m = r as Map<String, dynamic>;
+      _samples.add(_Sample((m['method'] as String).toUpperCase(), RegExp(m['pattern'] as String), m['weight'] as int,
+          Uint8List.fromList(utf8.encode(json.encode(m['body'])))));
+    }
+  } catch (_) {}
+}
+
+HttpClientResponse _answer(String method, Uri uri) {
+  _Sample? best;
+  for (final s in _samples) {
+    if (s.method != method.toUpperCase() || !s.pattern.hasMatch(uri.path)) continue;
+    if (best == null || s.weight > best.weight) best = s;
+  }
+  _asked.add('${method.toUpperCase()} ${uri.path}${best == null ? ' -' : ''}');
+  return best == null ? _CxResponse(400, Uint8List(0), null) : _CxResponse(200, best.body, 'application/json; charset=utf-8');
+}
+
+class _CxHttp extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) => _CxClient();
+}
+
+class _CxClient implements HttpClient {
+  @override
+  bool autoUncompress = true;
+  @override
+  Duration? connectionTimeout;
+  @override
+  Duration idleTimeout = const Duration(seconds: 15);
+  @override
+  int? maxConnectionsPerHost;
+  @override
+  String? userAgent;
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async => _CxRequest(method, url);
+  @override
+  Future<HttpClientRequest> open(String method, String host, int port, String path) =>
+      openUrl(method, Uri(scheme: 'https', host: host, port: port, path: path));
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) => openUrl('GET', url);
+  @override
+  Future<HttpClientRequest> postUrl(Uri url) => openUrl('POST', url);
+  @override
+  Future<HttpClientRequest> putUrl(Uri url) => openUrl('PUT', url);
+  @override
+  Future<HttpClientRequest> patchUrl(Uri url) => openUrl('PATCH', url);
+  @override
+  Future<HttpClientRequest> deleteUrl(Uri url) => openUrl('DELETE', url);
+  @override
+  Future<HttpClientRequest> headUrl(Uri url) => openUrl('HEAD', url);
+  @override
+  Future<HttpClientRequest> get(String host, int port, String path) => open('GET', host, port, path);
+  @override
+  Future<HttpClientRequest> post(String host, int port, String path) => open('POST', host, port, path);
+  @override
+  Future<HttpClientRequest> put(String host, int port, String path) => open('PUT', host, port, path);
+  @override
+  Future<HttpClientRequest> patch(String host, int port, String path) => open('PATCH', host, port, path);
+  @override
+  Future<HttpClientRequest> delete(String host, int port, String path) => open('DELETE', host, port, path);
+  @override
+  Future<HttpClientRequest> head(String host, int port, String path) => open('HEAD', host, port, path);
+  @override
+  void close({bool force = false}) {}
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _CxRequest implements HttpClientRequest {
+  _CxRequest(this.method, this.uri);
+  @override
+  final String method;
+  @override
+  final Uri uri;
+  @override
+  final HttpHeaders headers = _CxHeaders();
+  @override
+  final List<Cookie> cookies = <Cookie>[];
+  @override
+  bool bufferOutput = true;
+  @override
+  int contentLength = -1;
+  @override
+  Encoding encoding = utf8;
+  @override
+  bool followRedirects = true;
+  @override
+  int maxRedirects = 5;
+  @override
+  bool persistentConnection = true;
+  Future<HttpClientResponse>? _reply;
+  @override
+  HttpConnectionInfo? get connectionInfo => null;
+  @override
+  void add(List<int> data) {}
+  @override
+  void write(Object? object) {}
+  @override
+  Future<void> addStream(Stream<List<int>> stream) => stream.drain<void>();
+  @override
+  Future<void> flush() => Future<void>.value();
+  @override
+  Future<HttpClientResponse> close() => _reply ??= Future<HttpClientResponse>.value(_answer(method, uri));
+  @override
+  Future<HttpClientResponse> get done => close();
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _CxResponse extends Stream<List<int>> implements HttpClientResponse {
+  _CxResponse(this.statusCode, this._body, String? type) {
+    if (type != null) headers.set(HttpHeaders.contentTypeHeader, type);
+  }
+  final Uint8List _body;
+  @override
+  final int statusCode;
+  @override
+  final HttpHeaders headers = _CxHeaders();
+  @override
+  String get reasonPhrase => statusCode == 200 ? 'OK' : 'Bad Request';
+  @override
+  int get contentLength => _body.length;
+  @override
+  bool get isRedirect => false;
+  @override
+  List<RedirectInfo> get redirects => const <RedirectInfo>[];
+  @override
+  bool get persistentConnection => false;
+  @override
+  HttpClientResponseCompressionState get compressionState => HttpClientResponseCompressionState.notCompressed;
+  @override
+  List<Cookie> get cookies => const <Cookie>[];
+  @override
+  X509Certificate? get certificate => null;
+  @override
+  HttpConnectionInfo? get connectionInfo => null;
+  @override
+  StreamSubscription<List<int>> listen(void Function(List<int> event)? onData,
+          {Function? onError, void Function()? onDone, bool? cancelOnError}) =>
+      Stream<List<int>>.fromIterable(<List<int>>[_body])
+          .listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _CxHeaders implements HttpHeaders {
+  final Map<String, List<String>> _all = <String, List<String>>{};
+  @override
+  bool chunkedTransferEncoding = false;
+  @override
+  int contentLength = -1;
+  @override
+  bool persistentConnection = true;
+  @override
+  DateTime? date;
+  @override
+  DateTime? expires;
+  @override
+  DateTime? ifModifiedSince;
+  @override
+  String? host;
+  @override
+  int? port;
+  @override
+  List<String>? operator [](String name) => _all[name.toLowerCase()];
+  @override
+  String? value(String name) => _all[name.toLowerCase()]?.join(',');
+  @override
+  void add(String name, Object value, {bool preserveHeaderCase = false}) =>
+      (_all[name.toLowerCase()] ??= <String>[]).add('$value');
+  @override
+  void set(String name, Object value, {bool preserveHeaderCase = false}) => _all[name.toLowerCase()] = <String>['$value'];
+  @override
+  void remove(String name, Object value) => _all[name.toLowerCase()]?.remove('$value');
+  @override
+  void removeAll(String name) => _all.remove(name.toLowerCase());
+  @override
+  void forEach(void Function(String name, List<String> values) action) => _all.forEach(action);
+  @override
+  void noFolding(String name) {}
+  @override
+  void clear() => _all.clear();
+  @override
+  ContentType? get contentType {
+    final v = value(HttpHeaders.contentTypeHeader);
+    return v == null ? null : ContentType.parse(v);
+  }
+
+  @override
+  set contentType(ContentType? type) {
+    if (type == null) {
+      _all.remove(HttpHeaders.contentTypeHeader);
+    } else {
+      set(HttpHeaders.contentTypeHeader, type.toString());
+    }
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
 bool _noise(String m) =>
     m.contains('MissingPluginException') || m.contains('PlatformException') || m.contains('SocketException') ||
     m.contains('HttpException') || m.contains('DioException') || m.contains('DioError') || m.contains('connection on channel') ||
@@ -323,6 +554,9 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
   }
   final old = FlutterError.onError;
   FlutterError.onError = (d) => add(_first(d.exception));
+  _readSamples();
+  _asked.clear();
+  HttpOverrides.global = _CxHttp();
   final messenger = t.binding.defaultBinaryMessenger;
   messenger.allMessagesHandler = (channel, handler, message) {
     if (handler != null) return handler(message);
@@ -353,22 +587,25 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
     final svc = WidgetInspectorService.instance;
     try {
       final tree = json.decode(svc.getRootWidgetSummaryTree('cx')) as Map<String, dynamic>;
-      void walk(Map<String, dynamic> n, int depth) {
+      // 'p': the index of the nearest box around it (a widget without a box of its own passes its parent on)
+      void walk(Map<String, dynamic> n, int depth, int parent) {
+        var mine = parent;
         final loc = n['creationLocation'] as Map<String, dynamic>?;
         if (loc != null && n['createdByLocalProject'] == true) {
           final obj = svc.toObject(n['valueId'] as String?, 'cx');
           final ro = obj is Element ? obj.renderObject : null;
           if (ro is RenderBox && ro.attached && ro.hasSize) {
             final o = ro.localToGlobal(Offset.zero);
+            mine = boxes.length;
             boxes.add({'w': n['description'], 'f': loc['file'], 'l': loc['line'], 'c': loc['column'],
-              'x': o.dx, 'y': o.dy, 'wd': ro.size.width, 'ht': ro.size.height, 'd': depth});
+              'x': o.dx, 'y': o.dy, 'wd': ro.size.width, 'ht': ro.size.height, 'd': depth, 'p': parent});
           }
         }
         for (final k in (n['children'] as List<dynamic>? ?? const <dynamic>[])) {
-          walk(k as Map<String, dynamic>, depth + 1);
+          walk(k as Map<String, dynamic>, depth + 1, mine);
         }
       }
-      walk(tree, 0);
+      walk(tree, 0, -1);
     } catch (e) {
       add('widget map: ${_first(e)}');
     }
@@ -381,7 +618,7 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
         File('$_out${Platform.pathSeparator}$id.png').writeAsBytesSync(bytes!.buffer.asUint8List());
       }
       File('$_out${Platform.pathSeparator}$id.json')
-          .writeAsStringSync(json.encode({'ms': sw.elapsedMilliseconds, 'problems': problems, 'noise': noise, 'boxes': boxes}));
+          .writeAsStringSync(json.encode({'ms': sw.elapsedMilliseconds, 'problems': problems, 'noise': noise, 'boxes': boxes, 'requests': _asked.toList()}));
     });
     await t.pumpWidget(const SizedBox());
     await t.pump(const Duration(seconds: 1));
@@ -407,9 +644,11 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
 
     /// <summary>Draw these screens. Each gets its PNG + widget map in <paramref name="outDir"/> (named by its index in
     /// the list). Runs the app's own code under <c>flutter test</c>, through the same always-on safety check as every
-    /// command CluadeX runs.</summary>
+    /// command CluadeX runs. The app's requests get sample replies (with the owner's realistic values from
+    /// <paramref name="sampleOverrides"/> merged over them) unless <paramref name="sampleData"/> is off: then none is
+    /// answered, as before sample data existed — the screens draw their error and empty states.</summary>
     public static async Task<RenderRun> RunAsync(FlutterProject p, IReadOnlyList<StudioPage> pages, string outDir, string language,
-        CancellationToken ct, Action<string>? log = null, int width = 390, int height = 844)
+        CancellationToken ct, Action<string>? log = null, int width = 390, int height = 844, bool sampleData = true, string? sampleOverrides = null)
     {
         var run = new RenderRun();
         var sw = Stopwatch.StartNew();
@@ -446,8 +685,14 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
         foreach (var f in Directory.EnumerateFiles(outDir)) { try { File.Delete(f); } catch { } }
         string dir = Path.Combine(p.Root, Folder.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(dir);
+        // what the app's requests are answered with, read from its own code (beside the test, never in the sources);
+        // switched off, nothing ("[]": every request fails)
+        string samplesPath = Path.Combine(dir, FlutterSampleData.FileName);
+        var samples = sampleData ? FlutterSampleData.For(p.Root, sampleOverrides, ct) : null;
+        await File.WriteAllTextAsync(samplesPath, samples?.ToJson() ?? "[]", new UTF8Encoding(false), ct);
+        run.SampleReplies = samples?.Replies.Count ?? 0;
         string testPath = Path.Combine(dir, TestFile);
-        await File.WriteAllTextAsync(testPath, Generate(setup, list, outDir, width, height), new UTF8Encoding(false), ct);
+        await File.WriteAllTextAsync(testPath, Generate(setup, list, outDir, width, height, samplesPath), new UTF8Encoding(false), ct);
 
         bool pubReady = File.Exists(Path.Combine(p.Root, ".dart_tool", "package_config.json"));
         string command = $"flutter test {Folder}/{TestFile} --reporter json" + (pubReady ? " --no-pub" : "");
@@ -541,15 +786,21 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
                 sr.Noise = r.TryGetProperty("noise", out var nz) ? nz.GetInt32() : 0;
                 if (r.TryGetProperty("problems", out var pr))
                     foreach (var x in pr.EnumerateArray()) if (x.GetString() is { Length: > 0 } m) sr.Problems.Add(m);
+                if (r.TryGetProperty("requests", out var rq))
+                    foreach (var x in rq.EnumerateArray()) if (x.GetString() is { Length: > 0 } m && sr.Requests.Count < 200) sr.Requests.Add(m);
                 if (r.TryGetProperty("boxes", out var bx))
+                {
+                    int index = -1;
                     foreach (var b in bx.EnumerateArray())
                     {
+                        index++;
                         string file = b.GetProperty("f").GetString() ?? "";
                         if (file.Contains("cluadex_studio", StringComparison.Ordinal)) continue;   // our own test's widgets
                         sr.Boxes.Add(new WidgetBox(b.GetProperty("w").GetString() ?? "", FileFromUri(file), b.GetProperty("l").GetInt32(), b.GetProperty("c").GetInt32(),
                             b.GetProperty("x").GetDouble(), b.GetProperty("y").GetDouble(), b.GetProperty("wd").GetDouble(), b.GetProperty("ht").GetDouble(),
-                            b.TryGetProperty("d", out var d) ? d.GetInt32() : 0));
+                            b.TryGetProperty("d", out var d) ? d.GetInt32() : 0, index, b.TryGetProperty("p", out var pa) ? pa.GetInt32() : -1));
                     }
+                }
             }
             catch { /* a half-written file: the screen shows as not drawn */ }
         }
