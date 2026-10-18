@@ -264,6 +264,8 @@ public class AutonomousCodingService
 
     private async Task<(bool ok, string output)> RunProcessAsync(string command, CancellationToken ct)
     {
+        // A harness that calls the service directly starts nothing (the same dry-run as ShellRunner and code blocks).
+        if (Safety.ProcessLaunchPolicy.DryRun) return (true, Safety.ProcessLaunchPolicy.Report("verify: " + command));
         Process? proc = null;
         try
         {

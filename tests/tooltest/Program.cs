@@ -542,11 +542,18 @@ internal static partial class Program
         });
         await Case("G8", async () =>
         {
-            Fs.WorkingDirectory = @"E:\Code\ClaudeClient";           // read-only search over the real repo
+            // Read-only search over the CluadeX repo this harness was built from (not a fixed path: the main checkout
+            // also holds .claude/worktrees copies and is not the code under test). One warm-up run first, so a cold
+            // disk cache or a busy machine is not mistaken for a slow search.
+            string repo = AppContext.BaseDirectory;
+            while (repo != null && !File.Exists(Path.Combine(repo, "CluadeX", "CluadeX.csproj"))) repo = Path.GetDirectoryName(repo);
+            repo ??= @"E:\Code\ClaudeClient";
+            Fs.WorkingDirectory = repo;
+            await T("grep_search", ("pattern", "ExecuteToolAsync"), ("output_mode", "files_with_matches"));
             var r = await T("grep_search", ("pattern", "ExecuteToolAsync"), ("output_mode", "files_with_matches"));
             long ms = LastMs;
             Fs.WorkingDirectory = Root;
-            Check("G8", $"search over the real CluadeX repo is fast ({ms} ms)", r.Success && Seen(r).Contains("AgentToolService.cs") && ms < 3000, Seen(r));
+            Check("G8", $"search over the real CluadeX repo is fast ({ms} ms, warm, {repo})", r.Success && Seen(r).Contains("AgentToolService.cs") && ms < 3000, Seen(r));
         });
 
         await Case("G9", async () =>
@@ -1207,6 +1214,15 @@ internal static partial class Program
                     File.WriteAllText(victim, "x");
                     var (okRoot, outRoot) = await (Task<(bool, string)>)run.Invoke(auto, new object[] { rootDel, CancellationToken.None })!;
                     Check("PG13f2", "…and refuses the drive-root delete itself, before any shell", !okRoot && outRoot == auto.VerifyCommandBlockReason(rootDel), outRoot);
+                    bool keepDry3 = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+                    CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+                    try
+                    {
+                        var (okDry, outDry) = await (Task<(bool, string)>)run.Invoke(auto, new object[] { $"del /q \"{victim}\"", CancellationToken.None })!;
+                        Check("PG13f3", "…and in dry-run the runner starts nothing (it reports the command; the temp file stays)",
+                            okDry && outDry.StartsWith("[dry-run]") && File.Exists(victim), $"ok={okDry} {outDry}");
+                    }
+                    finally { CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = keepDry3; }
 
                     // With Dangerous Command Blocking off the clean-up delete runs the same way (the switch never
                     // decided deletes; the drive-root gate above cannot be switched off).
