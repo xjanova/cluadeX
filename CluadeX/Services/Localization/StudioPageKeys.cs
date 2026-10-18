@@ -91,7 +91,7 @@ internal static class StudioPageKeys
 
         // ═══════ real screens (Flutter draws them) ═══════
         ["studio.render.askTitle"] = E("Draw the real screens?", "วาดหน้าจอจริงไหม?"),
-        ["studio.render.askBody"] = E("To show each screen exactly as the app draws it, the Studio runs this project's code with Flutter's test runner (flutter test) on this PC — no phone, no real network (every request fails, nothing is sent). It writes one file in {0}/.dart_tool, which git ignores.\n\nAllow it for this project?", "เพื่อแสดงแต่ละหน้าจอเหมือนที่แอปวาดจริง Studio จะรันโค้ดของโปรเจกต์นี้ด้วยตัวทดสอบของ Flutter (flutter test) บนเครื่องนี้ — ไม่ใช้มือถือ ไม่ต่อเน็ตจริง (คำขอทุกอันล้มเหลว ไม่มีอะไรส่งออกไป) และเขียนไฟล์เดียวใน {0}/.dart_tool ซึ่ง git ไม่เก็บ\n\nอนุญาตสำหรับโปรเจกต์นี้ไหม?"),
+        ["studio.render.askBody"] = E("To show each screen exactly as the app draws it, the Studio runs this project's code with Flutter's test runner (flutter test) on this PC — no phone, no real network (the app's requests are answered inside the test with sample data made from its own code; nothing is sent). It writes its files in {0}/.dart_tool, which git ignores.\n\nAllow it for this project?", "เพื่อแสดงแต่ละหน้าจอเหมือนที่แอปวาดจริง Studio จะรันโค้ดของโปรเจกต์นี้ด้วยตัวทดสอบของ Flutter (flutter test) บนเครื่องนี้ — ไม่ใช้มือถือ ไม่ต่อเน็ตจริง (คำขอของแอปตอบภายในการทดสอบด้วยข้อมูลตัวอย่างที่สร้างจากโค้ดของแอปเอง ไม่มีอะไรส่งออกไป) และเขียนไฟล์ไว้ใน {0}/.dart_tool ซึ่ง git ไม่เก็บ\n\nอนุญาตสำหรับโปรเจกต์นี้ไหม?"),
         ["studio.render.allow"] = E("Draw them", "วาดเลย"),
         ["studio.render.notNow"] = E("Not now", "ไว้ก่อน"),
         ["studio.render.drawing"] = E("Flutter is drawing {0} screen(s)…", "Flutter กำลังวาด {0} หน้าจอ…"),
@@ -101,6 +101,7 @@ internal static class StudioPageKeys
         ["studio.render.compileFailed"] = E("The app doesn't compile — see the error", "แอปคอมไพล์ไม่ผ่าน — ดูข้อผิดพลาด"),
         ["studio.render.withProblems"] = E("Drawn, with {0} problem(s)", "วาดแล้ว แต่มีปัญหา {0} จุด"),
         ["studio.render.drawn"] = E("Drawn by Flutter at {0}", "Flutter วาดเมื่อ {0}"),
+        ["studio.render.drawnSample"] = E("Drawn by Flutter at {0} · sample data for {1} request(s)", "Flutter วาดเมื่อ {0} · ใช้ข้อมูลตัวอย่าง {1} คำขอ"),
         ["studio.render.failed"] = E("Couldn't draw the screens (see the log)", "วาดหน้าจอไม่สำเร็จ (ดูใน log)"),
         ["studio.render.dryRun"] = E("Drawing is off in this test run (dry run)", "ปิดการวาดไว้ในการทดสอบรอบนี้ (dry run)"),
         ["studio.render.noFlutter"] = E("Flutter isn't installed (or isn't on PATH) — showing wireframes", "ไม่พบ Flutter ในเครื่อง (หรือไม่อยู่ใน PATH) — แสดงภาพร่างแทน"),
@@ -276,6 +277,6 @@ internal static class StudioPageKeys
         ["studio.check.noRender"] = E("The screens were not drawn (drawing is off for this project)", "ไม่ได้วาดหน้าจอ (ปิดการวาดไว้สำหรับโปรเจกต์นี้)"),
         ["studio.check.noDart"] = E("the Dart SDK was not found", "ไม่พบ Dart SDK"),
 
-        ["studio.render.realNote"] = E("Drawn by Flutter from the app's code. There's no network here, so screens that load data show their own empty or error state.", "Flutter วาดจากโค้ดของแอปจริง — ที่นี่ไม่มีเน็ต หน้าที่ต้องโหลดข้อมูลจึงแสดงสถานะว่างหรือข้อผิดพลาดของแอปเอง"),
+        ["studio.render.realNote"] = E("Drawn by Flutter from the app's code. There's no network here: the app's requests are answered with sample data made from its own code (made-up numbers and names); a request whose reply the code doesn't read stays unanswered.", "Flutter วาดจากโค้ดของแอปจริง — ที่นี่ไม่มีเน็ต คำขอของแอปจึงตอบด้วยข้อมูลตัวอย่างที่สร้างจากโค้ดของแอปเอง (ตัวเลขและชื่อเป็นของสมมติ) ส่วนคำขอที่โค้ดไม่ได้อ่านค่ากลับจะไม่มีคำตอบ"),
     };
 }

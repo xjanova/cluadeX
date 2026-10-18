@@ -621,6 +621,8 @@ public static class FlutterCodeEdit
         int index = 0, start = open + 1;
         for (int k = open + 1; k <= close; k++)
         {
+            // Map<String, dynamic> m — the commas of a type's arguments don't end a parameter
+            if (d.Is(k, "<") && d.SkipAngles(k) is int past && past > k && past <= close) { k = past - 1; continue; }
             bool end = k == close || d.Is(k, ",") || d.Is(k, "}") || d.Is(k, "]");
             if (!end && d.IsOpener(k) && d.Match[k] > k)
             {
@@ -719,12 +721,12 @@ public static class FlutterCodeEdit
 
     /// <summary>A function written in the code: its name's token (-1: a closure), the ( of its parameters, its body (the
     /// expression after =>, or the { … } block: first and last token), and which of the two it is.</summary>
-    private sealed record FuncDecl(int NameTok, int Open, int BodyFrom, int BodyTo, bool Arrow);
+    internal sealed record FuncDecl(int NameTok, int Open, int BodyFrom, int BodyTo, bool Arrow);
 
     /// <summary>The function whose parameter list a ( opens — <c>Widget _row(String label) =&gt; …</c>,
     /// <c>row(label) { … }</c>, a closure <c>(context) =&gt; …</c> (no name) — when a body follows it. Null for a call,
     /// <c>if (…) {</c> and the like, a constructor's initializer list.</summary>
-    private static FuncDecl? FuncFromParams(DartDoc d, int open)
+    internal static FuncDecl? FuncFromParams(DartDoc d, int open)
     {
         if (!d.Is(open, "(") || d.Match[open] <= open) return null;
         int after = d.Match[open] + 1;

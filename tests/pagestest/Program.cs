@@ -248,6 +248,7 @@ internal static partial class Program
         await FlutterTools(vm, view, fx);
         await FlutterParams(vm, view, fx);
         await FlutterHelpers(vm, view, fx);
+        await FlutterSampleScreens(vm, view, fx);
         await FlutterTranslations(vm, view, fx);
         await WpfApp(vm, view, fx);
 

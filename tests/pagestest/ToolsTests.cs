@@ -636,6 +636,183 @@ class _Mood extends StatelessWidget {
         }
     }
 
+    // ═══════════════════════════════════════════ a screen that loads data ═══════════════════════════════════════════
+
+    const string ShopApiDart = @"import 'dart:convert';
+import 'dart:io';
+
+Map<String, dynamic> _m(dynamic v) => v is Map ? v.cast<String, dynamic>() : const {};
+
+/// The app's client: GETs a path and gives back what the reply's envelope carries ({ success, data }).
+class Api {
+  Api(this.base);
+  final String base;
+
+  Future<dynamic> get(String path) async {
+    final client = HttpClient();
+    final req = await client.getUrl(Uri.parse('$base$path'));
+    final res = await req.close();
+    final body = _m(json.decode(await res.transform(utf8.decoder).join()));
+    if (res.statusCode != 200 || body['success'] != true) {
+      throw Exception('โหลดไม่สำเร็จ (${res.statusCode})');
+    }
+    return body['data'];
+  }
+}
+
+class ShopStats {
+  const ShopStats(this.orders, this.revenue, this.items);
+  final int orders;
+  final double revenue;
+  final List<ShopItem> items;
+
+  factory ShopStats.fromJson(Map<String, dynamic> j) => ShopStats(
+        (j['orders_count'] as num? ?? 0).toInt(),
+        (j['revenue_thb'] as num? ?? 0).toDouble(),
+        [for (final e in (j['items'] as List? ?? const [])) ShopItem.fromJson(_m(e))],
+      );
+}
+
+class ShopItem {
+  const ShopItem(this.title, this.sold);
+  final String title;
+  final int sold;
+
+  factory ShopItem.fromJson(Map<String, dynamic> j) => ShopItem(j['title'] as String? ?? '', (j['sold'] as num? ?? 0).toInt());
+}
+
+class ShopRepository {
+  final _api = Api('https://shop.example.test/api');
+
+  Future<ShopStats> stats() async {
+    final data = await _api.get('/shop/stats');
+    return ShopStats.fromJson(_m(data));
+  }
+}
+";
+
+    const string ShopScreenDart = @"import 'package:flutter/material.dart';
+import 'shop_api.dart';
+
+class ShopScreen extends StatefulWidget {
+  const ShopScreen({super.key});
+
+  @override
+  State<ShopScreen> createState() => _ShopScreenState();
+}
+
+class _ShopScreenState extends State<ShopScreen> {
+  late final Future<ShopStats> _stats = ShopRepository().stats();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget line(String label, String value) => Padding(
+          padding: const EdgeInsets.all(4),
+          child: Row(children: [Text(label), const SizedBox(width: 8), Text(value)]),
+        );
+    return Scaffold(
+      appBar: AppBar(title: const Text('ร้านค้า')),
+      body: FutureBuilder<ShopStats>(
+        future: _stats,
+        builder: (context, snap) {
+          if (snap.hasError) return Center(child: Text('${snap.error}'));
+          final s = snap.data;
+          if (s == null) return const Center(child: Text('กำลังโหลด'));
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              line('ออเดอร์', '${s.orders}'),
+              line('ยอดขาย', s.revenue.toStringAsFixed(2)),
+              for (final it in s.items) Text(it.title),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+";
+
+    /// <summary>A screen that loads its data over HTTP — through the app's own client and envelope, the way
+    /// thaipromptadminapp does — drawn for real: the renderer feeds the request the sample reply read from the app's
+    /// code (sample_data.json beside the generated test), so the screen draws its loaded state (a row per sample item,
+    /// the amounts) instead of its error; the card says it was drawn with sample data; and a helper's text on it can be
+    /// picked and typed over like any other.</summary>
+    static async Task FlutterSampleScreens(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## A screen that loads data, drawn with sample replies read from the app's own code");
+        string? flutter = FlutterRenderer.FindFlutter();
+        if (flutter == null) { Log("  (skipped: Flutter is not installed on this PC)"); return; }
+        string root = Path.Combine(fx, "flutter-data");
+        W(root, "pubspec.yaml", "name: cxdata\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\ndependencies:\n  flutter:\n    sdk: flutter\ndev_dependencies:\n  flutter_test:\n    sdk: flutter\nflutter:\n  uses-material-design: true\n");
+        W(root, "lib/main.dart", "import 'package:flutter/material.dart';\nimport 'shop_screen.dart';\n\nvoid main() => runApp(const MaterialApp(home: ShopScreen()));\n");
+        W(root, "lib/shop_api.dart", ShopApiDart);
+        W(root, "lib/shop_screen.dart", ShopScreenDart);
+        var pub = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/d /s /c \"\"{flutter}\" pub get --offline\"")
+        { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var pubOut = pub.StandardOutput.ReadToEndAsync();
+        var pubErr = pub.StandardError.ReadToEndAsync();
+        await pub.WaitForExitAsync();
+        if (pub.ExitCode != 0 || !File.Exists(Path.Combine(root, ".dart_tool", "package_config.json")))
+        {
+            Log("  (skipped: `flutter pub get --offline` could not resolve the SDK's packages from the cache) " + (await pubErr).Trim().Split('\n').LastOrDefault());
+            return;
+        }
+        _ = await pubOut;
+
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("flutter.bat");
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("dart.bat");
+        vm.RenderConsentOverride = true;
+        vm.ToolConfirmOverride = true;
+        int titleLine = LineOf(ShopScreenDart, "Text(it.title)"), errorLine = LineOf(ShopScreenDart, "Text('${snap.error}')"), labelLine = LineOf(ShopScreenDart, "Row(children: [Text(label)");
+        int revenueCall = LineOf(ShopScreenDart, "line('ยอดขาย'");
+        // (Text(label) and Text(value) share that line: the label's column tells them apart)
+        int at = ShopScreenDart.IndexOf("[Text(label)", StringComparison.Ordinal) + 1;
+        int labelCol = at - ShopScreenDart.LastIndexOf('\n', at);
+        try
+        {
+            vm.OpenProject(root, autoStart: true);
+            bool drawn = await WaitUntil(() => Cards(vm).Count == 1 && Cards(vm).All(c => c.State == "done" && c.HasThumb), 300000);
+            Check("sample: Flutter draws the data screen", drawn, string.Join(", ", Cards(vm).Select(c => $"{c.Page.Detail}:{c.State} '{c.StateText}'")) + (vm.CompileError != null ? " COMPILE " + vm.CompileError : ""));
+            if (!drawn) return;
+            var card = Cards(vm)[0];
+            string samples = Path.Combine(root, ".dart_tool", "cluadex_studio", FlutterSampleData.FileName);
+            string fed = File.Exists(samples) ? File.ReadAllText(samples) : "";
+            Check("sample: the reply for /shop/stats was read from the app's code, in its envelope, beside the generated test",
+                  fed.Contains("\"pattern\":\"(^|/)shop/stats/?$\"", StringComparison.Ordinal) && fed.Contains("\"success\":true", StringComparison.Ordinal) && fed.Contains("\"items\":[", StringComparison.Ordinal),
+                  fed.Length > 400 ? fed[..400] : fed);
+            Check("sample: the card says the screen was drawn with sample data", card.StateText.Contains(T(vm, "studio.render.drawnSample", "", 1).Split('·')[1].Trim(), StringComparison.Ordinal), card.StateText);
+            vm.OpenCardCommand.Execute(card);
+            await Idle(400);
+            var titles = vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == titleLine).ToList();
+            Check("sample: the screen drew its loaded state — a row for each of the three sample items", titles.Count == 3,
+                  $"{titles.Count} · " + string.Join(", ", vm.StageBoxes.Where(b => b.File.EndsWith("shop_screen.dart", StringComparison.OrdinalIgnoreCase)).Select(b => $"{b.Widget}:{b.Line}")));
+            Check("sample: … not its error", !vm.StageBoxes.Any(b => b.Line == errorLine && b.File.EndsWith("shop_screen.dart", StringComparison.OrdinalIgnoreCase)));
+            var store = (PageShotStore)GetField(vm, "_store")!;
+            string side = store.ReadSidecar(store.Get(card.Page.Id, "app")!) ?? "";
+            Check("sample: the screen's request was answered (kept with the picture)", side.Contains("\"GET /api/shop/stats\"", StringComparison.Ordinal), side.Length > 300 ? side[^300..] : side);
+            await Idle(300);
+            SavePng((FrameworkElement)view.FindName("Stage"), "stage-sample.png");
+
+            // a helper's text on a data screen is picked and offered like any other
+            var labels = vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == labelLine && b.Column == labelCol).OrderBy(b => b.Y).ToList();
+            if (labels.Count == 2)
+            {
+                vm.PickStageBox(labels[1], open: false);
+                Check("sample: a helper's label on the data screen offers what its call passes", vm.CanToolText && vm.ToolText == "ยอดขาย" && vm.ToolTextNote.Contains($"lib/shop_screen.dart:{revenueCall}"),
+                      $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            }
+            else Check("sample: the helper drew its two labels", false, $"{labels.Count}");
+        }
+        finally
+        {
+            vm.RenderConsentOverride = null;
+            vm.ToolConfirmOverride = null;
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
+        }
+    }
+
     // ═══════════════════════════════════════════ translated text ═══════════════════════════════════════════
 
     const string L10nThArb = "{\n  \"@@locale\": \"th\",\n  \"welcome\": \"ยินดีต้อนรับสู่แอปพลิเคชันของเรา\",\n  \"@welcome\": { \"description\": \"The greeting on the home screen\" },\n\n" +

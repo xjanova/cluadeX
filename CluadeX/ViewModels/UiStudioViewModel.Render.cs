@@ -284,12 +284,16 @@ public sealed partial class UiStudioViewModel
             }
             catch { c.SetState("failed", T("studio.render.notDrawn")); continue; }
             var entry = _store.Save(c.Page.Id, "app", jpeg, "flutter:" + c.Page.Id, null, sr.Problems.Count > 0 ? 500 : 200);
-            _store.SaveSidecar(entry, JsonSerializer.Serialize(new { boxes = sr.Boxes, problems = sr.Problems, noise = sr.Noise }));
+            _store.SaveSidecar(entry, JsonSerializer.Serialize(new { boxes = sr.Boxes, problems = sr.Problems, noise = sr.Noise, requests = sr.Requests }));
             c.Thumb = LoadImage(_store.ImagePath(entry));
             c.ThumbDevice = "app";
             c.IsStale = false;
             c.Problems = sr.Problems.Count;
-            c.SetState("done", sr.Problems.Count > 0 ? T("studio.render.withProblems", sr.Problems.Count) : T("studio.render.drawn", entry.CapturedUtc.ToLocalTime().ToString("HH:mm:ss")));
+            // (the numbers and names on it are made up when its requests were answered with sample data)
+            int fed = sr.Requests.Count(r => !r.EndsWith(" -", StringComparison.Ordinal));
+            string at = entry.CapturedUtc.ToLocalTime().ToString("HH:mm:ss");
+            c.SetState("done", sr.Problems.Count > 0 ? T("studio.render.withProblems", sr.Problems.Count)
+                : fed > 0 ? T("studio.render.drawnSample", at, fed) : T("studio.render.drawn", at));
             if (ReferenceEquals(c, _stageCard)) LoadStageRender();
         }
         UpdateSummary();
