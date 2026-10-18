@@ -347,17 +347,23 @@ public sealed class FlutterProject : IScreenSketcher
 
     private void LoadL10n(string language)
     {
-        string yaml = WebPages.SafeRead(Path.Combine(Root, "l10n.yaml"), 50_000);
-        string arbDir = Regex.Match(yaml, @"(?m)^\s*arb-dir:\s*(?<d>\S+)").Groups["d"].Value;
-        string template = Regex.Match(yaml, @"(?m)^\s*template-arb-file:\s*(?<f>\S+)").Groups["f"].Value;
-        string dir = Path.Combine(Root, arbDir.Length > 0 ? arbDir.Replace('/', Path.DirectorySeparatorChar) : Path.Combine("lib", "l10n"));
-        if (!Directory.Exists(dir)) return;
-        var arbs = Directory.EnumerateFiles(dir, "*.arb").ToList();
-        string? pick = arbs.FirstOrDefault(a => Path.GetFileNameWithoutExtension(a).EndsWith("_" + language, StringComparison.OrdinalIgnoreCase))
-                       ?? (template.Length > 0 ? arbs.FirstOrDefault(a => Path.GetFileName(a).Equals(template, StringComparison.OrdinalIgnoreCase)) : null)
-                       ?? arbs.FirstOrDefault();
+        string? template, pick;
+        if (FlutterL10n.Load(Root) is { } cfg)
+        {
+            // gen-l10n's setup: the same language file the text tool edits
+            template = cfg.TemplatePath;
+            pick = cfg.ArbFor(language);
+        }
+        else
+        {
+            string dir = Path.Combine(Root, "lib", "l10n");
+            if (!Directory.Exists(dir)) return;
+            var arbs = Directory.EnumerateFiles(dir, "*.arb").ToList();
+            template = null;
+            pick = arbs.FirstOrDefault(a => Path.GetFileNameWithoutExtension(a).EndsWith("_" + language, StringComparison.OrdinalIgnoreCase)) ?? arbs.FirstOrDefault();
+        }
         // the template first (every key), then the chosen language over it
-        foreach (var arb in new[] { template.Length > 0 ? Path.Combine(dir, template) : null, pick }.Where(a => a != null).Distinct())
+        foreach (var arb in new[] { template, pick }.Where(a => a != null).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             try
             {
