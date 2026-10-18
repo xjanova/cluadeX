@@ -661,6 +661,7 @@ internal static partial class Program
         CompareWithGolden("midnight-roundtrip", back);
 
         await PortraitChecks();
+        await PersonaRenders();
         await SplitTreeShots(themes, all);
 
         return Finish();

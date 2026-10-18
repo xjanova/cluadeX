@@ -318,12 +318,14 @@ public partial class ChatViewModel
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null) return Task.FromResult("(no answer: CluadeX has no window open)");
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var who = CharacterForBox(run);   // the girl who asks: the provider's, or the room member answering
         var msg = new ChatMessage
         {
             Role = MessageRole.Question,
             Content = "❓ " + question.Trim(),
             QuestionOptions = options,
-            QuestionGirl = Services.GirlArt.PickName(),
+            QuestionGirl = who.Girl,
+            Character = who,
             QuestionCallback = answer => tcs.TrySetResult(answer),
         };
         var token = run?.Cts?.Token ?? CancellationToken.None;

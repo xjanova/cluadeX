@@ -291,6 +291,7 @@ internal static partial class Program
         await TestToolGrouping();             // G: tool rows fold together
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
+        await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();

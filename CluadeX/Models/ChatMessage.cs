@@ -52,7 +52,41 @@ public class ChatMessage : INotifyPropertyChanged
     public string Content
     {
         get => _content;
-        set { if (_content != value) { _content = value; OnPropertyChanged(); } }
+        set
+        {
+            if (_content == value) return;
+            _content = value;
+            OnPropertyChanged();
+            if (Role == MessageRole.Assistant) NoteRoomSpeaker();
+        }
+    }
+
+    // ─── who is talking (ChatCharacter) ───
+
+    private Services.ChatCharacter? _character;
+    /// <summary>The girl this box belongs to — the one who asks (question / permission prompt): her portrait, her colour.
+    /// Set when the box is made, from the provider answering (or the room member speaking); a row read back from the
+    /// database has none and stands as its <see cref="QuestionGirl"/>, else CluadeX's own girl.</summary>
+    public Services.ChatCharacter Character
+    {
+        get => _character ?? Services.ChatCharacter.ForGirl(QuestionGirl);
+        set { _character = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuestionGirlGlow)); }
+    }
+
+    private string? _roomSpeaker;
+    /// <summary>A BrainX cowork-room reply: the member speaking last in it ("### 💬 codex" — BrainXRoomProvider), or null.</summary>
+    public string? RoomSpeaker => _roomSpeaker;
+
+    /// <summary>Any reply's room speaker changed (the composer's frame follows whoever answers now).</summary>
+    public static event Action<ChatMessage>? RoomSpeakerChanged;
+
+    private void NoteRoomSpeaker()
+    {
+        string? s = Services.ChatCharacter.LastRoomSpeakerIn(_content);
+        if (string.Equals(s, _roomSpeaker, StringComparison.Ordinal)) return;
+        _roomSpeaker = s;
+        OnPropertyChanged(nameof(RoomSpeaker));
+        RoomSpeakerChanged?.Invoke(this);
     }
 
     public DateTime Timestamp { get; set; } = DateTime.Now;
@@ -274,7 +308,7 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The girl standing beside this question (an Assets\Girls name), picked at random when it was asked.</summary>
     public string? QuestionGirl { get; set; }
     public System.Windows.Media.ImageSource? QuestionGirlImage => Services.GirlArt.Image(QuestionGirl);
-    public System.Windows.Media.Color QuestionGirlGlow => Services.GirlArt.Glow(QuestionGirl);
+    public System.Windows.Media.Color QuestionGirlGlow => Character.Accent;
     private string _answerDraft = "";
     public string AnswerDraft { get => _answerDraft; set { _answerDraft = value; OnPropertyChanged(); } }
 

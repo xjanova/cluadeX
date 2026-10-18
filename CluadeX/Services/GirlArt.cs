@@ -78,15 +78,6 @@ public static class GirlArt
         }
     }
 
-    /// <summary>Each girl's own glow, so the halo matches her outfit.</summary>
-    public static Color Glow(string? name) => (name ?? "").ToLowerInvariant() switch
-    {
-        "claude" => Color.FromRgb(0xF4, 0xA2, 0x6B),
-        "codex" => Color.FromRgb(0x38, 0xBD, 0xF8),
-        "gemini" => Color.FromRgb(0x60, 0xA5, 0xFA),
-        "grok" => Color.FromRgb(0xE5, 0xE7, 0xEB),
-        "mai" => Color.FromRgb(0x34, 0xD3, 0x99),
-        "brainx" => Color.FromRgb(0xA7, 0x8B, 0xFA),
-        _ => Color.FromRgb(0xC0, 0x84, 0xFC),
-    };
+    /// <summary>Each girl's own glow, so the halo matches her outfit (her ChatCharacter colour).</summary>
+    public static Color Glow(string? name) => ChatCharacter.ForGirl(name).Accent;
 }
