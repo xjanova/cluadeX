@@ -473,6 +473,14 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
         set { if (_splitSummary != value) { _splitSummary = value; Raise(nameof(SplitSummary)); } }
     }
 
+    private bool _isLastSplit;
+    /// <summary>The last split chat under its parent: its tree line ends in a rounded corner (╰) instead of going on (├).</summary>
+    public bool IsLastSplit
+    {
+        get => _isLastSplit;
+        set { if (_isLastSplit != value) { _isLastSplit = value; Raise(nameof(IsLastSplit)); } }
+    }
+
     private bool _projectAsParent;
     /// <summary>A split chat working in the same project as its parent: its project line would only repeat the parent's.</summary>
     public bool ProjectAsParent

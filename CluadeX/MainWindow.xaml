@@ -807,17 +807,33 @@
                                                         </Style.Triggers>
                                                     </Style>
                                                 </Grid.Style>
-                                                <!-- the tree's guide: a vertical line the full height of each split chat's row, so the
-                                                     rows of one split group join into one line under their parent -->
-                                                <Border Width="1.5" HorizontalAlignment="Left" Margin="-7,0,0,0" CornerRadius="1"
-                                                        Background="{DynamicResource Border.Default}" Opacity="0.9"
-                                                        Visibility="{Binding IsSplit, Converter={StaticResource BoolVis}}"/>
+                                                <!-- The tree line of a split chat: ├ (the line goes on to the next split chat) or ╰ (the last one) — a rounded
+                                                     elbow from the parent's line into this row's status dot. -->
+                                                <Grid Width="13" HorizontalAlignment="Left" Margin="-9,0,0,0" IsHitTestVisible="False"
+                                                      Visibility="{Binding IsSplit, Converter={StaticResource BoolVis}}">
+                                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                                    <Border Grid.RowSpan="2" Width="1.5" HorizontalAlignment="Left" Background="{DynamicResource Border.Strong}"
+                                                            Visibility="{Binding IsLastSplit, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                    <Border Grid.Row="0" BorderBrush="{DynamicResource Border.Strong}" BorderThickness="1.5,0,0,1.5"
+                                                            CornerRadius="0,0,0,7" Margin="0,0,0,-0.75"/>
+                                                </Grid>
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding Id}"
                                                         Background="Transparent" BorderThickness="0"
                                                         Foreground="{DynamicResource Text.Secondary}"
-                                                        HorizontalContentAlignment="Stretch" Cursor="Hand"
-                                                        Margin="0,1" Padding="10,7">
+                                                        HorizontalContentAlignment="Stretch" Cursor="Hand">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button">
+                                                            <Setter Property="Margin" Value="0,1"/>
+                                                            <Setter Property="Padding" Value="10,7"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSplit}" Value="True">
+                                                                    <Setter Property="Margin" Value="0,0"/>
+                                                                    <Setter Property="Padding" Value="8,5"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
                                                     <Button.Template>
                                                         <ControlTemplate TargetType="Button">
                                                             <Grid>
@@ -848,6 +864,83 @@
                                                         </ControlTemplate>
                                                     </Button.Template>
                                                     <Grid>
+                                                    <!-- ═══ a split chat: one line — status dot, its task as the title, where it went (another project) ═══ -->
+                                                    <Grid Visibility="{Binding IsSplit, Converter={StaticResource BoolVis}}" ToolTip="{Binding SplitTask}">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <!-- the node: faint when idle, the accent with a soft pulse while working, amber waiting, green done -->
+                                                        <Grid Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center">
+                                                            <Ellipse Width="9" Height="9" Opacity="0" Fill="{DynamicResource Accent.1}">
+                                                                <Ellipse.Style>
+                                                                    <Style TargetType="Ellipse">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="working">
+                                                                                <DataTrigger.EnterActions>
+                                                                                    <BeginStoryboard x:Name="PulseNode">
+                                                                                        <Storyboard RepeatBehavior="Forever">
+                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0.5" To="0" Duration="0:0:1.2"/>
+                                                                                        </Storyboard>
+                                                                                    </BeginStoryboard>
+                                                                                </DataTrigger.EnterActions>
+                                                                                <DataTrigger.ExitActions><StopStoryboard BeginStoryboardName="PulseNode"/></DataTrigger.ExitActions>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Ellipse.Style>
+                                                            </Ellipse>
+                                                            <Ellipse Width="7" Height="7">
+                                                                <Ellipse.Style>
+                                                                    <Style TargetType="Ellipse">
+                                                                        <Setter Property="Fill" Value="{DynamicResource Text.Faint}"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="working"><Setter Property="Fill" Value="{DynamicResource Accent.1}"/></DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="waiting"><Setter Property="Fill" Value="{DynamicResource Status.Warning}"/></DataTrigger>
+                                                                            <DataTrigger Binding="{Binding RunStatus}" Value="done"><Setter Property="Fill" Value="{DynamicResource Status.Success}"/></DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Ellipse.Style>
+                                                            </Ellipse>
+                                                        </Grid>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="12" VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource Text.Secondary}" TextTrimming="CharacterEllipsis"/>
+                                                        <!-- the work went to another project: say where -->
+                                                        <Border Grid.Column="2" Margin="6,0,0,0" Padding="5,0,6,1" CornerRadius="4" VerticalAlignment="Center"
+                                                                Background="{DynamicResource State.Hover.Subtle}"
+                                                                Visibility="{Binding ShowProjectLine, Converter={StaticResource BoolVis}}">
+                                                            <TextBlock FontSize="10" Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis" MaxWidth="90">
+                                                                <Run Text="→ "/><Run Text="{Binding ProjectName, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="4,0,0,0" VerticalAlignment="Center"
+                                                                    Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}">
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.ArchiveSplitCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc chat.split.archiveTip}"
+                                                                    Visibility="{Binding IsArchived, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                                                <TextBlock Text="&#xE7B8;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.UnarchiveSplitCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc chat.split.unarchiveTip}"
+                                                                    Visibility="{Binding IsArchived, Converter={StaticResource BoolVis}}">
+                                                                <TextBlock Text="&#xE7A7;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
+                                                                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <!-- ═══ an ordinary chat (top of a tree or on its own) ═══ -->
+                                                    <Grid Visibility="{Binding IsSplit, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="*"/>
@@ -942,31 +1035,32 @@
                                                         </Grid>
                                                         <StackPanel Grid.Column="1">
                                                             <DockPanel LastChildFill="True">
-                                                                <!-- a chat that split work off: a branch badge with how many split chats are open -->
-                                                                <Border DockPanel.Dock="Right" Margin="6,0,0,0" Padding="5,0,6,1" CornerRadius="8" VerticalAlignment="Center"
-                                                                        Background="{DynamicResource State.Hover.Subtle}" BorderBrush="{DynamicResource Accent.2}" BorderThickness="1"
-                                                                        ToolTip="{Binding SplitSummary}"
-                                                                        Visibility="{Binding HasOpenSplits, Converter={StaticResource BoolVis}}">
-                                                                    <StackPanel Orientation="Horizontal">
-                                                                        <!-- a branch: a trunk and one fork -->
-                                                                        <Path Width="9" Height="10" Margin="0,0,3,0" VerticalAlignment="Center" Stretch="None"
-                                                                              Stroke="{DynamicResource Accent.2}" StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                                                              Data="M2,1 L2,9 M2,4 C2,6 7,5 7,8 M7,1 L7,3"/>
-                                                                        <TextBlock Text="{Binding OpenSplitCount}" FontSize="10" FontWeight="SemiBold"
+                                                                <!-- a chat that split work off: a git-branch badge with how many split chats are open (tooltip: how they stand) -->
+                                                                <Grid DockPanel.Dock="Right" Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="{Binding SplitSummary}"
+                                                                      Visibility="{Binding HasOpenSplits, Converter={StaticResource BoolVis}}">
+                                                                    <Border CornerRadius="6" Background="{DynamicResource Accent.2}" Opacity="0.16"/>
+                                                                    <StackPanel Orientation="Horizontal" Margin="5,1,6,1">
+                                                                        <Path Width="11" Height="12" Margin="0,0,3,0" VerticalAlignment="Center" Stretch="None"
+                                                                              Stroke="{DynamicResource Accent.2}" StrokeThickness="1.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                                                                            <Path.Data>
+                                                                                <GeometryGroup>
+                                                                                    <EllipseGeometry Center="3,2.5" RadiusX="1.6" RadiusY="1.6"/>
+                                                                                    <EllipseGeometry Center="3,9.5" RadiusX="1.6" RadiusY="1.6"/>
+                                                                                    <EllipseGeometry Center="8.5,3.5" RadiusX="1.6" RadiusY="1.6"/>
+                                                                                    <LineGeometry StartPoint="3,4.1" EndPoint="3,7.9"/>
+                                                                                    <PathGeometry Figures="M8.5,5.1 C8.5,7.6 3,6.4 3,7.9"/>
+                                                                                </GeometryGroup>
+                                                                            </Path.Data>
+                                                                        </Path>
+                                                                        <TextBlock Text="{Binding OpenSplitCount}" FontSize="10.5" FontWeight="SemiBold"
                                                                                    Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center"/>
                                                                     </StackPanel>
-                                                                </Border>
+                                                                </Grid>
                                                                 <TextBlock Text="{Binding Title}" FontSize="12"
                                                                            Foreground="{DynamicResource Text.Primary}"
                                                                            TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
                                                             </DockPanel>
-                                                            <!-- a split chat: what it was split off to do -->
-                                                            <TextBlock FontSize="10.5" Margin="0,1,0,0" TextTrimming="CharacterEllipsis"
-                                                                       Foreground="{DynamicResource Text.Secondary}" FontStyle="Italic"
-                                                                       ToolTip="{Binding SplitTask}"
-                                                                       Visibility="{Binding SplitTask, Converter={StaticResource BoolVis}}">
-                                                                <Run Text="↳ "/><Run Text="{Binding SplitTask, Mode=OneWay}"/>
-                                                            </TextBlock>
+                                                            
 
                                                             <TextBlock Text="{Binding ProjectName}" FontSize="11" Margin="0,1,0,0"
                                                                        Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"
@@ -1040,6 +1134,7 @@
                                                             </Button>
                                                         </StackPanel>
                                                         </Grid>
+                                                    </Grid>
                                                     </Grid>
                                                 </Button>
                                                 </Grid>

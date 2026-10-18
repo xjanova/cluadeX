@@ -277,16 +277,18 @@ public partial class ChatViewModel : ViewModelBase
 
         var result = new List<ChatSession>(flat.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        void Add(ChatSession s, int depth, string? group, ChatSession? parent)
+        void Add(ChatSession s, int depth, string? group, ChatSession? parent, bool last = false)
         {
             if (!seen.Add(s.Id)) return;
             s.GroupOverride = group;
             s.SplitDepth = depth;
+            s.IsLastSplit = last;
             s.ProjectAsParent = parent != null
                 && string.Equals((s.ProjectPath ?? "").TrimEnd('\\', '/'), (parent.ProjectPath ?? "").TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
             result.Add(s);
             if (kids.TryGetValue(s.Id, out var children))
-                foreach (var c in children) Add(c, depth + 1, group ?? s.DateGroupLabel, s);
+                for (int i = 0; i < children.Count; i++)
+                    Add(children[i], depth + 1, group ?? s.DateGroupLabel, s, i == children.Count - 1);
         }
         ChatSession RootOf(ChatSession s)
         {
