@@ -257,10 +257,17 @@ public sealed class AgentRunScope
         var notes = DrainUserNotes();
         if (notes.Count == 0) return null;
         // Queued, not a detour: the owner wants the plan in hand finished first (2026-10-16). A correction to the
-        // current work or a "stop" still applies at once.
-        return "[The user sent this while you were working. It is QUEUED: first finish the plan you are on, then do this "
-               + "next, in the same turn. Only if it corrects the current work or says stop/cancel, apply it now. "
-               + "Say in one short line that you have queued it, then carry on:]\n"
+        // current work or a "stop" still applies at once. And a request that stands on its own runs in parallel in its
+        // own chat (owner 2026-10-18: "ความฉลาดในการแตกแชทไปทำคู่ขนานของงาน เมื่อมีการสั่งเพิ่มเข้ามา") — it shows
+        // under this chat in the sidebar, and close_chat puts it away once its result is in.
+        return "[The user sent this while you were working. Decide which it is, say so in one short line, then carry on:\n"
+               + "- It corrects the current work, or says stop/cancel: apply it now.\n"
+               + "- It builds on the current work or needs it done first: QUEUED — finish the plan you are on, then do it "
+               + "next, in the same turn.\n"
+               + "- It is a NEW request that stands on its own (it does not need what you are doing and touches other files "
+               + "or another project): start it now in its own chat with new_chat — a complete message, since that chat does "
+               + "not see this one — so both run in parallel, and keep going with your plan here. Once its result is in, put "
+               + "it away with close_chat.]\n"
                + string.Join("\n\n", notes.Select(n => n.Text));
     }
 

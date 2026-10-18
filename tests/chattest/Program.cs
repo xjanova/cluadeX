@@ -1351,6 +1351,84 @@ internal static partial class Program
             finally { CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = keep; }
         }
 
+        // Owner 2026-10-18: "ปิดแชทเก็บกวาดงานแยกที่เสร็จแล้วได้ … ทำผังด้วยว่าแยกไปที่ไหนทำอะไร" and "ความฉลาดในการแตกแชท
+        // ไปทำคู่ขนานของงาน เมื่อมีการสั่งเพิ่มเข้ามา".
+        Log("\n## SC — split chats: the tree, putting finished ones away, close_chat, splitting a new request off");
+        {
+            // The link store on its own: links, no loops, put away / back, forget the gone, survive a restart.
+            string dir = Path.Combine(Settings.DataRoot, "sc-links-" + Guid.NewGuid().ToString("N")[..6]);
+            var st = new ChatLinkStore(dir);
+            st.Link("b", "a", "build the API");
+            st.Link("c", "b", "write its tests");
+            st.Link("a", "c", "loop");   // a would become its own ancestor
+            Check("SC a split is recorded with its parent and task", st.Get("b") is { ParentId: "a", Task: "build the API" });
+            Check("SC a link that would make a loop is refused", st.Get("a") == null);
+            Check("SC children are listed per parent", st.ChildrenOf("a").Select(k => k.Id).SequenceEqual(new[] { "b" }));
+            Check("SC put away and back", st.SetArchived("b", true) && st.Get("b")!.ArchivedAt != null && st.SetArchived("b", false) && st.Get("b")!.ArchivedAt == null);
+            Check("SC a chat that was never split cannot be put away", !st.SetArchived("zzz", true));
+            st.SetArchived("c", true);
+            var again = new ChatLinkStore(dir);
+            Check("SC links and archive state survive a restart (chat-links.json)", again.Get("c") is { ParentId: "b", ArchivedAt: not null }
+                && File.Exists(Path.Combine(dir, "chat-links.json")));
+            again.Prune(new[] { "a", "b" });
+            Check("SC links of chats that are gone are forgotten", again.Get("c") == null && again.Get("b") != null);
+
+            // Through the real chat page: new_chat from a chat → a split chat under it in the list.
+            var vm = FreeVm();
+            var links = ChatLinkStore.Current;
+            Check("SC the chat page made the app's link store", links != null);
+            var p0 = ChatInDb("SC parent", "plan the release", "ok");
+            await Open(p0.Id);
+            string parentId = vm.CurrentSession!.Id;
+            string said = await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, "SC split A");
+            var made = vm.CurrentSession!;
+            Check("SC new_chat records the asking chat as the parent, and the task", made.ParentId == parentId && made.SplitTask == "SC split A", said);
+            made.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "build the API" });
+            made.Messages.Add(new ChatMessage { Role = MessageRole.Assistant, Content = "done" });
+            Persist.SaveSession(made);
+            string aId = made.Id;
+            await Open(parentId);
+            await Render();
+            ChatSession S(string id) => vm.Sessions.First(s => s.Id == id);
+            var parent = S(parentId);
+            var a = S(aId);
+            var list = vm.VisibleSessions.ToList();
+            int pi = list.FindIndex(s => s.Id == parentId), ai = list.FindIndex(s => s.Id == aId);
+            Check("SC the list is a tree: the split chat right under its parent, one step in",
+                pi >= 0 && ai == pi + 1 && a.SplitDepth == 1 && parent.SplitDepth == 0 && a.DateGroupLabel == parent.DateGroupLabel,
+                $"parent@{pi} split@{ai} depth={a.SplitDepth}");
+            Check("SC the parent says how its split chats stand", parent.SplitSummary.Contains("1") && parent.HasFinishedSplits, parent.SplitSummary);
+
+            // close_chat, as the parent chat's agent calls it.
+            var close = typeof(ChatViewModel).GetMethod("CloseChatsForAgent", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            string listed = (string)close.Invoke(vm, new object[] { parent.Id, "" })!;
+            Check("SC close_chat lists the split chats with what each does and how it stands",
+                listed.Contains("SC split A") && listed.Contains("finished"), listed);
+            string closed = (string)close.Invoke(vm, new object[] { parent.Id, "done" })!;
+            Check("SC close_chat \"done\" puts the finished ones away — kept, not deleted",
+                a.IsArchived && vm.Sessions.Any(s => s.Id == aId) && !vm.VisibleSessions.Any(s => s.Id == aId), closed);
+            Check("SC the parent's line counts it as put away", parent.SplitSummary.Contains("1") && !parent.HasFinishedSplits, parent.SplitSummary);
+            vm.ShowArchivedSplits = true;
+            Check("SC \"show put-away chats\" brings it back into view, under its parent", vm.VisibleSessions.Any(s => s.Id == aId));
+            vm.ShowArchivedSplits = false;
+            vm.UnarchiveSplitCommand.Execute(a.Id);
+            Check("SC \"bring back\" returns it to the list", !a.IsArchived && vm.VisibleSessions.Any(s => s.Id == aId));
+            string none = (string)close.Invoke(vm, new object[] { a.Id, "done" })!;
+            Check("SC close_chat from a chat that split nothing off says so", none.Contains("not split off"), none);
+
+            var mod = new CluadeX.Services.Tools.ProjectToolModule();
+            Check("SC close_chat (and its aliases) is one of the agent's tools",
+                mod.ResolveToolType("close_chat") == ToolType.CloseChat && mod.ResolveToolType("archive_chat") == ToolType.CloseChat
+                && mod.GetToolSchemas().Any(s => s.Name == "close_chat"));
+
+            // A new request typed while the agent works: the agent is told to split a stand-alone one off.
+            var scope = new AgentRunScope("sc", null, null);
+            scope.AddUserNote("also make a landing page for the other project");
+            string note = scope.TakeUserNotes() ?? "";
+            Check("SC a request typed mid-task: stand-alone → its own chat with new_chat (parallel); corrections stay; close_chat after",
+                note.Contains("new_chat") && note.Contains("parallel") && note.Contains("close_chat") && note.Contains("QUEUED"), note);
+        }
+
         Log("\n## L6 — the context meter uses the answering model's real window");
         Check("L6 Claude Opus 5.5 → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-opus-5-5", 12288) == 1_000_000);
         Check("L6 Claude Haiku 4.5 → 200K", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-haiku-4-5", 12288) == 200_000);

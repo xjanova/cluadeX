@@ -710,6 +710,30 @@
                                             </ControlTemplate>
                                         </ToggleButton.Template>
                                     </ToggleButton>
+                                    <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
+                                    <ToggleButton Width="24" Height="24"
+                                                  IsChecked="{Binding ChatVM.ShowArchivedSplits}"
+                                                  Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                  Foreground="{DynamicResource Text.Faint}"
+                                                  ToolTip="{services:Loc chat.split.showAwayTip}">
+                                        <ToggleButton.Template>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                                                    <TextBlock Text="&#xE7B8;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Foreground="{TemplateBinding Foreground}"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </ToggleButton.Template>
+                                    </ToggleButton>
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -772,6 +796,22 @@
                                         </ItemsControl.Style>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
+                                                <!-- A split chat sits indented under the chat that opened it (SplitIndent); put away = dimmed -->
+                                                <Grid Margin="{Binding SplitIndent}">
+                                                <Grid.Style>
+                                                    <Style TargetType="Grid">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsArchived}" Value="True">
+                                                                <Setter Property="Opacity" Value="0.55"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Grid.Style>
+                                                <!-- the tree's guide: a vertical line the full height of each split chat's row, so the
+                                                     rows of one split group join into one line under their parent -->
+                                                <Border Width="1.5" HorizontalAlignment="Left" Margin="-7,0,0,0" CornerRadius="1"
+                                                        Background="{DynamicResource Border.Default}" Opacity="0.9"
+                                                        Visibility="{Binding IsSplit, Converter={StaticResource BoolVis}}"/>
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding Id}"
                                                         Background="Transparent" BorderThickness="0"
@@ -901,12 +941,36 @@
                                                             </TextBlock>
                                                         </Grid>
                                                         <StackPanel Grid.Column="1">
-                                                            <TextBlock Text="{Binding Title}" FontSize="12"
-                                                                       Foreground="{DynamicResource Text.Primary}"
-                                                                       TextTrimming="CharacterEllipsis" MaxWidth="150"/>
+                                                            <DockPanel LastChildFill="True">
+                                                                <!-- a chat that split work off: a branch badge with how many split chats are open -->
+                                                                <Border DockPanel.Dock="Right" Margin="6,0,0,0" Padding="5,0,6,1" CornerRadius="8" VerticalAlignment="Center"
+                                                                        Background="{DynamicResource State.Hover.Subtle}" BorderBrush="{DynamicResource Accent.2}" BorderThickness="1"
+                                                                        ToolTip="{Binding SplitSummary}"
+                                                                        Visibility="{Binding HasOpenSplits, Converter={StaticResource BoolVis}}">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <!-- a branch: a trunk and one fork -->
+                                                                        <Path Width="9" Height="10" Margin="0,0,3,0" VerticalAlignment="Center" Stretch="None"
+                                                                              Stroke="{DynamicResource Accent.2}" StrokeThickness="1.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                                              Data="M2,1 L2,9 M2,4 C2,6 7,5 7,8 M7,1 L7,3"/>
+                                                                        <TextBlock Text="{Binding OpenSplitCount}" FontSize="10" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource Accent.2}" VerticalAlignment="Center"/>
+                                                                    </StackPanel>
+                                                                </Border>
+                                                                <TextBlock Text="{Binding Title}" FontSize="12"
+                                                                           Foreground="{DynamicResource Text.Primary}"
+                                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+                                                            </DockPanel>
+                                                            <!-- a split chat: what it was split off to do -->
+                                                            <TextBlock FontSize="10.5" Margin="0,1,0,0" TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{DynamicResource Text.Secondary}" FontStyle="Italic"
+                                                                       ToolTip="{Binding SplitTask}"
+                                                                       Visibility="{Binding SplitTask, Converter={StaticResource BoolVis}}">
+                                                                <Run Text="↳ "/><Run Text="{Binding SplitTask, Mode=OneWay}"/>
+                                                            </TextBlock>
+
                                                             <TextBlock Text="{Binding ProjectName}" FontSize="11" Margin="0,1,0,0"
-                                                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis" MaxWidth="150"
-                                                                       Visibility="{Binding ProjectName, Converter={StaticResource BoolVis}}"/>
+                                                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"
+                                                                       Visibility="{Binding ShowProjectLine, Converter={StaticResource BoolVis}}"/>
                                                             <!-- what the run is doing now, breathing softly while it works -->
                                                             <TextBlock Text="{Binding RunStep}" FontSize="10.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" MaxWidth="150"
                                                                        Foreground="{DynamicResource Accent.1}"
@@ -928,18 +992,57 @@
                                                         <TextBlock Text="{Binding ListTimeLabel}" FontSize="11" VerticalAlignment="Top" Margin="6,1,0,0"
                                                                    FontFamily="{DynamicResource Font.Mono}" Foreground="{DynamicResource Text.Muted}"
                                                                    Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
-                                                        <Button Width="20" Height="20" VerticalAlignment="Top"
-                                                                Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                                Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}"
-                                                                Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
-                                                            <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                                       Foreground="{DynamicResource Text.Muted}"
-                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                        </Button>
+                                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Top"
+                                                                    Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}">
+                                                            <!-- a chat that split work off: put away its finished split chats -->
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.ArchiveFinishedSplitsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc chat.split.archiveDoneTip}"
+                                                                    Visibility="{Binding HasFinishedSplits, Converter={StaticResource BoolVis}}">
+                                                                <TextBlock Text="&#xE7B8;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                           Foreground="{DynamicResource Accent.2}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <!-- a split chat: put it away / bring it back -->
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.ArchiveSplitCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc chat.split.archiveTip}">
+                                                                <Button.Style>
+                                                                    <Style TargetType="Button">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        <Style.Triggers>
+                                                                            <MultiDataTrigger>
+                                                                                <MultiDataTrigger.Conditions>
+                                                                                    <Condition Binding="{Binding IsSplit}" Value="True"/>
+                                                                                    <Condition Binding="{Binding IsArchived}" Value="False"/>
+                                                                                </MultiDataTrigger.Conditions>
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                            </MultiDataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Button.Style>
+                                                                <TextBlock Text="&#xE7B8;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                           Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.UnarchiveSplitCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc chat.split.unarchiveTip}"
+                                                                    Visibility="{Binding IsArchived, Converter={StaticResource BoolVis}}">
+                                                                <TextBlock Text="&#xE7A7;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                           Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <Button Width="20" Height="20"
+                                                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.DeleteSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.deleteSession}">
+                                                                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                                                           Foreground="{DynamicResource Text.Muted}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                        </StackPanel>
                                                         </Grid>
                                                     </Grid>
                                                 </Button>
+                                                </Grid>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
