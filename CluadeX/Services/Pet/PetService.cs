@@ -139,23 +139,68 @@ public sealed class PetService : IDisposable
         Save();
     }
 
+    /// <summary>Let a process that is not the CluadeX app put the pet on the desktop (pettest --live only).</summary>
+    public static bool AllowDesktopOutsideApp { get; set; }
+
+    /// <summary>The machine-wide token of "a pet is on the desktop": one pet, whichever CluadeX holds it.</summary>
+    public const string DesktopMutexName = @"Local\CluadeX_DesktopPet";
+
+    private System.Threading.Mutex? _desktopToken;
+
+    /// <summary>
+    /// May this process put a pet on the desktop at all? Only the CluadeX app itself. Owner 2026-10-18: "มีสัตว์เลี้ยงที่
+    /// ฟักแล้ว และมีไข่ตกลงมาใหม่อีกได้อย่างไร" — pagestest / themetest build the real MainWindow, so each run started a
+    /// pet from the harness's empty Data folder: a fresh egg fell onto the owner's desktop beside their hatched owl.
+    /// </summary>
+    public static bool MayShowOnDesktop(string? entryAssemblyName = null) =>
+        AllowDesktopOutsideApp || Mcp.McpHostService.IsCluadeXApp(entryAssemblyName);
+
     /// <summary>Show or hide the desktop window to match the setting and the put-away state.</summary>
     public void ApplyVisibility()
     {
-        bool show = Enabled && State.OnDesktop;
+        bool show = Enabled && State.OnDesktop && MayShowOnDesktop();
         if (show && _window == null && System.Windows.Application.Current?.MainWindow == null) return;   // see Start
         if (show && _window == null)
         {
+            // Another CluadeX (the installed app beside a portable / DEV copy, each with its own pet.json) already
+            // has its pet out: never a second one.
+            if (!TakeDesktopToken())
+            {
+                _log?.Info("Pet", "another CluadeX already has its pet on the desktop · staying in");
+                Changed?.Invoke();
+                return;
+            }
             _window = new Views.Pet.PetWindow(this);
-            _window.Closed += (_, _) => _window = null;
+            _window.Closed += (_, _) => { _window = null; ReleaseDesktopToken(); };
             _window.Show();
         }
         else if (!show && _window != null)
         {
             _window.Close();
             _window = null;
+            ReleaseDesktopToken();
         }
         Changed?.Invoke();
+    }
+
+    private bool TakeDesktopToken()
+    {
+        if (_desktopToken != null) return true;
+        if (AllowDesktopOutsideApp) return true;   // pettest --live: shown on purpose, beside the app's own pet
+        try
+        {
+            var m = new System.Threading.Mutex(false, DesktopMutexName, out bool createdNew);
+            if (!createdNew) { m.Dispose(); return false; }
+            _desktopToken = m;
+            return true;
+        }
+        catch { return true; }   // no named objects here: one process, one window — as before
+    }
+
+    private void ReleaseDesktopToken()
+    {
+        try { _desktopToken?.Dispose(); } catch { }
+        _desktopToken = null;
     }
 
     public bool IsOut => _window != null;
@@ -487,6 +532,7 @@ public sealed class PetService : IDisposable
         Save();
         _window?.Close();
         _window = null;
+        ReleaseDesktopToken();
     }
 
     public void Dispose()
@@ -494,5 +540,6 @@ public sealed class PetService : IDisposable
         _minuteTimer?.Stop();
         if (_dirty) Save();
         _window?.Close();
+        ReleaseDesktopToken();
     }
 }

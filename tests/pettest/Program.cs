@@ -39,6 +39,7 @@ internal static class Program
         Physics();
         Lines();
         Persistence();
+        Desktop();
 
         Console.WriteLine($"{_pass} passed, {_fail} failed");
         return _fail == 0 ? 0 : 1;
@@ -451,12 +452,56 @@ internal static class Program
         File.Delete(path); File.Delete(path + ".unreadable");
     }
 
+    /// <summary>Owner 2026-10-18: "มีสัตว์เลี้ยงที่ฟักแล้ว และมีไข่ตกลงมาใหม่อีกได้อย่างไร" — the harnesses that build the real
+    /// MainWindow (pagestest, themetest) put a fresh egg from their own Data folder onto the owner's desktop.</summary>
+    static void Desktop()
+    {
+        Console.WriteLine("Desktop: only the CluadeX app, and only one pet on the machine");
+        Check("a harness may not put a pet on the desktop (pagestest / themetest / chattest / pettest)",
+            !PetService.MayShowOnDesktop("pagestest") && !PetService.MayShowOnDesktop("themetest")
+            && !PetService.MayShowOnDesktop("chattest") && !PetService.MayShowOnDesktop("pettest"));
+        Check("the CluadeX app may", PetService.MayShowOnDesktop("CluadeX"));
+
+        // The real window path, as pagestest drives it: an app with a main window, the pet enabled and out.
+        var app = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        app.MainWindow ??= new Window();
+        var settings = new SettingsService();
+        File.Delete(Path.Combine(settings.DataRoot, "pet.json"));
+        var svc = new PetService(settings, new LocalizationService());
+        svc.State.OnDesktop = true;
+        svc.ApplyVisibility();
+        Check("in a harness ApplyVisibility shows no pet window (no egg falls onto the desktop)",
+            !svc.IsOut && !app.Windows.OfType<CluadeX.Views.Pet.PetWindow>().Any(), $"out={svc.IsOut}");
+
+        // One pet per machine: while another CluadeX holds the token, this one stays in.
+        var take = typeof(PetService).GetMethod("TakeDesktopToken", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var release = typeof(PetService).GetMethod("ReleaseDesktopToken", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        bool whileOther, afterOther;
+        using (var other = new System.Threading.Mutex(false, PetService.DesktopMutexName, out bool mine))
+        {
+            whileOther = (bool)take.Invoke(svc, null)!;
+            if (whileOther) release.Invoke(svc, null);
+            Check("(the stand-in for the other CluadeX made the token)", mine);
+        }
+        afterOther = (bool)take.Invoke(svc, null)!;
+        var second = new PetService(settings, new LocalizationService());
+        bool secondToo = (bool)take.Invoke(second, null)!;
+        release.Invoke(svc, null);
+        bool secondAfter = (bool)take.Invoke(second, null)!;
+        release.Invoke(second, null);
+        Check("while another CluadeX has its pet out, this one may not; once it is gone, it may",
+            !whileOther && afterOther, $"whileOther={whileOther} after={afterOther}");
+        Check("two pets in one machine: the second waits until the first is put away", !secondToo && secondAfter, $"second={secondToo} after={secondAfter}");
+        svc.Dispose(); second.Dispose();
+    }
+
     // ─── live: the real PetWindow on the real desktop for ~20 s ───────────
 
     /// <summary>Shows the pet (portable data folder, never the user's own) and prints where it is twice a second:
     /// its window rectangle, the floor it stands on, and its state — the screenshots are taken from outside.</summary>
     static int Live(bool egg, bool hatchLive)
     {
+        PetService.AllowDesktopOutsideApp = true;   // a harness never puts a pet out otherwise
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var settings = new SettingsService();
         File.Delete(Path.Combine(settings.DataRoot, "pet.json"));
