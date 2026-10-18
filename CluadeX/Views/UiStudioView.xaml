@@ -391,9 +391,37 @@
                         <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.approx}" FontSize="11" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center" Margin="12,6,12,8" TextWrapping="Wrap"/>
                         <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.hint}" FontSize="11.5" Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center" Margin="12,0" TextWrapping="Wrap"/>
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,18,0,12" CornerRadius="30" Padding="9" Background="#FF101014"
-                                    Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
-                                <sk:SketchView x:Name="StageView" Width="378" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True"/>
+                            <!-- a phone in its bezel; a desktop app's window (WPF) as wide as the stage, in a thin frame -->
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Margin" Value="0,18,0,12"/>
+                                        <Setter Property="CornerRadius" Value="30"/>
+                                        <Setter Property="Padding" Value="9"/>
+                                        <Setter Property="Background" Value="#FF101014"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDesktopApp}" Value="True">
+                                                <Setter Property="Margin" Value="18,18,18,12"/>
+                                                <Setter Property="CornerRadius" Value="9"/>
+                                                <Setter Property="Padding" Value="1"/>
+                                                <Setter Property="Background" Value="{DynamicResource Border.Default}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <sk:SketchView x:Name="StageView" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True">
+                                    <sk:SketchView.Style>
+                                        <Style TargetType="sk:SketchView">
+                                            <Setter Property="Width" Value="378"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsDesktopApp}" Value="True">
+                                                    <Setter Property="Width" Value="Auto"/>
+                                                    <Setter Property="MaxWidth" Value="1180"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </sk:SketchView.Style>
+                                </sk:SketchView>
                             </Border>
                         </ScrollViewer>
                     </DockPanel>

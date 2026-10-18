@@ -115,6 +115,8 @@ public sealed partial class UiStudioViewModel
     public ObservableCollection<PageCard> ScreenCards { get; } = new();
 
     public bool IsSimulated => _studio.Project.Kind == StudioProjectKind.Simulated;
+    /// <summary>A simulated desktop app (WPF): its screens are landscape windows, not phone screens.</summary>
+    public bool IsDesktopApp => IsSimulated && _studio.Project.Framework == "wpf";
     public bool IsServerSite => _studio.Project.Kind == StudioProjectKind.Server;
     /// <summary>The project shows in the live browser (not a simulated app).</summary>
     public bool IsLiveView => HasProject && !IsSimulated;
@@ -156,13 +158,15 @@ public sealed partial class UiStudioViewModel
         set { value = Math.Clamp(value, 1, 12); if (SetProperty(ref _galleryColumns, value)) RebuildRows(); }
     }
 
-    /// <summary>Phone-shaped thumbnails (an app's screens, or the Studio set to a mobile width).</summary>
-    public bool IsPhoneLayout => IsSimulated || Device == "mobile";
+    /// <summary>Phone-shaped thumbnails (a mobile app's screens, or the Studio set to a mobile width); a desktop
+    /// app's windows are landscape like a web page's shot.</summary>
+    public bool IsPhoneLayout => IsSimulated ? !IsDesktopApp : Device == "mobile";
     public double CardWidth => IsPhoneLayout ? 184 : 272;
     public double ThumbHeight => IsPhoneLayout ? 360 : 170;
 
     private void NotifyLayout()
     {
+        OnPropertyChanged(nameof(IsDesktopApp));
         OnPropertyChanged(nameof(IsPhoneLayout));
         OnPropertyChanged(nameof(CardWidth));
         OnPropertyChanged(nameof(ThumbHeight));
@@ -247,7 +251,9 @@ public sealed partial class UiStudioViewModel
             }
             BuildCards();
             _store.Prune(_allCards.Select(c => c.Page.Id).ToList());
-            if (IsSimulated && StageCard == null && ScreenCards.FirstOrDefault(c => c.Page.Route != null) is { } first) OpenStage(first, closeGallery: false);
+            // the stage starts on the first routed screen (a desktop app has no routes: its main window)
+            if (IsSimulated && StageCard == null && (ScreenCards.FirstOrDefault(c => c.Page.Route != null) ?? ScreenCards.FirstOrDefault()) is { } first)
+                OpenStage(first, closeGallery: false);
             _ = SketchAllAsync();
         }
         catch (OperationCanceledException) { }
@@ -298,6 +304,13 @@ public sealed partial class UiStudioViewModel
                 PageSections.Add(new PageSection { Key = "~routed", Label = T("studio.pages.routed"), Count = routed });
                 PageSections.Add(new PageSection { Key = "~other", Label = T("studio.pages.otherScreens"), Count = _allCards.Count - routed });
             }
+            else
+            {
+                // a desktop app: its views (the pages inside the main window) and its windows (dialogs, tools)
+                foreach (var g in _allCards.Where(c => c.Page.Group != null).GroupBy(c => c.Page.Group!).OrderBy(g => g.Key == "window" ? 1 : 0))
+                    if (g.Count() < _allCards.Count)
+                        PageSections.Add(new PageSection { Key = "~group:" + g.Key, Label = g.Key == "window" ? T("studio.pages.windows") : T("studio.pages.views"), Count = g.Count() });
+            }
             return;
         }
         foreach (var g in _allCards.Where(c => !c.IsExternal && c.Page.Route != null)
@@ -330,6 +343,7 @@ public sealed partial class UiStudioViewModel
                 "~web" => c.IsExternal,
                 "~routed" => c.Page.Route != null,
                 "~other" => c.Page.Route == null,
+                _ when _section.StartsWith("~group:", StringComparison.Ordinal) => c.Page.Group == _section["~group:".Length..],
                 _ => c.Page.Route != null && ("/" + FirstSegment(c.Page.Route)).Equals(_section, StringComparison.OrdinalIgnoreCase),
             };
             if (!inSection) return false;
@@ -520,7 +534,7 @@ public sealed partial class UiStudioViewModel
     /// <summary>Draw every screen of a simulated app, one by one in the background.</summary>
     private async Task SketchAllAsync()
     {
-        if (_sketching || _catalog?.Flutter is not { } flutter) return;
+        if (_sketching || _catalog?.Screens is not { } screens) return;
         _sketching = true;
         var ct = _pagesCts.Token;
         try
@@ -529,7 +543,7 @@ public sealed partial class UiStudioViewModel
             {
                 if (ct.IsCancellationRequested) break;
                 ScreenSketch? sk = null;
-                try { sk = await Task.Run(() => flutter.Sketch(c.Page), ct); }
+                try { sk = await Task.Run(() => screens.Sketch(c.Page), ct); }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex) { _log?.Warn("UiStudio", "sketch failed " + c.Page.Id, ex); }
                 c.Sketched = true;
@@ -766,7 +780,7 @@ public sealed partial class UiStudioViewModel
     /// <summary>Draw a screen now when the background pass hasn't reached it yet (the user opened it first).</summary>
     private void EnsureSketch(PageCard c)
     {
-        if (c.Sketched || !c.IsScreen || _catalog?.Flutter is not { } f) return;
+        if (c.Sketched || !c.IsScreen || _catalog?.Screens is not { } f) return;
         try { c.Sketch = f.Sketch(c.Page); } catch (Exception ex) { _log?.Warn("UiStudio", "sketch failed", ex); }
         c.Sketched = true;
         if (c.Sketch?.Title is { Length: > 0 } t && t != "…") c.Title = t;
@@ -806,12 +820,13 @@ public sealed partial class UiStudioViewModel
     {
         var c = _stageCard!;
         var sb = new StringBuilder();
-        sb.AppendLine($"[UI Studio] Change a screen of this {(_studio.Project.Framework is { Length: > 0 } fw ? fw : "app")} app.");
+        string framework = _studio.Project.Framework switch { "wpf" => "WPF", { Length: > 0 } fw => fw, _ => "app" };
+        sb.AppendLine($"[UI Studio] Change a screen of this {framework} app.");
         sb.AppendLine();
         sb.AppendLine("Request: " + request);
         sb.AppendLine();
         sb.AppendLine($"Screen: {c.Page.Detail} — \"{c.Title}\"" + (c.Page.Route != null ? $", route {c.Page.Route}" : ""));
-        if (c.Page.SourcePath != null) sb.AppendLine($"Screen file: {Rel(c.Page.SourcePath)} (class at line {c.Page.SourceLine})");
+        if (c.Page.SourcePath != null) sb.AppendLine($"Screen file: {Rel(c.Page.SourcePath)} ({(IsDesktopApp ? "root element" : "class")} at line {c.Page.SourceLine})");
         if (_stageNode is { } n)
         {
             sb.AppendLine($"The part the user picked: <{n.Widget ?? n.Kind.ToString()}>" + (n.Text is { Length: > 0 } t && t != "…" ? $" showing \"{t}\"" : ""));
@@ -819,7 +834,9 @@ public sealed partial class UiStudioViewModel
             if (n.UseFile != null) sb.AppendLine($"  used by the screen at {Rel(n.UseFile)}:{n.UseLine}");
         }
         sb.AppendLine();
-        sb.AppendLine("Edit only what the request needs. If the part is a shared widget used by other screens, change it only when the request is about every screen; otherwise change this screen's use of it. Keep the app's existing theme and widget kit.");
+        sb.AppendLine(IsDesktopApp
+            ? "Edit only what the request needs. If the part is a UserControl or a style shared with other views, change it only when the request is about every view; otherwise change this view's use of it. Keep the app's existing theme resources ({DynamicResource} brushes), styles and translations ({services:Loc} keys, each with its Thai text)."
+            : "Edit only what the request needs. If the part is a shared widget used by other screens, change it only when the request is about every screen; otherwise change this screen's use of it. Keep the app's existing theme and widget kit.");
         return sb.ToString();
     }
 
