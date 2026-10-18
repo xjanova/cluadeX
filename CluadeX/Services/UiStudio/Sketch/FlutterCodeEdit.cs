@@ -69,6 +69,9 @@ public sealed class FlutterWidgetInfo
     public string? L10nKey { get; init; }
     /// <summary>The key is called with values (<c>l10n.greeting(name)</c>): a message with placeholders.</summary>
     public bool L10nCall { get; init; }
+    /// <summary>Its text is a parameter of the widget class it is written in (<c>Text(label)</c> in class _Tag): the
+    /// text tool types over what the widget's use passes (<c>_Tag(label: 'ยอดขาย')</c>).</summary>
+    public FlutterParamText? ParamText { get; init; }
     public bool CanText { get; init; }
     public bool CanTextStyle { get; init; }
     public double? FontSize { get; init; }
@@ -96,6 +99,47 @@ public sealed class FlutterWidgetInfo
     public bool HasChildren { get; init; }
     /// <summary>Its own const keyword or an enclosing one.</summary>
     public bool InConst { get; init; }
+}
+
+/// <summary>A widget's text that is one of its own constructor's parameters — <c>Text(label)</c> in class _Tag,
+/// <c>Text(widget.label)</c> in its State: what shows is what each use passes, so the text is written there (the
+/// <c>label:</c> argument of the <c>_Tag(…)</c> call that drew it).</summary>
+public sealed class FlutterParamText
+{
+    /// <summary>The widget class whose constructor takes the text ("_Tag").</summary>
+    public string Class { get; init; } = "";
+    /// <summary>The parameter ("label").</summary>
+    public string Param { get; init; } = "";
+    /// <summary>Each constructor that takes it as <c>this.label</c> ("" for the unnamed one, "small" for _Tag.small) →
+    /// its place among that constructor's positional parameters (-1: a named parameter).</summary>
+    public IReadOnlyDictionary<string, int> Ctors { get; init; } = new Dictionary<string, int>();
+}
+
+/// <summary>What a use of a widget passes for one of its text parameters.</summary>
+public enum FlutterArgKind
+{
+    /// <summary>A plain string literal: the text tool types over it.</summary>
+    Literal,
+    /// <summary>A translation (<c>context.l10n.title</c>): its message in the .arb file is what to type over.</summary>
+    Translation,
+    /// <summary>A parameter of the widget the use is written in (<c>_Tag(label: title)</c> inside _Section): the text
+    /// comes from further up, from where _Section is used.</summary>
+    PassedOn,
+    /// <summary>Built from data: an interpolation, a variable, a call.</summary>
+    Data,
+    /// <summary>The use leaves it out: the parameter's default shows.</summary>
+    Default,
+    /// <summary>No call of that widget there (the code changed under the picture).</summary>
+    Stale,
+}
+
+public sealed class FlutterArgText
+{
+    public FlutterArgKind Kind { get; init; }
+    public string? Literal { get; init; }
+    public string? L10nKey { get; init; }
+    public bool L10nCall { get; init; }
+    public FlutterParamText? PassedOn { get; init; }
 }
 
 /// <summary>Where a widget dragged onto the real picture would go.</summary>
@@ -168,12 +212,18 @@ public static class FlutterCodeEdit
         var tc = TextCallFor(d, c);
         string? textNote = null, literal = null, l10nKey = null;
         bool l10nCall = false;
+        FlutterParamText? param = null;
         if (tc != null)
         {
             var a = tc.Positional(0);
             if (a != null && LiteralOf(d, a) is { } s) literal = s;
             else if (a != null && TranslationKey(d, a, out l10nCall) is { } key) { l10nKey = key; textNote = "studio.fedit.text.l10n"; }
-            else textNote = a != null && IsL10n(d.Text[a.ValueStart..a.ValueEnd]) ? "studio.fedit.text.l10n" : "studio.fedit.text.data";
+            else
+            {
+                textNote = a != null && IsL10n(d.Text[a.ValueStart..a.ValueEnd]) ? "studio.fedit.text.l10n" : "studio.fedit.text.data";
+                // (the reason stays until the use is found: only the call that drew this widget knows its text)
+                if (a != null) param = ParamOf(d, a);
+            }
         }
         var style = tc?.Named("style");
         DartCall? styleCall = style != null ? d.CallIs(style) ?? d.TrailingCall(style) : null;
@@ -186,6 +236,7 @@ public static class FlutterCodeEdit
             TextNote = textNote,
             L10nKey = l10nKey,
             L10nCall = l10nCall,
+            ParamText = param,
             CanText = literal != null,
             CanTextStyle = tc != null,
             FontSize = Num(d, styleCall?.Named("fontSize")),
@@ -354,6 +405,243 @@ public static class FlutterCodeEdit
         return n.Contains("l10n", StringComparison.Ordinal) || n is "loc" or "i18n" || n.Contains("localization", StringComparison.Ordinal) || n.Contains("translation", StringComparison.Ordinal);
     }
 
+    // ───────────────────────────── text passed in through a parameter ─────────────────────────────
+
+    /// <summary>A class declaration: its name, the { of its body, and for a State class the widget it belongs to.</summary>
+    private sealed record ClassDecl(string Name, int Open, string? StateOf);
+
+    /// <summary>The constructor parameter of the widget around it that a value is: <c>label</c> or <c>this.label</c> in a
+    /// widget class whose constructor takes <c>this.label</c>, <c>widget.label</c> in its State class — also
+    /// <c>label!</c> and <c>label ?? 'x'</c> (what the use passes is what shows). Null for anything else: a local or a
+    /// closure's parameter of that name, a State's own field, a getter, a call on it (<c>label.toUpperCase()</c>).</summary>
+    internal static FlutterParamText? ParamOf(DartDoc d, DartItem a)
+    {
+        int first = a.FirstTok, last = a.LastTok;
+        for (int k = first; k <= last; k++)
+        {
+            if (d.IsOpener(k) && d.Match[k] > k) { k = d.Match[k]; continue; }
+            if (d.Is(k, "??")) { last = k - 1; break; }
+        }
+        if (last > first && d.Is(last, "!")) last--;
+        bool viaWidget = false, viaThis = false;
+        if (last == first + 2 && d.Is(first + 1, ".") && (d.IsIdent(first, "widget") || d.IsIdent(first, "this")))
+        {
+            viaWidget = d.IsIdent(first, "widget");
+            viaThis = !viaWidget;
+        }
+        else if (last != first) return null;
+        var t = d.T[last];
+        if (t.Kind != DTok.Ident || t.Text is "this" or "widget" or "super" or "null" or "true" or "false") return null;
+        string name = t.Text;
+        var around = ClassAround(d, first);
+        if (around == null) return null;
+        var owner = around;
+        if (viaWidget)
+        {
+            // State<Foo>: widget.label is Foo's parameter (Foo is written next to its State)
+            if (around.StateOf == null || FindClass(d, around.StateOf) is not { } w) return null;
+            owner = w;
+        }
+        else if (!viaThis && Shadowed(d, around.Open, first, name)) return null;
+        var ctors = CtorsTaking(d, owner, name);
+        return ctors.Count == 0 ? null : new FlutterParamText { Class = owner.Name, Param = name, Ctors = ctors };
+    }
+
+    /// <summary>The class whose body holds token <paramref name="tok"/> (classes don't nest in Dart).</summary>
+    private static ClassDecl? ClassAround(DartDoc d, int tok)
+    {
+        for (int o = d.EnclosingOpener(tok); o >= 0; o = d.EnclosingOpener(o))
+            if (d.Is(o, "{") && ClassHeader(d, o) is { } c) return c;
+        return null;
+    }
+
+    /// <summary>The class a { opens the body of: <c>class Name&lt;T&gt; extends State&lt;W&gt; with M implements I {</c>
+    /// (null: a method body, a block, an extension, a mixin).</summary>
+    private static ClassDecl? ClassHeader(DartDoc d, int open)
+    {
+        for (int k = open - 1; k >= 0 && k > open - 80; k--)
+        {
+            if (d.IsIdent(k, "class"))
+            {
+                if (k + 1 >= open || d.T[k + 1].Kind != DTok.Ident) return null;
+                string? stateOf = null;
+                for (int j = k + 2; j < open; j++)
+                {
+                    if (!d.IsIdent(j, "extends")) continue;
+                    int s = j + 1;
+                    if (d.Is(s + 1, ".")) s += 2;   // a prefixed base: m.State<Foo>
+                    if (s + 2 < open && d.T[s].Kind == DTok.Ident && d.T[s].Text.EndsWith("State", StringComparison.Ordinal) && d.Is(s + 1, "<") && d.T[s + 2].Kind == DTok.Ident)
+                        stateOf = d.T[s + 2].Text;
+                    break;
+                }
+                return new ClassDecl(d.T[k + 1].Text, open, stateOf);
+            }
+            var tk = d.T[k];
+            if (tk.Kind == DTok.Ident || tk.Kind == DTok.Punct && tk.Text is "<" or ">" or ">>" or "," or "." or "?") continue;
+            return null;
+        }
+        return null;
+    }
+
+    private static ClassDecl? FindClass(DartDoc d, string name)
+    {
+        for (int i = 0; i + 1 < d.T.Count; i++)
+        {
+            if (!d.IsIdent(i, "class") || !d.IsIdent(i + 1, name)) continue;
+            for (int k = i + 2; k < d.T.Count && k < i + 80; k++)
+            {
+                if (d.Is(k, ";")) break;
+                if (d.Is(k, "{") && d.Match[k] > k) return ClassHeader(d, k);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>The constructors of a class that take <paramref name="name"/> as <c>this.name</c>: the constructor's name
+    /// ("" for the unnamed one) → the parameter's place among its positional ones (-1: named).</summary>
+    private static Dictionary<string, int> CtorsTaking(DartDoc d, ClassDecl c, string name)
+    {
+        var map = new Dictionary<string, int>(StringComparer.Ordinal);
+        int close = d.Match[c.Open];
+        for (int k = c.Open + 1; k < close; k++)
+        {
+            if (!d.IsOpener(k) || d.Match[k] <= k) continue;
+            if (d.Is(k, "(") && CtorNameAt(d, k, c.Name) is { } ctor && ParamPlace(d, k, name) is int at) map.TryAdd(ctor, at);
+            k = d.Match[k];
+        }
+        return map;
+    }
+
+    /// <summary>The ( opens the parameters of a constructor of <paramref name="cls"/> (<c>Name(</c>, <c>const Name(</c>,
+    /// <c>Name.named(</c> at the start of a member of its class body — not a factory, not a call): its name ("" for
+    /// the unnamed one).</summary>
+    private static string? CtorNameAt(DartDoc d, int open, string cls)
+    {
+        int j = open - 1;
+        string ctor = "";
+        if (j >= 2 && d.T[j].Kind == DTok.Ident && d.Is(j - 1, ".") && d.IsIdent(j - 2, cls)) { ctor = d.T[j].Text; j -= 2; }
+        else if (!d.IsIdent(j, cls)) return null;
+        int before = j - 1;
+        if (d.IsIdent(before, "const")) before--;
+        // after the body's {, a member's ; or }, or an annotation's )
+        return before < 0 || d.Is(before, "{") || d.Is(before, ";") || d.Is(before, "}") || d.Is(before, ")") ? ctor : null;
+    }
+
+    /// <summary>Where <c>this.name</c> is among a constructor's parameters: its positional index, -1 when it is named,
+    /// null when the constructor doesn't take it so.</summary>
+    private static int? ParamPlace(DartDoc d, int open, string name)
+    {
+        int close = d.Match[open];
+        bool named = false;
+        int index = 0, start = open + 1;
+        for (int k = open + 1; k <= close; k++)
+        {
+            bool end = k == close || d.Is(k, ",") || d.Is(k, "}") || d.Is(k, "]");
+            if (!end && d.IsOpener(k) && d.Match[k] > k)
+            {
+                // the {…} of the named parameters, the […] of the optional ones: their parameters are read one by one;
+                // any other bracket belongs to one parameter (a default value, a function type)
+                if (k == start && (d.Is(k, "{") || d.Is(k, "["))) { named = d.Is(k, "{"); start = k + 1; continue; }
+                k = d.Match[k];
+                continue;
+            }
+            if (!end) continue;
+            for (int j = start; j + 2 < k; j++)
+                if (d.IsIdent(j, "this") && d.Is(j + 1, ".") && d.IsIdent(j + 2, name)) return named ? -1 : index;
+            if (k > start && !named) index++;
+            start = k + 1;
+        }
+        return null;
+    }
+
+    /// <summary>A declaration of <paramref name="name"/> before token <paramref name="use"/> in the class member that holds
+    /// it — a local (<c>final label = …</c>, <c>for (final label in …)</c>), a parameter of the method or of a closure
+    /// (<c>(label) =&gt; …</c>): there the name isn't the field. Any such declaration counts, wherever its scope ends:
+    /// when in doubt, it isn't the field.</summary>
+    private static bool Shadowed(DartDoc d, int classOpen, int use, string name)
+    {
+        int start = classOpen + 1;
+        for (int k = classOpen + 1; k < use; k++)
+        {
+            if (d.IsOpener(k) && d.Match[k] > k)
+            {
+                if (d.Match[k] > use) break;            // the member that holds the use
+                k = d.Match[k];
+                if (d.Is(k, "}")) start = k + 1;        // a member's body ended
+                continue;
+            }
+            if (d.Is(k, ";")) start = k + 1;
+        }
+        for (int k = Math.Max(start, 1); k < use; k++)
+        {
+            if (d.T[k].Kind != DTok.Ident || d.T[k].Text != name) continue;
+            if (d.Is(k - 1, ".") || d.Is(k - 1, "?.") || d.Is(k + 1, ":")) continue;   // x.label · label: (an argument's name)
+            var prev = d.T[k - 1];
+            if (prev.Kind == DTok.Ident && prev.Text is "final" or "var" or "const" or "late") return true;
+            bool typed = prev.Kind == DTok.Ident && (char.IsUpper(prev.Text.TrimStart('_').FirstOrDefault()) || prev.Text is "int" or "double" or "num" or "bool" or "dynamic")
+                         || d.Is(k - 1, "?") || d.Is(k - 1, ">") || d.Is(k - 1, ")");
+            if (typed && (d.Is(k + 1, "=") || d.Is(k + 1, ",") || d.Is(k + 1, ")") || d.Is(k + 1, ";") || d.Is(k + 1, "}") || d.Is(k + 1, "=>") || d.IsIdent(k + 1, "in")))
+                return true;
+            // an untyped parameter — (label) => …, (context, label) { … }, row(label) { … } — or a pattern: final (label, n) = …
+            int o = d.EnclosingOpener(k);
+            if (o >= 0 && d.Is(o, "(") && (d.Is(k - 1, "(") || d.Is(k - 1, ",")) && (d.Is(k + 1, ",") || d.Is(k + 1, ")")))
+            {
+                int after = d.Match[o] + 1;
+                if (d.Is(after, "=>") || d.Is(after, "{") || d.IsIdent(after, "async") || d.IsIdent(o - 1, "final") || d.IsIdent(o - 1, "var")) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>The call of <paramref name="p"/>'s class at a line and column — the widget's use that the inspector says
+    /// drew it — and its argument for the text parameter (null: left out). <paramref name="known"/> is false when that
+    /// constructor doesn't take the parameter as this.x.</summary>
+    private static DartItem? ArgFor(DartDoc d, int line, int column, FlutterParamText p, out DartCall? call, out bool known)
+    {
+        known = false;
+        call = d.CallAt(line, column);
+        if (call == null || call.ClassName != p.Class) { call = null; return null; }
+        string ctor = call.Name.Contains('.') ? call.Name[(call.Name.IndexOf('.') + 1)..] : "";
+        if (!p.Ctors.TryGetValue(ctor, out int index)) return null;
+        known = true;
+        return index < 0 ? call.Named(p.Param) : call.Positional(index);
+    }
+
+    /// <summary>What the use of a widget at line:column (its call, as the widget inspector gives it) passes for the text
+    /// parameter <paramref name="p"/>: a literal to type over, a translation, the caller's own parameter (followed on from
+    /// where that widget is used), data, nothing (the default shows).</summary>
+    public static FlutterArgText ArgText(string text, int line, int column, FlutterParamText p)
+    {
+        var d = new DartDoc(text);
+        var a = ArgFor(d, line, column, p, out var call, out bool known);
+        if (call == null) return new FlutterArgText { Kind = FlutterArgKind.Stale };
+        if (!known) return new FlutterArgText { Kind = FlutterArgKind.Data };
+        if (a == null) return new FlutterArgText { Kind = FlutterArgKind.Default };
+        if (LiteralOf(d, a) is { } s) return new FlutterArgText { Kind = FlutterArgKind.Literal, Literal = s };
+        if (TranslationKey(d, a, out bool l10nCall) is { } key) return new FlutterArgText { Kind = FlutterArgKind.Translation, L10nKey = key, L10nCall = l10nCall };
+        if (ParamOf(d, a) is { } up) return new FlutterArgText { Kind = FlutterArgKind.PassedOn, PassedOn = up };
+        return new FlutterArgText { Kind = FlutterArgKind.Data };
+    }
+
+    /// <summary>Where <paramref name="cls"/> is used in a file: the line and column of each call of it (as the widget
+    /// inspector gives them — a named constructor's name), its own constructors' declarations left out.</summary>
+    public static List<(int Line, int Column)> CallsOf(string text, string cls)
+    {
+        var found = new List<(int, int)>();
+        if (!text.Contains(cls, StringComparison.Ordinal)) return found;
+        var d = new DartDoc(text);
+        int lastAt = -1;
+        for (int i = 0; i < d.T.Count; i++)
+        {
+            if (!d.IsIdent(i, cls) || d.CallAtOffset(d.T[i].Pos) is not { } c || c.ClassName != cls || c.NameAt == lastAt) continue;
+            lastAt = c.NameAt;
+            bool declared = d.IsIdent(c.StartTok - 1, "factory")
+                            || ClassAround(d, c.OpenTok) is { } owner && owner.Name == cls && d.EnclosingOpener(c.StartTok) == owner.Open && CtorNameAt(d, c.OpenTok, cls) != null;
+            if (!declared) found.Add(d.LineCol(c.NameAt));
+        }
+        return found;
+    }
+
     private static string Src(DartDoc d, DartItem v) => d.Text[v.ValueStart..v.ValueEnd].Trim();
 
     /// <summary>A number the code gives directly: 16, 16.0, EdgeInsets.all(16), BorderRadius.circular(12).</summary>
@@ -432,10 +720,29 @@ public static class FlutterCodeEdit
         if (tc == null) return FlutterEdit.Fail("text.none");
         var a = tc.Positional(0);
         if (a == null) return FlutterEdit.Fail("text.none");
+        return SetLiteral(d, a, value, c.NameAt);
+    }
+
+    /// <summary>Type over a text that a widget gets through its parameter <paramref name="p"/>, where the widget is used:
+    /// only the literal the call at line:column passes changes (a string literal is a constant, so a const call or list
+    /// around it stays const). With <paramref name="expect"/> (the text the tool showed), a literal that says something
+    /// else by now — the AI or the editor changed it meanwhile — is not overwritten.</summary>
+    public static FlutterEdit SetArgText(string text, int line, int column, FlutterParamText p, string value, string? expect = null)
+    {
+        var d = new DartDoc(text);
+        var a = ArgFor(d, line, column, p, out var call, out bool known);
+        if (call == null || !known || a == null) return FlutterEdit.Fail("stale");
+        if (expect != null && LiteralOf(d, a) is { } now && now != expect) return FlutterEdit.Fail("changedMeanwhile");
+        return SetLiteral(d, a, value, call.NameAt);
+    }
+
+    /// <summary>Replace a string literal with <paramref name="value"/>, in the quotes it was written with.</summary>
+    private static FlutterEdit SetLiteral(DartDoc d, DartItem a, string value, int focus)
+    {
         if (LiteralOf(d, a) == null) return FlutterEdit.Fail(IsL10n(Src(d, a)) ? "text.l10n" : "text.data");
         char q = d.Text[a.ValueStart] == 'r' ? d.Text[a.ValueStart + 1] : d.Text[a.ValueStart];
         if (q != '"') q = '\'';
-        return Make(d, new List<Replace> { new(a.ValueStart, a.ValueEnd, Quote(value, q)) }, c.NameAt);
+        return Make(d, new List<Replace> { new(a.ValueStart, a.ValueEnd, Quote(value, q)) }, focus);
     }
 
     /// <summary>A Dart string literal of <paramref name="s"/> ('…', with \, ', $ and new lines escaped).</summary>
