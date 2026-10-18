@@ -158,7 +158,8 @@ public sealed partial class UiStudioViewModel
                 foreach (var b in bx.EnumerateArray())
                     boxes.Add(new WidgetBox(b.GetProperty("Widget").GetString() ?? "", b.GetProperty("File").GetString() ?? "", b.GetProperty("Line").GetInt32(),
                         b.GetProperty("Column").GetInt32(), b.GetProperty("X").GetDouble(), b.GetProperty("Y").GetDouble(), b.GetProperty("W").GetDouble(),
-                        b.GetProperty("H").GetDouble(), b.GetProperty("Depth").GetInt32()));
+                        b.GetProperty("H").GetDouble(), b.GetProperty("Depth").GetInt32(),
+                        b.TryGetProperty("Id", out var id) ? id.GetInt32() : -1, b.TryGetProperty("Parent", out var pa) ? pa.GetInt32() : -1));
         }
         catch { }
         return (boxes, problems);

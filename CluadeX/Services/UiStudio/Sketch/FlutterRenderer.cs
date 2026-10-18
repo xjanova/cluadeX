@@ -7,8 +7,10 @@ using CluadeX.Services.UiStudio.Pages;
 
 namespace CluadeX.Services.UiStudio.Sketch;
 
-/// <summary>Where one widget written in the project sits on a rendered screen (logical pixels).</summary>
-public sealed record WidgetBox(string Widget, string File, int Line, int Column, double X, double Y, double W, double H, int Depth);
+/// <summary>Where one widget written in the project sits on a rendered screen (logical pixels). <see cref="Id"/> is its
+/// place in the renderer's list, <see cref="Parent"/> the Id of the nearest box around it in Flutter's widget tree (-1:
+/// none); both are -1 in a picture taken before they were recorded.</summary>
+public sealed record WidgetBox(string Widget, string File, int Line, int Column, double X, double Y, double W, double H, int Depth, int Id = -1, int Parent = -1);
 
 /// <summary>One screen as Flutter drew it.</summary>
 public sealed class ScreenRender
@@ -353,22 +355,25 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
     final svc = WidgetInspectorService.instance;
     try {
       final tree = json.decode(svc.getRootWidgetSummaryTree('cx')) as Map<String, dynamic>;
-      void walk(Map<String, dynamic> n, int depth) {
+      // 'p': the index of the nearest box around it (a widget without a box of its own passes its parent on)
+      void walk(Map<String, dynamic> n, int depth, int parent) {
+        var mine = parent;
         final loc = n['creationLocation'] as Map<String, dynamic>?;
         if (loc != null && n['createdByLocalProject'] == true) {
           final obj = svc.toObject(n['valueId'] as String?, 'cx');
           final ro = obj is Element ? obj.renderObject : null;
           if (ro is RenderBox && ro.attached && ro.hasSize) {
             final o = ro.localToGlobal(Offset.zero);
+            mine = boxes.length;
             boxes.add({'w': n['description'], 'f': loc['file'], 'l': loc['line'], 'c': loc['column'],
-              'x': o.dx, 'y': o.dy, 'wd': ro.size.width, 'ht': ro.size.height, 'd': depth});
+              'x': o.dx, 'y': o.dy, 'wd': ro.size.width, 'ht': ro.size.height, 'd': depth, 'p': parent});
           }
         }
         for (final k in (n['children'] as List<dynamic>? ?? const <dynamic>[])) {
-          walk(k as Map<String, dynamic>, depth + 1);
+          walk(k as Map<String, dynamic>, depth + 1, mine);
         }
       }
-      walk(tree, 0);
+      walk(tree, 0, -1);
     } catch (e) {
       add('widget map: ${_first(e)}');
     }
@@ -542,14 +547,18 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
                 if (r.TryGetProperty("problems", out var pr))
                     foreach (var x in pr.EnumerateArray()) if (x.GetString() is { Length: > 0 } m) sr.Problems.Add(m);
                 if (r.TryGetProperty("boxes", out var bx))
+                {
+                    int index = -1;
                     foreach (var b in bx.EnumerateArray())
                     {
+                        index++;
                         string file = b.GetProperty("f").GetString() ?? "";
                         if (file.Contains("cluadex_studio", StringComparison.Ordinal)) continue;   // our own test's widgets
                         sr.Boxes.Add(new WidgetBox(b.GetProperty("w").GetString() ?? "", FileFromUri(file), b.GetProperty("l").GetInt32(), b.GetProperty("c").GetInt32(),
                             b.GetProperty("x").GetDouble(), b.GetProperty("y").GetDouble(), b.GetProperty("wd").GetDouble(), b.GetProperty("ht").GetDouble(),
-                            b.TryGetProperty("d", out var d) ? d.GetInt32() : 0));
+                            b.TryGetProperty("d", out var d) ? d.GetInt32() : 0, index, b.TryGetProperty("p", out var pa) ? pa.GetInt32() : -1));
                     }
+                }
             }
             catch { /* a half-written file: the screen shows as not drawn */ }
         }

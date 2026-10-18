@@ -462,6 +462,180 @@ class _Badge extends StatelessWidget {
         }
     }
 
+    // ═══════════════════════════════════════════ text passed in through a helper function ═══════════════════════════════════════════
+
+    const string HelperHome = @"import 'package:flutter/material.dart';
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget line(String text) => Padding(
+          padding: const EdgeInsets.all(4),
+          child: Text(text),
+        );
+    return Scaffold(
+      appBar: AppBar(title: const Text('หน้าแรก')),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          line('บรรทัดแรก'),
+          line('บรรทัดที่สอง'),
+          line('บรรทัดที่สาม'),
+          Row(children: [_cell('ซ้าย'), _cell('ขวา')]),
+          const _Mood(),
+          const _Mood(mood: 'ดีใจ'),
+        ],
+      ),
+    );
+  }
+
+  Widget _cell(String label) => Padding(padding: const EdgeInsets.all(4), child: Text(label));
+}
+
+class _Mood extends StatelessWidget {
+  const _Mood({this.mood = 'ปกติ'});
+
+  final String mood;
+
+  @override
+  Widget build(BuildContext context) => Text(mood);
+}
+";
+
+    /// <summary>Text a helper function gets through its parameter, and a widget's default, on a REAL Flutter app (the
+    /// flutter-real fixture): a function declared in build called three times in one Column and a method called twice in
+    /// one Row draw their Text from one line each — the boxes carry the widget tree, and picking any of those Texts
+    /// offers the literal THAT call passes and says where it is written. Enter changes only that call, the Text stays
+    /// picked, Flutter draws again — that call's box gets wider, the others don't — and Undo puts it back. A widget used
+    /// without its text shows its default; typing over it adds the argument at that use only (the const stays).</summary>
+    static async Task FlutterHelpers(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## Text passed in through a helper function, and a widget's default, typed over at the call that drew it");
+        string root = Path.Combine(fx, "flutter-real");
+        if (!File.Exists(Path.Combine(root, ".dart_tool", "package_config.json"))) { Log("  (skipped: the real Flutter fixture is not set up)"); return; }
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("flutter.bat");
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("dart.bat");
+        vm.RenderConsentOverride = true;
+        vm.ToolConfirmOverride = true;
+        string home = Path.Combine(root, "lib", "home_screen.dart");
+        int lineText = LineOf(HelperHome, "child: Text(text)"), cellText = LineOf(HelperHome, "child: Text(label)"), moodText = LineOf(HelperHome, "=> Text(mood)");
+        int call2 = LineOf(HelperHome, "line('บรรทัดที่สอง')"), rowLine = LineOf(HelperHome, "Row(children: [_cell("), mood1 = LineOf(HelperHome, "const _Mood(),");
+        List<WidgetBox> Texts(int line) => vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == line && b.File.EndsWith("home_screen.dart", StringComparison.OrdinalIgnoreCase))
+                                                        .OrderBy(b => b.Y).ThenBy(b => b.X).ToList();
+        string W0(List<WidgetBox> l, int i) => l.Count > i ? l[i].W.ToString("0") : "-";
+        try
+        {
+            await WaitUntil(() => !vm.IsRendering, 120000);
+            var store = (PageShotStore)GetField(vm, "_store")!;
+            var card = Card(vm, "/")!;
+            File.WriteAllText(home, HelperHome);
+            DateTime t0 = DateTime.UtcNow;
+            vm.OpenCardCommand.Execute(card);
+            vm.RenderStageCommand.Execute(null);
+            bool drawn = await Redrawn(vm, store, card.Page.Id, t0);
+            // (the watcher's own redraw of the saved file may follow: let it end)
+            await Idle(1800);
+            await WaitUntil(() => !vm.IsRendering, 240000);
+            var lines = Texts(lineText);
+            var cells = Texts(cellText);
+            var moods = Texts(moodText);
+            Check("helpers: a function declared in build draws its Text three times, a method twice — one line of code each",
+                  drawn && lines.Count == 3 && cells.Count == 2 && moods.Count == 2, $"{drawn} {vm.CompileError} · {lines.Count} {cells.Count} {moods.Count}");
+            if (lines.Count != 3 || cells.Count != 2 || moods.Count != 2) return;
+            Check("helpers: every box knows the box around it (the renderer records Flutter's widget tree)",
+                  vm.StageBoxes.All(b => b.Id >= 0) && lines.All(b => b.Parent >= 0) && lines.Select(b => b.Parent).Distinct().Count() == 3,
+                  string.Join(", ", lines.Select(b => $"{b.Id}<{b.Parent}")));
+
+            // ── each call offers its own text ──
+            vm.PickStageBox(lines[1], open: false);
+            Check("helpers: the second line() call's Text offers what that call passes", vm.HasTools && vm.CanToolText && vm.ToolText == "บรรทัดที่สอง",
+                  $"can={vm.CanToolText} '{vm.ToolText}' '{vm.ToolTextNote}'");
+            Check("helpers: it says the text is set where line() is called (file:line)", vm.ToolTextNote == T(vm, "studio.fedit.text.helperParam", "line", $"lib/home_screen.dart:{call2}"), vm.ToolTextNote);
+            await Idle(300);
+            SavePng(MainWin.Content as FrameworkElement ?? view, "studio-helpers.png");
+            vm.PickStageBox(lines[2], open: false);
+            Check("helpers: the third call's Text offers its own text", vm.CanToolText && vm.ToolText == "บรรทัดที่สาม", $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            vm.PickStageBox(cells[1], open: false);
+            Check("helpers: a method called twice in one Row — the right-hand call's text", vm.CanToolText && vm.ToolText == "ขวา" && vm.ToolTextNote.Contains($"lib/home_screen.dart:{rowLine}"),
+                  $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            vm.PickStageBox(moods[0], open: false);
+            Check("default: a use that leaves the text out offers the widget's default", vm.CanToolText && vm.ToolText == "ปกติ", $"can={vm.CanToolText} '{vm.ToolText}' '{vm.ToolTextNote}'");
+            Check("default: it says Enter adds it at that use", vm.ToolTextNote == T(vm, "studio.fedit.text.paramAdd", $"lib/home_screen.dart:{mood1}"), vm.ToolTextNote);
+            vm.PickStageBox(moods[1], open: false);
+            Check("default: … the use that passes one offers that", vm.CanToolText && vm.ToolText == "ดีใจ", vm.ToolText);
+
+            // ── typing over the second call ──
+            vm.PickStageBox(Texts(lineText)[1], open: false);
+            double w0 = Texts(lineText)[0].W, w1 = Texts(lineText)[1].W, w2 = Texts(lineText)[2].W;
+            string longer = "บรรทัดที่สองที่ยาวขึ้นอีกหลายคำ";
+            vm.ToolText = longer;
+            DateTime t1 = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("helpers: only that call's literal changed", File.ReadAllText(home) == HelperHome.Replace("line('บรรทัดที่สอง')", $"line('{longer}')"), FirstLine(home, "line('บรรทัดที่ส"));
+            Check("helpers: the Text stays picked, showing what was written", vm.StageBox?.Line == lineText && vm.CanToolText && vm.ToolText == longer,
+                  $"{vm.StageBox?.Widget}:{vm.StageBox?.Line} '{vm.ToolText}'");
+            Check("helpers: the change joins the review round", vm.HasSession && vm.SessionReview, vm.SessionText);
+            // typed again at once, before Flutter has drawn it: the tools read the call again (not refused as changed meanwhile)
+            string longest = longer + "จริงๆ";
+            vm.ToolText = longest;
+            DateTime t1b = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("helpers: a second change before the picture is drawn again is written too", File.ReadAllText(home) == HelperHome.Replace("line('บรรทัดที่สอง')", $"line('{longest}')"),
+                  $"{FirstLine(home, "line('บรรทัดที่ส")} · {vm.StatusText}");
+            drawn = await Redrawn(vm, store, card.Page.Id, t1b);
+            await WaitUntil(() => !vm.IsRendering, 240000);
+            var after = Texts(lineText);
+            Check("helpers: drawn again — that call's text is wider, the other two are as they were",
+                  drawn && after.Count == 3 && after[1].W > w1 + 40 && Math.Abs(after[0].W - w0) < 1 && Math.Abs(after[2].W - w2) < 1,
+                  $"{w0:0}/{w1:0}/{w2:0} → {W0(after, 0)}/{W0(after, 1)}/{W0(after, 2)} {vm.CompileError}");
+            Check("helpers: the same call's Text stays picked on the new picture", after.Count == 3 && ReferenceEquals(vm.StageBox, after[1]) && vm.ToolText == longest,
+                  $"picked y={vm.StageBox?.Y:0} '{vm.ToolText}'");
+            SavePng((FrameworkElement)view.FindName("Stage"), "stage-helpers.png");
+
+            vm.UndoCommand.Execute(null);
+            Check("undo: one step back — the first change", File.ReadAllText(home) == HelperHome.Replace("line('บรรทัดที่สอง')", $"line('{longer}')"), FirstLine(home, "line('บรรทัดที่ส"));
+            DateTime t2 = DateTime.UtcNow;
+            vm.UndoCommand.Execute(null);
+            Check("undo: the call's literal is back", File.ReadAllText(home) == HelperHome);
+            drawn = await Redrawn(vm, store, card.Page.Id, t2);
+            var back = Texts(lineText);
+            Check("undo: drawn again — the second line is as narrow as before", drawn && back.Count == 3 && Math.Abs(back[1].W - w1) < 1, $"{w1:0} → {W0(back, 1)}");
+
+            // ── a default: typing over it adds the argument at that use ──
+            vm.PickStageBox(Texts(moodText)[0], open: false);
+            double m0 = Texts(moodText)[0].W, m1 = Texts(moodText)[1].W;
+            string mood = "อารมณ์ดีมากเป็นพิเศษวันนี้";
+            vm.ToolText = mood;
+            DateTime t3 = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("default: the argument is added at that use only — the const stays", File.ReadAllText(home) == HelperHome.Replace("const _Mood(),", $"const _Mood(mood: '{mood}'),"),
+                  FirstLine(home, "const _Mood("));
+            Check("default: the Text stays picked, its use now passing what was written", vm.CanToolText && vm.ToolText == mood && vm.ToolTextNote == T(vm, "studio.fedit.text.param", $"lib/home_screen.dart:{mood1}"),
+                  $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            drawn = await Redrawn(vm, store, card.Page.Id, t3);
+            var moodsAfter = Texts(moodText);
+            Check("default: drawn again — that use's text is wider, the other use's isn't", drawn && moodsAfter.Count == 2 && moodsAfter[0].W > m0 + 40 && Math.Abs(moodsAfter[1].W - m1) < 1,
+                  $"{m0:0}/{m1:0} → {W0(moodsAfter, 0)}/{W0(moodsAfter, 1)} {vm.CompileError}");
+            DateTime t4 = DateTime.UtcNow;
+            vm.UndoCommand.Execute(null);
+            Check("undo: the use leaves it out again", File.ReadAllText(home) == HelperHome);
+            drawn = await Redrawn(vm, store, card.Page.Id, t4);
+            var moodsBack = Texts(moodText);
+            Check("undo: drawn again with the default", drawn && moodsBack.Count == 2 && Math.Abs(moodsBack[0].W - m0) < 1, $"{m0:0} → {W0(moodsBack, 0)}");
+            vm.UndoAllCommand.Execute(null);
+            Check("round: undo all ends it with the screen as it began", !vm.HasSession && File.ReadAllText(home) == HelperHome, vm.SessionText);
+        }
+        finally
+        {
+            vm.RenderConsentOverride = null;
+            vm.ToolConfirmOverride = null;
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
+        }
+    }
+
     // ═══════════════════════════════════════════ translated text ═══════════════════════════════════════════
 
     const string L10nThArb = "{\n  \"@@locale\": \"th\",\n  \"welcome\": \"ยินดีต้อนรับสู่แอปพลิเคชันของเรา\",\n  \"@welcome\": { \"description\": \"The greeting on the home screen\" },\n\n" +
