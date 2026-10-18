@@ -62,8 +62,19 @@ public partial class ChatView : UserControl
         SizeChanged += (_, _) => UpdateSidePanelRoom();
         // A dragged grip (or the grip restoring its saved width) changes Width: refit, as the Edit page does.
         var panelWidth = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(WidthProperty, typeof(FrameworkElement));
-        Loaded += (_, _) => panelWidth.AddValueChanged(SidePanel, OnSidePanelWidthChanged);
-        Unloaded += (_, _) => panelWidth.RemoveValueChanged(SidePanel, OnSidePanelWidthChanged);
+        var panelHeight = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(HeightProperty, typeof(FrameworkElement));
+        Loaded += (_, _) =>
+        {
+            panelWidth.AddValueChanged(SidePanel, OnSidePanelWidthChanged);
+            panelHeight.AddValueChanged(SidePanel, OnSidePanelWidthChanged);
+        };
+        Unloaded += (_, _) =>
+        {
+            panelWidth.RemoveValueChanged(SidePanel, OnSidePanelWidthChanged);
+            panelHeight.RemoveValueChanged(SidePanel, OnSidePanelWidthChanged);
+        };
+        // The panel's own show/hide (the toggle): the height grip follows it, or a hidden panel leaves a 6 px strip.
+        SidePanel.IsVisibleChanged += (_, _) => UpdateSidePanelRoom();
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
@@ -120,8 +131,11 @@ public partial class ChatView : UserControl
     // first (MaxWidth only — the dragged width comes back when the window widens), and when even its minimum does not fit
     // beside the conversation, or the window stands portrait, it moves under the composer across the whole width.
     private bool _panelStacked;
-    private double _panelSideWidth = 300;
+    private double _panelSideWidth = 300, _panelStackedHeight = double.NaN;
     private bool _fittingPanel;
+
+    /// <summary>Stacked, the conversation and composer keep at least this much height above the files.</summary>
+    private const double MinStackedConversationHeight = 320;
 
     /// <summary>Side by side, or stacked under the chat? Too narrow for both minimums, or a portrait window.</summary>
     public static bool StackSidePanel(double width, double height) =>
@@ -146,19 +160,30 @@ public partial class ChatView : UserControl
                 Grid.SetRow(SidePanelHost, 4); Grid.SetRowSpan(SidePanelHost, 1);
                 SidePanel.Width = double.NaN;
                 SidePanel.MaxWidth = double.PositiveInfinity;
-                SidePanel.Height = Math.Clamp(ActualHeight * 0.32, 160, 320);
+                // The height is the user's (dragged on the top-edge grip, remembered across restarts — owner 2026-10-18:
+                // "ไฟล์ในโปรเจคอยากให้ย้ายมาช่องแชทด้านล่างเมื่อหน้าจอแคบ ปรับขนาดกันได้"). Any height that shows up
+                // here is theirs; a first stack gets about a third of the window. MaxHeight keeps the conversation readable.
+                if (!double.IsNaN(SidePanel.Height)) _panelStackedHeight = SidePanel.Height;
+                SidePanel.MaxHeight = Math.Max(SidePanelHeightGrip.MinSize, ActualHeight - MinStackedConversationHeight);
+                SidePanel.Height = double.IsNaN(_panelStackedHeight) ? Math.Clamp(ActualHeight * 0.32, 160, 320) : _panelStackedHeight;
                 SidePanel.BorderThickness = new Thickness(0, 1, 0, 0);
                 SidePanelGrip.Opacity = 0; SidePanelGrip.IsHitTestVisible = false;
+                SidePanelHeightGrip.Visibility = SidePanel.Visibility;
             }
             else
             {
                 if (_panelStacked) SidePanel.Width = _panelSideWidth;
                 Grid.SetColumn(SidePanelHost, 1); Grid.SetColumnSpan(SidePanelHost, 1);
                 Grid.SetRow(SidePanelHost, 0); Grid.SetRowSpan(SidePanelHost, 4);
+                // Beside the chat it runs the full height. A height here (the height grip restoring its saved one on
+                // Loaded) is kept for the next time it stacks.
+                if (!double.IsNaN(SidePanel.Height)) _panelStackedHeight = SidePanel.Height;
                 SidePanel.Height = double.NaN;
+                SidePanel.MaxHeight = double.PositiveInfinity;
                 SidePanel.MaxWidth = Math.Max(MinSidePanelWidth, ActualWidth - MinConversationWidth);
                 SidePanel.BorderThickness = new Thickness(1, 0, 0, 0);
                 SidePanelGrip.Opacity = 1; SidePanelGrip.IsHitTestVisible = true;
+                SidePanelHeightGrip.Visibility = Visibility.Collapsed;
             }
             _panelStacked = stack;
         }
