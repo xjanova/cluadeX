@@ -246,6 +246,7 @@ internal static partial class Program
         await FlutterApp(vm, view, fx);
         await FlutterReal(vm, view, fx);
         await FlutterTools(vm, view, fx);
+        await WpfApp(vm, view, fx);
 
         return Finish();
     }
@@ -329,7 +330,8 @@ internal static partial class Program
         await Idle(800);
         Log($"  {Cards(vm).Count} pages · {vm.PagesSummary}");
         SavePng((FrameworkElement)view.FindName("PagesPanel"), "look-gallery.png");
-        if (vm.IsSimulated && Cards(vm).FirstOrDefault(c => c.HasSketch && c.Page.Route != null) is { } first)
+        // an app's stage: its first routed screen (a desktop app has no routes: its first view)
+        if (vm.IsSimulated && (Cards(vm).FirstOrDefault(c => c.HasSketch && c.Page.Route != null) ?? Cards(vm).FirstOrDefault(c => c.HasSketch)) is { } first)
         {
             vm.OpenCardCommand.Execute(Cards(vm).FirstOrDefault(c => c.Page.Route == "/users") ?? first);
             await Idle(600);
@@ -539,6 +541,8 @@ internal static partial class Program
         var stage = (FrameworkElement)view.FindName("Stage");
         SavePng(stage, "stage-flutter.png");
         var button = vm.StageSketch!.Root.Walk().First(n => n.Kind == CluadeX.Services.UiStudio.Sketch.SketchKind.Button);
+        var hit = HitAt((SketchView)view.FindName("StageView"), button);
+        Check("flutter: a click where the button is drawn hits the button (not the column around it)", ReferenceEquals(hit, button), hit?.ToString() ?? "nothing");
         vm.PickStageNode(button, open: false);
         Check("flutter: picking a block shows where it is written", vm.StageNodeWhere == "lib/home_screen.dart:9" && vm.StageNodeText == "เริ่มเลย", $"{vm.StageNodeWhere} '{vm.StageNodeText}'");
         vm.OpenStageNodeCommand.Execute(null);
@@ -690,5 +694,132 @@ class HomeScreen extends StatelessWidget {
         var px = new byte[4];
         conv.CopyPixels(new Int32Rect((int)(conv.PixelWidth * fx), (int)(conv.PixelHeight * fy), 1, 1), px, 4, 0);
         return (Color.FromRgb(px[2], px[1], px[0]), conv.PixelWidth, conv.PixelHeight);
+    }
+
+    /// <summary>The block the stage finds at the centre of where it drew <paramref name="n"/> — the hit-test a mouse
+    /// click on the stage goes through.</summary>
+    static CluadeX.Services.UiStudio.Sketch.SketchNode? HitAt(SketchView v, CluadeX.Services.UiStudio.Sketch.SketchNode n)
+    {
+        const BindingFlags Private = BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+        var t = typeof(SketchView);
+        if (t.GetMethod("Rect", Private)!.Invoke(v, new object[] { n }) is not Rect r) return null;
+        var (s, x, y) = ((double, double, double))t.GetMethod("Fit", Private)!.Invoke(v, null)!;
+        var p = new Point(x + (r.X + r.Width / 2) * s, y + (r.Y + r.Height / 2) * s);
+        return (CluadeX.Services.UiStudio.Sketch.SketchNode?)t.GetMethod("HitTest", Private)!.Invoke(v, new object[] { p });
+    }
+
+    static int LineOf(string text, string needle) => text[..text.IndexOf(needle, StringComparison.Ordinal)].Count(c => c == '\n') + 1;
+
+    // ═══════════════════════════════════════════ a WPF app ═══════════════════════════════════════════
+
+    static async Task WpfApp(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## WPF app (simulated from XAML)");
+        string root = Path.Combine(fx, "wpf");
+        const string ns = "xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"";
+        W(root, "Desk.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net8.0-windows</TargetFramework><UseWPF>true</UseWPF></PropertyGroup></Project>");
+        W(root, "App.xaml", $$$"""
+            <Application x:Class="Desk.App" {{{ns}}} StartupUri="MainWindow.xaml">
+                <Application.Resources>
+                    <ResourceDictionary>
+                        <SolidColorBrush x:Key="Page.Background" Color="#14161C"/>
+                        <SolidColorBrush x:Key="Accent.1" Color="#2EC27E"/>
+                        <SolidColorBrush x:Key="Surface.Card" Color="#1F232B"/>
+                        <Style x:Key="PrimaryButton" TargetType="Button"/>
+                    </ResourceDictionary>
+                </Application.Resources>
+            </Application>
+            """);
+        W(root, "MainWindow.xaml", $$$"""
+            <Window x:Class="Desk.MainWindow" {{{ns}}} xmlns:vm="clr-namespace:Desk.ViewModels" xmlns:views="clr-namespace:Desk.Views"
+                    Title="Desk" Width="1200" Height="760" Background="{DynamicResource Page.Background}">
+                <Window.Resources>
+                    <DataTemplate DataType="{x:Type vm:HomeViewModel}"><views:HomeView/></DataTemplate>
+                </Window.Resources>
+                <DockPanel>
+                    <Border DockPanel.Dock="Left" Width="220" Background="{DynamicResource Surface.Card}">
+                        <StackPanel Margin="12">
+                            <TextBlock Text="Desk" FontSize="20" FontWeight="Bold"/>
+                            <RadioButton Content="หน้าแรก" IsChecked="True"/>
+                            <RadioButton Content="รายงาน"/>
+                        </StackPanel>
+                    </Border>
+                    <ContentControl Content="{Binding CurrentView}"/>
+                </DockPanel>
+            </Window>
+            """);
+        string home = $$$"""
+            <UserControl x:Class="Desk.Views.HomeView" {{{ns}}}>
+                <StackPanel Margin="24">
+                    <TextBlock Text="หน้าแรก" FontSize="24" FontWeight="Bold"/>
+                    <TextBlock Text="{Binding Summary}"/>
+                    <Grid>
+                        <TextBlock Text="ค้นหาลูกค้า" IsHitTestVisible="False" Visibility="{Binding Query, Converter={StaticResource EmptyToVisible}}"/>
+                        <TextBox Text="{Binding Query}"/>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="บันทึก" Style="{StaticResource PrimaryButton}"/>
+                        <Button Content="ยกเลิก"/>
+                    </StackPanel>
+                </StackPanel>
+            </UserControl>
+            """;
+        W(root, "Views/HomeView.xaml", home);
+        W(root, "Views/AboutWindow.xaml", $$$"""
+            <Window x:Class="Desk.Views.AboutWindow" {{{ns}}} Title="เกี่ยวกับ Desk" Width="520" SizeToContent="Height">
+                <StackPanel Margin="20"><TextBlock Text="Desk 1.0"/><Button Content="ปิด" IsCancel="True"/></StackPanel>
+            </Window>
+            """);
+
+        vm.OpenProject(root, autoStart: true);
+        Check("wpf: opened as a desktop app simulated from its XAML, the gallery opens by itself", vm.IsSimulated && vm.IsDesktopApp && vm.ShowPages, $"{vm.IsSimulated} {vm.IsDesktopApp} {vm.ShowPages}");
+        bool sketched = await WaitUntil(() => Cards(vm).Count == 3 && Cards(vm).All(c => c.HasSketch), 30000);
+        Check("wpf: every view and window is drawn from its XAML", sketched, string.Join(", ", Cards(vm).Select(c => $"{c.Page.Detail}:{c.State}")));
+        Check("wpf: landscape cards — a desktop window, not a phone", !vm.IsPhoneLayout && vm.CardWidth > 200 && Cards(vm).All(c => c.Sketch?.Desktop == true), $"{vm.IsPhoneLayout} {vm.CardWidth}");
+        Check("wpf: the main window first, named by its Title; a dialog by its Title too",
+              Cards(vm).First().Page.Detail == "MainWindow" && Cards(vm).First().Title == "Desk" && Cards(vm).Any(c => c.Title == "เกี่ยวกับ Desk"), string.Join(" | ", Cards(vm).Select(c => c.Title)));
+        Check("wpf: filter chips for views and windows", vm.PageSections.Any(s => s.Key == "~group:view") && vm.PageSections.Any(s => s.Key == "~group:window"),
+              string.Join(", ", vm.PageSections.Select(s => s.Label)));
+        Check("wpf: the live browser is hidden (nothing to run)", ((FrameworkElement)view.FindName("Frame")).Visibility != Visibility.Visible);
+        await Idle(300);
+        SavePng((FrameworkElement)view.FindName("PagesPanel"), "gallery-wpf.png");
+
+        var homeCard = Cards(vm).First(c => c.Page.Detail == "HomeView");
+        vm.OpenCardCommand.Execute(homeCard);
+        Check("wpf: a click on a card opens that view on the stage", !vm.ShowPages && vm.StageCard == homeCard && vm.StageSketch?.Desktop == true);
+        await Idle(400);
+        var stageView = (SketchView)view.FindName("StageView");
+        Check("wpf: the stage draws a wide window, not a phone in a bezel", stageView.ActualWidth > 500 && stageView.ActualWidth > stageView.ActualHeight * 0.9, $"{stageView.ActualWidth:0}×{stageView.ActualHeight:0}");
+        SavePng((FrameworkElement)view.FindName("Stage"), "stage-wpf.png");
+
+        var save = vm.StageSketch!.Root.Walk().First(n => n.Kind == CluadeX.Services.UiStudio.Sketch.SketchKind.Button && n.Text == "บันทึก");
+        var hit = HitAt(stageView, save);
+        Check("wpf: a click where the button is drawn hits that button", ReferenceEquals(hit, save), hit?.ToString() ?? "nothing");
+        int requested = -1;
+        Action<int> onLine = l => requested = l;
+        MainVm.CodeEditorVM.ScrollToLineRequested += onLine;
+        vm.PickStageNode(hit ?? save, open: true);
+        int want = LineOf(home, "Content=\"บันทึก\"");
+        bool opened = await WaitUntil(() => MainVm.CodeEditorVM.ActiveTab?.FullPath?.EndsWith("HomeView.xaml", StringComparison.OrdinalIgnoreCase) == true && requested > 0, 15000);
+        MainVm.CodeEditorVM.ScrollToLineRequested -= onLine;
+        Check("wpf: clicking a block opens its XAML file at that line", opened && requested == want, $"{MainVm.CodeEditorVM.ActiveTab?.FullPath} line {requested} (want {want})");
+        Check("wpf: the inspector names the element and where it is written", vm.StageNodeWhere == "Views/HomeView.xaml:" + want && vm.StageNodeLabel == "Button" && vm.StageNodeText == "บันทึก",
+              $"{vm.StageNodeWhere} {vm.StageNodeLabel} '{vm.StageNodeText}'");
+        Check("wpf: the hint text over the search box is its placeholder", vm.StageSketch.Root.Walk().Any(n => n.Kind == CluadeX.Services.UiStudio.Sketch.SketchKind.Input && n.Text == "ค้นหาลูกค้า"));
+        string prompt = (string)Invoke(vm, "BuildStagePrompt", "make the save button bigger", false)!;
+        Check("wpf: the AI request names the WPF view, its XAML file, the picked element and its line",
+              prompt.Contains("WPF") && prompt.Contains("HomeView") && prompt.Contains("Views/HomeView.xaml") && prompt.Contains("<Button>") && prompt.Contains(":" + want) && prompt.Contains("{DynamicResource}"), prompt);
+        Invoke(MainVm, "NavigateTo", "UiStudio");
+        await Idle(200);
+
+        // the main window: the view its DataTemplate shows, inside the window, beside the 220-px side bar
+        var mainCard = Cards(vm).First();
+        vm.OpenScreenCommand.Execute(mainCard);
+        await Idle(300);
+        var nodes = vm.StageSketch!.Root.Walk().ToList();
+        Check("wpf: the main window draws its first page inside it (the view a DataTemplate names)",
+              nodes.Any(n => n.Text == "หน้าแรก" && n.File!.EndsWith("HomeView.xaml") && n.UseFile!.EndsWith("MainWindow.xaml")) && nodes.Any(n => n.Width == 220),
+              string.Join(" | ", nodes.Where(n => n.Text != null).Select(n => $"{n.Kind}:{n.Text}:{Path.GetFileName(n.File)}")));
+        SavePng((FrameworkElement)view.FindName("Stage"), "stage-wpf-main.png");
     }
 }

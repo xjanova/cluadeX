@@ -82,7 +82,7 @@ internal sealed class DartClass
 /// screens and draw each one as a wireframe without running the app (Flutter can't run inside the Studio's browser,
 /// and many apps don't build for the web at all).
 /// </summary>
-public sealed class FlutterProject
+public sealed class FlutterProject : IScreenSketcher
 {
     internal static readonly HashSet<string> WidgetBases = new(StringComparer.Ordinal)
         { "StatelessWidget", "ConsumerWidget", "HookWidget", "HookConsumerWidget", "GetView", "GetWidget", "StatelessHookWidget" };

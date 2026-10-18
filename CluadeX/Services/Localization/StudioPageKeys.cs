@@ -41,6 +41,8 @@ internal static class StudioPageKeys
         ["studio.pages.all"] = E("All", "ทั้งหมด"),
         ["studio.pages.routed"] = E("Routes", "มีเส้นทาง"),
         ["studio.pages.otherScreens"] = E("Other screens", "หน้าจออื่น"),
+        ["studio.pages.views"] = E("Views", "หน้าจอ (UserControl)"),
+        ["studio.pages.windows"] = E("Windows", "หน้าต่าง (Window)"),
         ["studio.pages.withParams"] = E("Need a value", "ต้องใส่ค่า"),
         ["studio.pages.webPages"] = E("Web pages", "หน้าเว็บที่เพิ่ม"),
 

@@ -21,6 +21,11 @@ public sealed partial class UiStudioViewModel
     private CancellationTokenSource? _renderCts;
     private int _renderRun;
 
+    /// <summary>The open app is a Flutter app: real screens and the widget tools (a WPF app is wireframes only).</summary>
+    public bool IsFlutterApp => _catalog?.Flutter != null;
+    /// <summary>The widget palette: a Flutter screen on the stage.</summary>
+    public bool ShowPalette => HasStage && IsFlutterApp;
+
     /// <summary>Set by a harness to answer the one-time "run flutter test here?" question without a dialog.</summary>
     public bool? RenderConsentOverride { get; set; }
 
@@ -347,6 +352,8 @@ public sealed partial class UiStudioViewModel
         _palette = null;
         OnPropertyChanged(nameof(Swatches));
         OnPropertyChanged(nameof(Palette));
+        OnPropertyChanged(nameof(IsFlutterApp));
+        OnPropertyChanged(nameof(ShowPalette));
         if (_catalog?.Flutter == null) return;
         try
         {

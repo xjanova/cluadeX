@@ -26,8 +26,10 @@ internal static partial class Program
     static System.Windows.Media.Imaging.BitmapSource SaveSketch(CluadeX.Services.UiStudio.Sketch.ScreenSketch sk, string? file, double scale = 1, bool fullHeight = false)
     {
         var view = new CluadeX.Views.UiStudio.SketchView { Sketch = sk, FullHeight = fullHeight };
-        double w = CluadeX.Views.UiStudio.SketchView.ScreenWidth * scale;
-        view.Measure(new System.Windows.Size(w, fullHeight ? double.PositiveInfinity : CluadeX.Views.UiStudio.SketchView.ScreenHeight * scale));
+        // a phone screen is 360 × 760; a desktop window (WPF) is the size its XAML gives
+        double w = (sk.Desktop && sk.Width > 0 ? sk.Width : CluadeX.Views.UiStudio.SketchView.ScreenWidth) * scale;
+        double h = (sk.Desktop && sk.Height > 0 ? sk.Height : CluadeX.Views.UiStudio.SketchView.ScreenHeight) * scale;
+        view.Measure(new System.Windows.Size(w, fullHeight ? double.PositiveInfinity : h));
         var size = view.DesiredSize;
         view.Arrange(new System.Windows.Rect(size));
         view.UpdateLayout();
@@ -97,22 +99,25 @@ internal static partial class Program
                 Console.WriteLine($"  {pg.Route ?? pg.Detail,-28} {(s.PngPath != null ? "png" : "---")} boxes={s.Boxes.Count,4} noise={s.Noise,3} {s.Skipped}{(s.Problems.Count > 0 ? " PROBLEMS: " + string.Join(" | ", s.Problems.Take(3)) : "")}");
             return run.Ok ? 0 : 1;
         }
-        // studiotest tree <flutter folder> <route or class> — print one screen's wireframe blocks (to see what the sketch read).
+        // studiotest tree <app folder> <route or class> — print one screen's wireframe blocks (to see what the sketch read).
         if (args.Length == 3 && args[0] == "tree")
         {
             var found = CluadeX.Services.UiStudio.Pages.PageCatalog.Discover(StudioProject.Detect(args[1]), "th");
             var pg = found.Pages.FirstOrDefault(p => p.Route == args[2] || p.Detail == args[2]);
-            var sk = pg == null ? null : found.Flutter?.Sketch(pg);
+            var sk = pg == null ? null : found.Screens?.Sketch(pg);
             if (sk == null) { Console.WriteLine("no such screen"); return 1; }
             void Dump(CluadeX.Services.UiStudio.Sketch.SketchNode n, int d)
             {
-                Console.WriteLine($"{new string(' ', d * 2)}{n.Kind} <{n.Widget}> {(n.Text != null ? "\"" + n.Text + "\"" : "")}{(n.Text2 != null ? " / \"" + n.Text2 + "\"" : "")}{(n.Icon != null ? " icon=" + n.Icon : "")}{(n.Items.Count > 0 ? " [" + string.Join("|", n.Items) + "]" : "")} {Path.GetFileName(n.File)}:{n.Line}{(n.UseFile != null ? " use " + Path.GetFileName(n.UseFile) + ":" + n.UseLine : "")}");
+                string icon = n.Icon == null ? "" : " icon=" + (n.Icon.Length <= 2 && n.Icon.All(ch => ch >= '' && ch <= '') ? string.Concat(n.Icon.Select(ch => $"U+{(int)ch:X4}")) : n.Icon);
+                string size = (n.Width > 0 ? $" w={n.Width:0}" : "") + (n.Flex > 0 ? $" flex={n.Flex:0.#}" : "") + (n.Variant != null ? " " + n.Variant : "");
+                Console.WriteLine($"{new string(' ', d * 2)}{n.Kind} <{n.Widget}> {(n.Text != null ? "\"" + n.Text + "\"" : "")}{(n.Text2 != null ? " / \"" + n.Text2 + "\"" : "")}{icon}{size}{(n.Items.Count > 0 ? " [" + string.Join("|", n.Items) + "]" : "")} {Path.GetFileName(n.File)}:{n.Line}{(n.UseFile != null ? " use " + Path.GetFileName(n.UseFile) + ":" + n.UseLine : "")}");
                 foreach (var c in n.Children) Dump(c, d + 1);
             }
+            Console.WriteLine($"title \"{sk.Title}\" · {(sk.Desktop ? $"desktop {sk.Width:0}×{sk.Height:0}" : "phone")} · caption \"{sk.Caption}\" · bg {sk.Theme.Background:X8} accent {sk.Theme.Accent:X8} dark={sk.Theme.Dark} · unknown {sk.Unknown}");
             Dump(sk.Root, 0);
             return 0;
         }
-        // studiotest sketch <flutter folder> <out folder> — draw every screen's wireframe to a PNG (read-only on the project).
+        // studiotest sketch <app folder> <out folder> — draw every screen's wireframe to a PNG (read-only on the project).
         if (args.Length == 3 && args[0] == "sketch")
         {
             var info = StudioProject.Detect(args[1]);
@@ -122,7 +127,7 @@ internal static partial class Program
             var thumbs = new List<System.Windows.Media.Imaging.BitmapSource>();
             foreach (var pg in found.Pages)
             {
-                var sk = found.Flutter?.Sketch(pg);
+                var sk = found.Screens?.Sketch(pg);
                 if (sk == null) { Console.WriteLine($"  no sketch: {pg.Id}"); continue; }
                 string file = Path.Combine(args[2], $"{i++:00}-{string.Concat((pg.Route ?? pg.Detail ?? "x").Select(c => char.IsLetterOrDigit(c) ? c : '_'))}.png");
                 SaveSketch(sk, file, 2);
@@ -132,13 +137,13 @@ internal static partial class Program
             // one contact sheet of every screen, the way the page gallery shows them
             if (thumbs.Count > 0)
             {
-                int cols = 8, tw = thumbs[0].PixelWidth, th = thumbs[0].PixelHeight, rows = (thumbs.Count + cols - 1) / cols;
+                int cols = thumbs[0].PixelWidth > thumbs[0].PixelHeight ? 4 : 8, tw = thumbs.Max(t => t.PixelWidth), th = thumbs.Max(t => t.PixelHeight), rows = (thumbs.Count + cols - 1) / cols;
                 var dv = new System.Windows.Media.DrawingVisual();
                 using (var dc = dv.RenderOpen())
                 {
                     dc.DrawRectangle(System.Windows.Media.Brushes.DimGray, null, new System.Windows.Rect(0, 0, cols * (tw + 8), rows * (th + 8)));
                     for (int k = 0; k < thumbs.Count; k++)
-                        dc.DrawImage(thumbs[k], new System.Windows.Rect(k % cols * (tw + 8) + 4, k / cols * (th + 8) + 4, tw, th));
+                        dc.DrawImage(thumbs[k], new System.Windows.Rect(k % cols * (tw + 8) + 4, k / cols * (th + 8) + 4, thumbs[k].PixelWidth, thumbs[k].PixelHeight));
                 }
                 var sheet = new System.Windows.Media.Imaging.RenderTargetBitmap(cols * (tw + 8), rows * (th + 8), 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
                 sheet.Render(dv);
@@ -163,6 +168,7 @@ internal static partial class Program
             DartReading();
             FlutterScreens(temp);
             FlutterEdits(temp);
+            WpfViews(temp);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { Directory.Delete(temp, true); } catch { } }

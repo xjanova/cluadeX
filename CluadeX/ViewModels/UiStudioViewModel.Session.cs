@@ -251,6 +251,13 @@ public sealed partial class UiStudioViewModel
     /// change live.</summary>
     private bool AskAi(string prompt)
     {
+        if (!IsFlutterApp)
+        {
+            // a WPF app's views are wireframes from its XAML: no live redraw, no review round — the request goes as is
+            if (!StudioAi.Send(prompt)) { Status(T("studio.ai.busy"), error: true); return false; }
+            Status(T("studio.ai.sent"));
+            return true;
+        }
         var s = Session();
         SnapshotLib(s);
         if (!StudioAi.Send(prompt))

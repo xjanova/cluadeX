@@ -383,10 +383,11 @@
                                 <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ShowPagesCommand}" Margin="0">
                                     <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.pages.button}"/></StackPanel>
                                 </Button>
-                                <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding RenderStageCommand}" ToolTip="{services:Loc studio.render.redrawTip}">
+                                <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding RenderStageCommand}" ToolTip="{services:Loc studio.render.redrawTip}"
+                                        Visibility="{Binding IsFlutterApp, Converter={StaticResource BoolVis}}">
                                     <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/>
                                 </Button>
-                                <Border DockPanel.Dock="Right" Style="{StaticResource StudioSegmentHost}" Margin="0,0,6,0">
+                                <Border DockPanel.Dock="Right" Style="{StaticResource StudioSegmentHost}" Margin="0,0,6,0" Visibility="{Binding IsFlutterApp, Converter={StaticResource BoolVis}}">
                                     <StackPanel Orientation="Horizontal">
                                         <RadioButton Style="{StaticResource StudioSegment}" GroupName="StageLook" IsChecked="{Binding ShowRealRender}" ToolTip="{services:Loc studio.render.realTip}">
                                             <TextBlock Text="{services:Loc studio.render.real}" FontSize="11.5"/>
@@ -530,11 +531,40 @@
                         </TextBlock>
                         <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.hint}" FontSize="11.5" Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center" Margin="12,0" TextWrapping="Wrap"/>
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,18,0,12" CornerRadius="30" Padding="9" Background="#FF101014"
-                                    Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
+                            <!-- a phone in its bezel; a desktop app's window (WPF) as wide as the stage, in a thin frame -->
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Margin" Value="0,18,0,12"/>
+                                        <Setter Property="CornerRadius" Value="30"/>
+                                        <Setter Property="Padding" Value="9"/>
+                                        <Setter Property="Background" Value="#FF101014"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDesktopApp}" Value="True">
+                                                <Setter Property="Margin" Value="18,18,18,12"/>
+                                                <Setter Property="CornerRadius" Value="9"/>
+                                                <Setter Property="Padding" Value="1"/>
+                                                <Setter Property="Background" Value="{DynamicResource Border.Default}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
                                 <Grid>
-                                    <sk:SketchView x:Name="StageView" Width="378" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True"
-                                                   Visibility="{Binding StageShowsSketch, Converter={StaticResource BoolVis}}"/>
+                                    <sk:SketchView x:Name="StageView" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True"
+                                                   Visibility="{Binding StageShowsSketch, Converter={StaticResource BoolVis}}">
+                                        <sk:SketchView.Style>
+                                            <Style TargetType="sk:SketchView">
+                                                <Setter Property="Width" Value="378"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDesktopApp}" Value="True">
+                                                        <Setter Property="Width" Value="Auto"/>
+                                                        <Setter Property="MaxWidth" Value="1180"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </sk:SketchView.Style>
+                                    </sk:SketchView>
+                                    <!-- a Flutter screen as Flutter drew it -->
                                     <sk:RenderStageView x:Name="RenderView" Width="378" Source="{Binding StageRenderShown}" Boxes="{Binding StageBoxesShown}" Selected="{Binding StageBox}"
                                                         Busy="{Binding IsRendering}" Visibility="{Binding StageShowsRender, Converter={StaticResource BoolVis}}"/>
                                 </Grid>
@@ -1035,7 +1065,7 @@
                         </StackPanel>
 
                         <!-- the palette: a click puts a widget next to the picked one (inside it when it holds a list); a drag puts it where it is dropped -->
-                        <StackPanel Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
+                        <StackPanel Visibility="{Binding ShowPalette, Converter={StaticResource BoolVis}}">
                             <TextBlock Text="{services:Loc studio.fedit.palette}" Style="{StaticResource StudioKicker}" Margin="0,20,0,4"/>
                             <TextBlock Text="{services:Loc studio.fedit.paletteHint}" FontSize="10.5" Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="0,0,0,6"/>
                             <ItemsControl x:Name="WidgetPalette" ItemsSource="{Binding Palette}">

@@ -53,12 +53,21 @@ public sealed class SketchView : FrameworkElement
         Focusable = false;
     }
 
-    private double LogicalHeight => FullHeight ? Math.Max(ScreenHeight, _contentHeight) : ScreenHeight;
+    /// <summary>A desktop window or view (WPF): a landscape frame with no phone status bar.</summary>
+    private bool Desktop => Sketch?.Desktop == true;
+    /// <summary>The logical frame: a phone (360 × 760), or the size the desktop view gives itself.</summary>
+    private double Sw => Sketch is { Desktop: true, Width: > 0 } s ? s.Width : ScreenWidth;
+    private double Sh => Sketch is { Desktop: true, Height: > 0 } s ? s.Height : ScreenHeight;
+    /// <summary>Where the content starts: under the phone's status bar, under a window's title bar, or a little inset.</summary>
+    private double Top => Sketch is { Desktop: true } s ? (s.Caption != null ? CaptionBar : 0) + 12 : StatusBar;
+    private const double CaptionBar = 32;
+
+    private double LogicalHeight => FullHeight ? Math.Max(Sh, _contentHeight) : Sh;
 
     protected override Size MeasureOverride(Size available)
     {
-        double ratio = LogicalHeight / ScreenWidth;
-        double w = double.IsInfinity(available.Width) ? ScreenWidth : available.Width;
+        double ratio = LogicalHeight / Sw;
+        double w = double.IsInfinity(available.Width) ? Sw : available.Width;
         if (FullHeight) return new Size(w, w * ratio);   // as tall as the content; the stage scrolls
         double h = double.IsInfinity(available.Height) ? w * ratio : available.Height;
         return new Size(Math.Min(w, h / ratio), Math.Min(h, w * ratio));
@@ -67,10 +76,10 @@ public sealed class SketchView : FrameworkElement
     /// <summary>The scale and offset that fit the logical screen into the control.</summary>
     private (double Scale, double X, double Y) Fit()
     {
-        double s = FullHeight ? ActualWidth / ScreenWidth : Math.Min(ActualWidth / ScreenWidth, ActualHeight / ScreenHeight);
+        double s = FullHeight ? ActualWidth / Sw : Math.Min(ActualWidth / Sw, ActualHeight / Sh);
         if (s <= 0 || double.IsNaN(s)) s = 1;
-        double x = (ActualWidth - ScreenWidth * s) / 2;
-        double y = FullHeight ? 0 : (ActualHeight - ScreenHeight * s) / 2;
+        double x = (ActualWidth - Sw * s) / 2;
+        double y = FullHeight ? 0 : (ActualHeight - Sh * s) / 2;
         return (s, Math.Max(0, x), Math.Max(0, y));
     }
 
@@ -80,9 +89,13 @@ public sealed class SketchView : FrameworkElement
     {
         var (s, ox, oy) = Fit();
         var q = new Point((p.X - ox) / s, (p.Y - oy) / s);
-        for (int i = _boxes.Count - 1; i >= 0; i--)
-            if (_boxes[i].Box.Contains(q)) return _boxes[i].Node;
-        return null;
+        // the smallest block under the pointer: a container is boxed after its children, so the first match from the
+        // end would always be the outermost column — the button inside a card inside a column is what was clicked
+        SketchNode? best = null;
+        double area = double.MaxValue;
+        foreach (var (node, box) in _boxes)
+            if (box.Contains(q) && box.Width * box.Height < area) { best = node; area = box.Width * box.Height; }
+        return best;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -129,8 +142,8 @@ public sealed class SketchView : FrameworkElement
         var floating = new List<SketchNode>();
         Collect(root, flow, bottom, floating, 0);
 
-        double y = StatusBar;
-        foreach (var n in flow) y += Layout(n, 0, y, ScreenWidth, true) + (IsBand(n) ? 0 : Gap);
+        double y = Top;
+        foreach (var n in flow) y += Layout(n, 0, y, Sw, true) + (IsBand(n) ? 0 : Gap);
         _contentHeight = y + Pad + bottom.Count * 66;
 
         double screenBottom = LogicalHeight;
@@ -139,7 +152,7 @@ public sealed class SketchView : FrameworkElement
         {
             double h = n.Kind == SketchKind.NavBar ? 64 : 56;
             by -= h;
-            Layout(n, 0, by, ScreenWidth, true);
+            Layout(n, 0, by, Sw, true);
         }
         double fy = by - 16;
         foreach (var f in floating)
@@ -147,7 +160,7 @@ public sealed class SketchView : FrameworkElement
             double size = f.Text != null ? 48 : 56;
             double width = f.Text != null ? Math.Min(200, Measure(f.Text, 14, true) + 64) : 56;
             fy -= size;
-            var box = new Rect(ScreenWidth - 16 - width, fy, width, size);
+            var box = new Rect(Sw - 16 - width, fy, width, size);
             Box(f, box);
             var node = f;
             _paint.Add(dc => DrawFab(dc, node, box));
@@ -292,9 +305,12 @@ public sealed class SketchView : FrameworkElement
         var kids = n.Children.Where(c => !c.Floating).ToList();
         if (kids.Count == 0) return 0;
         var widths = kids.Select(Intrinsic).ToList();
+        // the blocks without a width of their own share what is left, each by its weight ("2*" columns)
+        double Share(SketchNode k) => k.Flex > 0 ? k.Flex : 1;
         int flex = widths.Count(v => v < 0);
+        double shares = kids.Where((k, i) => widths[i] < 0).Sum(Share);
         double fixedW = widths.Where(v => v >= 0).Sum() + Gap * (kids.Count - 1);
-        double flexW = flex > 0 ? Math.Max(40, (w - fixedW) / flex) : 0;
+        double free = Math.Max(40 * flex, w - fixedW);
         if (n.Kind == SketchKind.Wrap)
         {
             double cx = x, cy = y, lineH = 0;
@@ -312,7 +328,7 @@ public sealed class SketchView : FrameworkElement
         double h = 0, px = x;
         for (int i = 0; i < kids.Count; i++)
         {
-            double cw = widths[i] < 0 ? flexW : widths[i];
+            double cw = widths[i] < 0 ? Math.Max(40, free * Share(kids[i]) / shares) : widths[i];
             if (px >= x + w) break;
             cw = Math.Min(cw, x + w - px);
             h = Math.Max(h, Layout(kids[i], px, y, cw, false));
@@ -322,8 +338,8 @@ public sealed class SketchView : FrameworkElement
         return h;
     }
 
-    /// <summary>A block's natural width in a row, or -1 when it shares the row's free space.</summary>
-    private double Intrinsic(SketchNode n) => n.Kind switch
+    /// <summary>A block's natural width in a row (or the width its source gives it), or -1 when it shares the row's free space.</summary>
+    private double Intrinsic(SketchNode n) => n.Width > 0 ? n.Width : n.Kind switch
     {
         SketchKind.Icon => 24,
         SketchKind.IconButton => 40,
@@ -485,15 +501,20 @@ public sealed class SketchView : FrameworkElement
         var (s, ox, oy) = Fit();
         dc.PushTransform(new TranslateTransform(ox, oy));
         dc.PushTransform(new ScaleTransform(s, s));
-        var screen = new Rect(0, 0, ScreenWidth, LogicalHeight);
-        dc.PushClip(new RectangleGeometry(screen, FullHeight ? 0 : 22, FullHeight ? 0 : 22));
+        var screen = new Rect(0, 0, Sw, LogicalHeight);
+        double corner = FullHeight ? 0 : Desktop ? 8 : 22;
+        dc.PushClip(new RectangleGeometry(screen, corner, corner));
         dc.DrawRectangle(_c.Bg, null, screen);
         if (Sketch != null)
         {
-            // status bar
-            DrawText(dc, "9:41", 18, 4, 60, 12, true, _c.OnBg);
-            dc.DrawRoundedRectangle(_c.OnBg, null, new Rect(ScreenWidth - 44, 8, 22, 10), 3, 3);
-            dc.DrawEllipse(_c.OnBg, null, new Point(ScreenWidth - 56, 13), 4, 4);
+            if (Desktop) DrawCaption(dc, Sketch.Caption);
+            else
+            {
+                // status bar
+                DrawText(dc, "9:41", 18, 4, 60, 12, true, _c.OnBg);
+                dc.DrawRoundedRectangle(_c.OnBg, null, new Rect(Sw - 44, 8, 22, 10), 3, 3);
+                dc.DrawEllipse(_c.OnBg, null, new Point(Sw - 56, 13), 4, 4);
+            }
             foreach (var p in _paint) p(dc);
             if (Interactive)
             {
@@ -502,7 +523,7 @@ public sealed class SketchView : FrameworkElement
                     dc.DrawRectangle(null, new Pen(_c.Accent, 1.5 / s) { DashStyle = DashStyles.Dash }, hr);
                     string label = _hover.Widget ?? _hover.Kind.ToString();
                     double lw = Measure(label, 10.5, true) + 12;
-                    var lr = new Rect(Math.Min(hr.X, ScreenWidth - lw), Math.Max(0, hr.Y - 17), lw, 16);
+                    var lr = new Rect(Math.Min(hr.X, Sw - lw), Math.Max(0, hr.Y - 17), lw, 16);
                     dc.DrawRoundedRectangle(_c.Accent, null, lr, 4, 4);
                     DrawText(dc, label, lr.X + 6, lr.Y + 1.5, lw, 10.5, true, _c.OnAccent);
                 }
@@ -518,6 +539,21 @@ public sealed class SketchView : FrameworkElement
     {
         foreach (var (node, box) in _boxes) if (ReferenceEquals(node, n)) return box;
         return null;
+    }
+
+    /// <summary>A desktop window's title bar: its title, then minimise, maximise and close.</summary>
+    private void DrawCaption(DrawingContext dc, string? caption)
+    {
+        if (caption == null) return;
+        dc.DrawRectangle(_c.Bar, null, new Rect(0, 0, Sw, CaptionBar));
+        dc.DrawRectangle(_c.Outline, null, new Rect(0, CaptionBar - 1, Sw, 1));
+        DrawText(dc, caption, 14, 8, Sw - 170, 12.5, true, _c.OnBg);
+        var pen = new Pen(_c.Muted, 1.1);
+        double x = Sw - 3 * 46;
+        dc.DrawLine(pen, new Point(x + 18, 16.5), new Point(x + 28, 16.5));
+        dc.DrawRectangle(null, pen, new Rect(x + 46 + 18, 11.5, 10, 10));
+        dc.DrawLine(pen, new Point(x + 92 + 18, 11.5), new Point(x + 92 + 28, 21.5));
+        dc.DrawLine(pen, new Point(x + 92 + 28, 11.5), new Point(x + 92 + 18, 21.5));
     }
 
     private void DrawAppBar(DrawingContext dc, SketchNode n, Rect r)
@@ -813,6 +849,7 @@ public static class IconGlyphs
     public static string? For(string? icon)
     {
         if (string.IsNullOrWhiteSpace(icon)) return null;
+        if (icon.Length <= 2 && icon.All(c => c is >= '' and <= '')) return icon;   // a Segoe glyph as XAML writes it (&#xE713;)
         string n = icon.Replace("_", "").Replace("-", "").ToLowerInvariant();
         foreach (var (words, glyph) in Map)
             foreach (var w in words)

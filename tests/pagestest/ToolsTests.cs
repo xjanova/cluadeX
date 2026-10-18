@@ -72,6 +72,7 @@ internal static partial class Program
         vm.RenderConsentOverride = true;
         vm.ToolConfirmOverride = true;
         var ai = new ScriptedAi();
+        var chatAi = vm.StudioAi;
         vm.StudioAi = ai;
         string file = Path.Combine(root, "lib", "home_screen.dart");
         try
@@ -293,6 +294,7 @@ internal static partial class Program
         {
             vm.RenderConsentOverride = null;
             vm.ToolConfirmOverride = null;
+            vm.StudioAi = chatAi;   // the next test talks to the real chat again
             CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
             CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
         }

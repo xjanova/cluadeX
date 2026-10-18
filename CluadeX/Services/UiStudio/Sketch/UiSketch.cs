@@ -39,6 +39,10 @@ public sealed class SketchNode
     public int Columns { get; set; }
     /// <summary>An explicit height in logical pixels (spacers, images), 0 = natural.</summary>
     public double Height { get; set; }
+    /// <summary>An explicit width in a row, in logical pixels (a 260-px side panel, a fixed grid column), 0 = its own.</summary>
+    public double Width { get; set; }
+    /// <summary>Its share of a row's free space ("2*" columns), 0 = an equal share.</summary>
+    public double Flex { get; set; }
     /// <summary>Button: "filled", "tonal", "outlined", "text"; Progress: "linear"; Input: "search"; Card: "box".</summary>
     public string? Variant { get; set; }
     /// <summary>Drawn over the content (a floating action button) rather than in the flow.</summary>
@@ -88,4 +92,19 @@ public sealed class ScreenSketch
     public string? Title { get; init; }
     /// <summary>Widgets the sketch could not read (drawn as labelled boxes) — shown so the user knows it is approximate.</summary>
     public int Unknown { get; init; }
+    /// <summary>A desktop window or view (WPF): drawn in a landscape frame of <see cref="Width"/> × <see cref="Height"/>
+    /// with no phone status bar.</summary>
+    public bool Desktop { get; init; }
+    /// <summary>The frame's size in logical pixels (desktop only; a phone is always 360 × 760).</summary>
+    public double Width { get; init; }
+    public double Height { get; init; }
+    /// <summary>The window title drawn in a title bar (a window with the system's frame); null draws none.</summary>
+    public string? Caption { get; init; }
+}
+
+/// <summary>A project whose screens are simulated from the source (Flutter, WPF): each page's wireframe.</summary>
+public interface IScreenSketcher
+{
+    /// <summary>Draw a page as a wireframe (null when it is not one of this project's screens).</summary>
+    ScreenSketch? Sketch(Pages.StudioPage page);
 }

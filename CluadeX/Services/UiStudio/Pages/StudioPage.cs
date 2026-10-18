@@ -39,6 +39,8 @@ public sealed class StudioPage
     public bool InShell { get; init; }
     /// <summary>The page lives under a hash router ("#/about").</summary>
     public bool HashRoute { get; init; }
+    /// <summary>A desktop app's kind of screen — "window" or "view" (UserControl / Page): the gallery's filter chips.</summary>
+    public string? Group { get; init; }
 
     public bool NeedsParams => Params.Count > 0;
 
@@ -67,6 +69,10 @@ public sealed class PageCatalogResult
     public bool Truncated { get; set; }
     /// <summary>A Flutter project, read: it draws each screen's wireframe (<see cref="Sketch.FlutterProject.Sketch"/>).</summary>
     public Sketch.FlutterProject? Flutter { get; set; }
+    /// <summary>A WPF project, read: it draws each window's and view's wireframe from its XAML.</summary>
+    public Sketch.WpfProject? Wpf { get; set; }
+    /// <summary>Whatever draws this project's screens (Flutter or WPF); null for a web project.</summary>
+    public Sketch.IScreenSketcher? Screens => (Sketch.IScreenSketcher?)Flutter ?? Wpf;
 }
 
 /// <summary>Lists a project's pages, whatever it is built with.</summary>
@@ -89,6 +95,16 @@ public static class PageCatalog
                 r.Pages.AddRange(LaravelPages.Discover(root, ct));
                 r.SuggestedBaseUrl = LaravelPages.AppUrl(root) ?? "http://localhost:8000/";
                 break;
+
+            case StudioProjectKind.Simulated when info.Framework == "wpf":
+            {
+                r.Source = "wpf";
+                var wpf = Sketch.WpfProject.Load(root, language, ct);
+                r.Wpf = wpf;
+                r.Truncated = wpf.Truncated;
+                r.Pages.AddRange(wpf.Pages());
+                break;
+            }
 
             case StudioProjectKind.Simulated:
             {
