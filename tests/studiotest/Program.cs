@@ -99,6 +99,8 @@ internal static partial class Program
                 Console.WriteLine($"  {pg.Route ?? pg.Detail,-28} {(s.PngPath != null ? "png" : "---")} boxes={s.Boxes.Count,4} noise={s.Noise,3} {s.Skipped}{(s.Problems.Count > 0 ? " PROBLEMS: " + string.Join(" | ", s.Problems.Take(3)) : "")}");
             return run.Ok ? 0 : 1;
         }
+        // studiotest texts <flutter folder> — every Text that shows a parameter of its widget and what each use passes (read-only).
+        if (args.Length == 2 && args[0] == "texts") return ParamReport(args[1]);
         // studiotest tree <app folder> <route or class> — print one screen's wireframe blocks (to see what the sketch read).
         if (args.Length == 3 && args[0] == "tree")
         {

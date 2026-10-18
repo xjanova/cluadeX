@@ -231,28 +231,213 @@ public partial class ChatViewModel : ViewModelBase
         bool filter = HasProject && !ShowAllProjectSessions;
         string currentProject = WorkingDirectory ?? "";
 
+        // Split chats that were put away leave the list (kept, not deleted) unless the owner shows them.
+        bool Hidden(ChatSession s) => s.IsArchived && !ShowArchivedSplits && !ReferenceEquals(s, CurrentSession);
+
         // Chats with work going on (running, waiting for the owner, finished unseen) always show, first, whatever the
         // project filter (owner 2026-10-17: the sidebar must keep the working projects in view) — a background task in
         // another project was otherwise nowhere in the list.
         var active = Sessions.Where(IsActiveChat).ToList();
-        foreach (var s in active) VisibleSessions.Add(s);
+        var flat = new List<ChatSession>(active);
         _activeChatsShown = string.Join("|", active.Select(s => s.Id));
 
         foreach (var s in Sessions)
         {
-            if (active.Contains(s)) continue;
+            if (active.Contains(s) || Hidden(s)) continue;
             if (filter)
             {
                 // Match sessions for this project. Legacy rows (empty ProjectPath) also pass so
-                // we don't hide the user's pre-migration history.
+                // we don't hide the user's pre-migration history. A split chat follows its parent into view.
                 bool matches = string.IsNullOrEmpty(s.ProjectPath)
-                    || PathEquals(s.ProjectPath, currentProject);
+                    || PathEquals(s.ProjectPath, currentProject)
+                    || (s.ParentId is { } pid && flat.Any(p => p.Id == pid));
                 if (!matches) continue;
             }
-            VisibleSessions.Add(s);
+            flat.Add(s);
         }
 
+        foreach (var s in SplitTree(flat)) VisibleSessions.Add(s);
+        UpdateSplitSummaries();
         OnPropertyChanged(nameof(VisibleSessionsCount));
+    }
+
+    /// <summary>
+    /// The list as a tree (owner 2026-10-18: "ทำผังว่าแยกไปที่ไหนทำอะไร"): each split chat right under the chat that
+    /// opened it, indented one step, in that chat's day group. A tree comes up where its first member stood (a working
+    /// split chat lifts its parent with it). A split chat whose parent is not in the list stands on its own.
+    /// </summary>
+    internal static List<ChatSession> SplitTree(IReadOnlyList<ChatSession> flat)
+    {
+        var byId = new Dictionary<string, ChatSession>(StringComparer.Ordinal);
+        foreach (var s in flat) byId.TryAdd(s.Id, s);
+        var kids = new Dictionary<string, List<ChatSession>>(StringComparer.Ordinal);
+        foreach (var s in flat)
+            if (s.ParentId is { } p && byId.ContainsKey(p) && p != s.Id)
+                (kids.TryGetValue(p, out var l) ? l : kids[p] = new()).Add(s);
+
+        var result = new List<ChatSession>(flat.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        void Add(ChatSession s, int depth, string? group, ChatSession? parent, bool last = false)
+        {
+            if (!seen.Add(s.Id)) return;
+            s.GroupOverride = group;
+            s.SplitDepth = depth;
+            s.IsLastSplit = last;
+            s.ProjectAsParent = parent != null
+                && string.Equals((s.ProjectPath ?? "").TrimEnd('\\', '/'), (parent.ProjectPath ?? "").TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+            result.Add(s);
+            if (kids.TryGetValue(s.Id, out var children))
+                for (int i = 0; i < children.Count; i++)
+                    Add(children[i], depth + 1, group ?? s.DateGroupLabel, s, i == children.Count - 1);
+        }
+        ChatSession RootOf(ChatSession s)
+        {
+            var hops = new HashSet<string>(StringComparer.Ordinal) { s.Id };
+            while (s.ParentId is { } p && byId.TryGetValue(p, out var up) && hops.Add(up.Id)) s = up;
+            return s;
+        }
+        foreach (var s in flat) Add(RootOf(s), 0, null, null);
+        foreach (var s in flat) Add(s, 0, null, null);   // anything a loop left out
+        return result;
+    }
+
+    /// <summary>Each chat that split work off says how its split chats stand ("↳ 3 split chats · 1 working · 2 done").</summary>
+    private void UpdateSplitSummaries()
+    {
+        var links = ChatLinkStore.Current;
+        foreach (var s in Sessions)
+        {
+            var kids = links?.ChildrenOf(s.Id) ?? new();
+            if (kids.Count == 0) { s.SplitSummary = ""; s.HasFinishedSplits = false; s.OpenSplitCount = 0; continue; }
+            int working = 0, done = 0, away = 0;
+            foreach (var (id, link) in kids)
+            {
+                var child = Sessions.FirstOrDefault(c => c.Id == id);
+                if (link.ArchivedAt != null) away++;
+                else if (child != null && RunOf(child) != null) working++;
+                else done++;
+            }
+            var parts = new List<string> { LocF("chat.split.summary", kids.Count) };
+            if (working > 0) parts.Add(LocF("chat.split.working", working));
+            if (done > 0) parts.Add(LocF("chat.split.done", done));
+            if (away > 0) parts.Add(LocF("chat.split.away", away));
+            s.SplitSummary = string.Join(" · ", parts);
+            s.HasFinishedSplits = done > 0;
+            s.OpenSplitCount = working + done;
+        }
+    }
+
+    private bool _showArchivedSplits;
+    /// <summary>Show split chats that were put away (dimmed, with "bring back").</summary>
+    public bool ShowArchivedSplits
+    {
+        get => _showArchivedSplits;
+        set { if (_showArchivedSplits != value) { _showArchivedSplits = value; OnPropertyChanged(); RebuildVisibleSessions(); } }
+    }
+
+    /// <summary>The link store changed (a split recorded, a chat put away or brought back): redraw the tree.</summary>
+    private void OnSplitLinkChanged(string id)
+    {
+        Sessions.FirstOrDefault(s => s.Id == id)?.RaiseSplitChanged();
+        RebuildVisibleSessions();
+    }
+
+    /// <summary>Put a finished split chat away (and its finished split chats). A chat still working stays. The chat on
+    /// screen, when put away, hands the screen to its parent. Returns false when it was refused.</summary>
+    private bool ArchiveSplit(ChatSession s)
+    {
+        if (!s.IsSplit || RunOf(s) != null) return false;
+        foreach (var (kidId, _) in ChatLinkStore.Current?.ChildrenOf(s.Id) ?? new())
+            if (Sessions.FirstOrDefault(c => c.Id == kidId) is { } kid && RunOf(kid) == null) ArchiveSplit(kid);
+        ChatLinkStore.Current?.SetArchived(s.Id, true);
+        s.RaiseSplitChanged();
+        if (ReferenceEquals(s, CurrentSession) && s.ParentId is { } parent)
+            _ = LoadSessionAsync(parent);
+        return true;
+    }
+
+    /// <summary>Sidebar: put this split chat away.</summary>
+    public ICommand ArchiveSplitCommand => _archiveSplitCommand ??= new RelayCommand<string>(id =>
+    {
+        if (Sessions.FirstOrDefault(s => s.Id == id) is not { } s) return;
+        if (!ArchiveSplit(s)) StatusText = Loc("chat.split.stillWorking");
+        RebuildVisibleSessions();
+    });
+    private ICommand? _archiveSplitCommand;
+
+    /// <summary>Sidebar: bring a put-away split chat back into the list.</summary>
+    public ICommand UnarchiveSplitCommand => _unarchiveSplitCommand ??= new RelayCommand<string>(id =>
+    {
+        if (string.IsNullOrEmpty(id)) return;
+        ChatLinkStore.Current?.SetArchived(id, false);
+        Sessions.FirstOrDefault(s => s.Id == id)?.RaiseSplitChanged();
+        RebuildVisibleSessions();
+    });
+    private ICommand? _unarchiveSplitCommand;
+
+    /// <summary>Sidebar, on a chat that split work off: put away every finished split chat of it.</summary>
+    public ICommand ArchiveFinishedSplitsCommand => _archiveFinishedSplitsCommand ??= new RelayCommand<string>(id =>
+    {
+        if (string.IsNullOrEmpty(id)) return;
+        foreach (var (kidId, link) in ChatLinkStore.Current?.ChildrenOf(id) ?? new())
+            if (link.ArchivedAt == null && Sessions.FirstOrDefault(c => c.Id == kidId) is { } kid) ArchiveSplit(kid);
+        RebuildVisibleSessions();
+    });
+    private ICommand? _archiveFinishedSplitsCommand;
+
+    /// <summary>Sidebar: show / hide the split chats that were put away.</summary>
+    public ICommand ToggleArchivedSplitsCommand => _toggleArchivedSplitsCommand ??= new RelayCommand(() => ShowArchivedSplits = !ShowArchivedSplits);
+    private ICommand? _toggleArchivedSplitsCommand;
+
+    /// <summary>
+    /// close_chat (UI thread): the split chats of <paramref name="parentId"/> — list them (<paramref name="target"/> empty
+    /// or "list"), or put away the finished ones ("done") or one by id / title. A chat still working is never closed.
+    /// </summary>
+    private string CloseChatsForAgent(string? parentId, string target)
+    {
+        if (parentId == null) return "No chat is asking (close_chat works from a chat that split work off with new_chat).";
+        var kids = ChatLinkStore.Current?.ChildrenOf(parentId) ?? new();
+        if (kids.Count == 0) return "This chat has not split off any chats (new_chat), so there is nothing to close.";
+
+        string StateOf(string id, ChatLink link) =>
+            link.ArchivedAt != null ? "put away"
+            : Sessions.FirstOrDefault(c => c.Id == id) is { } c && RunOf(c) != null ? "working"
+            : "finished";
+        string Line(string id, ChatLink link)
+        {
+            var c = Sessions.FirstOrDefault(x => x.Id == id);
+            string where = string.IsNullOrEmpty(c?.ProjectPath) ? "" : $" in {c!.ProjectPath}";
+            return $"- \"{c?.Title ?? "?"}\" (id {id}){where} — {link.Task} — {StateOf(id, link)}";
+        }
+        string List() => "Split chats of this chat:\n" + string.Join("\n", kids.Select(k => Line(k.Id, k.Link)));
+
+        target = (target ?? "").Trim();
+        if (target.Length == 0 || target.Equals("list", StringComparison.OrdinalIgnoreCase)) return List();
+
+        bool all = target.ToLowerInvariant() is "done" or "finished" or "all" or "all-done" or "*";
+        var picked = kids.Where(k => k.Link.ArchivedAt == null && (all
+            || k.Id == target
+            || string.Equals(Sessions.FirstOrDefault(c => c.Id == k.Id)?.Title, target, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (picked.Count == 0) return $"No open split chat matches \"{target}\".\n" + List();
+
+        var closed = new List<string>(); var busy = new List<string>();
+        foreach (var (id, _) in picked)
+        {
+            var c = Sessions.FirstOrDefault(x => x.Id == id);
+            if (c == null) { ChatLinkStore.Current?.SetArchived(id, true); closed.Add(id); continue; }
+            if (ArchiveSplit(c)) closed.Add(c.Title); else busy.Add(c.Title);
+        }
+        RebuildVisibleSessions();   // at once: the store's own notice redraws again a moment later, harmlessly
+        string said = closed.Count > 0 ? $"Put away {closed.Count}: {string.Join(", ", closed)} (kept, not deleted; the user can bring them back)." : "Nothing was put away.";
+        if (busy.Count > 0) said += $" Still working, left open: {string.Join(", ", busy)}.";
+        return said;
+    }
+
+    private static string? FirstLineOf(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        string first = text.Trim().Split('\n')[0].Trim();
+        return first.Length > 80 ? first[..80] + "…" : first;
     }
 
     public int VisibleSessionsCount => VisibleSessions.Count;
@@ -720,9 +905,21 @@ public partial class ChatViewModel : ViewModelBase
             });
         Services.Tools.ProjectToolModule.RelatedFolderAdded += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
-        // The agent opens a new chat itself (new_chat).
+        // The agent opens a new chat itself (new_chat), and puts finished ones away (close_chat). The asking chat is read
+        // here, on the tool's own flow (its run scope), before the hop to the UI thread.
         Services.Tools.ProjectToolModule.NewChatHandler = (path, message, title) =>
-            App.Current.Dispatcher.InvokeAsync(() => OpenChatForAgent(path, message, title)).Task;
+        {
+            string? parentId = FlowRun?.Session.Id;
+            return App.Current.Dispatcher.InvokeAsync(() => OpenChatForAgent(path, message, title, parentId)).Task;
+        };
+        Services.Tools.ProjectToolModule.CloseChatHandler = target =>
+        {
+            string? parentId = FlowRun?.Session.Id;
+            return App.Current.Dispatcher.InvokeAsync(() => CloseChatsForAgent(parentId, target)).Task;
+        };
+        // Which chat split off which, and which finished split chats were put away (chat-links.json beside codex.db).
+        ChatLinkStore.Current ??= new ChatLinkStore(settingsService.DataRoot);
+        ChatLinkStore.Current.Changed += id => App.Current?.Dispatcher.BeginInvoke(() => OnSplitLinkChanged(id));
         _providerManager = providerManager;
         _agentService = agentService;
         _codeExecutionService = codeExecutionService;
@@ -1085,6 +1282,8 @@ public partial class ChatViewModel : ViewModelBase
                 // Sessions
                 foreach (var session in savedSessions)
                     Sessions.Add(session);
+                // Split links of chats that are gone (deleted, or dropped above as empty) are forgotten.
+                ChatLinkStore.Current?.Prune(savedSessions.Select(s => s.Id));
                 // Projects the saved chats worked in join the project list (the agent opens them by name).
                 foreach (var session in savedSessions)
                     ProjectRegistryService.Current?.Seed(session.ProjectPath, session.UpdatedAt);
@@ -1990,14 +2189,18 @@ public partial class ChatViewModel : ViewModelBase
     /// with <paramref name="message"/>, its first turn started as the user's message. The asking chat keeps running
     /// beside it (each run has its own folder). Not awaited: the new chat's turn is its own. Returns the tool's report.
     /// </summary>
-    private string OpenChatForAgent(string? path, string? message, string? title)
+    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null)
     {
-        string? from = CurrentSession?.Title;
+        parentId ??= CurrentSession?.Id;
+        string? from = Sessions.FirstOrDefault(s => s.Id == parentId)?.Title ?? CurrentSession?.Title;
         if (path != null && !string.Equals(path, _fileSystemService.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
             ApplyWorkingDirectory(path, announce: false, showEditor: false);
         NewSession();
         var chat = CurrentSession ?? throw new InvalidOperationException("no chat was created");
         if (title != null) chat.Title = title;
+        // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
+        if (parentId != null)
+            ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
         string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
         Messages.Add(new ChatMessage
         {

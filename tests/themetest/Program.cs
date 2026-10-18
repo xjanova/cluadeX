@@ -662,9 +662,61 @@ internal static partial class Program
 
         await PortraitChecks();
         await PersonaRenders();
-
+        await SplitTreeShots(themes, all);
 
         return Finish();
+    }
+
+    /// <summary>
+    /// Split chats in the sidebar (owner 2026-10-18: a tree like Claude's — each split chat under the chat that opened
+    /// it, a branch badge with the count, what each one does), in every theme. Rendered for the eye, not compared with
+    /// a golden; the checks are on the list's order and the badge. Runs last: it adds chats the other pages never saw.
+    /// </summary>
+    static async Task SplitTreeShots(object themes, List<string> themeIds)
+    {
+        Log("\n## Split chats in the sidebar — the tree (rendered for the eye)");
+        var chat = MainVm.ChatVM;
+        var links = ChatLinkStore.Current;
+        Check("split: the chat page made the link store", links != null);
+        if (links == null) return;
+        ChatSession Make(string title, string? parent, string? task, string status = "")
+        {
+            var s = new ChatSession { Title = title, ProjectPath = FixtureProject, RunStatus = status };
+            chat.Sessions.Insert(0, s);
+            if (parent != null) links.Link(s.Id, parent, task ?? title);
+            return s;
+        }
+        var p = Make("CluadeX — works again after the wipe", null, null);
+        var k1 = Make("Interactive boxes per character", p.Id, "provider / Cowork avatars on every question box", "working");
+        var k2 = Make("UI Studio — continue and fix", p.Id, "UI Studio pages, gallery and fixes");
+        var k3 = Make("Edit .arb translations", k2.Id, "edit Flutter .arb texts from the page");
+        var k4 = Make("Old probe", p.Id, "a finished probe, put away");
+        links.SetArchived(k4.Id, true);
+        // The parent opened first, so it stands first; its split chats under it, in the order they were opened.
+        chat.Sessions.Move(chat.Sessions.IndexOf(p), 0);
+        MainVm.NavigateToCommand.Execute("Chat");
+        Invoke(chat, "RebuildVisibleSessions");
+        await Idle(300);
+
+        var list = chat.VisibleSessions.ToList();
+        int ip = list.IndexOf(p);
+        Check("split: each split chat sits right under the chat that opened it, nested one step per level",
+            ip >= 0 && list.IndexOf(k1) > ip && list.IndexOf(k2) > ip && list.IndexOf(k3) == list.IndexOf(k2) + 1
+            && k1.SplitDepth == 1 && k2.SplitDepth == 1 && k3.SplitDepth == 2,
+            string.Join(" / ", list.Take(8).Select(s => $"{s.Title}@{s.SplitDepth}")));
+        Check("split: a put-away chat is not in the list", !list.Contains(k4));
+        Check("split: the parent's badge counts its open split chats (2 — the put-away one not)", p.OpenSplitCount == 2 && p.HasOpenSplits, $"{p.OpenSplitCount}");
+
+        foreach (string id in themeIds.Append("Midnight"))
+        {
+            Invoke(themes, "Apply", id, true);
+            await Idle(250);
+            var root = RootVisual(MainWin);
+            var full = Snapshot(root, W, H);
+            var side = new CroppedBitmap(full, new Int32Rect(0, 0, Math.Min(420, W), H));
+            SavePng(side, Path.Combine(OutRoot, "renders", "split-tree", $"sidebar-{id.ToLowerInvariant()}.png"));
+        }
+        Log($"  shots: {Path.Combine(OutRoot, "renders", "split-tree")}");
     }
 
     static bool IsBlocking(HttpMessageInvoker inv) => GetFieldDeep(inv, "_handler") is BlockingHandler;
