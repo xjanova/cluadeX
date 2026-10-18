@@ -58,7 +58,8 @@
                                                   TextBlock.FontFamily="Segoe MDL2 Assets"
                                                   TextBlock.FontSize="18"
                                                   TextBlock.Foreground="{TemplateBinding Foreground}"/>
-                                <Image x:Name="art" Width="32" Height="32" RenderOptions.BitmapScalingMode="HighQuality"
+                                <!-- 34 px: the Lavender tiles (design/lavender/make_rail_icons.py) are drawn to be read at this size -->
+                                <Image x:Name="art" Width="34" Height="34" RenderOptions.BitmapScalingMode="HighQuality"
                                        Visibility="{DynamicResource NavIcon.Art.Visibility}"
                                        Source="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource NavIconSource}}"/>
                             </Grid>

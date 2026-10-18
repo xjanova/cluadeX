@@ -627,6 +627,7 @@ internal static partial class Program
         string startTheme = themes == null ? "midnight" : ((string)Prop(themes, "CurrentThemeId")).ToLowerInvariant();
         var midnight = await RenderSet(startTheme);
         CompareWithGolden(startTheme, midnight);
+        await RailIcons(startTheme);
 
         // The probe (opt-in): every token inverted LIVE on each page — what does not invert ignores the theme.
         if (ProbeMode && themes != null) await RunProbe();
@@ -654,6 +655,7 @@ internal static partial class Program
             await Idle(200);
             var set = await RenderSet(id.ToLowerInvariant());
             Check($"{id}: every page and dialog rendered", set.Count == Pages.Length + Dialogs.Length, $"{set.Count}");
+            await RailIcons(id.ToLowerInvariant());
         }
         Invoke(themes, "Apply", "Midnight", true);
         await Idle(200);
@@ -825,6 +827,33 @@ internal static partial class Program
         MainWin.Width = W; MainWin.Height = H;
         await Idle(600);
         Check("P4 landscape again: the chat is back on the right", chat != null && Grid.GetRow(chat) == 0 && Grid.GetColumn(chat) == 2);
+    }
+
+    /// <summary>Every activity-rail button shows its drawn tile (Assets/Icons/&lt;Tag&gt;.png, design/lavender/make_rail_icons.py)
+    /// in every theme — none falls back to the font glyph (owner 2026-10-18). The rail is saved for the eye at 100 % and
+    /// 3× (renders/&lt;set&gt;/rail.png, rail-3x.png).</summary>
+    static async Task RailIcons(string set)
+    {
+        MainVm.NavigateToCommand.Execute("Chat");
+        await Idle(300);
+        var style = (Style)Application.Current.Resources["ActivityBarButton"];
+        var rail = Find<RadioButton>(MainWin).Where(r => r.Style == style).ToList();
+        Check($"{set}: the activity rail has its 10 buttons", rail.Count >= 10, $"{rail.Count}");
+        var missing = new List<string>();
+        foreach (var b in rail)
+        {
+            var art = b.Template?.FindName("art", b) as Image;
+            var glyph = b.Template?.FindName("glyph", b) as FrameworkElement;
+            if (art?.Source == null || art.Visibility != Visibility.Visible || glyph?.Visibility == Visibility.Visible)
+                missing.Add($"{b.Tag} (art {(art?.Source == null ? "none" : art.Visibility.ToString())}, glyph {glyph?.Visibility})");
+        }
+        Check($"{set}: every rail button shows its drawn icon, no glyph fallback", missing.Count == 0, string.Join(", ", missing));
+        FreezeVolatile();
+        var full = await Stable(() => (RootVisual(MainWin), W, H), $"{set}/rail");
+        var crop = new CroppedBitmap(full, RailColumn);
+        SavePng(crop, Path.Combine(OutRoot, "renders", set, "rail.png"));
+        var big = new TransformedBitmap(crop, new ScaleTransform(3, 3));
+        SavePng(big, Path.Combine(OutRoot, "renders", set, "rail-3x.png"));
     }
 
     static RenderTargetBitmap Snapshot(Visual v, int w, int h)
@@ -1039,7 +1068,10 @@ internal static partial class Program
             string golden = Path.Combine(GoldenDir, key + ".png");
             if (!File.Exists(golden)) { Log($"INFO  {key}: no golden image"); continue; }
             if (!rendered.TryGetValue(key, out var mine)) { Check($"{set}: {key} rendered", false); continue; }
-            var d = Diff(golden, mine, Path.Combine(diffDir, key + ".png"));
+            // The activity rail's icons are the drawn tiles in every theme now (owner 2026-10-18), not the golden's font
+            // glyphs: the rail column of a main page is left out here; RailIcons() checks the rail itself.
+            bool page = Pages.Any(p => p.Key == key);
+            var d = Diff(golden, mine, Path.Combine(diffDir, key + ".png"), page ? RailColumn : null);
             string detail = $"{d.Pct:F4} % changed ({d.Changed} px), max Δ {d.MaxDelta}{(d.SizeMismatch ? ", SIZE DIFFERS " + d.Sizes : "")}";
             if (ExpectedToChange.Contains(key))
                 Log($"INFO  {set}: {key} — expected to change (theme picker added): {detail}");
@@ -1051,7 +1083,10 @@ internal static partial class Program
 
     sealed record DiffResult(double Pct, int Changed, int MaxDelta, bool SizeMismatch, string Sizes);
 
-    static DiffResult Diff(string goldenPath, string minePath, string diffPng)
+    /// <summary>The activity rail on a main page (MainWindow.xaml: the 60 px column between the title and status bars).</summary>
+    static readonly Int32Rect RailColumn = new(0, 42, 60, H - 42 - 34);
+
+    static DiffResult Diff(string goldenPath, string minePath, string diffPng, Int32Rect? ignore = null)
     {
         var a = LoadPng(goldenPath);
         var b = LoadPng(minePath);
@@ -1062,6 +1097,11 @@ internal static partial class Program
         var mask = diffPng != null ? new byte[pa.Length] : null;
         for (int i = 0; i < pa.Length; i += 4)
         {
+            if (ignore is Int32Rect ig)
+            {
+                int x = i / 4 % a.PixelWidth, y = i / 4 / a.PixelWidth;
+                if (x >= ig.X && x < ig.X + ig.Width && y >= ig.Y && y < ig.Y + ig.Height) continue;
+            }
             int d = Math.Max(Math.Max(Math.Abs(pa[i] - pb[i]), Math.Abs(pa[i + 1] - pb[i + 1])),
                              Math.Max(Math.Abs(pa[i + 2] - pb[i + 2]), Math.Abs(pa[i + 3] - pb[i + 3])));
             if (d > maxDelta) maxDelta = d;
