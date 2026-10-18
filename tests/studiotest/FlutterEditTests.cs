@@ -257,6 +257,7 @@ class HomeScreen extends StatelessWidget {
         Check("drop: nothing under the point", FlutterCodeEdit.PlanDrop(boxes, 380, 800, f => Home, f => true) == null);
         Check("drop: boxes in files the Studio may not edit are passed over", FlutterCodeEdit.PlanDrop(boxes, 200, 200, f => Home, f => false) == null);
 
+        ParamTexts();
         AnalyzeEdits(temp);
     }
 

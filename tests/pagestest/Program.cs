@@ -246,6 +246,7 @@ internal static partial class Program
         await FlutterApp(vm, view, fx);
         await FlutterReal(vm, view, fx);
         await FlutterTools(vm, view, fx);
+        await FlutterParams(vm, view, fx);
         await FlutterTranslations(vm, view, fx);
         await WpfApp(vm, view, fx);
 
