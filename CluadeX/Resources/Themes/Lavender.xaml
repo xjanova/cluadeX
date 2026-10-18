@@ -30,7 +30,7 @@
 
     <sys:String x:Key="Theme.Id">Lavender</sys:String>
 
-    <!-- Menu icons: font glyphs, or the ChatGPT-made art in Assets/Icons (Lavender) -->
+    <!-- Menu icons: the tiles in Assets/Icons in every theme (owner 2026-10-18), drawn by design/lavender/make_rail_icons.py -->
     <Visibility x:Key="NavIcon.Glyph.Visibility">Collapsed</Visibility>
     <Visibility x:Key="NavIcon.Art.Visibility">Visible</Visibility>
 

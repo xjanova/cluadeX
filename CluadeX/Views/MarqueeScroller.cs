@@ -1,7 +1,11 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("marqueetest")]
 
 namespace CluadeX.Views;
 
@@ -144,6 +148,13 @@ public sealed class MarqueeScroller : ScrollViewer
         var now = e is RenderingEventArgs r ? r.RenderingTime : TimeSpan.Zero;
         double dt = _lastTick == TimeSpan.Zero ? 0 : Math.Min(0.1, (now - _lastTick).TotalSeconds);
         _lastTick = now;
+        Step(dt);
+    }
+
+    /// <summary>One frame of the glide or the hover-follow, <paramref name="dt"/> seconds after the last one.
+    /// Internal: marqueetest drives it frame by frame.</summary>
+    internal void Step(double dt)
+    {
         double max = ScrollableWidth;
         if (max <= MinOverflow)
         {
@@ -151,14 +162,15 @@ public sealed class MarqueeScroller : ScrollViewer
             Hook(false);
             return;
         }
+        _offset = Math.Clamp(_offset, 0, max);
         if (dt <= 0) return;
 
-        if (IsMouseOver)
+        if (PointerOverBar() is Point pt)
         {
             // Follow the pointer, eased: the edge 15% at each side reaches the ends.
-            double x = Mouse.GetPosition(this).X / Math.Max(1, ActualWidth);
-            double target = Math.Clamp((x - 0.15) / 0.7, 0, 1) * max;
+            double target = HoverTarget(pt.X / Math.Max(1, ActualWidth)) * max;
             _offset += (target - _offset) * Math.Min(1, dt * 8);
+            if (Math.Abs(target - _offset) < 0.5) _offset = target;
             _rest = RestSeconds / 2;
         }
         else if (_rest > 0)
@@ -173,4 +185,35 @@ public sealed class MarqueeScroller : ScrollViewer
         }
         if (Math.Abs(HorizontalOffset - _offset) > 0.2) ScrollToHorizontalOffset(_offset);
     }
+
+    /// <summary>Pointer across the bar (0 = left edge, 1 = right edge) → how far along the row to show: the edge 15% at
+    /// each side reaches the ends, so the end is reached without hunting for the bar's last pixel.</summary>
+    internal static double HoverTarget(double x) => Math.Clamp((x - 0.15) / 0.7, 0, 1);
+
+    /// <summary>Tests put the pointer here (in the bar's coordinates, null = not over it) instead of the real cursor.</summary>
+    internal Func<Point?>? PointerOverride;
+
+    /// <summary>The pointer in this bar's coordinates while it is over the bar, else null. From the real cursor, not
+    /// WPF's mouse: the title bar lies in the window's caption (WindowChrome), where only the chips marked
+    /// IsHitTestVisibleInChrome get mouse input. Over the project name, the version or a gap WPF saw no mouse at all,
+    /// so the row kept gliding under the pointer and followed it only while a chip happened to be beneath — pointing at
+    /// the gliding text never brought out the end (owner 2026-10-18, the 1094 px window).</summary>
+    private Point? PointerOverBar()
+    {
+        if (PointerOverride != null) return PointerOverride();
+        if (!IsVisible || PresentationSource.FromVisual(this) is not HwndSource src || !GetCursorPos(out var c)) return null;
+        // Over this window, not over another one in front of it (a dialog, the pet, another app).
+        IntPtr under = WindowFromPoint(c);
+        if (under == IntPtr.Zero || GetAncestor(under, GaRoot) != GetAncestor(src.Handle, GaRoot)) return null;
+        Point pt;
+        try { pt = PointFromScreen(new Point(c.X, c.Y)); }
+        catch (InvalidOperationException) { return null; }   // not connected to a source any more
+        return pt.X >= 0 && pt.Y >= 0 && pt.X < ActualWidth && pt.Y < ActualHeight ? pt : null;
+    }
+
+    private const uint GaRoot = 2;
+    [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+    [DllImport("user32.dll")] private static extern bool GetCursorPos(out NativePoint p);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativePoint p);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 }

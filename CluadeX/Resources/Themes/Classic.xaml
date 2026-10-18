@@ -39,9 +39,9 @@
 
     <sys:String x:Key="Theme.Id">Classic</sys:String>
 
-    <!-- Menu icons: font glyphs, or the ChatGPT-made art in Assets/Icons (Lavender) -->
-    <Visibility x:Key="NavIcon.Glyph.Visibility">Visible</Visibility>
-    <Visibility x:Key="NavIcon.Art.Visibility">Collapsed</Visibility>
+    <!-- Menu icons: the tiles in Assets/Icons in every theme (owner 2026-10-18), drawn by design/lavender/make_rail_icons.py -->
+    <Visibility x:Key="NavIcon.Glyph.Visibility">Collapsed</Visibility>
+    <Visibility x:Key="NavIcon.Art.Visibility">Visible</Visibility>
 
     <!-- ═════════════════════════════════════ 2. SEMANTIC TOKENS ═════════════════════════════════════ -->
 
