@@ -35,8 +35,25 @@ public sealed class ResizeGrip : Thumb
     public double MinSize { get; set; } = 160;
     public double MaxSize { get; set; } = 900;
 
-    /// <summary>The grip is on the panel's LEFT edge (a right-hand panel): dragging left widens it.</summary>
+    /// <summary>The grip is on the panel's LEFT edge (a right-hand panel): dragging left widens it. With
+    /// <see cref="Vertical"/>: the TOP edge (a panel below the content): dragging up makes it taller.</summary>
     public bool OnLeftEdge { get; set; }
+
+    private bool _vertical;
+    /// <summary>Drives the target's Height instead of its Width (a grip lying along a horizontal edge).</summary>
+    public bool Vertical
+    {
+        get => _vertical;
+        set
+        {
+            _vertical = value;
+            if (value) { Width = double.NaN; Height = 6; Cursor = Cursors.SizeNS; }
+            else { Height = double.NaN; Width = 6; Cursor = Cursors.SizeWE; }
+        }
+    }
+
+    private DependencyProperty SizeProperty => _vertical ? HeightProperty : WidthProperty;
+    private double TargetSize(FrameworkElement t) => _vertical ? t.Height : t.Width;
 
     private double _designWidth = double.NaN;
     private bool _applied;
@@ -57,7 +74,7 @@ public sealed class ResizeGrip : Thumb
         MouseDoubleClick += (_, e) =>
         {
             if (Target == null || double.IsNaN(_designWidth)) return;
-            Target.Width = _designWidth;
+            Target.SetValue(SizeProperty, _designWidth);
             Persist();
             e.Handled = true;
         };
@@ -79,22 +96,24 @@ public sealed class ResizeGrip : Thumb
     {
         if (_applied || Target == null) return;
         _applied = true;
-        _designWidth = Target.Width;
+        _designWidth = TargetSize(Target);
         if (Key.Length > 0 && Load?.Invoke(Key) is double saved && !double.IsNaN(saved))
-            Target.Width = Math.Clamp(saved, MinSize, MaxSize);
+            Target.SetValue(SizeProperty, Math.Clamp(saved, MinSize, MaxSize));
     }
 
     private void OnDragDelta(object sender, DragDeltaEventArgs e)
     {
         if (Target == null) return;
-        double current = double.IsNaN(Target.Width) ? Target.ActualWidth : Target.Width;
-        double next = current + (OnLeftEdge ? -e.HorizontalChange : e.HorizontalChange);
-        Target.Width = Math.Clamp(next, MinSize, MaxSize);
+        double size = TargetSize(Target);
+        double current = double.IsNaN(size) ? (_vertical ? Target.ActualHeight : Target.ActualWidth) : size;
+        double change = _vertical ? e.VerticalChange : e.HorizontalChange;
+        double next = current + (OnLeftEdge ? -change : change);
+        Target.SetValue(SizeProperty, Math.Clamp(next, MinSize, MaxSize));
     }
 
     private void Persist()
     {
-        if (Target == null || Key.Length == 0 || double.IsNaN(Target.Width)) return;
-        try { Save?.Invoke(Key, Math.Round(Target.Width)); } catch { /* a width is not worth an error */ }
+        if (Target == null || Key.Length == 0 || double.IsNaN(TargetSize(Target))) return;
+        try { Save?.Invoke(Key, Math.Round(TargetSize(Target))); } catch { /* a size is not worth an error */ }
     }
 }
