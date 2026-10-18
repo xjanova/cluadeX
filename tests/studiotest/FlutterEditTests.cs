@@ -13,7 +13,11 @@ namespace StudioTest;
 /// </summary>
 internal static partial class Program
 {
-    const string Home = @"import 'package:flutter/material.dart';
+    /// <summary>The Dart samples as LF text, whatever line endings git wrote this file with (core.autocrlf turns
+    /// them into CRLF on a checkout). The expected strings below say \n; the CRLF case is built from them on purpose.</summary>
+    static string Lf(string s) => s.Replace("\r\n", "\n");
+
+    static readonly string Home = Lf(@"import 'package:flutter/material.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -42,7 +46,7 @@ class HomeScreen extends StatelessWidget {
     );
   }
 }
-";
+");
 
     /// <summary>The 1-based line and column of the first character of <paramref name="marker"/> (after <paramref name="skip"/> chars).</summary>
     static (int Line, int Col) At(string text, string marker, int skip = 0)
@@ -261,7 +265,7 @@ class HomeScreen extends StatelessWidget {
         AnalyzeEdits(temp);
     }
 
-    const string Themed = @"import 'package:flutter/material.dart';
+    static readonly string Themed = Lf(@"import 'package:flutter/material.dart';
 
 class ThemedScreen extends StatelessWidget {
   const ThemedScreen({super.key});
@@ -271,7 +275,7 @@ class ThemedScreen extends StatelessWidget {
     return Text('หัวข้อ', style: Theme.of(context).textTheme.titleLarge);
   }
 }
-";
+");
 
     static bool FlutterConstSafe(string code) =>
         (bool)typeof(FlutterCodeEdit).Assembly.GetType("CluadeX.Services.UiStudio.Sketch.DartDoc")!
