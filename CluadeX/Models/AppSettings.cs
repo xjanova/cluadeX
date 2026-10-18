@@ -70,6 +70,13 @@ public class AppSettings
     /// INSIDE the open project run without a prompt (never execute, MCP, browse or paths outside the project).</summary>
     public bool AcceptEditsDefault { get; set; } = false;
 
+    /// <summary>The agent opening a folder OUTSIDE the open project (a related repo it found on its own, open_project):
+    /// "ask" (default — a prompt with "Always allow this folder") or "allow" (never ask). Owner 2026-10-18: "ต้องขออนุญาต
+    /// ในการเปิดโฟลเดอร์อื่น จะให้ถามเสมอ หรือไม่ต้องถามอีกก็ได้".</summary>
+    public string RelatedFolderAccess { get; set; } = "ask";
+    /// <summary>Folders answered "Always allow": the agent opens them (and anything inside) without asking.</summary>
+    public List<string> AllowedProjectFolders { get; set; } = new();
+
     // ─── Dev Preview: background processes + built-in browser (feature.devPreview) ───
     /// <summary>Built-in browser engine: "auto" (WebView2, else an installed Edge/Chrome over CDP), "webview2" or "cdp".</summary>
     public string BrowserEngine { get; set; } = "auto";
@@ -105,6 +112,29 @@ public class AppSettings
     public bool EnforceReadBeforeEdit { get; set; } = true;
     /// <summary>When the agent edits a file, auto-open/refresh it in the Code Editor and scroll to the change.</summary>
     public bool LiveEditFollow { get; set; } = true;
+
+    /// <summary>When the API's credit/quota runs out mid-task, carry the same turn on with Claude Dev (the user's
+    /// Claude login) and a handoff brief instead of stopping on a billing error.</summary>
+    public bool AutoFailoverOnQuota { get; set; } = true;
+
+    // ─── Dispatch policy (Services/Agents/DispatchPolicy.cs) ───
+    /// <summary>Effort decides when the agent fans out: low none, medium read-only sub-agents on the cheapest model,
+    /// high workers in git worktrees with a reviewer, xhigh/max also speculative fixes. Off = sub-agents as before.</summary>
+    public bool DispatchPolicyEnabled { get; set; } = true;
+
+    // ─── Desktop control (Services/Desktop) ───
+    /// <summary>The desktop_* tools: see and drive other programs on this PC (testing a desktop app, a game window,
+    /// an installer). On by default — every app still asks once per run (or "Allow in this chat").</summary>
+    public bool DesktopControlEnabled { get; set; } = true;
+    /// <summary>Sub-agents, workers and fixers one run may have going at the same time.</summary>
+    public int MaxParallelAgents { get; set; } = 3;
+    /// <summary>Race 2–3 fixers in their own worktrees on a red build the main loop could not fix.</summary>
+    public bool SpeculativeFixEnabled { get; set; } = true;
+    public int SpeculativeFixCount { get; set; } = 3;
+    /// <summary>How long a speculative-fix race may take before the main loop gets the build back.</summary>
+    public int SpeculativeFixMinutes { get; set; } = 6;
+    /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix"); empty = the policy's choice.</summary>
+    public Dictionary<string, string> SubAgentModelOverrides { get; set; } = new();
     /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
     /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).</summary>
     public bool AutoOpenEditorOnAgentEdit { get; set; } = true;

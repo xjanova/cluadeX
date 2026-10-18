@@ -84,7 +84,13 @@ public partial class CodeAgentService
 
     /// <summary>What a sub-agent is doing, for the agent map: Phase "start" | "tool" | "done" | "failed" | "stopped".
     /// Raised in the run's own flow (AgentRunScope.Current is the run that spawned it).</summary>
-    public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps);
+    public sealed record SubAgentEvent(int Id, string Label, string Kind, string Task, string Phase, string Detail, int Steps,
+        string? Model = null, decimal CostUsd = 0);
+
+    /// <summary>How one sub-agent runs when the dispatcher starts it: its map id and label, kind, routed model, own scope
+    /// (its cost), its warm-start context; ReportOnDone = false for a fixer, whose "done" comes after the re-run.</summary>
+    private sealed record SubAgentRunOptions(int Id, string Label, string Kind, string? Model, AgentRunScope? Scope,
+        string? Warm = null, bool ReportOnDone = true);
 
     public event Action<SubAgentEvent>? OnSubAgentEvent;
 
@@ -98,7 +104,38 @@ public partial class CodeAgentService
     private async Task<string?> RunSubAgentAsync(SubAgentRequest request, CancellationToken ct)
     {
         _subAgentLast.Value = null;
-        try { return await RunSubAgentCoreAsync(request, ct); }
+        if (string.Equals(request.Type, "workers", StringComparison.OrdinalIgnoreCase))
+            return await RunWorkersAsync(request, ct);
+
+        // ─── the dispatch policy: may this one run, on which model, how many at once ───
+        var dispatch = CurrentDispatch();
+        bool canEdit = SubAgentCanEdit(request);
+        if (Agents.DispatchPolicy.Gate(dispatch, request.Type, canEdit) is { } refusal)
+        {
+            _debugLog?.Info("Dispatch", $"sub-agent refused ({request.Type}, edit={canEdit}) · {dispatch.Reason}");
+            return refusal;
+        }
+        var parent = AgentRunScope.Current;
+        var gate = GateFor(parent, dispatch.MaxConcurrency);
+        await gate.WaitAsync(ct);
+        try
+        {
+            var kind = Agents.DispatchPolicy.KindOf(canEdit);
+            string? model = dispatch.Legacy ? null : RoutedModel(kind);
+            var child = parent?.CreateChild();
+            if (child != null && !dispatch.Legacy && kind == Agents.SubAgentKind.Explore) child.StepEffort = "low";
+            AgentRunScope.Enter(child ?? parent);
+            Agents.SubAgentModel.Use(model);
+            if (!dispatch.Legacy) parent?.MarkStrategy((int)Agents.DispatchStrategy.FanOut);
+            string warm = dispatch.Legacy ? "" : WarmContext();
+            if (!dispatch.Legacy && !canEdit && QuotaRecentlyExhausted && _settingsService.Settings.AutoFailoverOnQuota)
+                return await RunSubAgentOnClaudeDevAsync(BriefOf(request, warm), false, ct);
+            int n = Interlocked.Increment(ref _subAgentCounter);
+            bool thai = _localizationService.CurrentLanguage == "th";
+            bool specialist = !string.IsNullOrWhiteSpace(request.Persona);
+            string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({request.Type})" : "");
+            return await RunSubAgentCoreAsync(request, ct, new SubAgentRunOptions(n, label, request.Type, model, child, warm));
+        }
         catch (OperationCanceledException)
         {
             if (_subAgentLast.Value is { } e) RaiseSubAgent(e with { Phase = "stopped", Detail = "" });
@@ -109,12 +146,26 @@ public partial class CodeAgentService
             if (_subAgentLast.Value is { } e) RaiseSubAgent(e with { Phase = "failed", Detail = Shorten(ex.Message, 120) });
             throw;
         }
+        finally { gate.Release(); }
     }
+
+    /// <summary>Would this request's sub-agent get edit tools?</summary>
+    private bool SubAgentCanEdit(SubAgentRequest request)
+    {
+        if (request.AllowedTools is { Count: > 0 } allowed)
+            return allowed.Select(_agentToolService.ResolveToolTypePublic)
+                .Any(t => t is ToolType.WriteFile or ToolType.EditFile or ToolType.MultiEdit);
+        return !string.IsNullOrWhiteSpace(request.Persona) || string.Equals(request.Type, "general", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BriefOf(SubAgentRequest r, string warm) =>
+        r.Task.Trim() + (string.IsNullOrWhiteSpace(r.Context) ? "" : "\n\nContext from the main agent:\n" + r.Context.Trim())
+        + (string.IsNullOrWhiteSpace(warm) ? "" : "\n\n" + warm) + "\n\nYou are read-only: investigate and report (file:line, evidence).";
 
     // The sub-agent this flow is running (for the failed / stopped event).
     private readonly AsyncLocal<SubAgentEvent?> _subAgentLast = new();
 
-    private async Task<string?> RunSubAgentCoreAsync(SubAgentRequest request, CancellationToken ct)
+    private async Task<string?> RunSubAgentCoreAsync(SubAgentRequest request, CancellationToken ct, SubAgentRunOptions? opts)
     {
         var provider = _providerManager.ActiveProvider;
         if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady)
@@ -122,9 +173,9 @@ public partial class CodeAgentService
 
         string task = request.Task, context = request.Context, type = request.Type;
         bool thai = _localizationService.CurrentLanguage == "th";
-        int n = Interlocked.Increment(ref _subAgentCounter);
+        int n = opts?.Id ?? Interlocked.Increment(ref _subAgentCounter);
         bool specialist = !string.IsNullOrWhiteSpace(request.Persona);
-        string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({type})" : "");
+        string label = opts?.Label ?? (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({type})" : "");
         var catalogue = _agentToolService.BuildNativeToolSchemas();
         var tools = request.AllowedTools is { Count: > 0 } allowed
             ? SpecialistTools(catalogue, allowed, _agentToolService.ResolveToolTypePublic)
@@ -137,10 +188,14 @@ public partial class CodeAgentService
 
         var first = new StringBuilder(task.Trim());
         if (!string.IsNullOrWhiteSpace(context)) first.Append("\n\nContext from the main agent:\n").Append(context.Trim());
+        // Warm start: the cached repo map and the run's brain recall, once — not a re-read of the project. A fixer's or
+        // worker's prompt already carries its own (Warm is the prompt itself then).
+        if (!string.IsNullOrWhiteSpace(opts?.Warm) && opts!.Warm != task) first.Append("\n\n").Append(opts.Warm!.Trim());
         var messages = new List<NativeMessage> { new() { Role = "user", Content = { new ContentBlock { Type = "text", Text = first.ToString() } } } };
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
-        var ev = new SubAgentEvent(n, label, type, Shorten(task, 160), "start", "", 0);
+        var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model);
+        decimal Cost() => opts?.Scope?.CostUsd ?? 0;
         _subAgentLast.Value = ev;
         RaiseSubAgent(ev);
         _debugLog?.Info("SubAgent", $"{label} ({type}) start: {Shorten(task, 120)} · {tools.Count} tools");
@@ -149,18 +204,37 @@ public partial class CodeAgentService
         for (int step = 1; step <= SubAgentMaxSteps; step++)
         {
             ct.ThrowIfCancellationRequested();
-            bool lastStep = step == SubAgentMaxSteps;
+            // The run's spend guard holds for its sub-agents too: past the budget, report now instead of spending on.
+            bool overBudget = step > 1 && opts != null && RunBudgetSpent();
+            bool lastStep = step == SubAgentMaxSteps || overBudget;
             if (lastStep)
-                messages[^1].Content.Add(new ContentBlock { Type = "text", Text = "[Step budget reached: no more tools. Write your report now.]" });
+                messages[^1].Content.Add(new ContentBlock { Type = "text", Text = overBudget
+                    ? "[The run's spend budget is used: no more tools. Write your report now with what you have.]"
+                    : "[Step budget reached: no more tools. Write your report now.]" });
 
             NativeToolResponse response;
             using (var callCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 // Idle timeout, reset by every stream event (the same keep-alive the main loop uses).
                 if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
-                response = await provider.ChatWithToolsAsync(messages, system, tools,
-                    onTextDelta: _ => { if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); },
-                    ct: callCts.Token, toolChoice: lastStep ? "none" : null);
+                try
+                {
+                    response = await provider.ChatWithToolsAsync(messages, system, tools,
+                        onTextDelta: _ => { if (timeoutSec > 0) callCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec)); },
+                        ct: callCts.Token, toolChoice: lastStep ? "none" : null);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && IsQuotaExhausted(ex.Message)
+                                           && _settingsService.Settings.AutoFailoverOnQuota)
+                {
+                    // The API ran out: this sub-agent's task goes to Claude Dev, like the main loop's failover.
+                    NoteQuotaExhausted();
+                    _debugLog?.Warn("SubAgent", $"{label}: quota exhausted — carrying on with Claude Dev");
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = "→ Claude Dev (API quota)", Steps = step, CostUsd = Cost() });
+                    string? cdReport = await RunSubAgentOnClaudeDevAsync(first.ToString(), canEdit, ct);
+                    if (cdReport == null) throw;
+                    RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done", Detail = Shorten(cdReport, 140), Steps = step, CostUsd = Cost() });
+                    return cdReport;
+                }
             }
 
             if (response.ToolCalls.Count == 0)
@@ -171,7 +245,8 @@ public partial class CodeAgentService
                 // The node shows the report's opening words — as text, not markdown (**, `, #, list bullets).
                 string gist = System.Text.RegularExpressions.Regex.Replace(report, @"[*`#>_]+|^\s*[-•]\s*", "",
                     System.Text.RegularExpressions.RegexOptions.Multiline);
-                RaiseSubAgent(ev with { Phase = "done", Detail = Shorten(gist, 140), Steps = step });
+                RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
+                    Detail = Shorten(gist, 140), Steps = step, CostUsd = Cost() });
                 return report.Length > 0 ? report : (thai ? "(เอเจนต์ย่อยไม่ได้เขียนรายงาน)" : "(the sub-agent wrote no report)");
             }
 
@@ -189,7 +264,7 @@ public partial class CodeAgentService
                     var call = new ToolCall { ToolName = c.tc.Name, Type = c.type.Value, Arguments = ParseJsonInputToArgs(c.tc.Input) };
                     string doing = GetToolStatusMessage(c.tc.Name, call.Arguments);
                     OnAgentStatus?.Invoke($"{label}: {doing}");
-                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step });
+                    RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost() });
                     var r = await _agentToolService.ExecuteToolAsync(call, ct);
                     string text = r.Success ? (r.Output ?? "") : $"Error: {r.Error ?? r.Output}";
                     if (text.Length > SubAgentMaxResultChars)
@@ -213,7 +288,8 @@ public partial class CodeAgentService
             messages.Add(assistant);
             messages.Add(results);
         }
-        RaiseSubAgent(ev with { Phase = "done", Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = SubAgentMaxSteps });
+        RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
+            Detail = thai ? "ใช้ขั้นครบโดยไม่ได้สรุป" : "step budget used, no report", Steps = SubAgentMaxSteps, CostUsd = Cost() });
         return thai ? "(เอเจนต์ย่อยใช้ขั้นตอนครบโดยไม่ได้สรุป)" : "(the sub-agent used its step budget without a report)";
     }
 

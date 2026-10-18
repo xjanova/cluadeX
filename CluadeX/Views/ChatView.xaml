@@ -58,6 +58,8 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <!-- The side panel moves here, under the composer, when the chat is too narrow to keep it beside (ChatView.xaml.cs) -->
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- ═══ IN-CHAT SEARCH BAR (Ctrl+F) ═══ -->
@@ -125,6 +127,7 @@
                                     Padding="{TemplateBinding Padding}">
                                 <ScrollViewer Style="{StaticResource SlimScrollViewer}"
                                               Focusable="False"
+                                              HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
                                               CanContentScroll="True">
                                     <ItemsPresenter/>
                                 </ScrollViewer>
@@ -357,6 +360,7 @@
                                                                         Foreground="{DynamicResource Text.Primary}" Background="{DynamicResource Surface.Chip}"
                                                                         BorderBrush="{DynamicResource Accent.1}" BorderThickness="1"
                                                                         Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        AutomationProperties.AutomationId="CxGuard.QuestionOption"
                                                                         Click="QuestionOption_Click">
                                                                     <Button.Template>
                                                                         <ControlTemplate TargetType="Button">
@@ -395,10 +399,10 @@
                                                     </ItemsControl>
                                                     <Grid>
                                                         <Grid.ColumnDefinitions><ColumnDefinition MinWidth="200"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                                        <TextBox Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
+                                                        <TextBox AutomationProperties.AutomationId="CxGuard.QuestionAnswer" Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
                                                                  ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
                                                         <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="14,4" Margin="8,0,0,0"
-                                                                FontSize="12.5" Style="{StaticResource PrimaryButton}" Click="QuestionSend_Click"/>
+                                                                FontSize="12.5" Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CxGuard.QuestionSend" Click="QuestionSend_Click"/>
                                                     </Grid>
                                                 </StackPanel>
                                             </StackPanel>
@@ -409,22 +413,40 @@
                                 <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
                                 <Border Grid.Row="1" HorizontalAlignment="Left"
                                         Margin="20,4,40,4"
-                                        Background="{DynamicResource Chat.Permission.Background}"
-                                        BorderBrush="{DynamicResource Status.Warning}"
-                                        BorderThickness="2,0,0,0"
                                         CornerRadius="0,6,6,0"
                                         Padding="10,6">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Setter Property="Background" Value="{DynamicResource Chat.Permission.Background}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning}"/>
+                                            <Setter Property="BorderThickness" Value="2,0,0,0"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.PermissionRequest}">
                                                     <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                                <!-- The red prompt: a delete aimed at a drive / home / system folder (Safety.DangerApproval) -->
+                                                <DataTrigger Binding="{Binding IsPermissionDanger}" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource Chat.Diff.Removed.Background}"/>
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger}"/>
+                                                    <Setter Property="BorderThickness" Value="4,2,2,2"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </Border.Style>
                                     <StackPanel>
+                                        <!-- Dangerous action: say so in red, in plain words, with the guard's full finding -->
+                                        <StackPanel Margin="0,0,0,8"
+                                                    Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <TextBlock Text="{services:Loc chat.perm.danger.title}" FontSize="14" FontWeight="Bold"
+                                                       Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{services:Loc chat.perm.danger.body}" FontSize="12" Margin="0,4,0,4"
+                                                       Foreground="{DynamicResource Status.Danger.Soft}" TextWrapping="Wrap"/>
+                                            <TextBox Text="{Binding PermissionDanger, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                                                     Background="Transparent" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                     Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap" MaxHeight="180"
+                                                     VerticalScrollBarVisibility="Auto"/>
+                                        </StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                             <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets"
                                                        FontSize="14" Foreground="{DynamicResource Status.Warning}"
@@ -482,6 +504,15 @@
                                             <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,0"
                                                     Style="{StaticResource PrimaryButton}"
                                                     FontSize="12"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllow"
+                                                    Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
+                                                    Click="PermissionAllow_Click"/>
+                                            <!-- The red prompt's yes says what it is: running something that deletes -->
+                                            <Button Content="{services:Loc chat.perm.danger.allow}" Padding="14,3" Margin="0,0,8,0"
+                                                    FontSize="12" FontWeight="Bold" Foreground="White"
+                                                    Background="{DynamicResource Status.Danger}" BorderBrush="{DynamicResource Status.Danger}"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllowDanger"
+                                                    Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}}"
                                                     Click="PermissionAllow_Click"/>
                                             <!-- An MCP tool no policy judged: allow it for the rest of this chat (one ChatGPT session asked 18×) -->
                                             <Button Content="{services:Loc chat.perm.allowChat}" Padding="14,3" Margin="0,0,8,0"
@@ -489,10 +520,19 @@
                                                     FontSize="12"
                                                     ToolTip="{services:Loc chat.perm.allowChat.tip}"
                                                     Visibility="{Binding PermissionCanAllowForChat, Converter={StaticResource BoolVis}}"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllowChat"
                                                     Click="PermissionAllowChat_Click"/>
+                                            <!-- A folder outside the project: remember it, never ask again (owner 2026-10-18) -->
+                                            <Button Content="{services:Loc chat.perm.allowAlways}" Padding="14,3" Margin="0,0,8,0"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    FontSize="12"
+                                                    ToolTip="{services:Loc chat.perm.allowAlways.tip}"
+                                                    Visibility="{Binding PermissionCanAllowAlways, Converter={StaticResource BoolVis}}"
+                                                    Click="PermissionAllowAlways_Click"/>
                                             <Button Content="{services:Loc chat.deny}" Padding="14,3"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionDeny"
                                                     Click="PermissionDeny_Click"/>
                                         </StackPanel>
                                         <Grid Margin="22,0,0,0"
@@ -509,6 +549,9 @@
                                                             <DataTrigger Binding="{Binding PermissionAllowedForChat}" Value="True">
                                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                             </DataTrigger>
+                                                            <DataTrigger Binding="{Binding PermissionAllowedAlways}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
@@ -516,6 +559,9 @@
                                             <TextBlock Text="{services:Loc chat.perm.allowedChat}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Success}"
                                                        Visibility="{Binding PermissionAllowedForChat, Converter={StaticResource BoolVis}}"/>
+                                            <TextBlock Text="{services:Loc chat.perm.allowedAlways}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Status.Success}"
+                                                       Visibility="{Binding PermissionAllowedAlways, Converter={StaticResource BoolVis}}"/>
                                             <TextBlock Text="{services:Loc chat.perm.denied}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Danger}">
                                                 <TextBlock.Style>
@@ -2397,6 +2443,13 @@
                                     <TextBlock x:Name="EstimateLabel" Text="{Binding EstimateShortText}" Foreground="{DynamicResource Text.Secondary}" FontSize="12"/>
                                 </Border>
 
+                                <!-- Follow edits: this chat's edits open in the editor while it is on screen (per chat) -->
+                                <CheckBox x:Name="FollowEditsBox" IsChecked="{Binding FollowEditsHere}" VerticalAlignment="Center" Margin="0,2,10,2"
+                                          ToolTip="{services:Loc chat.follow.tip}">
+                                    <TextBlock Text="{services:Loc chat.follow.label}" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource Text.Secondary}"/>
+                                </CheckBox>
+
                                 <!-- Batch: the next questions go out at half price through the provider's batch API and the
                                      answer lands in this chat later. Only shown when the active provider has one. -->
                                 <CheckBox IsChecked="{Binding BatchMode}" Foreground="{DynamicResource Status.Success}"
@@ -2474,8 +2527,8 @@
         </Border>
 
         <!-- ═══ RIGHT PANEL — the project's files, the last image the agent looked at, its last run ═══ -->
-        <!-- SidePanelHost: the view hides it where it does not belong — inside the Edit page (which has its own
-             explorer and terminal) and when the chat itself is too narrow to give up 300 px. -->
+        <!-- SidePanelHost: the view hides it only inside the Edit page (which has its own explorer and terminal). On a
+             narrow chat it first gives up width, then moves under the composer across the whole width (ChatView.xaml.cs). -->
         <Grid x:Name="SidePanelHost" Grid.Column="1" Grid.RowSpan="4">
         <Border x:Name="SidePanel" Width="300" Background="{DynamicResource Bg.Panel}"
                 BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0"
@@ -2579,7 +2632,7 @@
             </Grid>
         </Border>
         <!-- Drag the panel's left edge to resize it (remembered); double-click puts it back to 300. -->
-        <views:ResizeGrip HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
+        <views:ResizeGrip x:Name="SidePanelGrip" HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
                           Target="{Binding ElementName=SidePanel}"
                           Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}"/>
         </Grid>

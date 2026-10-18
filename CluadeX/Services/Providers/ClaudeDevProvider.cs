@@ -58,6 +58,157 @@ public class ClaudeDevProvider : IAiProvider
         "mcp__brainx-brain__brain_search,mcp__brainx-brain__brain_semantic_search," +
         "mcp__brainx-brain__brain_get_note,mcp__brainx-brain__brain_expertise";
 
+    /// <summary>What the CLI may do in an agent turn, decided by CluadeX from the user's own rules and Accept edits
+    /// for the run's folder (CodeAgentService.WorkerGrantFor). Null = read-only advice, as in a plain chat.</summary>
+    public sealed record WorkerGrant(bool Edit, bool Run);
+
+    /// <summary>The grant for the turn in flight (set by the agent loop around its one delegated call).</summary>
+    public static readonly AsyncLocal<WorkerGrant?> Grant = new();
+
+    /// <summary>Set by the agent loop around a worker turn: every stream-json line goes here (ClaudeDevStreamTurn turns
+    /// it into tool rows, the plan, steps) instead of being quoted into the reply. ChatAsync then yields only what no
+    /// event carries — the explained auth/billing refusal of a turn that produced nothing.</summary>
+    public static readonly AsyncLocal<Action<string>?> StreamSink = new();
+
+    /// <summary>File tools the CLI gets when the user's rules let CluadeX's own agent edit in the folder. The brain's
+    /// write tools come with them: a worker that learned something must be able to save it (cx-self-2, 2026-10-17:
+    /// brain_remember was refused and six lessons from the run were lost). Task* is how CLI 2.1.29x keeps its plan.</summary>
+    private const string EditTools = "Edit,Write,MultiEdit,NotebookEdit,TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet," +
+        "mcp__brainx-brain__brain_remember,mcp__brainx-brain__brain_create_note,mcp__brainx-brain__brain_append_note," +
+        "mcp__brainx-brain__brain_recall";
+
+    /// <summary>Commands the CLI is never let run headless, whatever the rules say: rewriting git history and shutting
+    /// the machine down. Recursive deletes are NOT here any more (owner, 2026-10-18): `rm -rf build` must just run, and a
+    /// delete aimed at a drive / home / system folder is caught by the --cx-guard hook and put to the user on CluadeX's
+    /// red prompt (Safety.DangerApproval) — it runs only on their yes.</summary>
+    private const string NeverTools =
+        "Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*),Bash(git clean:*),Bash(shutdown:*)";
+
+    /// <summary>The CLI's own sub-agent tool (named Task in older CLIs, Agent in newer ones): a worker splits independent
+    /// parts across sub-agents itself. They run inside the same CLI session, so they carry the same --settings guard hook
+    /// and allowed tools; their steps stream with parent_tool_use_id and land on the chat's agent map
+    /// (ClaudeDevStreamTurn). Before 2026-10-18 it was not allowed, so a Claude Dev chat never fanned out.</summary>
+    private const string SubAgentTools = "Task,Agent";
+
+    /// <summary>The arguments for one call: read-only advice, or a worker that edits/runs as the grant allows.</summary>
+    public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort)
+    {
+        bool worker = grant is { Edit: true } || grant is { Run: true };
+        string wrapper = worker
+            ? "You are 'claude-dev', the coding agent of a CluadeX chat, working directly in the project. " +
+              $"Project working directory: {cwd}. " +
+              (grant!.Edit ? "You may create and edit files inside it. " : "You may not edit files: propose changes as diffs. ") +
+              (grant.Run ? "You may run commands (builds, tests, git) in it. " : "You may not run commands. ") +
+              "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
+              "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
+              "and the user watches each one on the agent map. Keep a small task to yourself. " +
+              "Stay inside the project folder. Reply in the language the user writes in."
+            : "You are 'claude-dev', answering inside the CluadeX desktop app. " +
+              $"Project working directory: {cwd}. " +
+              "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
+              "Reply in the language the user writes in.";
+
+        string tools = AllowedTools;
+        if (grant is { Edit: true }) tools += "," + EditTools;
+        if (grant is { Run: true }) tools += ",Bash";
+        if (worker) tools += "," + SubAgentTools;
+
+        // Worker turns stream events (stream-json) so the chat shows each step while a long task runs; text mode
+        // printed nothing until the very end — a 30-minute task looked hung.
+        var args = new StringBuilder(worker ? "-p --output-format stream-json --verbose" : "-p --output-format text");
+        args.Append(" --append-system-prompt ").Append(Quote(wrapper));
+        args.Append(" --allowedTools ").Append(Quote(tools));
+        if (grant is { Run: true }) args.Append(" --disallowedTools ").Append(Quote(NeverTools));
+        if (grant is { Edit: true }) args.Append(" --permission-mode acceptEdits");
+        // Every worker that may edit or run carries CluadeX's PreToolUse guard (Safety.GuardHook): the CLI's own Bash
+        // never passes through CluadeX's command checks otherwise — the 2026-10-17 `rd /s /q C:\` went through there.
+        if (worker)
+        {
+            try { args.Append(" --settings ").Append(Quote(Safety.GuardHook.SettingsFile())); }
+            catch { args.Append(" --disallowedTools ").Append(Quote("Bash,PowerShell")); }   // no guard → no shell
+        }
+        // "default"/"auto"/empty → NO --model flag. An explicit alias routed the call to
+        // API-credit billing and died with "Credit balance is too low" on a machine whose
+        // Claude login is subscription-based; the CLI's own default rides the subscription.
+        if (!string.IsNullOrWhiteSpace(model)
+            && !model.Equals("default", StringComparison.OrdinalIgnoreCase)
+            && !model.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            args.Append(" --model ").Append(Quote(model));
+        // Claude Code takes low/medium/high (newer builds also max); xhigh/max round down to high so an
+        // older CLI never rejects the flag. "auto" leaves the CLI on its own setting.
+        if (effort != Models.EffortLevels.Auto)
+            args.Append(" --effort ").Append(effort is "xhigh" or "max" ? "high" : effort);
+        return args.ToString();
+    }
+
+    /// <summary>The model the CLI said it runs (its init line) — what "default" resolved to. Null before the first run.</summary>
+    public static string? ReportedModel { get; private set; }
+
+    /// <summary>The context window the CLI reported for its last run (result.modelUsage.*.contextWindow). Null before one.</summary>
+    public static int? ReportedContextWindow { get; private set; }
+
+    /// <summary>One stream-json line → the text the chat shows (assistant text, a short line per tool call, the final
+    /// result's text only when it is an error). Null = nothing to show. <paramref name="isError"/> is set by a result
+    /// line that failed.</summary>
+    public static string? RenderStreamLine(string line, out bool isError, out string? resultText)
+    {
+        isError = false;
+        resultText = null;
+        if (string.IsNullOrWhiteSpace(line) || line[0] != '{') return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            string type = root.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "";
+            // The CLI says which model "default" really is (init) and how big its window is (result.modelUsage) —
+            // the status bar's "of N tokens" used to be a fixed 200K for every Claude Dev model (owner 2026-10-18:
+            // "ทำไมมันไม่ใช่ 1 ล้านเหรอ").
+            if (type == "system" && root.TryGetProperty("subtype", out var st) && st.GetString() == "init"
+                && root.TryGetProperty("model", out var im) && im.ValueKind == System.Text.Json.JsonValueKind.String
+                && im.GetString() is { Length: > 0 } initModel)
+                ReportedModel = initModel;
+            if (type == "result" && root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                int window = 0;
+                foreach (var m in mu.EnumerateObject())
+                    if (m.Value.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && m.Value.TryGetProperty("contextWindow", out var cw) && cw.TryGetInt32(out int w))
+                        window = Math.Max(window, w);
+                if (window > 0) ReportedContextWindow = window;
+            }
+            if (type == "result")
+            {
+                isError = root.TryGetProperty("is_error", out var e) && e.ValueKind == System.Text.Json.JsonValueKind.True;
+                resultText = root.TryGetProperty("result", out var r) && r.ValueKind == System.Text.Json.JsonValueKind.String ? r.GetString() : null;
+                return null;
+            }
+            if (type != "assistant" || !root.TryGetProperty("message", out var msg)
+                || !msg.TryGetProperty("content", out var content) || content.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return null;
+            var sb = new StringBuilder();
+            foreach (var part in content.EnumerateArray())
+            {
+                string kind = part.TryGetProperty("type", out var k) ? k.GetString() ?? "" : "";
+                if (kind == "text" && part.TryGetProperty("text", out var tx))
+                    sb.Append(tx.GetString()).Append('\n');
+                else if (kind == "tool_use")
+                {
+                    string name = part.TryGetProperty("name", out var n) ? n.GetString() ?? "tool" : "tool";
+                    string detail = "";
+                    if (part.TryGetProperty("input", out var inp) && inp.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        foreach (var key in new[] { "command", "file_path", "path", "pattern", "description" })
+                            if (inp.TryGetProperty(key, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String)
+                            { detail = v.GetString() ?? ""; break; }
+                    detail = detail.Replace('\n', ' ');
+                    if (detail.Length > 140) detail = detail[..139] + "…";
+                    sb.Append("\n> ⏵ ").Append(name).Append(detail.Length > 0 ? " · `" + detail.Replace("`", "'") + "`" : "").Append("\n\n");
+                }
+            }
+            return sb.Length > 0 ? sb.ToString() : null;
+        }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
     public ClaudeDevProvider(SettingsService settingsService, FileSystemService fileSystemService)
     {
         _settingsService = settingsService;
@@ -79,13 +230,13 @@ public class ClaudeDevProvider : IAiProvider
     }
 
     /// <summary>
-    /// `where.exe claude` first (respects however the user installed it), then the
-    /// known install roots. The .cmd shim is fine — Process.Start handles it via
-    /// cmd /c when UseShellExecute is false and the file is a script, so prefer a
-    /// real .exe when one exists.
+    /// `where.exe claude` first (respects however the user installed it), then the known install places. Only a real
+    /// .exe is ever returned: npm's extensionless `claude` shim is a bash script Process.Start refuses, and the .cmd
+    /// shim would need cmd.exe (and its quoting) in between.
     /// </summary>
     private static async Task<string?> ResolveCliAsync(CancellationToken ct)
     {
+        string whereOut = "";
         try
         {
             var psi = new ProcessStartInfo("where.exe", "claude")
@@ -97,36 +248,67 @@ public class ClaudeDevProvider : IAiProvider
             using var p = Process.Start(psi);
             if (p != null)
             {
-                string outp = await p.StandardOutput.ReadToEndAsync(ct);
+                whereOut = await p.StandardOutput.ReadToEndAsync(ct);
                 await p.WaitForExitAsync(ct);
-                // .exe ONLY. npm puts an extensionless bash shim named `claude` on PATH
-                // first, and Process.Start refuses it ("not a valid application") —
-                // observed live. The .cmd shim would need a cmd.exe wrapper; the real
-                // exe in the fallback below is strictly better than either.
-                var first = outp.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(l => l.Trim())
-                    .FirstOrDefault(l => l.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
-                if (!string.IsNullOrWhiteSpace(first) && File.Exists(first)) return first;
             }
         }
         catch { /* fall through to known locations */ }
+        return FindCli(whereOut,
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            File.Exists, Directory.Exists, d => Directory.GetDirectories(d));
+    }
 
-        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        string claudeRoot = Path.Combine(appData, "Claude", "claude-code");
+    /// <summary>
+    /// Where the CLI is, from `where.exe claude` output and the known install places, newest first:
+    /// <list type="number">
+    /// <item>a claude.exe on PATH;</item>
+    /// <item>the exe behind npm's shims on PATH (`npm\claude.cmd` runs `node_modules\@anthropic-ai\claude-code\bin\claude.exe`);</item>
+    /// <item>the Claude desktop app's copy: `%APPDATA%\Claude\claude-code\&lt;version&gt;\[&lt;hash&gt;\]claude.exe` — the hash
+    /// folder is new (2.1.29x): the old flat lookup found nothing and Claude Dev said "CLI not found" on a machine with
+    /// three installs (owner 2026-10-17). Versions compare as versions (2.1.299 &gt; 2.1.30), a half-written version
+    /// folder without its exe is skipped;</item>
+    /// <item>the native installer's `~\.local\bin\claude.exe`.</item>
+    /// </list>
+    /// </summary>
+    public static string? FindCli(string? whereOutput, string appData, string userProfile,
+        Func<string, bool> fileExists, Func<string, bool> dirExists, Func<string, IEnumerable<string>> subdirs)
+    {
+        var onPath = (whereOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToList();
+        foreach (var l in onPath)
+            if (l.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && fileExists(l)) return l;
+        foreach (var l in onPath)
+        {
+            string? dir = Path.GetDirectoryName(l);
+            if (string.IsNullOrEmpty(dir)) continue;
+            string exe = Path.Combine(dir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+            if (fileExists(exe)) return exe;
+        }
+
         try
         {
-            if (Directory.Exists(claudeRoot))
+            string root = Path.Combine(appData, "Claude", "claude-code");
+            if (dirExists(root))
             {
-                // Versioned folders (2.1.221\claude.exe) — newest wins.
-                var exe = Directory.GetDirectories(claudeRoot)
-                    .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
-                    .Select(d => Path.Combine(d, "claude.exe"))
-                    .FirstOrDefault(File.Exists);
-                if (exe != null) return exe;
+                var versions = subdirs(root)
+                    .Select(d => (Dir: d, Ver: Version.TryParse(Path.GetFileName(d), out var v) ? v : new Version(0, 0)))
+                    .OrderByDescending(x => x.Ver);
+                foreach (var (dir, _) in versions)
+                {
+                    string flat = Path.Combine(dir, "claude.exe");
+                    if (fileExists(flat)) return flat;
+                    foreach (var hash in subdirs(dir))
+                    {
+                        string exe = Path.Combine(hash, "claude.exe");
+                        if (fileExists(exe)) return exe;
+                    }
+                }
             }
         }
         catch { }
-        return null;
+
+        string native = Path.Combine(userProfile, ".local", "bin", "claude.exe");
+        return fileExists(native) ? native : null;
     }
 
     public async IAsyncEnumerable<string> ChatAsync(
@@ -148,32 +330,16 @@ public class ClaudeDevProvider : IAiProvider
             : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         // The CLI builds its own context (CLAUDE.md, MCP, its system prompt). CluadeX's
-        // big prompt would just be noise on top — send a three-line wrapper instead.
-        string wrapper =
-            "You are 'claude-dev', answering inside the CluadeX desktop app. " +
-            $"Project working directory: {cwd}. " +
-            "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
-            "Reply in the language the user writes in.";
-
-        var args = new StringBuilder("-p --output-format text");
-        args.Append(" --append-system-prompt ").Append(Quote(wrapper));
-        args.Append(" --allowedTools ").Append(Quote(AllowedTools));
+        // big prompt would just be noise on top — send a short wrapper instead (BuildArgs).
+        var grant = Grant.Value;
+        bool worker = grant is { Edit: true } || grant is { Run: true };
+        var sink = worker ? StreamSink.Value : null;
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
-        // "default"/"auto"/empty → NO --model flag. An explicit alias routed the call to
-        // API-credit billing and died with "Credit balance is too low" on a machine whose
-        // Claude login is subscription-based; the CLI's own default rides the subscription.
-        if (!string.IsNullOrWhiteSpace(model)
-            && !model.Equals("default", StringComparison.OrdinalIgnoreCase)
-            && !model.Equals("auto", StringComparison.OrdinalIgnoreCase))
-            args.Append(" --model ").Append(Quote(model));
-        // Claude Code takes low/medium/high (newer builds also max); xhigh/max round down to high so an
-        // older CLI never rejects the flag. "auto" leaves the CLI on its own setting.
         string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
-        if (effort != Models.EffortLevels.Auto)
-            args.Append(" --effort ").Append(effort is "xhigh" or "max" ? "high" : effort);
+        string args = BuildArgs(cwd, grant, model, effort);
 
-        var psi = new ProcessStartInfo(_cliPath, args.ToString())
+        var psi = new ProcessStartInfo(_cliPath, args)
         {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -185,7 +351,9 @@ public class ClaudeDevProvider : IAiProvider
             StandardErrorEncoding = Encoding.UTF8,
         };
 
-        SetLoading(true);
+        // No SetLoading here: "loading" drives the full-window "กำลังโหลดโมเดล" overlay, which then covered the chat for
+        // the whole turn — a worker turn of half an hour hid every step it streamed (owner 2026-10-17). The chat's own
+        // running state shows the turn; loading is for InitializeAsync (finding the CLI) only.
         SetStatus("Claude Dev thinking…");
         Process? proc = null;
         try
@@ -212,9 +380,10 @@ public class ClaudeDevProvider : IAiProvider
             }
 
             // Hard ceiling so a wedged CLI can never hang the chat forever. Generous,
-            // because a real turn with tool use routinely takes tens of seconds.
+            // because a real turn with tool use routinely takes tens of seconds — and a worker turn carrying on a
+            // whole task takes as long as the task (Stop still ends it at once).
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(600));
+            timeout.CancelAfter(worker ? TimeSpan.FromMinutes(90) : TimeSpan.FromSeconds(600));
 
             var stderrTask = proc.StandardError.ReadToEndAsync(timeout.Token);
             string? line;
@@ -222,6 +391,25 @@ public class ClaudeDevProvider : IAiProvider
             string? lastLine = null;
             while ((line = await ReadLineOrNullAsync(proc.StandardOutput, timeout.Token)) != null)
             {
+                if (worker)
+                {
+                    string? shown = RenderStreamLine(line, out bool failed, out string? result);
+                    // The structured events (rows, plan, steps) — the agent loop renders them. A UI handler that throws
+                    // must not end a half-hour task.
+                    try { sink?.Invoke(line); } catch { }
+                    if (failed)
+                    {
+                        // An error result (billing, auth, a limit) is the reply when nothing else was said.
+                        lastLine = result ?? line;
+                        if (any && sink == null && !string.IsNullOrWhiteSpace(result)) yield return "\n⚠ " + result + "\n";
+                        continue;
+                    }
+                    if (shown == null) continue;
+                    any = true;
+                    SetStatus("Claude Dev working…");
+                    if (sink == null) yield return shown;
+                    continue;
+                }
                 // The CLI reports auth/billing refusals on STDOUT with a non-zero exit,
                 // not on stderr — so a one-line refusal looks like a successful reply
                 // unless the exit code is consulted. Hold the first line back until we
@@ -255,7 +443,6 @@ public class ClaudeDevProvider : IAiProvider
         }
         finally
         {
-            SetLoading(false);
             try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
             proc?.Dispose();
         }

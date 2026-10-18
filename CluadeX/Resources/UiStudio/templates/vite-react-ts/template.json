@@ -1,0 +1,12 @@
+{
+  "name": "React + TypeScript",
+  "nameTh": "React + TypeScript",
+  "description": "Vite + React 19 + TypeScript app split into components (header, hero, feature cards, task list with local storage). Exact click-to-source through the CluadeX locator.",
+  "descriptionTh": "แอป Vite + React 19 + TypeScript แยกคอมโพเนนต์ (เฮดเดอร์, Hero, การ์ดฟีเจอร์, รายการงานที่จำในเครื่อง) คลิกแล้วไปถึงบรรทัดซอร์สได้แม่นยำด้วย locator",
+  "kind": "vite",
+  "stack": "Vite · React · TS",
+  "icon": "",
+  "accent": "#61DAFB",
+  "order": 10,
+  "tags": ["react", "typescript", "node"]
+}

@@ -58,6 +58,51 @@
             <TextBlock Text="{services:Loc perms.subtitle}"
                        Foreground="{DynamicResource Text.Secondary}" FontSize="13" Margin="0,0,0,8"/>
 
+            <!-- ═══════ FOLDERS OUTSIDE THE PROJECT (open_project) ═══════ -->
+            <TextBlock Text="{services:Loc perms.folders.title}" Style="{StaticResource SectionTitle}" Margin="0,4,0,8"/>
+            <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="{services:Loc perms.folders.desc}" TextWrapping="Wrap" FontSize="12"
+                               Foreground="{DynamicResource Text.Secondary}" Margin="0,0,0,8"/>
+                    <CheckBox Content="{services:Loc perms.folders.ask}" IsChecked="{Binding AskBeforeOtherFolders}"
+                              Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,10"/>
+                    <TextBlock Text="{services:Loc perms.folders.allowed}" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{DynamicResource Text.Primary}" Margin="0,0,0,4"/>
+                    <TextBlock Text="{services:Loc perms.folders.none}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Text.Muted}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding AllowedFolders.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                    <ItemsControl ItemsSource="{Binding AllowedFolders}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding}" FontFamily="{DynamicResource Font.Mono}" FontSize="12"
+                                               Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
+                                    <Button Grid.Column="1" Content="{services:Loc perms.folders.remove}" Padding="10,2" Margin="8,0,0,0"
+                                            Style="{StaticResource SecondaryButton}" FontSize="11"
+                                            Command="{Binding DataContext.RemoveAllowedFolderCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                            CommandParameter="{Binding}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
             <!-- ═══════ RULES LIST ═══════ -->
             <TextBlock Text="{services:Loc perms.activeRules}" Style="{StaticResource SectionTitle}" Margin="0,4,0,12"/>
             <Border Style="{StaticResource Card}">

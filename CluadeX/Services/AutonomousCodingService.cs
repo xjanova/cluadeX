@@ -221,10 +221,13 @@ public class AutonomousCodingService
     /// </summary>
     public string? VerifyCommandBlockReason(string? verifyCmd)
     {
-        if (string.IsNullOrWhiteSpace(verifyCmd) || !_settings.Settings.Features.DangerousCommandBlocking) return null;
+        if (string.IsNullOrWhiteSpace(verifyCmd)) return null;
+        // Always on (Safety.CodeRunGuard): not switched off with the Features list below.
+        if (Safety.DestructiveCodeScan.JudgeLine(verifyCmd) is { } direct) return "CluadeX safety: refused — this command " + direct + ".";
+        if (!_settings.Settings.Features.DangerousCommandBlocking) return null;
         // RunCommandAsync runs it with cmd.exe /c on Windows, bash elsewhere.
         var dialect = OperatingSystem.IsWindows() ? DangerousCommandCheck.Dialect.Cmd : DangerousCommandCheck.Dialect.Posix;
-        return DangerousCommandCheck.FindBlocked(verifyCmd, dialect) is { } line
+        return DangerousCommandCheck.FindSerious(verifyCmd, dialect) is { } line
             ? string.Format(LocalizedResources.Instance["chat.auto.verifyBlocked"], line)
             : null;
     }

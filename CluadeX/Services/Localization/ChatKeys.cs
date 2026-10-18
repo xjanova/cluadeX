@@ -113,6 +113,9 @@ internal static class ChatKeys
         ["chat.ctx.fullWarning"] = new() { ["en"] = "🔴 Context almost full — the AI is losing earlier messages. Compact now or start a New Chat.", ["th"] = "🔴 context เกือบเต็ม — AI เริ่มลืมข้อความก่อนหน้า บีบอัดตอนนี้หรือเริ่มแชทใหม่" },
 
         // ─── Permission prompts ───
+        ["chat.perm.danger.title"] = new() { ["en"] = "⚠ DANGER — this deletes a drive, a home or a system folder", ["th"] = "⚠ อันตราย — คำสั่งนี้จะลบไดรฟ์ โฟลเดอร์ผู้ใช้ หรือโฟลเดอร์ระบบ" },
+        ["chat.perm.danger.body"] = new() { ["en"] = "Nothing runs unless you say yes here. No rule, no \"allow everything\" and no agent can answer this. Read what it would delete:", ["th"] = "จะไม่มีอะไรรันจนกว่าคุณจะกดอนุญาตที่นี่ ไม่มีกฎ โหมดอนุญาตทั้งหมด หรือ agent ตัวไหนตอบแทนได้ อ่านก่อนว่าจะลบอะไร:" },
+        ["chat.perm.danger.allow"] = new() { ["en"] = "Yes, run this delete", ["th"] = "อนุญาตให้รันคำสั่งลบนี้" },
         ["chat.perm.prompt"] = new() { ["en"] = "Allow {0} to {1}?", ["th"] = "อนุญาตให้ {0} ทำสิ่งนี้ไหม: {1}" },
         ["chat.perm.allowed"] = new() { ["en"] = "✓ Allowed", ["th"] = "✓ อนุญาตแล้ว" },
         ["chat.perm.denied"] = new() { ["en"] = "✗ Denied", ["th"] = "✗ ปฏิเสธแล้ว" },
@@ -123,6 +126,10 @@ internal static class ChatKeys
         ["chat.perm.allowChat"] = new() { ["en"] = "Allow in this chat", ["th"] = "อนุญาตทั้งแชทนี้" },
         ["chat.perm.allowChat.tip"] = new() { ["en"] = "Let this tool run without asking again in this chat. Other chats and new chats still ask.", ["th"] = "ให้เครื่องมือนี้ทำงานต่อโดยไม่ถามอีกในแชทนี้ แชทอื่นและแชทใหม่ยังถามเหมือนเดิม" },
         ["chat.perm.allowedChat"] = new() { ["en"] = "✓ Allowed in this chat", ["th"] = "✓ อนุญาตทั้งแชทนี้แล้ว" },
+        ["chat.perm.allowAlways"] = new() { ["en"] = "Always allow this folder", ["th"] = "อนุญาตโฟลเดอร์นี้เสมอ" },
+        ["chat.perm.allowAlways.tip"] = new() { ["en"] = "Remember it: the agent opens this folder (and the folders inside it) in every chat without asking again. Undo on the Permissions page.", ["th"] = "จำไว้: ทุกแชทเปิดโฟลเดอร์นี้ (และโฟลเดอร์ย่อย) ได้โดยไม่ถามอีก ยกเลิกได้ที่หน้า สิทธิ์การเข้าถึง" },
+        ["chat.perm.allowedAlways"] = new() { ["en"] = "✓ Always allowed — not asked again", ["th"] = "✓ อนุญาตเสมอแล้ว — จะไม่ถามอีก" },
+        ["chat.perm.openFolder"] = new() { ["en"] = "Open a folder outside the project: {0}", ["th"] = "เปิดโฟลเดอร์นอกโปรเจกต์: {0}" },
 
         // ─── Agent tool results (web_fetch, repl) ───
         ["chat.web.invalidUrl"] = new() { ["en"] = "Only http:// and https:// URLs can be fetched: {0}", ["th"] = "ดึงข้อมูลได้เฉพาะ URL แบบ http:// และ https:// เท่านั้น: {0}" },
@@ -254,7 +261,11 @@ internal static class ChatKeys
         ["plan.rewind.note"] = new() { ["en"] = "Files went back to before step {0} ({1}) — {2} file(s). The previous state is a restore point in the plan window.", ["th"] = "ไฟล์ย้อนกลับไปก่อนขั้น {0} ({1}) แล้ว — {2} ไฟล์ สภาพก่อนย้อนเก็บเป็นจุดย้อนกลับในหน้าต่างแผน" },
         ["chat.tools.groupContent"] = new() { ["en"] = "{0} operations ({1})", ["th"] = "{0} การทำงาน ({1})" },
         ["chat.tools.groupName"] = new() { ["en"] = "{0} tools", ["th"] = "{0} เครื่องมือ" },
-        ["chat.tools.groupVerb"] = new() { ["en"] = "Worked", ["th"] = "ทำงานเบื้องหลัง" },
+        // Not "ทำงานเบื้องหลัง": these calls ran in the foreground of this turn; "background" read as a separate process.
+        ["chat.tools.groupVerb"] = new() { ["en"] = "Used tools", ["th"] = "ใช้เครื่องมือ" },
+        ["chat.tool.drafting"] = new() { ["en"] = "{0} — writing the call… {1} chars", ["th"] = "{0} — กำลังเขียนคำสั่ง… {1} ตัวอักษร" },
+        ["chat.follow.label"] = new() { ["en"] = "Follow edits", ["th"] = "ตามดูโค้ด" },
+        ["chat.follow.tip"] = new() { ["en"] = "On: when this chat's agent edits a file of the open project, the editor opens it (only while this chat is on screen). Off: the agent keeps working, the screen stays where you are.", ["th"] = "ติ๊กไว้: เมื่อแชทนี้แก้ไฟล์ในโปรเจคที่เปิดอยู่ editor จะเปิดไฟล์นั้นให้ดู (เฉพาะตอนแชทนี้อยู่บนจอ) · เอาติ๊กออก: งานยังทำต่อตามปกติ แค่ไม่สลับหน้าจอ" },
         ["chat.skill.notInvocable"] = new() { ["en"] = "Skill '/{0}' can't be run directly.", ["th"] = "สกิล '/{0}' เรียกใช้โดยตรงไม่ได้" },
         ["chat.skill.unknown"] = new() { ["en"] = "Unknown skill '/{0}'. Available: {1}", ["th"] = "ไม่รู้จักสกิล '/{0}' — ที่ใช้ได้: {1}" },
         ["chat.skill.unknownNone"] = new() { ["en"] = "Unknown skill '/{0}'. No skills are available.", ["th"] = "ไม่รู้จักสกิล '/{0}' และยังไม่มีสกิลให้ใช้" },
@@ -349,6 +360,11 @@ internal static class ChatKeys
         {
             ["en"] = "CluadeX is back on your project {0}. This task worked in {1} — a message you send here now works in {0}; to continue the task, open {1} first.",
             ["th"] = "CluadeX กลับมาที่โปรเจกต์ของคุณ {0} แล้ว งานนี้ทำใน {1} — ข้อความที่ส่งในแชทนี้ตอนนี้จะทำงานใน {0} ถ้าจะทำงานนี้ต่อ ให้เปิด {1} ก่อน",
+        },
+        ["chat.resume.inTaskFolder"] = new()
+        {
+            ["en"] = "This chat's task carries on in its own folder {0}.",
+            ["th"] = "งานของแชทนี้ทำต่อในโฟลเดอร์ของงานเอง {0}",
         },
         ["chat.pipe.backToNoProject"] = new()
         {

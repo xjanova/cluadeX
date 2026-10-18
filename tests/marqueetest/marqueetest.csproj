@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>marqueetest</AssemblyName>
+    <RootNamespace>MarqueeTest</RootNamespace>
+    <NoWarn>MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <!-- The REAL shipping assembly — linked, NOT rebuilt: build CluadeX first or you test a stale binary.
+       Default is the normal Debug output; point it at another build with: dotnet run -p:CluadeXBin=<dir>\ -->
+  <PropertyGroup>
+    <CluadeXBin Condition="'$(CluadeXBin)' == ''">$(MSBuildThisFileDirectory)..\..\CluadeX\bin\DebugBuild\net8.0-windows\</CluadeXBin>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="CluadeX">
+      <HintPath>$(CluadeXBin)CluadeX.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

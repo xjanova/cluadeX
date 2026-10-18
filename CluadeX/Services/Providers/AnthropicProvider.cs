@@ -284,8 +284,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
     private static string BaseUrlOf(ProviderConfig config) =>
         string.IsNullOrWhiteSpace(config.BaseUrl) ? "https://api.anthropic.com" : config.BaseUrl.TrimEnd('/');
 
-    private static string ModelOf(ProviderConfig config) =>
-        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim();
+    private static string ModelOf(ProviderConfig config) => Agents.SubAgentModel.Pick(
+        string.IsNullOrWhiteSpace(config.EffectiveModelId) ? DefaultModel : config.EffectiveModelId.Trim());
 
     /// <summary>The workspace to run in: the configured one, else ANTHROPIC_WORKSPACE_ID.</summary>
     internal static string? ResolveWorkspaceId(ProviderConfig config)
@@ -803,7 +803,11 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         public readonly StringBuilder Text = new();
         public readonly StringBuilder Json = new();
         public string? Id, Name, Signature, Data;
+        /// <summary>Input length at the last draft report (tool_use): reported again every DraftReportEvery characters.</summary>
+        public int ReportedChars;
     }
+
+    private const int DraftReportEvery = 400;
 
     public override async Task<NativeToolResponse> ChatWithToolsAsync(
         List<NativeMessage> messages,
@@ -1018,6 +1022,13 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                                     break;
                                 case "input_json_delta":
                                     if (delta.TryGetProperty("partial_json", out var pj)) blk.Json.Append(pj.GetString());
+                                    // A long input (a whole file) streams for a minute: let the chat say what is being written.
+                                    if (blk.Type == "tool_use" && blk.Json.Length - blk.ReportedChars >= DraftReportEvery)
+                                    {
+                                        blk.ReportedChars = blk.Json.Length;
+                                        string head = blk.Json.Length > 2000 ? blk.Json.ToString(0, 2000) : blk.Json.ToString();
+                                        AgentRunScope.ReportToolDraft(blk.Name ?? "", blk.Json.Length, AgentRunScope.DraftPath(head));
+                                    }
                                     break;
                             }
                         }

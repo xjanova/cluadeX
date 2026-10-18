@@ -201,7 +201,7 @@ public sealed class BrainXRoomProvider : IAiProvider
             var taskArgs = new Dictionary<string, object>
             {
                 ["action"] = "add",
-                ["title"] = Trim(FirstLine(text), 80),
+                ["title"] = Trim(CardTitle(text), 80),
                 ["detail"] = Trim(request, 3900),
                 ["work"] = work,
             };
@@ -345,6 +345,18 @@ public sealed class BrainXRoomProvider : IAiProvider
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     private static string FirstLine(string s) => s.Split('\n', 2)[0].Trim();
+
+    /// <summary>The board card's title: the request's first line — and for a handoff ("ทำต่อ" + AgentHandoff's brief)
+    /// the task's first line after it, so the card says which task, not just "ทำต่อ".</summary>
+    public static string CardTitle(string text)
+    {
+        string first = FirstLine(text);
+        int at = text.IndexOf("### The task", StringComparison.Ordinal);
+        if (at < 0) return first;
+        var lines = text[at..].Split('\n').Skip(1).Select(l => l.Trim()).Where(l => l.Length > 0);
+        string task = lines.FirstOrDefault() ?? "";
+        return task.Length == 0 || task.StartsWith("###", StringComparison.Ordinal) ? first : first + " · " + task;
+    }
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + "…";
     private static string Slug(string s) => Regex.Replace(s.ToLowerInvariant(), @"[^a-z0-9]+", "-").Trim('-') is { Length: > 0 } x ? x : "project";
 

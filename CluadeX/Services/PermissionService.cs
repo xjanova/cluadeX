@@ -305,10 +305,15 @@ public class PermissionService
     /// <summary>Is Accept edits on for this project folder?</summary>
     public bool AcceptsEditsIn(string? projectRoot)
     {
-        string? on = AcceptEditsProject;
-        if (on == null || string.IsNullOrWhiteSpace(projectRoot)) return false;
-        try { return string.Equals(on, Path.GetFullPath(projectRoot).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
-        catch { return false; }
+        if (string.IsNullOrWhiteSpace(projectRoot)) return false;
+        return Same(AcceptEditsProject, projectRoot) || Same(AgentRunScope.Current?.AcceptEditsRoot, projectRoot);
+
+        static bool Same(string? on, string root)
+        {
+            if (string.IsNullOrWhiteSpace(on)) return false;
+            try { return string.Equals(Path.GetFullPath(on).TrimEnd('\\', '/'), Path.GetFullPath(root).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
+        }
     }
 
     /// <summary>
@@ -441,10 +446,18 @@ public class PermissionService
     }
 
     /// <summary>The action of the first rule that matches, or null when no rule does — so a caller can
-    /// apply its own default (e.g. reading inside the open project) without overriding a user rule.</summary>
+    /// apply its own default (e.g. reading inside the open project) without overriding a user rule.
+    /// "Allow *" covers running commands too: the owner's rule is that only a delete aimed at a drive, a home or a
+    /// system folder is refused outright (Safety.CodeRunGuard / GuardHook, whatever the rules say). Taking run tools out
+    /// of a blanket allow (2026-10-17, 3.0.127) turned Claude Dev read-only — its worker grant reads this rule — so
+    /// flutter, git and gh could not run at all.</summary>
     public PermAction? FindRule(string resource, string scope, string? toolName)
+        => FirstMatch(SnapshotRules(), resource, scope, toolName);
+
+    /// <summary><see cref="FindRule"/> over a given rule list (pure — no file, no state).</summary>
+    public static PermAction? FirstMatch(IEnumerable<PermissionRule> rules, string resource, string scope, string? toolName)
     {
-        foreach (var rule in SnapshotRules())
+        foreach (var rule in rules)
         {
             if (!ScopeMatches(rule, scope)) continue;
             if (RuleMatches(rule, resource, toolName))

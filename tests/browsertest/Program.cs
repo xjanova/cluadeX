@@ -43,6 +43,9 @@ internal static partial class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // This harness checks real command output, so it opts out of the default dry-run on purpose (ProcessLaunchPolicy).
+        // A new harness must not copy this line unless real runs are its point; the guards still check every command.
+        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
         Console.SetOut(stdout);
         if (args.Length >= 3 && args[0] == "--serve")

@@ -28,6 +28,7 @@ public partial class ChatViewModel
             AiProviderType.OpenAI => "codex",
             AiProviderType.Gemini => "gemini",
             AiProviderType.BrainX => "brainx",
+            AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama => "mai",   // local = มายด์ (AgentPersona)
             _ => "cluadex",
         };
         public System.Windows.Media.ImageSource? GirlImage => GirlArt.Image(Girl);
@@ -182,7 +183,8 @@ public partial class ChatViewModel
     /// weights into VRAM with nobody here to ask), a provider change waits for running replies, cloud needs Pro.
     /// Returns null when done, else why not, in the user's language.
     /// </summary>
-    public async Task<string?> ChooseFromOutsideAsync(string? model, string? effort)
+    /// <param name="provider">Optional: the model must be offered by this provider (an AiProviderType name).</param>
+    public async Task<string?> ChooseFromOutsideAsync(string? model, string? effort, string? provider = null)
     {
         if (!string.IsNullOrWhiteSpace(model))
         {
@@ -190,6 +192,7 @@ public partial class ChatViewModel
             // The BrainX room model is the owner's choice only: set from outside (the room's office), every task the room
             // then hands CluadeX would be relayed straight back into the room.
             var choice = ChatModelChoices.FirstOrDefault(c => c.Model == model.Trim() && !c.NeedsKey
+                && (string.IsNullOrWhiteSpace(provider) || c.Provider.ToString().Equals(provider.Trim(), StringComparison.OrdinalIgnoreCase))
                 && c.Provider is not (AiProviderType.BrainX or AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama));
             if (choice == null) return LocF("chat.model.notOffered", model.Trim());
             if (!Equals(choice, _selectedChatModel))

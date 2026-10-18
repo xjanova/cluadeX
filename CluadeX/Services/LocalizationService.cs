@@ -19,7 +19,9 @@ public class LocalizationService
         foreach (var extra in new[] { Localization.EditorKeys.Keys, Localization.ManagerKeys.Keys, Localization.ChatKeys.Keys,
                                       Localization.SparkKeys.Keys, Localization.BrainKeys.Keys,
                                       Localization.BackgroundKeys.Keys, Localization.PreviewKeys.Keys, Localization.ChromeKeys.Keys,
-                                      Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys })
+                                      Localization.ThemeKeys.Keys, Localization.EditorToolKeys.Keys, Localization.UsageKeys.Keys,
+                                      Localization.DispatchKeys.Keys, Localization.DesktopKeys.Keys,
+                                      Localization.StudioKeys.Keys, Localization.StudioPageKeys.Keys })
             foreach (var (key, values) in extra)
                 Translations.TryAdd(key, values);
     }
@@ -597,6 +599,13 @@ public class LocalizationService
         ["perms.title"] = new() { ["en"] = "Permissions", ["th"] = "สิทธิ์การเข้าถึง" },
         ["perms.subtitle"] = new() { ["en"] = "Control what CluadeX is allowed to access. Rules are evaluated top-down, first match wins.", ["th"] = "กำหนดสิ่งที่ CluadeX เข้าถึงได้ กฎถูกตรวจจากบนลงล่าง ข้อแรกที่ตรงจะถูกใช้" },
         ["perms.activeRules"] = new() { ["en"] = "Active Rules", ["th"] = "กฎที่ใช้อยู่" },
+        ["perms.folders.title"] = new() { ["en"] = "Folders outside the project", ["th"] = "โฟลเดอร์นอกโปรเจกต์" },
+        ["perms.folders.desc"] = new() { ["en"] = "The agent opens related projects by itself when the work crosses into them (a shared library, the server an app calls).", ["th"] = "agent เปิดโปรเจกต์ที่เกี่ยวข้องเองได้เมื่องานลามไปถึง (ไลบรารีที่ใช้ร่วมกัน, เซิร์ฟเวอร์ที่แอปเรียก)" },
+        ["perms.folders.ask"] = new() { ["en"] = "Ask before opening another folder (off = never ask)", ["th"] = "ถามก่อนเปิดโฟลเดอร์อื่นทุกครั้ง (ปิด = ไม่ต้องถาม)" },
+        ["perms.folders.allowed"] = new() { ["en"] = "Always allowed (not asked again):", ["th"] = "อนุญาตเสมอ (ไม่ถามอีก):" },
+        ["perms.folders.none"] = new() { ["en"] = "None yet — answer \"Always allow this folder\" on a prompt to add one.", ["th"] = "ยังไม่มี — กด \"อนุญาตโฟลเดอร์นี้เสมอ\" ตอนถูกถาม เพื่อเพิ่ม" },
+        ["perms.folders.remove"] = new() { ["en"] = "Remove", ["th"] = "ลบ" },
+        ["perms.folders.removeConfirm"] = new() { ["en"] = "Ask again before the agent opens {0}?", ["th"] = "ให้กลับมาถามก่อนเปิด {0} ใช่ไหม?" },
         ["perms.noRules"] = new() { ["en"] = "No rules defined. All actions will prompt for confirmation.", ["th"] = "ยังไม่มีกฎ ทุกการกระทำจะถามยืนยันก่อน" },
         ["perms.removeSelected"] = new() { ["en"] = "Remove Selected Rule", ["th"] = "ลบกฎที่เลือก" },
         ["perms.addRule"] = new() { ["en"] = "Add Rule", ["th"] = "เพิ่มกฎ" },

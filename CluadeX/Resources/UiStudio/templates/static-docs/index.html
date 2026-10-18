@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Getting started · {{PROJECT_TITLE}} Docs</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="#"><span class="mark">{ }</span>{{PROJECT_TITLE}} <span class="docs">Docs</span></a>
+    <nav class="top-links"><a href="#">Guides</a><a href="#">API</a><a href="#">Changelog</a></nav>
+    <span class="version">v1.0</span>
+  </header>
+
+  <div class="layout">
+    <aside class="side">
+      <input class="filter" id="filter" type="search" placeholder="Filter pages…">
+      <nav class="tree" id="tree">
+        <p class="group">Getting started</p>
+        <a class="page active" href="#">Introduction</a>
+        <a class="page" href="#">Installation</a>
+        <a class="page" href="#">Quick start</a>
+        <p class="group">Guides</p>
+        <a class="page" href="#">Configuration</a>
+        <a class="page" href="#">Theming</a>
+        <a class="page" href="#">Deployment</a>
+        <p class="group">Reference</p>
+        <a class="page" href="#">CLI</a>
+        <a class="page" href="#">JavaScript API</a>
+        <a class="page" href="#">FAQ</a>
+      </nav>
+    </aside>
+
+    <main class="article">
+      <p class="crumbs">Docs / Getting started</p>
+      <h1>Introduction</h1>
+      <p class="lead">{{PROJECT_TITLE}} is a small, fast toolkit for building modern web apps. This guide takes you from install to your first deploy in about five minutes.</p>
+
+      <h2 id="install">Installation</h2>
+      <p>Install the package with your favourite package manager:</p>
+      <pre class="code"><button class="copy">Copy</button><code>npm install {{PROJECT_NAME}}</code></pre>
+
+      <div class="callout info"><b>Note</b><p>Node.js 18 or newer is required.</p></div>
+
+      <h2 id="usage">Basic usage</h2>
+      <p>Import it and create an app. Everything is typed, so your editor guides you along the way.</p>
+      <pre class="code"><button class="copy">Copy</button><code>import { createApp } from '{{PROJECT_NAME}}'
+
+const app = createApp({ title: 'Hello' })
+app.mount('#root')</code></pre>
+
+      <h2 id="config">Configuration</h2>
+      <p>All options are optional. The defaults are tuned for most projects.</p>
+      <table class="table">
+        <thead><tr><th>Option</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>title</code></td><td>string</td><td><code>''</code></td><td>Document title.</td></tr>
+          <tr><td><code>theme</code></td><td>'light' | 'dark'</td><td><code>'light'</code></td><td>Initial color scheme.</td></tr>
+          <tr><td><code>strict</code></td><td>boolean</td><td><code>true</code></td><td>Warn on unknown options.</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn"><b>Heads up</b><p>Changing <code>strict</code> to false hides typos in your config.</p></div>
+
+      <h2 id="next">Next steps</h2>
+      <div class="cards">
+        <a class="next" href="#"><b>Quick start →</b><p>Build a small app end to end.</p></a>
+        <a class="next" href="#"><b>Theming →</b><p>Make it look like your brand.</p></a>
+      </div>
+
+      <footer class="foot">
+        <a href="#">← Previous</a>
+        <span>Last updated <span id="updated"></span></span>
+        <a href="#">Installation →</a>
+      </footer>
+    </main>
+
+    <aside class="toc">
+      <p class="toc-title">On this page</p>
+      <nav id="toc">
+        <a href="#install">Installation</a>
+        <a href="#usage">Basic usage</a>
+        <a href="#config">Configuration</a>
+        <a href="#next">Next steps</a>
+      </nav>
+    </aside>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

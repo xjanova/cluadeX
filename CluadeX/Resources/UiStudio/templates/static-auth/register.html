@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create account · {{PROJECT_TITLE}}</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="split">
+    <section class="panel">
+      <a class="brand" href="index.html"><span class="mark">●</span>{{PROJECT_TITLE}}</a>
+      <div class="card">
+        <h1 class="title">Create your account</h1>
+        <p class="sub">Free for 14 days. No credit card required.</p>
+        <form class="form" data-validate novalidate>
+          <div class="two">
+            <label class="field">
+              <span>First name</span>
+              <input name="first" autocomplete="given-name" required placeholder="Jane">
+              <small class="error">Required.</small>
+            </label>
+            <label class="field">
+              <span>Last name</span>
+              <input name="last" autocomplete="family-name" required placeholder="Doe">
+              <small class="error">Required.</small>
+            </label>
+          </div>
+          <label class="field">
+            <span>Work email</span>
+            <input type="email" name="email" autocomplete="email" required placeholder="you@company.com">
+            <small class="error">Enter a valid email address.</small>
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <span class="pw">
+              <input type="password" name="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters" data-strength>
+              <button class="pw-toggle" type="button" aria-label="Show password">Show</button>
+            </span>
+            <span class="meter"><i></i><i></i><i></i><i></i></span>
+            <small class="hint" data-strength-label>Use 8+ characters with a mix of letters, numbers &amp; symbols.</small>
+            <small class="error">At least 8 characters.</small>
+          </label>
+          <label class="check"><input type="checkbox" name="terms" required> I agree to the <a class="link" href="#">Terms</a> and <a class="link" href="#">Privacy Policy</a></label>
+          <button class="btn btn-primary" type="submit">Create account</button>
+          <p class="form-msg" role="status"></p>
+        </form>
+        <p class="switch">Already have an account? <a class="link" href="index.html">Sign in</a></p>
+      </div>
+    </section>
+    <aside class="art art-2">
+      <ul class="perks">
+        <li>✓ Unlimited projects</li>
+        <li>✓ Invite your whole team</li>
+        <li>✓ Cancel anytime</li>
+      </ul>
+    </aside>
+  </div>
+  <script src="auth.js"></script>
+</body>
+</html>

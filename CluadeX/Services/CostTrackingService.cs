@@ -282,6 +282,57 @@ public class CostTrackingService
         OnCostUpdated?.Invoke(GetSummary());
     }
 
+    // ── Dispatch strategy ledger: what each kind of run cost, took and achieved (tuning DispatchPolicy from real numbers) ──
+
+    /// <summary>One finished agent run under its dispatch strategy (<see cref="Agents.DispatchPolicy.Tag"/>): its cost (the
+    /// run scope's total, sub-agents included), wall time, and whether it ended successfully.</summary>
+    public void RecordRun(string strategy, decimal usd, double seconds, bool success, DateTime? when = null)
+    {
+        if (string.IsNullOrWhiteSpace(strategy)) strategy = "single";
+        bool save;
+        lock (_lock)
+        {
+            string day = DayKey(when ?? DateTime.Now);
+            if (!_days.TryGetValue(day, out var du)) _days[day] = du = new DailyUsage();
+            du.ByStrategy ??= new();
+            if (!du.ByStrategy.TryGetValue(strategy, out var su)) du.ByStrategy[strategy] = su = new StrategyUsage();
+            su.Runs++;
+            if (success) su.Successes++;
+            su.Usd += usd;
+            su.Seconds += Math.Max(0, seconds);
+            _ledgerDirty = true;
+            save = _ledgerPath != null;
+        }
+        if (save) FlushLedger();
+    }
+
+    /// <summary>One strategy over a span of days: runs, successes, total cost and time; averages derived.</summary>
+    public sealed record StrategyRow(string Strategy, int Runs, int Successes, decimal Usd, double Seconds)
+    {
+        public decimal UsdPerRun => Runs == 0 ? 0 : Usd / Runs;
+        public double SecondsPerRun => Runs == 0 ? 0 : Seconds / Runs;
+        public double SuccessShare => Runs == 0 ? 0 : (double)Successes / Runs;
+    }
+
+    /// <summary>Every strategy with a run in the last <paramref name="days"/> local days (today included), in
+    /// <see cref="Agents.DispatchPolicy.AllTags"/> order, then any other tag.</summary>
+    public IReadOnlyList<StrategyRow> StrategyBreakdown(int days)
+    {
+        var sum = new Dictionary<string, StrategyUsage>(StringComparer.Ordinal);
+        lock (_lock)
+            for (int i = 0; i < days; i++)
+                if (_days.TryGetValue(DayKey(DateTime.Today.AddDays(-i)), out var u) && u.ByStrategy != null)
+                    foreach (var (k, v) in u.ByStrategy)
+                    {
+                        if (!sum.TryGetValue(k, out var t)) sum[k] = t = new StrategyUsage();
+                        t.Runs += v.Runs; t.Successes += v.Successes; t.Usd += v.Usd; t.Seconds += v.Seconds;
+                    }
+        return sum.OrderBy(kv => Array.IndexOf(Agents.DispatchPolicy.AllTags, kv.Key) is var at && at < 0 ? 99 : at)
+                  .ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                  .Select(kv => new StrategyRow(kv.Key, kv.Value.Runs, kv.Value.Successes, kv.Value.Usd, kv.Value.Seconds))
+                  .ToList();
+    }
+
     /// <summary>Get current session cost summary.</summary>
     public CostSummary GetSummary()
     {
@@ -451,6 +502,17 @@ public class DailyUsage
     public long OutputTokens { get; set; }
     /// <summary>The same day split by provider (<see cref="CostTrackingService.ProviderOf"/>). Null on days recorded before it.</summary>
     public Dictionary<string, DailyUsage>? ByProvider { get; set; }
+    /// <summary>Finished agent runs by dispatch strategy ("single", "fan-out", "workers", "speculative-fix"). Null before any.</summary>
+    public Dictionary<string, StrategyUsage>? ByStrategy { get; set; }
+}
+
+/// <summary>Agent runs of one dispatch strategy on one day.</summary>
+public class StrategyUsage
+{
+    public int Runs { get; set; }
+    public int Successes { get; set; }
+    public decimal Usd { get; set; }
+    public double Seconds { get; set; }
 }
 
 public class ModelUsage

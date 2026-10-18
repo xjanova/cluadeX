@@ -310,6 +310,13 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The prompt offers "Allow in this chat" (an MCP tool no policy judged, and not one that always asks).</summary>
     public bool PermissionCanAllowForChat { get; set; }
 
+    /// <summary>Non-null = a red, dangerous-action prompt (deletes a drive, a home or a system folder): the guard's
+    /// finding, shown in full under the request so the user sees exactly what would be deleted.</summary>
+    public string? PermissionDanger { get; set; }
+
+    /// <summary>The prompt is the red dangerous-action kind.</summary>
+    public bool IsPermissionDanger => !string.IsNullOrEmpty(PermissionDanger);
+
     /// <summary>It was answered with "Allow in this chat" (the outcome label says so).</summary>
     public bool PermissionAllowedForChat { get; private set; }
 
@@ -320,6 +327,21 @@ public class ChatMessage : INotifyPropertyChanged
         if (!PermissionCanAllowForChat || PermissionAnswered) return false;
         PermissionAllowedForChat = true;
         OnPropertyChanged(nameof(PermissionAllowedForChat));
+        return ResolvePermission(PermissionOutcome.Allowed);
+    }
+
+    /// <summary>The prompt offers "Always allow" (a folder outside the project: remembered, never asked again).</summary>
+    public bool PermissionCanAllowAlways { get; set; }
+
+    /// <summary>It was answered with "Always allow".</summary>
+    public bool PermissionAllowedAlways { get; private set; }
+
+    /// <summary>Answer "Always allow". False when the prompt does not offer it or was already answered.</summary>
+    public bool AllowPermissionAlways()
+    {
+        if (!PermissionCanAllowAlways || PermissionAnswered) return false;
+        PermissionAllowedAlways = true;
+        OnPropertyChanged(nameof(PermissionAllowedAlways));
         return ResolvePermission(PermissionOutcome.Allowed);
     }
 

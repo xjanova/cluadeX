@@ -26,8 +26,11 @@ public class CodeWorkspaceService
         _git = git;
     }
 
-    public string WorkingDirectory => _fs.WorkingDirectory;
-    public bool HasWorkingDirectory => _fs.HasWorkingDirectory;
+    // The project open in the WINDOW, never a run's folder: a UI callback raised from a background chat's run
+    // still carries that run's AgentRunScope, and through _fs.WorkingDirectory the explorer, tabs and save paths
+    // followed the other chat's project (owner 2026-10-17: the tree showed "Game" under a thaipromptadminapp title).
+    public string WorkingDirectory => _fs.AppWorkingDirectory;
+    public bool HasWorkingDirectory => !string.IsNullOrEmpty(WorkingDirectory) && Directory.Exists(WorkingDirectory);
 
     // Folders we DON'T descend into — they explode the tree size.
     private static readonly HashSet<string> ExcludedFolders = new(StringComparer.OrdinalIgnoreCase)

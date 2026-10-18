@@ -25,6 +25,8 @@ public partial class ChatViewModel
         public ChatMessage? ActiveStatus;
         /// <summary>The running balloon: the background-work row the current calls fold into (IsLive while they run).</summary>
         public ChatMessage? LiveRow;
+        /// <summary>"⏵ writing file x — 3,200 chars…" while the model still streams a long tool input.</summary>
+        public ChatMessage? DraftRow;
         public ChatMessage? TodoMsg;
         /// <summary>This command's agent map card (made when its first sub-agent starts).</summary>
         public ChatMessage? AgentMapMsg;
@@ -35,6 +37,10 @@ public partial class ChatViewModel
         public int SavedCount = -1;
         /// <summary>When each running tool started (Stopwatch timestamps, in call order): its row shows how long it took.</summary>
         public readonly System.Collections.Concurrent.ConcurrentQueue<long> ToolStarts = new();
+        /// <summary>A step limit for this run only (a pipe caller's maxSteps); null = the setting.</summary>
+        public int? MaxSteps;
+        /// <summary>The agent loop's result when this turn ran it (null = it answered another way).</summary>
+        public AgentLoopResult? LoopResult;
     }
 
     /// <summary>Runs in progress (UI thread only).</summary>
@@ -114,6 +120,7 @@ public partial class ChatViewModel
         OnPropertyChanged(nameof(CanResume));
         RaiseOpenFolders();
         RefreshSessionBadges();
+        RebuildSidebarIfActiveChanged();
     }
 
     /// <summary>Each chat in the sidebar shows how its run stands: working (with the step), waiting for the owner, or
@@ -346,9 +353,25 @@ public partial class ChatViewModel
             NewSession();
             session = CurrentSession!;
         }
-        var run = new ChatRun { Session = session, Messages = Messages };
-        string? folder = _fileSystemService.AppWorkingDirectory;
+        string? taskFolder = TaskFolderFor(session);
+        string? folder = taskFolder ?? _fileSystemService.AppWorkingDirectory;
+        if (taskFolder != null)
+        {
+            Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "📁 " + LocF("chat.resume.inTaskFolder", taskFolder) });
+            _debugLog?.Info("Chat", $"turn runs in the chat's own folder {taskFolder} (window: {_fileSystemService.AppWorkingDirectory})");
+        }
+        return BeginTurnFor(session, Messages, folder);
+    }
+
+    /// <summary>Start a run in <paramref name="session"/> writing into <paramref name="messages"/> (its live list, on
+    /// screen or not), working in <paramref name="folder"/>. Enters the run's scope for the calling flow.</summary>
+    private TaskCompletionSource BeginTurnFor(ChatSession session, ObservableCollection<ChatMessage> messages, string? folder)
+    {
+        var run = new ChatRun { Session = session, Messages = messages };
         run.Scope = new AgentRunScope(session.Id, string.IsNullOrWhiteSpace(folder) ? null : folder, run);
+        run.Scope.ToolDrafting = (tool, chars, path) => OnToolDrafting(run, tool, chars, path);
+        // The chat's first request in full — the model's view may hold only a compaction summary of it (AgentHandoff).
+        run.Scope.TaskRequest = messages.FirstOrDefault(m => m.Role == MessageRole.User && !string.IsNullOrWhiteSpace(m.Content))?.Content;
         foreach (var extra in session.ExtraFolders.ToList())
             if (System.IO.Directory.Exists(extra)) run.Scope.AddExtraFolder(extra);
         _runs.Add(run);
@@ -368,6 +391,7 @@ public partial class ChatViewModel
             PostRunCostSummary(run);
             leftover = run.Scope?.DrainUserNotes();
             _runs.Remove(run);
+            DropDraft(run);
             if (run.LiveRow != null) { run.LiveRow.IsLive = false; run.LiveRow = null; }
             // Finished in a chat on screen: no badge. Elsewhere: "done" until the owner opens it.
             run.Session.RunStatus = ReferenceEquals(run.Session, CurrentSession) ? "" : "done";
@@ -403,6 +427,8 @@ public partial class ChatViewModel
         var took = DateTime.Now - node.StartedAt;
         node.Elapsed = took.TotalMinutes >= 1 ? $"{(int)took.TotalMinutes}m {took.Seconds}s" : $"{Math.Max(0, took.Seconds)}s";
         if (e.Steps > 0) node.Steps = e.Steps;
+        if (!string.IsNullOrEmpty(e.Model)) node.Model = e.Model;
+        if (e.CostUsd > node.CostUsd) node.CostUsd = e.CostUsd;
         switch (e.Phase)
         {
             case "start": node.Action = Loc("agentmap.starting"); break;

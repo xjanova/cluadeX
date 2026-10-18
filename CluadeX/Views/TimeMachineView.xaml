@@ -504,11 +504,6 @@
                     </StackPanel>
                 </Grid>
                     <WrapPanel Margin="0,12,0,0">
-                        <TextBlock Text="{services:Loc tm.project}" VerticalAlignment="Center" Margin="0,0,8,0"
-                                   Foreground="{DynamicResource Text.Muted}" FontSize="12"/>
-                        <ComboBox ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}"
-                                  MinWidth="380" MaxWidth="640" Margin="0,0,18,0"
-                                  ToolTip="{Binding SelectedProject.Path}"/>
                         <TextBlock Text="{services:Loc tm.day}" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="{DynamicResource Text.Muted}" FontSize="12"/>
                         <ComboBox ItemsSource="{Binding Days}" SelectedItem="{Binding SelectedDayOption}" MinWidth="200" Margin="0,0,8,0"/>
@@ -522,13 +517,86 @@
             <!-- ═══ SPLIT CONTENT ═══ -->
             <Grid Grid.Row="1" Margin="20,16,20,16">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="460"/>
+                    <ColumnDefinition Width="260"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="420"/>
                     <ColumnDefinition Width="20"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- ═══ LEFT: timeline panel ═══ -->
+                <!-- ═══ PROJECTS: a list, not a drop-down (many projects stay readable) ═══ -->
                 <Border Grid.Column="0" Style="{StaticResource NeonPanel}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Border Grid.Row="0" Padding="16,14" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource Border.Subtle}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                           Foreground="{DynamicResource Accent.1}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="{services:Loc tm.project}" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding ProjectCountText}" FontSize="10" Margin="10,0,0,0"
+                                           FontFamily="{DynamicResource Font.Mono.Display}" Foreground="{DynamicResource Text.Faint}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <TextBox x:Name="ProjectFilterBox" Grid.Row="1" Margin="12,10,12,6" Style="{StaticResource ModernTextBox}"
+                                 Text="{Binding ProjectFilter, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="{services:Loc tm.projectFilterTip}"/>
+                        <ListBox x:Name="ProjectList" Grid.Row="2" ItemsSource="{Binding VisibleProjects}"
+                                 SelectedItem="{Binding SelectedProject}"
+                                 Background="Transparent" BorderThickness="0" Margin="6,0,6,8"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.IsVirtualizing="True">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="Margin" Value="0,1"/>
+                                    <Setter Property="Cursor" Value="Hand"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="bd" CornerRadius="6" Padding="10,7" Background="Transparent"
+                                                        BorderThickness="2,0,0,0" BorderBrush="Transparent">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource State.Fill.Faint}"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="bd" Property="Background" Value="{DynamicResource Surface.Chip}"/>
+                                                        <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel ToolTip="{Binding Path}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis" MaxWidth="200"/>
+                                            <TextBlock Text=" ✕" Foreground="{DynamicResource Status.Danger}" FontSize="11"
+                                                       Visibility="{Binding Exists, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Path}" FontSize="10" FontFamily="{DynamicResource Font.Mono}"
+                                                   Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+
+                <!-- ═══ LEFT: timeline panel ═══ -->
+                <Border Grid.Column="2" Style="{StaticResource NeonPanel}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -631,7 +699,7 @@
                 </Border>
 
                 <!-- ═══ RIGHT: detail + diff ═══ -->
-                <Grid Grid.Column="2">
+                <Grid Grid.Column="4">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="16"/>

@@ -883,7 +883,7 @@ public class HookService
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             foreach (var dir in CreatedPayloadFolders.Keys)
-                try { Directory.Delete(dir, recursive: true); } catch { /* in use / gone */ }
+                try { Safety.SafeDelete.Directory(dir, dir); } catch { /* in use / gone / refused */ }
         };
     }
 
@@ -903,7 +903,7 @@ public class HookService
                 string pidText = rest.Split('-')[0];
                 if (!int.TryParse(pidText, out int pid) || pid == Environment.ProcessId) continue;
                 if (IsCluadeXProcess(pid)) continue;
-                try { Directory.Delete(dir, recursive: true); removed++; } catch { }
+                try { if (Safety.SafeDelete.Directory(dir, dir)) removed++; } catch { }
             }
         }
         catch { }

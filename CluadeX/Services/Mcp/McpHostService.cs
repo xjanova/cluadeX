@@ -568,7 +568,7 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                         capabilities = new { tools = new { } },
                         serverInfo = new { name = "CluadeX-McpHost", version = ResolveVersion() },
                         instructions = "Requests on one connection run one at a time, in order. A coding run "
-                            + "(cluadex.write_code / run_skill / review) holds its connection until it finishes: use a "
+                            + "(cluadex.write_code / run_skill / review / continue_chat) holds its connection until it finishes: use a "
                             + "second connection for ping or cluadex.get_active_model meanwhile. Closing the connection, "
                             + "or notifications/cancelled with the request's id, stops the run.",
                     });
@@ -672,6 +672,48 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                     taskId = new { type = "string" },
                     diff = new { type = "string", description = "Unified diff to review" },
                     intent = new { type = "string", description = "Original task spec for context" }
+                }
+            }
+        },
+        new
+        {
+            name = "cluadex.list_chats",
+            description = "List CluadeX's chats, newest first, to find one to carry on with cluadex.continue_chat. " +
+                          "Read-only: nothing in the CluadeX window changes. Returns JSON text: an array of " +
+                          "{ id, title, project, updatedAt (ISO 8601), running (a turn is going on in it now), " +
+                          "paused (its last reply is a Pause — it can be resumed) }.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    project = new { type = "string", description = "Optional project folder: only chats of that folder" },
+                    query = new { type = "string", description = "Optional part of the title (case-insensitive)" },
+                    limit = new { type = "integer", description = "Optional, 1-200. Default 20" },
+                }
+            }
+        },
+        new
+        {
+            name = "cluadex.continue_chat",
+            description = "Carry on an existing chat: opens it in the CluadeX window (as clicking it in the sidebar does, " +
+                          "which also opens its project), sends `message` as the user (as pressing Send does — a slash " +
+                          "command or skill works the same), waits for that turn and returns its final reply as text. isError " +
+                          "is true when the chat does not exist, is already running, the message started no reply, or the " +
+                          "turn failed, hit its step limit, was stopped in CluadeX or the caller disconnected. Requests on " +
+                          "one connection run one at a time; the call blocks until the turn ends.",
+            inputSchema = new
+            {
+                type = "object",
+                required = new[] { "message" },
+                properties = new
+                {
+                    chatId = new { type = "string", description = "The chat's id from cluadex.list_chats" },
+                    title = new { type = "string", description = "When no chatId: the newest chat with exactly this title (case-insensitive)" },
+                    message = new { type = "string", description = "What to send, as the user would type it (e.g. 'continue')" },
+                    maxSteps = new { type = "integer", description = "Optional step limit for this turn (1-100000, 0 = no limit). Default: the Max agent steps setting; the result says when it could not be applied" },
+                    provider = new { type = "string", description = "Optional, with model: the provider of that model (e.g. 'Anthropic')" },
+                    model = new { type = "string", description = "Optional: pick this model for the chat first, by cluadex.choose_model's rules (a model from get_active_model's options); nothing is sent when it is refused" },
                 }
             }
         },

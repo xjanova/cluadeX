@@ -141,6 +141,17 @@ public enum ToolType
 
     // App lifecycle (Services/Tools/AppRestartToolModule)
     RestartApp,        // Close CluadeX and start it again (optionally from a new build)
+
+    // Desktop control (Services/Desktop — UI Automation + Win32, Windows only)
+    DesktopWindows,    // List top-level windows
+    DesktopScreenshot, // Capture a window or a screen region (PNG + image for vision models)
+    DesktopInspect,    // A window's UI Automation tree with element refs
+    DesktopFind,       // Elements matching a query, as refs
+    DesktopAct,        // invoke / select / toggle / expand / set_value / scroll / focus / click on a ref
+    DesktopType,       // Type text into the focused element (or a ref)
+    DesktopKeys,       // Press key chords
+    DesktopLaunch,     // Start a program and wait for its main window
+    DesktopWait,       // Wait until a window / element appears or disappears
 }
 
 /// <summary>
@@ -178,7 +189,8 @@ public class ToolCall
         or ToolType.ListSymbols or ToolType.FindSymbol
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
-        or ToolType.BrowserRead or ToolType.BrowserFind => true,
+        or ToolType.BrowserRead or ToolType.BrowserFind
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind => true,
         _ => false,
     };
 
@@ -196,7 +208,8 @@ public class ToolCall
         or ToolType.ListSymbols or ToolType.FindSymbol
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
-        or ToolType.BrowserRead or ToolType.BrowserFind => true,
+        or ToolType.BrowserRead or ToolType.BrowserFind
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind => true,
         _ => false,
     };
 }
@@ -243,6 +256,9 @@ public class PermissionRequestInfo
     /// <summary>Asked every time on purpose — the user's own "Ask" rule, or code run in their browser. A chat set to
     /// "allow everything" still asks this one.</summary>
     public bool AlwaysAsk { get; set; }
+    /// <summary>Non-null = the red prompt (Safety.DangerApproval): this would delete a drive, a home or a system folder,
+    /// and here is why. Always asks; never answered by a rule, the chat's "allow everything" or "Allow in this chat".</summary>
+    public string? Danger { get; set; }
     /// <summary>Set when the prompt may be answered "Allow in this chat": the tool's identity (server + tool). One
     /// ChatGPT session through a third-party MCP server asked 18 times for the same javascript_tool (Reverse X run,
     /// 2026-10-13), and the only way out was the chat's "allow everything", which lets every shell command through
@@ -250,6 +266,11 @@ public class PermissionRequestInfo
     public string? ChatScopeKey { get; set; }
     /// <summary>The user answered "Allow in this chat": the same tool runs without asking again in this chat.</summary>
     public bool AllowedForChat { get; set; }
+    /// <summary>Set when the prompt may be answered "Always allow" (remembered in settings, never asked again) — a
+    /// folder outside the project the agent wants to open. Null = not offered.</summary>
+    public string? AlwaysKey { get; set; }
+    /// <summary>The user answered "Always allow".</summary>
+    public bool AllowedAlways { get; set; }
 }
 
 /// <summary>
@@ -275,4 +296,4 @@ public class TodoItem
 /// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
 /// name, with its Persona and AllowedTools).</summary>
 public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
-    IReadOnlyCollection<string>? AllowedTools = null);
+    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null);

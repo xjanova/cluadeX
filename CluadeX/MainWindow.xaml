@@ -72,6 +72,12 @@
         <DataTemplate DataType="{x:Type vm:WatchViewModel}">
             <views:WatchView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:UiStudioViewModel}">
+            <views:UiStudioView/>
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:NodeGraphViewModel}">
+            <views:NodeGraphView/>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:TaskManagerViewModel}">
             <views:TaskManagerView/>
         </DataTemplate>
@@ -405,8 +411,9 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
-                                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{DynamicResource Status.Success}"
+                                        <!-- E8B7 Folder — E838 drew as a half-open bracket the owner read as a broken icon -->
+                                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14" Foreground="{DynamicResource Status.Success}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
@@ -603,6 +610,20 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Watch"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.watchTip}" AutomationProperties.Name="Watch"/>
+
+                                <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
+
+                                <!-- UI Studio: edit the app's UI live, down to the exact source line; Node Graph: the project as nodes -->
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="uistudio" Content="&#xE790;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=UiStudio, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="UiStudio"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.uiStudioTip}" AutomationProperties.Name="UI Studio"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="nodegraph" Content="&#xE9D2;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=NodeGraph, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="NodeGraph"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.nodeGraphTip}" AutomationProperties.Name="Node Graph"/>
                             </StackPanel>
                             </ScrollViewer>
 
@@ -1169,7 +1190,8 @@
                         <!-- How full the context is: tokens used of the window, as a bar -->
                         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
                                     ToolTip="{services:Loc chat.ctxTip}">
-                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                            <!-- A gauge (SpeedHigh), not E8A5 "Document": at 11 px the page read as an empty square box. -->
+                            <TextBlock Text="&#xEC4A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
                                        Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock FontSize="12" Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center">
                                 <Run Text="{Binding ChatVM.ContextUsageText, Mode=OneWay}"/>
@@ -1291,33 +1313,42 @@
                         CornerRadius="16" Padding="40,36" MinWidth="380"
                         Effect="{DynamicResource Glow.Loading.Card}">
                     <StackPanel HorizontalAlignment="Center">
-                        <Border Width="64" Height="64" CornerRadius="32" Margin="0,0,0,20"
-                                HorizontalAlignment="Center" Background="{DynamicResource Loading.Orb}">
-                            <TextBlock Text="&#xE8F1;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource Text.OnAccent}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       RenderTransformOrigin="0.5,0.5">
-                                <TextBlock.RenderTransform><RotateTransform x:Name="SpinTransform" Angle="0"/></TextBlock.RenderTransform>
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
-                                                <DataTrigger.EnterActions>
-                                                    <BeginStoryboard x:Name="SpinStoryboard">
-                                                        <Storyboard RepeatBehavior="Forever">
-                                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                             From="0" To="360" Duration="0:0:1.5"/>
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </DataTrigger.EnterActions>
-                                                <DataTrigger.ExitActions>
-                                                    <StopStoryboard BeginStoryboardName="SpinStoryboard"/>
-                                                </DataTrigger.ExitActions>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Border>
+                        <!-- The mascot, bobbing, while a model loads (owner 2026-10-17: "หน้าโหลดโมเดลควรใช้มาสคอตมาแสดงกำลังโหลด"). -->
+                        <Image Source="/CluadeX;component/Assets/mascot.png" Width="132" Height="132" Margin="0,0,0,14"
+                               HorizontalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"
+                               RenderTransformOrigin="0.5,1">
+                            <Image.RenderTransform>
+                                <TransformGroup>
+                                    <ScaleTransform ScaleX="1" ScaleY="1"/>
+                                    <TranslateTransform Y="0"/>
+                                </TransformGroup>
+                            </Image.RenderTransform>
+                            <Image.Style>
+                                <Style TargetType="Image">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsModelLoading}" Value="True">
+                                            <DataTrigger.EnterActions>
+                                                <BeginStoryboard x:Name="MascotBobStoryboard">
+                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TransformGroup.Children)[1].(TranslateTransform.Y)"
+                                                                         From="0" To="-10" Duration="0:0:0.7">
+                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
+                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(TransformGroup.Children)[0].(ScaleTransform.ScaleY)"
+                                                                         From="0.97" To="1.02" Duration="0:0:0.7">
+                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                        </DoubleAnimation>
+                                                    </Storyboard>
+                                                </BeginStoryboard>
+                                            </DataTrigger.EnterActions>
+                                            <DataTrigger.ExitActions>
+                                                <StopStoryboard BeginStoryboardName="MascotBobStoryboard"/>
+                                            </DataTrigger.ExitActions>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Image.Style>
+                        </Image>
                         <TextBlock Text="{services:Loc nav.loadingModel}" Foreground="{DynamicResource Text.Primary}"
                                    FontSize="20" FontWeight="Bold"
                                    HorizontalAlignment="Center" Margin="0,0,0,8"/>
