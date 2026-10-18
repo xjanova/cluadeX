@@ -15,7 +15,7 @@ namespace StudioTest;
 /// </summary>
 internal static partial class Program
 {
-    const string ParamScreen = @"import 'package:flutter/material.dart';
+    static readonly string ParamScreen = Lf(@"import 'package:flutter/material.dart';
 
 class SummaryScreen extends StatelessWidget {
   const SummaryScreen({super.key});
@@ -118,7 +118,7 @@ class _Local extends StatelessWidget {
 
   Widget _row(String name) => Text(name);
 }
-";
+");
 
     /// <summary>The parameter the Text (or button) whose name is at <paramref name="marker"/> + <paramref name="skip"/> shows.</summary>
     static FlutterParamText? ParamAt(string marker, int skip = 0)
@@ -412,7 +412,7 @@ class _Local extends StatelessWidget {
 
     // ═══════════════════════════ a use that leaves the text out: the default shows ═══════════════════════════
 
-    const string DefaultScreen = @"import 'package:flutter/material.dart';
+    static readonly string DefaultScreen = Lf(@"import 'package:flutter/material.dart';
 
 class DefaultScreen extends StatelessWidget {
   const DefaultScreen({super.key});
@@ -479,7 +479,7 @@ class _Tone extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(tone);
 }
-";
+");
 
     static FlutterParamText? DParam(string marker, int skip = 0)
     {
@@ -555,7 +555,7 @@ class _Tone extends StatelessWidget {
 
     // ═══════════════════════════ a parameter of a helper function ═══════════════════════════
 
-    const string HelperScreen = @"import 'package:flutter/material.dart';
+    static readonly string HelperScreen = Lf(@"import 'package:flutter/material.dart';
 
 class HelperScreen extends StatelessWidget {
   const HelperScreen({super.key, this.items = const []});
@@ -615,7 +615,7 @@ class _Header extends StatelessWidget {
 Widget _footer(String note) => Text(note);
 
 Widget publicFooter(String note) => Text(note);
-";
+");
 
     const string HelperFile = @"C:\cx-fixture\lib\helper_screen.dart";
 

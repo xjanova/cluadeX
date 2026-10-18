@@ -10,7 +10,7 @@ namespace StudioTest;
 /// </summary>
 internal static partial class Program
 {
-    const string SampleClient = @"import 'package:dio/dio.dart';
+    static readonly string SampleClient = Lf(@"import 'package:dio/dio.dart';
 
 /// The envelope every reply comes in: { success, data, message }.
 class ApiEnvelope {
@@ -43,9 +43,9 @@ class Paged<T> {
     return Paged<T>(list.whereType<Map>().map((e) => item(e.cast<String, dynamic>())).toList());
   }
 }
-";
+");
 
-    const string SampleModels = @"part 'models.g.dart';
+    static readonly string SampleModels = Lf(@"part 'models.g.dart';
 
 Map<String, dynamic> _m(dynamic v) => v is Map ? v.cast<String, dynamic>() : const {};
 
@@ -117,9 +117,9 @@ class Profile {
 
   factory Profile.fromJson(Map<String, dynamic> json) => _$ProfileFromJson(json);
 }
-";
+");
 
-    const string SampleModelsG = @"part of 'models.dart';
+    static readonly string SampleModelsG = Lf(@"part of 'models.dart';
 
 Profile _$ProfileFromJson(Map<String, dynamic> json) => Profile(
       userName: json['user_name'] as String,
@@ -128,9 +128,9 @@ Profile _$ProfileFromJson(Map<String, dynamic> json) => Profile(
       avatarUrl: json['avatar_url'] as String?,
       errors: (json['errors'] as List<dynamic>?)?.map((e) => e as String).toList() ?? const [],
     );
-";
+");
 
-    const string SampleRepo = @"import 'package:dio/dio.dart';
+    static readonly string SampleRepo = Lf(@"import 'package:dio/dio.dart';
 import '../core/api_client.dart';
 import 'models.dart';
 
@@ -173,7 +173,7 @@ class ShopRepository {
 
   Future<Stats> summary() async => Stats.fromJson(_m(await _fetch('/summary')));
 }
-";
+");
 
     static readonly DateTime SampleNow = new(2026, 10, 18, 9, 30, 0, DateTimeKind.Utc);
 
