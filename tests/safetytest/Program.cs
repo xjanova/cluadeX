@@ -320,6 +320,7 @@ internal static class Program
         string exe = Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
         if (!File.Exists(exe) || !File.Exists(Path.Combine(AppContext.BaseDirectory, "CluadeX.runtimeconfig.json")))
             exe = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe"));
+        int lingered = 0;
         List<string> Talk(string token, params string[] lines)
         {
             var psi = new ProcessStartInfo(exe, CluadeX.Services.Tools.ChatToolBridge.Flag)
@@ -329,7 +330,7 @@ internal static class Program
             using (var w = new StreamWriter(p.StandardInput.BaseStream, new UTF8Encoding(false)))
                 foreach (var l in lines) w.Write(l + "\n");
             string outText = p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(30000)) p.Kill(true);
+            if (!p.WaitForExit(10000)) { lingered++; p.Kill(true); }
             return outText.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
         }
         string newChat = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 3, method = "tools/call", @params = new { name = "new_chat", arguments = new { path = a1, message = "สวัสดี ทำงานแยก" } } });
@@ -351,6 +352,7 @@ internal static class Program
         var after = Talk(ticket.Token, newChat);
         Check("after the turn ends its token opens nothing, and its config file is gone",
             after.Count == 1 && after[0].Contains("\"isError\":true") && seen.Count == 1 && !File.Exists(ticket.ConfigFile), string.Join("\n", after));
+        Check("every --cx-tools process exits by itself once the CLI closes its stdin (none left running)", lingered == 0, $"lingered={lingered}");
     }
 
     static void RunGates(string work)
