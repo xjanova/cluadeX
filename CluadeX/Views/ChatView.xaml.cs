@@ -412,25 +412,6 @@ public partial class ChatView : UserControl
     // Answering collapses the buttons and shows a localized outcome label (bound to PermissionOutcome) — they
     // used to stay clickable with a literal English "*Allowed*" appended to the prompt text.
     /// <summary>Right panel: a double-clicked file opens in the code editor.</summary>
-    private void ProjectTree_DoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        if (DataContext is ChatViewModel vm && ProjectTreeView.SelectedItem is FileNode { IsDirectory: false } node)
-        {
-            vm.RequestOpenFile(node.FullPath);
-            e.Handled = true;
-        }
-    }
-
-    private void SideTreeRefresh_Click(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is ChatViewModel vm) vm.RefreshProjectTree(force: true);
-    }
-
-    private void SidePanelHide_Click(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is ChatViewModel vm) vm.ShowSidePanel = false;
-    }
-
     /// <summary>The composer's "+": its menu opens on a left click, above the button.</summary>
     private void MoreButton_Click(object sender, RoutedEventArgs e)
     {

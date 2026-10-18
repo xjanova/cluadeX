@@ -1325,6 +1325,32 @@ internal static partial class Program
                 ClaudeDevProvider.AuthGuidance("Here is the refactored function.", null) == null);
         }
 
+        // "cluadex ต้องเปิดแชทใหม่ โปรเจคใหม่ได้ตามคำสั่ง" (owner 2026-10-18): the agent said it had no way to open a chat.
+        Log("\n## NC — the agent can open a new chat, in this project or another");
+        {
+            var mod = new CluadeX.Services.Tools.ProjectToolModule();
+            Check("NC new_chat (and its aliases) is one of the agent's tools",
+                mod.ResolveToolType("new_chat") == ToolType.NewChat && mod.ResolveToolType("start_chat") == ToolType.NewChat
+                && mod.GetToolSchemas().Any(s => s.Name == "new_chat"));
+            string? opened = null;
+            var keep = CluadeX.Services.Tools.ProjectToolModule.NewChatHandler;
+            CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = (p, m, t) => { opened = $"{p}|{m}|{t}"; return Task.FromResult("ok"); };
+            try
+            {
+                string dir = Path.GetTempPath().TrimEnd('\\');
+                var call = new ToolCall { ToolName = "new_chat", Type = ToolType.NewChat };
+                call.Arguments["path"] = dir; call.Arguments["message"] = "fix the build"; call.Arguments["title"] = "Build";
+                var r = await mod.ExecuteAsync(call, new CluadeX.Services.Tools.ToolModuleContext(), CancellationToken.None);
+                Check("NC it opens the chat in the folder given, with the first message and title", r.Success
+                    && opened == $"{Path.GetFullPath(dir).TrimEnd('\\')}|fix the build|Build", opened ?? r.Output);
+                var bad = new ToolCall { ToolName = "new_chat", Type = ToolType.NewChat };
+                bad.Arguments["path"] = @"Z:\no\such\folder\for\cluadex";
+                var rb = await mod.ExecuteAsync(bad, new CluadeX.Services.Tools.ToolModuleContext(), CancellationToken.None);
+                Check("NC a folder that does not exist is refused, nothing opened", !rb.Success);
+            }
+            finally { CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = keep; }
+        }
+
         Log("\n## L6 — the context meter uses the answering model's real window");
         Check("L6 Claude Opus 5.5 → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-opus-5-5", 12288) == 1_000_000);
         Check("L6 Claude Haiku 4.5 → 200K", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-haiku-4-5", 12288) == 200_000);
