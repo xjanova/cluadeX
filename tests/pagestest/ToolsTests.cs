@@ -300,6 +300,168 @@ internal static partial class Program
         }
     }
 
+    // ═══════════════════════════════════════════ text passed in through a parameter ═══════════════════════════════════════════
+
+    const string ShopTagDart = @"import 'package:flutter/material.dart';
+
+class ShopTag extends StatelessWidget {
+  const ShopTag({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Text(label),
+    );
+  }
+}
+";
+
+    const string ParamHome = @"import 'package:flutter/material.dart';
+import 'shop_tag.dart';
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('หน้าแรก')),
+      body: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ShopTag(label: 'ป้ายแรก'),
+          ShopTag(label: 'ป้ายที่สอง'),
+          _Badge(text: 'ใหม่'),
+          _Badge(text: 'ขายดี'),
+        ],
+      ),
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(text);
+}
+";
+
+    /// <summary>A shared widget (ShopTag, in its own file) used twice with different labels, and a private one (_Badge)
+    /// used twice in the screen's own file, on a REAL Flutter app (the flutter-real fixture): picking either use's Text
+    /// offers the label THAT use passes and says where it is written; Enter changes only that use's literal (the const
+    /// Column stays const), the Text stays picked, Flutter draws again — that use's box gets wider, the other's doesn't
+    /// — and Undo puts it back. On the wireframe the shared widget's use is told by the screen line its block names; the
+    /// private widget's two uses, with nothing to tell them apart, are refused with the reason.</summary>
+    static async Task FlutterParams(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## Text passed in through a widget's parameter, typed over where the widget is used");
+        string root = Path.Combine(fx, "flutter-real");
+        if (!File.Exists(Path.Combine(root, ".dart_tool", "package_config.json"))) { Log("  (skipped: the real Flutter fixture is not set up)"); return; }
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("flutter.bat");
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("dart.bat");
+        vm.RenderConsentOverride = true;
+        vm.ToolConfirmOverride = true;
+        string home = Path.Combine(root, "lib", "home_screen.dart"), tag = Path.Combine(root, "lib", "shop_tag.dart");
+        int textLine = LineOf(ShopTagDart, "Text(label)"), badgeLine = LineOf(ParamHome, "Text(text)");
+        int use1 = LineOf(ParamHome, "ShopTag(label: 'ป้ายแรก')"), use2 = LineOf(ParamHome, "ShopTag(label: 'ป้ายที่สอง')");
+        List<WidgetBox> Tags() => vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == textLine && b.File.EndsWith("shop_tag.dart", StringComparison.OrdinalIgnoreCase)).OrderBy(b => b.Y).ToList();
+        List<WidgetBox> Badges() => vm.StageBoxes.Where(b => b.Widget == "Text" && b.Line == badgeLine && b.File.EndsWith("home_screen.dart", StringComparison.OrdinalIgnoreCase)).OrderBy(b => b.Y).ToList();
+        string W0(List<WidgetBox> l, int i) => l.Count > i ? l[i].W.ToString("0") : "-";
+        try
+        {
+            await WaitUntil(() => !vm.IsRendering, 120000);
+            var store = (PageShotStore)GetField(vm, "_store")!;
+            var card = Card(vm, "/")!;
+            File.WriteAllText(tag, ShopTagDart);
+            File.WriteAllText(home, ParamHome);
+            DateTime t0 = DateTime.UtcNow;
+            vm.OpenCardCommand.Execute(card);
+            vm.RenderStageCommand.Execute(null);
+            bool drawn = await Redrawn(vm, store, card.Page.Id, t0);
+            // (the watcher's own redraw of the two saved files may follow: let it end)
+            await Idle(1800);
+            await WaitUntil(() => !vm.IsRendering, 240000);
+            var tags = Tags();
+            Check("params: the shared widget is drawn twice from its one Text line", drawn && tags.Count == 2,
+                  $"{drawn} {vm.CompileError} · " + string.Join(", ", vm.StageBoxes.Select(b => $"{b.Widget}:{b.Line}")));
+            if (tags.Count != 2) return;
+
+            // ── each use offers its own label ──
+            vm.PickStageBox(tags[0], open: false);
+            Check("params: the first use's Text offers the label that use passes", vm.HasTools && vm.CanToolText && vm.ToolText == "ป้ายแรก", $"can={vm.CanToolText} '{vm.ToolText}' '{vm.ToolTextNote}'");
+            Check("params: it says the text is set where the widget is used (file:line)", vm.ToolTextNote.Contains($"lib/home_screen.dart:{use1}"), vm.ToolTextNote);
+            await Idle(300);
+            SavePng(MainWin.Content as FrameworkElement ?? view, "studio-params.png");
+            vm.PickStageBox(tags[1], open: false);
+            Check("params: the second use offers its own label and line", vm.CanToolText && vm.ToolText == "ป้ายที่สอง" && vm.ToolTextNote.Contains($"lib/home_screen.dart:{use2}"),
+                  $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            var badges = Badges();
+            if (badges.Count == 2)
+            {
+                vm.PickStageBox(badges[1], open: false);
+                Check("params: a private widget used twice in the screen's own file — its box tells the uses apart", vm.CanToolText && vm.ToolText == "ขายดี", $"'{vm.ToolText}' '{vm.ToolTextNote}'");
+            }
+            else Check("params: the private widget is drawn twice", false, $"{badges.Count}");
+
+            // ── the wireframe has no boxes ──
+            var sketchTag = vm.StageSketch?.Root.Walk().FirstOrDefault(n => n.Text == "ป้ายที่สอง");
+            var sketchBadge = vm.StageSketch?.Root.Walk().FirstOrDefault(n => n.Text == "ใหม่");
+            if (sketchTag != null && sketchBadge != null)
+            {
+                vm.PickStageNode(sketchTag, open: false);
+                Check("params (wireframe): the shared widget's use is the screen line its block names", vm.CanToolText && vm.ToolText == "ป้ายที่สอง",
+                      $"can={vm.CanToolText} '{vm.ToolText}' '{vm.ToolTextNote}' use={sketchTag.UseFile}:{sketchTag.UseLine}");
+                vm.PickStageNode(sketchBadge, open: false);
+                Check("params (wireframe): two uses with nothing to tell them apart are refused, with the reason",
+                      vm.HasTools && !vm.CanToolText && vm.ToolTextNote == T(vm, "studio.fedit.text.paramMany", 2), $"can={vm.CanToolText} '{vm.ToolTextNote}'");
+            }
+            else Check("params (wireframe): the blocks are drawn", false, string.Join(", ", vm.StageSketch?.Root.Walk().Select(n => n.Text).Where(t => t != null) ?? Array.Empty<string>()));
+
+            // ── typing over the first use ──
+            vm.PickStageBox(Tags()[0], open: false);
+            double w1 = Tags()[0].W, w2 = Tags()[1].W;
+            string longer = "ป้ายแรกที่ยาวขึ้นอีกหลายคำ";
+            vm.ToolText = longer;
+            DateTime t1 = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("params: only that use's literal changed (the const Column stays const)", File.ReadAllText(home) == ParamHome.Replace("ShopTag(label: 'ป้ายแรก')", $"ShopTag(label: '{longer}')"),
+                  FirstLine(home, "ShopTag("));
+            Check("params: the shared widget's own file is untouched", File.ReadAllText(tag) == ShopTagDart);
+            Check("params: the Text stays picked, showing what was written", vm.StageBox?.Line == textLine && vm.CanToolText && vm.ToolText == longer,
+                  $"{vm.StageBox?.Widget}:{vm.StageBox?.Line} '{vm.ToolText}'");
+            Check("params: the change joins the review round", vm.HasSession && vm.SessionReview, vm.SessionText);
+            drawn = await Redrawn(vm, store, card.Page.Id, t1);
+            var after = Tags();
+            Check("params: drawn again — the edited use's text is wider, the other use's is as it was", drawn && after.Count == 2 && after[0].W > w1 + 40 && Math.Abs(after[1].W - w2) < 1,
+                  $"{w1:0} → {W0(after, 0)}, {w2:0} → {W0(after, 1)} {vm.CompileError}");
+            Check("params: the same use stays picked on the new picture", after.Count == 2 && ReferenceEquals(vm.StageBox, after[0]) && vm.ToolText == longer,
+                  $"picked y={vm.StageBox?.Y:0} '{vm.ToolText}'");
+            SavePng((FrameworkElement)view.FindName("Stage"), "stage-params.png");
+
+            DateTime t2 = DateTime.UtcNow;
+            vm.UndoCommand.Execute(null);
+            Check("undo: the use's literal is back", File.ReadAllText(home) == ParamHome);
+            drawn = await Redrawn(vm, store, card.Page.Id, t2);
+            var back = Tags();
+            Check("undo: drawn again — the first use is as narrow as before", drawn && back.Count == 2 && Math.Abs(back[0].W - w1) < 1, $"{w1:0} → {W0(back, 0)}");
+            vm.UndoAllCommand.Execute(null);
+            Check("round: undo all ends it with the screen as it began", !vm.HasSession && File.ReadAllText(home) == ParamHome, vm.SessionText);
+        }
+        finally
+        {
+            vm.RenderConsentOverride = null;
+            vm.ToolConfirmOverride = null;
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
+        }
+    }
+
     // ═══════════════════════════════════════════ translated text ═══════════════════════════════════════════
 
     const string L10nThArb = "{\n  \"@@locale\": \"th\",\n  \"welcome\": \"ยินดีต้อนรับสู่แอปพลิเคชันของเรา\",\n  \"@welcome\": { \"description\": \"The greeting on the home screen\" },\n\n" +
@@ -442,7 +604,11 @@ class HomeScreen extends StatelessWidget {
         }
     }
 
-    static string T(UiStudioViewModel vm, string key) => ((CluadeX.Services.LocalizationService)GetField(vm, "_loc")!).T(key);
+    static string T(UiStudioViewModel vm, string key, params object[] args)
+    {
+        var loc = (CluadeX.Services.LocalizationService)GetField(vm, "_loc")!;
+        return args.Length == 0 ? loc.T(key) : loc.T(key, args);
+    }
 
     static bool StrictJsonOk(string text)
     {
