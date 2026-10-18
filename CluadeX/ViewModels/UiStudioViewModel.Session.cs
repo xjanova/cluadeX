@@ -114,7 +114,7 @@ public sealed partial class UiStudioViewModel
             var s = _session;
             if (s == null) return "";
             int files = s.Changed.Count;
-            if (AiWorking) return files == 0 ? T("studio.session.aiStarting") : T("studio.session.aiWorking", files);
+            if (AiWorking) return _samplesAsking && files == 0 ? T("studio.samples.working") : files == 0 ? T("studio.session.aiStarting") : T("studio.session.aiWorking", files);
             return s.ToolEdits > 0 ? T("studio.session.changedTools", files, s.ToolEdits) : T("studio.session.changed", files);
         }
     }

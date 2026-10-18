@@ -158,7 +158,8 @@ public sealed partial class UiStudioViewModel
                 foreach (var b in bx.EnumerateArray())
                     boxes.Add(new WidgetBox(b.GetProperty("Widget").GetString() ?? "", b.GetProperty("File").GetString() ?? "", b.GetProperty("Line").GetInt32(),
                         b.GetProperty("Column").GetInt32(), b.GetProperty("X").GetDouble(), b.GetProperty("Y").GetDouble(), b.GetProperty("W").GetDouble(),
-                        b.GetProperty("H").GetDouble(), b.GetProperty("Depth").GetInt32()));
+                        b.GetProperty("H").GetDouble(), b.GetProperty("Depth").GetInt32(),
+                        b.TryGetProperty("Id", out var id) ? id.GetInt32() : -1, b.TryGetProperty("Parent", out var pa) ? pa.GetInt32() : -1));
         }
         catch { }
         return (boxes, problems);
@@ -209,19 +210,22 @@ public sealed partial class UiStudioViewModel
                 RenderStatus = T("studio.render.drawing", batch.Count);
                 foreach (var c in batch) c.SetState("rendering", T("studio.render.drawingOne"));
                 string outDir = Path.Combine(_studio.DataRoot, "UiStudio", "render", Path.GetFileName(_store.Folder), "run" + (++_renderRun % 3));
+                // what the app's requests are answered with in this draw (the switch, the AI's values)
+                string samples = SampleModeKey();
                 RenderRun run;
                 try
                 {
                     run = await FlutterRenderer.RunAsync(flutter, batch.Select(c => c.Page).ToList(), outDir, _loc.CurrentLanguage, ct,
-                        line => { if (line.Length > 0 && line != "·") _log?.Info("UiStudio", "render: " + line); });
+                        line => { if (line.Length > 0 && line != "·") _log?.Info("UiStudio", "render: " + line); },
+                        sampleData: samples != "off", sampleOverrides: _store?.SampleOverridesPath);
                 }
                 catch (Exception ex)
                 {
-                    _log?.Warn("UiStudio", "render failed", ex);
+                    if (!ct.IsCancellationRequested) _log?.Warn("UiStudio", "render failed", ex);
                     run = new RenderRun { Error = "studio.render.failed" };
                 }
                 if (ct.IsCancellationRequested) break;
-                ApplyRun(batch, run);
+                ApplyRun(batch, run, samples);
                 if (_renderAgain) { _renderAgain = false; }
             }
         }
@@ -247,7 +251,7 @@ public sealed partial class UiStudioViewModel
         System.Windows.Input.CommandManager.InvalidateRequerySuggested();
     }
 
-    private void ApplyRun(List<PageCard> batch, RenderRun run)
+    private void ApplyRun(List<PageCard> batch, RenderRun run, string samples)
     {
         if (run.Error == null)
         {
@@ -283,29 +287,38 @@ public sealed partial class UiStudioViewModel
             }
             catch { c.SetState("failed", T("studio.render.notDrawn")); continue; }
             var entry = _store.Save(c.Page.Id, "app", jpeg, "flutter:" + c.Page.Id, null, sr.Problems.Count > 0 ? 500 : 200);
-            _store.SaveSidecar(entry, JsonSerializer.Serialize(new { boxes = sr.Boxes, problems = sr.Problems, noise = sr.Noise }));
+            _store.SaveSidecar(entry, JsonSerializer.Serialize(new { boxes = sr.Boxes, problems = sr.Problems, noise = sr.Noise, requests = sr.Requests, samples }));
             c.Thumb = LoadImage(_store.ImagePath(entry));
             c.ThumbDevice = "app";
             c.IsStale = false;
             c.Problems = sr.Problems.Count;
-            c.SetState("done", sr.Problems.Count > 0 ? T("studio.render.withProblems", sr.Problems.Count) : T("studio.render.drawn", entry.CapturedUtc.ToLocalTime().ToString("HH:mm:ss")));
+            // (the numbers and names on it are made up when its requests were answered with sample data; with the
+            // samples off, a screen that asked for data shows what it shows without an answer)
+            int fed = sr.Requests.Count(r => !r.EndsWith(" -", StringComparison.Ordinal));
+            string at = entry.CapturedUtc.ToLocalTime().ToString("HH:mm:ss");
+            c.SetState("done", sr.Problems.Count > 0 ? T("studio.render.withProblems", sr.Problems.Count)
+                : fed > 0 ? T("studio.render.drawnSample", at, fed)
+                : samples == "off" && sr.Requests.Count > 0 ? T("studio.render.drawnNoSample", at) : T("studio.render.drawn", at));
             if (ReferenceEquals(c, _stageCard)) LoadStageRender();
         }
         UpdateSummary();
     }
 
-    /// <summary>Show each screen's last real picture (if any) on its card; the ones older than the code are marked.</summary>
+    /// <summary>Show each screen's last real picture (if any) on its card; the ones older than the code, or drawn with
+    /// other sample data (the switch, the AI's values), are marked.</summary>
     private void ApplyCachedRenders()
     {
         if (_store == null) return;
+        string samples = SampleModeKey();
         foreach (var c in _allCards.Where(c => c.IsScreen))
         {
             var e = _store.Get(c.Page.Id, "app");
             if (e == null) continue;
             c.Thumb = LoadImage(_store.ImagePath(e));
             c.ThumbDevice = "app";
-            c.IsStale = e.CapturedUtc < _projectStamp;
-            var (_, problems) = ReadRenderSidecar(_store.ReadSidecar(e));
+            string? side = _store.ReadSidecar(e);
+            c.IsStale = e.CapturedUtc < _projectStamp || SidecarSamples(side) is { } drawnWith && drawnWith != samples;
+            var (_, problems) = ReadRenderSidecar(side);
             c.Problems = problems.Count;
         }
     }
@@ -357,6 +370,7 @@ public sealed partial class UiStudioViewModel
         OnPropertyChanged(nameof(IsFlutterApp));
         OnPropertyChanged(nameof(ShowPalette));
         _l10n = null;
+        RefreshSampleInfo();
         if (_catalog?.Flutter == null) return;
         try { _l10n = FlutterL10n.Load(_studio.Root); }
         catch (Exception ex) { _log?.Warn("UiStudio", "reading l10n.yaml failed", ex); }
@@ -443,6 +457,7 @@ public sealed partial class UiStudioViewModel
         if (ct.IsCancellationRequested || fresh.Flutter == null) return;
         _catalog = fresh;
         _projectStamp = DateTime.UtcNow;
+        RefreshSampleInfo();   // (the requests the code makes may have changed)
         // keep the cards (and the stage) — refresh what each one draws
         foreach (var c in _allCards.Where(c => c.IsScreen))
         {

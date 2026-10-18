@@ -407,6 +407,29 @@
                                 </StackPanel>
                             </DockPanel>
                         </Border>
+                        <!-- what the app's requests are answered with while Flutter draws: sample replies on / off, realistic values by the AI -->
+                        <Border x:Name="SampleBar" DockPanel.Dock="Top" Background="{DynamicResource Surface.Panel}" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,0,0,1" Padding="14,6"
+                                Visibility="{Binding ShowSampleBar, Converter={StaticResource BoolVis}}">
+                            <WrapPanel>
+                                <TextBlock Text="{services:Loc studio.samples.label}" FontSize="11.5" Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Border Style="{StaticResource StudioSegmentHost}" Margin="0,2,10,2" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton Style="{StaticResource StudioSegment}" GroupName="SampleData" IsChecked="{Binding SampleDataOn}" ToolTip="{services:Loc studio.samples.onTip}">
+                                            <TextBlock Text="{services:Loc studio.samples.on}" FontSize="11.5"/>
+                                        </RadioButton>
+                                        <RadioButton Style="{StaticResource StudioSegment}" GroupName="SampleData" IsChecked="{Binding SampleDataOff}" ToolTip="{services:Loc studio.samples.offTip}">
+                                            <TextBlock Text="{services:Loc studio.samples.off}" FontSize="11.5"/>
+                                        </RadioButton>
+                                    </StackPanel>
+                                </Border>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding MakeSamplesRealCommand}" ToolTip="{services:Loc studio.samples.aiTip}" Margin="0,2,10,2" Padding="9,3" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.samples.ai}" FontSize="11.5"/></StackPanel>
+                                </Button>
+                                <TextBlock Text="{Binding SampleSummary}" FontSize="11" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,8,0" TextWrapping="Wrap"/>
+                                <Button Style="{StaticResource StudioLinkBtn}" Command="{Binding ClearSampleOverridesCommand}" Content="{services:Loc studio.samples.clear}" FontSize="11"
+                                        ToolTip="{services:Loc studio.samples.clearTip}" VerticalAlignment="Center" Visibility="{Binding HasSampleOverrides, Converter={StaticResource BoolVis}}"/>
+                            </WrapPanel>
+                        </Border>
                         <!-- a round of changes: drawn live while the AI edits, then kept (after the save check), taken back, or taken further -->
                         <Border DockPanel.Dock="Top" Margin="14,10,14,0" Padding="12,9" CornerRadius="10" Background="{DynamicResource Status.Info.Tint}" BorderBrush="{DynamicResource Status.Info.Border}" BorderThickness="1"
                                 Visibility="{Binding ShowSessionBar, Converter={StaticResource BoolVis}}">
@@ -525,6 +548,13 @@
                                     <Setter Property="Text" Value="{services:Loc studio.stage.approx}"/>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding StageShowsRender}" Value="True"><Setter Property="Text" Value="{services:Loc studio.render.realNote}"/></DataTrigger>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding StageShowsRender}" Value="True"/>
+                                                <Condition Binding="{Binding SampleDataOn}" Value="False"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Text" Value="{services:Loc studio.render.realNoteNoSample}"/>
+                                        </MultiDataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
