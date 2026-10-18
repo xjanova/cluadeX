@@ -31,16 +31,25 @@ public sealed class ProjectToolModule : IAgentToolModule
     public static event Action<AgentRunScope?, string>? RelatedFolderAdded;
 
     public const string ToolName = "open_project";
+    public const string NewChatToolName = "new_chat";
+
+    /// <summary>
+    /// Opens a new chat for new_chat (UI thread work, set by the chat page): the project folder (null = the one open),
+    /// the first message to start there (null = an empty chat), a title (null = from the message). Returns what the
+    /// tool reports, or throws to fail it. Null in harnesses with no chat page.
+    /// </summary>
+    public static Func<string?, string?, string?, Task<string>>? NewChatHandler;
 
     public string Id => "project";
 
-    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject };
+    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat };
 
     public bool WorksWithoutProject => true;
 
     public ToolType? ResolveToolType(string toolName) => toolName?.Trim().ToLowerInvariant() switch
     {
         "open_project" or "open_folder" or "set_project" or "open_workspace" or "set_working_directory" => ToolType.OpenProject,
+        "new_chat" or "open_new_chat" or "start_chat" or "new_session" or "create_chat" => ToolType.NewChat,
         _ => null,
     };
 
@@ -73,6 +82,41 @@ public sealed class ProjectToolModule : IAgentToolModule
                 + "notes record where each project lives), then call this. Do not ask the user to open it and do not hand the task off. "
                 + "When the task also spans a related project, open that one with add=\"true\" so both stay open.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(schema)).RootElement.Clone(),
+        };
+
+        // Owner 2026-10-18: "cluadex ต้องเปิดแชทใหม่ โปรเจคใหม่ได้ตามคำสั่ง" — the agent answered that it had no way to
+        // open a session. It has now: a new chat beside this one (both run), in this project or another.
+        var chatSchema = new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["path"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "Absolute path of the project folder the new chat works in. Omit for the project open now.",
+                },
+                ["message"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "The task to start in the new chat, written as the user's first message (complete: "
+                        + "what to do, where, what done looks like — that chat does not see this one). Omit for an empty chat.",
+                },
+                ["title"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "Optional short title for the chat in the sidebar.",
+                },
+            },
+        };
+        yield return new ToolSchema
+        {
+            Name = NewChatToolName,
+            Description = "Open a NEW chat in CluadeX — in this project or another folder — and start a task there; it runs "
+                + "beside this chat and the user can switch to it in the sidebar. Use it when the user asks for a new chat / "
+                + "new session / to work on another project in its own chat, or to hand a separate piece of work to its own "
+                + "chat. Never answer that you cannot open a chat.",
+            InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(chatSchema)).RootElement.Clone(),
         };
     }
 
@@ -116,6 +160,39 @@ public sealed class ProjectToolModule : IAgentToolModule
         };
     }
 
+    /// <summary>new_chat: a new chat in the sidebar, in this project or <c>path</c>, started with <c>message</c>.</summary>
+    private async Task<ToolResult> ExecuteNewChatAsync(ToolCall call)
+    {
+        ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
+        if (NewChatHandler == null) return Fail("No chat page is running here, so a new chat cannot be opened.");
+
+        string? full = null;
+        string raw = call.GetArg("path").Trim().Trim('"', '\'');
+        if (raw.Length > 0)
+        {
+            full = FullPathOrNull(raw);
+            if (full == null)
+                return Fail($"'{raw}' is not an absolute folder path. Give the full path (e.g. D:\\Code\\Atmos) — brain_search usually has it.");
+            if (!Directory.Exists(full))
+                return Fail($"No folder at {full}. Search for the project (brain_search, or ask the user where it is now).");
+            if (PermissionService.IsUnsafeAcceptEditsRoot(full, _settings?.DataRoot))
+                return Fail($"{full} is a drive root or a system / profile folder, which the agent does not open by itself.");
+        }
+        string? message = call.GetArg("message").Trim() is { Length: > 0 } m ? m : null;
+        string? title = call.GetArg("title").Trim() is { Length: > 0 } t ? t : null;
+        try
+        {
+            string said = await NewChatHandler(full, message, title);
+            if (full != null) _registry?.Record(full);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = true, Output = said,
+                Summary = "💬+ " + (title ?? full ?? "new chat"), FilePath = full,
+            };
+        }
+        catch (Exception ex) { return Fail("The new chat could not be opened: " + ex.Message); }
+    }
+
     private static string? FullPathOrNull(string raw)
     {
         raw = (raw ?? "").Trim().Trim('"', '\'');
@@ -146,6 +223,7 @@ public sealed class ProjectToolModule : IAgentToolModule
 
     public Task<ToolResult> ExecuteAsync(ToolCall call, ToolModuleContext context, CancellationToken ct)
     {
+        if (call.Type == ToolType.NewChat) return ExecuteNewChatAsync(call);
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
 
         string raw = call.GetArg("path").Trim().Trim('"', '\'');

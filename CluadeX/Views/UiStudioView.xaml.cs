@@ -18,6 +18,8 @@ namespace CluadeX.Views;
 public partial class UiStudioView : UserControl
 {
     private UiStudioViewModel? _vm;
+    /// <summary>Where the mouse went down on the widget palette, and on which widget (a drag starts from there).</summary>
+    private (Point At, WidgetPaletteItem? Item)? _paletteDown;
     private StudioService? _studio;
     private Task? _init;
     private string? _pendingUrl;
@@ -80,6 +82,20 @@ public partial class UiStudioView : UserControl
         };
         PagesList.SizeChanged += (_, _) => { UpdateColumns(); QueueVisible(); };
         StageView.NodeClicked += n => _vm?.PickStageNode(n, open: System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Control));
+        RenderView.BoxClicked += (b, ctrl) => _vm?.PickStageBox(b, ctrl);
+        RenderView.DropPlanner = (x, y) => _vm?.PlanDrop(x, y);
+        RenderView.Dropped += (key, x, y) => _vm?.DropPalette(key, x, y);
+        // a palette widget dragged out of the panel (a plain click still inserts it next to the picked widget)
+        WidgetPalette.PreviewMouseLeftButtonDown += (_, e) => _paletteDown = (e.GetPosition(WidgetPalette), (e.OriginalSource as FrameworkElement)?.DataContext as WidgetPaletteItem);
+        WidgetPalette.PreviewMouseMove += (_, e) =>
+        {
+            if (_paletteDown is not { Item: { } item } down || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
+            var p = e.GetPosition(WidgetPalette);
+            if (Math.Abs(p.X - down.At.X) < SystemParameters.MinimumHorizontalDragDistance && Math.Abs(p.Y - down.At.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+            _paletteDown = null;
+            DragDrop.DoDragDrop(WidgetPalette, new DataObject(RenderStageView.WidgetFormat, item.Key), DragDropEffects.Copy);
+        };
+        WidgetPalette.PreviewMouseLeftButtonUp += (_, _) => _paletteDown = null;
     }
 
     private void UpdateColumns()

@@ -152,6 +152,9 @@ public enum ToolType
     DesktopKeys,       // Press key chords
     DesktopLaunch,     // Start a program and wait for its main window
     DesktopWait,       // Wait until a window / element appears or disappears
+
+    // Chats (Services/Tools/ProjectToolModule) — appended last: a ToolType is stored by number
+    NewChat,           // Open a new chat (optionally in another project) and start a task there
 }
 
 /// <summary>

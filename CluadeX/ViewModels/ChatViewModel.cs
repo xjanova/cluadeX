@@ -720,6 +720,9 @@ public partial class ChatViewModel : ViewModelBase
             });
         Services.Tools.ProjectToolModule.RelatedFolderAdded += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
+        // The agent opens a new chat itself (new_chat).
+        Services.Tools.ProjectToolModule.NewChatHandler = (path, message, title) =>
+            App.Current.Dispatcher.InvokeAsync(() => OpenChatForAgent(path, message, title)).Task;
         _providerManager = providerManager;
         _agentService = agentService;
         _codeExecutionService = codeExecutionService;
@@ -1980,6 +1983,43 @@ public partial class ChatViewModel : ViewModelBase
         StatusText = Loc("chat.status.ready");
     }
 
+    /// <summary>
+    /// new_chat (UI thread): a new chat in the sidebar — in <paramref name="path"/> (null = the project open now) — and,
+    /// with <paramref name="message"/>, its first turn started as the user's message. The asking chat keeps running
+    /// beside it (each run has its own folder). Not awaited: the new chat's turn is its own. Returns the tool's report.
+    /// </summary>
+    private string OpenChatForAgent(string? path, string? message, string? title)
+    {
+        string? from = CurrentSession?.Title;
+        if (path != null && !string.Equals(path, _fileSystemService.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
+            ApplyWorkingDirectory(path, announce: false, showEditor: false);
+        NewSession();
+        var chat = CurrentSession ?? throw new InvalidOperationException("no chat was created");
+        if (title != null) chat.Title = title;
+        string folder = string.IsNullOrWhiteSpace(chat.ProjectPath) ? "(no project)" : chat.ProjectPath;
+        Messages.Add(new ChatMessage
+        {
+            Role = MessageRole.System,
+            Content = "💬 " + LocF("chat.newChat.byAgent", from ?? "?", folder),
+        });
+        RebuildVisibleSessions();
+        if (message == null)
+            return $"Opened a new empty chat (id {chat.Id}) in {folder}. It is on screen now; the user types there.";
+        _ = StartAgentChatTurnAsync(message, chat.Id);
+        return $"Opened a new chat (id {chat.Id}) in {folder} and started it with your message. It runs on its own beside "
+             + "this chat; the user follows it in the sidebar. Do not wait for it — carry on here or finish your reply.";
+    }
+
+    private async Task StartAgentChatTurnAsync(string message, string chatId)
+    {
+        try
+        {
+            if (CurrentSession?.Id != chatId) return;   // the user moved on before it started
+            await SendMessageCore(message, null);
+        }
+        catch (Exception ex) { _debugLog?.Warn("Chat", $"new_chat: the first turn of {chatId} failed: {ex.Message}"); }
+    }
+
     // ════════════════════════════════════════════════════════════════════
     //  MCP-driven external runs (called by McpHostService → ToolDispatcher)
     // ════════════════════════════════════════════════════════════════════
@@ -2770,6 +2810,20 @@ public partial class ChatViewModel : ViewModelBase
         {
             ClearBox();
             NewSession();
+            return;
+        }
+        // Claude Dev's CLI is signed out: open its login in a console; the user finishes it in the browser. Before the
+        // provider check on purpose — a signed-out Claude Dev is exactly when the provider is not ready.
+        if (input.Equals("/login", StringComparison.OrdinalIgnoreCase))
+        {
+            ClearBox();
+            bool opened = Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = opened ? "🔑 " + Loc("chat.login.opened") : "⚠ " + Loc("chat.login.failed"),
+            });
+            ScrollToBottom?.Invoke();
             return;
         }
 

@@ -32,7 +32,7 @@ public partial class ChatViewModel
     private readonly HashSet<string> _pipeSendingChats = new();
 
     /// <summary>The built-in commands that act on the chat and start no reply.</summary>
-    private static readonly string[] ChatCommands = ["/compact", "/clear", "/close", "/exit", "/new"];
+    private static readonly string[] ChatCommands = ["/compact", "/clear", "/close", "/exit", "/new", "/login"];
 
     /// <summary>
     /// cluadex.list_chats: stored chats and the ones only in memory (a chat not saved yet, a running chat's live list),

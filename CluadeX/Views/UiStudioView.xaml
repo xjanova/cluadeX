@@ -89,7 +89,7 @@
                             <Border Background="{DynamicResource Surface.Sunken}" CornerRadius="10,10,0,0"/>
                             <Image Source="{Binding Thumb}" Stretch="UniformToFill" VerticalAlignment="Top" HorizontalAlignment="Center"
                                    RenderOptions.BitmapScalingMode="HighQuality" Visibility="{Binding HasThumb, Converter={StaticResource BoolVis}}"/>
-                            <sk:SketchView Sketch="{Binding Sketch}" Margin="10,10,10,4" Visibility="{Binding HasSketch, Converter={StaticResource BoolVis}}"/>
+                            <sk:SketchView Sketch="{Binding Sketch}" Margin="10,10,10,4" Visibility="{Binding ShowSketch, Converter={StaticResource BoolVis}}"/>
                             <StackPanel VerticalAlignment="Center" Margin="14" Visibility="{Binding ShowPlaceholder, Converter={StaticResource BoolVis}}">
                                 <TextBlock x:Name="PlaceIcon" Text="&#xE91B;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center"/>
                                 <TextBlock Text="{Binding StateText}" FontSize="11" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,0"/>
@@ -104,6 +104,9 @@
                                 </Border>
                                 <Border Style="{StaticResource ThumbChip}" Visibility="{Binding IsStale, Converter={StaticResource BoolVis}}">
                                     <TextBlock Text="{services:Loc studio.pages.stale}" FontSize="10" Foreground="{DynamicResource Status.Warning}"/>
+                                </Border>
+                                <Border Style="{StaticResource ThumbChip}" Visibility="{Binding HasProblems, Converter={StaticResource BoolVis}}" BorderBrush="{DynamicResource Status.Danger.Border}">
+                                    <TextBlock FontSize="10" Foreground="{DynamicResource Status.Danger}"><Run Text="{services:Loc studio.render.problemsChip}"/><Run Text=" "/><Run Text="{Binding Problems, Mode=OneWay}"/></TextBlock>
                                 </Border>
                             </WrapPanel>
                             <!-- busy -->
@@ -380,6 +383,22 @@
                                 <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ShowPagesCommand}" Margin="0">
                                     <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8A9;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.pages.button}"/></StackPanel>
                                 </Button>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding RenderStageCommand}" ToolTip="{services:Loc studio.render.redrawTip}"
+                                        Visibility="{Binding IsFlutterApp, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets"/>
+                                </Button>
+                                <Border DockPanel.Dock="Right" Style="{StaticResource StudioSegmentHost}" Margin="0,0,6,0" Visibility="{Binding IsFlutterApp, Converter={StaticResource BoolVis}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton Style="{StaticResource StudioSegment}" GroupName="StageLook" IsChecked="{Binding ShowRealRender}" ToolTip="{services:Loc studio.render.realTip}">
+                                            <TextBlock Text="{services:Loc studio.render.real}" FontSize="11.5"/>
+                                        </RadioButton>
+                                        <RadioButton Style="{StaticResource StudioSegment}" GroupName="StageLook" IsChecked="{Binding ShowWireframe}" ToolTip="{services:Loc studio.render.sketchTip}">
+                                            <TextBlock Text="{services:Loc studio.render.sketch}" FontSize="11.5"/>
+                                        </RadioButton>
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock DockPanel.Dock="Right" Text="{Binding RenderStatus}" FontSize="11" Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,10,0"
+                                           TextTrimming="CharacterEllipsis" MaxWidth="260" Visibility="{Binding RenderStatus, Converter={StaticResource BoolVis}}"/>
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="{Binding StageTitle}" FontSize="13.5" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
                                     <TextBlock FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
@@ -388,12 +407,167 @@
                                 </StackPanel>
                             </DockPanel>
                         </Border>
-                        <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.approx}" FontSize="11" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center" Margin="12,6,12,8" TextWrapping="Wrap"/>
+                        <!-- a round of changes: drawn live while the AI edits, then kept (after the save check), taken back, or taken further -->
+                        <Border DockPanel.Dock="Top" Margin="14,10,14,0" Padding="12,9" CornerRadius="10" Background="{DynamicResource Status.Info.Tint}" BorderBrush="{DynamicResource Status.Info.Border}" BorderThickness="1"
+                                Visibility="{Binding ShowSessionBar, Converter={StaticResource BoolVis}}">
+                            <StackPanel>
+                                <DockPanel Visibility="{Binding AiWorking, Converter={StaticResource BoolVis}}">
+                                    <TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource Accent.1}" Margin="0,2,8,0" VerticalAlignment="Top"/>
+                                    <TextBlock Text="{Binding SessionText}" FontSize="12" Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap"/>
+                                </DockPanel>
+                                <StackPanel Visibility="{Binding SessionReview, Converter={StaticResource BoolVis}}">
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ToggleBeforeCommand}" Margin="8,0,0,0" Padding="8,3"
+                                                Visibility="{Binding HasBeforeImage, Converter={StaticResource BoolVis}}">
+                                            <TextBlock FontSize="11.5">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="{services:Loc studio.session.showBefore}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding ShowBefore}" Value="True"><Setter Property="Text" Value="{services:Loc studio.session.showAfter}"/></DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Button>
+                                        <TextBlock Text="{Binding SessionText}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                    <WrapPanel Margin="0,8,0,0">
+                                        <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding KeepChangesCommand}" Margin="0,0,6,4" ToolTip="{services:Loc studio.session.keepTip}">
+                                            <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.session.keep}"/></StackPanel>
+                                        </Button>
+                                        <Button Style="{StaticResource StudioDangerBtn}" Command="{Binding UndoAllCommand}" Margin="0,0,6,4" ToolTip="{services:Loc studio.session.undoTip}">
+                                            <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE7A7;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.session.undoAll}"/></StackPanel>
+                                        </Button>
+                                    </WrapPanel>
+                                    <DockPanel Margin="0,4,0,0">
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ReviseCommand}" Margin="6,0,0,0" Padding="9,4" VerticalAlignment="Top" ToolTip="{services:Loc studio.session.reviseTip}">
+                                            <TextBlock Text="&#xE724;" FontFamily="Segoe MDL2 Assets"/>
+                                        </Button>
+                                        <Grid>
+                                            <TextBox x:Name="ReviseBox" Style="{StaticResource StudioBox}" Text="{Binding ReviseText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="False" MaxHeight="80">
+                                                <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ReviseCommand}"/></TextBox.InputBindings>
+                                            </TextBox>
+                                            <TextBlock Text="{services:Loc studio.session.revisePlaceholder}" FontSize="11.5" Foreground="{DynamicResource Text.Faint}" Margin="9,5,0,0" IsHitTestVisible="False">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding ReviseText}" Value=""><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </DockPanel>
+                                </StackPanel>
+                                <DockPanel Visibility="{Binding IsChecking, Converter={StaticResource BoolVis}}">
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding StopCheckCommand}" Margin="8,0,0,0" Padding="8,3">
+                                        <TextBlock Text="{services:Loc studio.check.stop}" FontSize="11.5"/>
+                                    </Button>
+                                    <TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource Accent.1}" Margin="0,2,8,0" VerticalAlignment="Top"/>
+                                    <TextBlock Text="{Binding CheckStatus}" FontSize="12" Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap"/>
+                                </DockPanel>
+                                <DockPanel Visibility="{Binding HasCheckResult, Converter={StaticResource BoolVis}}">
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding DismissCheckCommand}" Margin="8,0,0,0" Padding="8,3">
+                                        <TextBlock Text="{services:Loc studio.check.dismiss}" FontSize="11.5"/>
+                                    </Button>
+                                    <TextBlock Text="{Binding CheckStatus}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding CheckOk}" Value="True"><Setter Property="Foreground" Value="{DynamicResource Status.Success}"/></DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DockPanel>
+                                <ScrollViewer MaxHeight="150" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,6,0,0">
+                                    <ItemsControl ItemsSource="{Binding CheckFindings}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate><TextBlock Text="{Binding}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" Margin="0,1"/></DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Border>
+                        <!-- what Flutter reported while drawing the screen: one click hands it to the AI -->
+                        <Border DockPanel.Dock="Top" Margin="14,10,14,0" Padding="12,8" CornerRadius="10" Background="{DynamicResource Status.Danger.Tint}" BorderBrush="{DynamicResource Status.Danger.Border}" BorderThickness="1">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasStageProblems}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                        <DataTrigger Binding="{Binding HasCompileError}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding FixProblemsCommand}" Margin="10,0,0,0" VerticalAlignment="Top">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE945;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.render.fix}"/></StackPanel>
+                                </Button>
+                                <StackPanel>
+                                    <TextBlock Text="{services:Loc studio.render.problemsTitle}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Status.Danger}"/>
+                                    <TextBlock Text="{Binding CompileError}" FontFamily="{DynamicResource Font.Mono}" FontSize="10.5" Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" MaxHeight="120"
+                                               Visibility="{Binding HasCompileError, Converter={StaticResource BoolVis}}" Margin="0,4,0,0"/>
+                                    <ItemsControl ItemsSource="{Binding StageProblems}" Margin="0,4,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate><TextBlock Text="{Binding}" FontSize="11" Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" Margin="0,1"/></DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <TextBlock DockPanel.Dock="Bottom" FontSize="11" Foreground="{DynamicResource Text.Faint}" HorizontalAlignment="Center" Margin="12,6,12,8" TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="{services:Loc studio.stage.approx}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding StageShowsRender}" Value="True"><Setter Property="Text" Value="{services:Loc studio.render.realNote}"/></DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <TextBlock DockPanel.Dock="Bottom" Text="{services:Loc studio.stage.hint}" FontSize="11.5" Foreground="{DynamicResource Text.Muted}" HorizontalAlignment="Center" Margin="12,0" TextWrapping="Wrap"/>
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,18,0,12" CornerRadius="30" Padding="9" Background="#FF101014"
-                                    Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
-                                <sk:SketchView x:Name="StageView" Width="378" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True"/>
+                            <!-- a phone in its bezel; a desktop app's window (WPF) as wide as the stage, in a thin frame -->
+                            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Visibility="{Binding HasStage, Converter={StaticResource BoolVis}}">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Margin" Value="0,18,0,12"/>
+                                        <Setter Property="CornerRadius" Value="30"/>
+                                        <Setter Property="Padding" Value="9"/>
+                                        <Setter Property="Background" Value="#FF101014"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDesktopApp}" Value="True">
+                                                <Setter Property="Margin" Value="18,18,18,12"/>
+                                                <Setter Property="CornerRadius" Value="9"/>
+                                                <Setter Property="Padding" Value="1"/>
+                                                <Setter Property="Background" Value="{DynamicResource Border.Default}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <Grid>
+                                    <sk:SketchView x:Name="StageView" Sketch="{Binding StageSketch}" Selected="{Binding StageNode}" Interactive="True" FullHeight="True"
+                                                   Visibility="{Binding StageShowsSketch, Converter={StaticResource BoolVis}}">
+                                        <sk:SketchView.Style>
+                                            <Style TargetType="sk:SketchView">
+                                                <Setter Property="Width" Value="378"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDesktopApp}" Value="True">
+                                                        <Setter Property="Width" Value="Auto"/>
+                                                        <Setter Property="MaxWidth" Value="1180"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </sk:SketchView.Style>
+                                    </sk:SketchView>
+                                    <!-- a Flutter screen as Flutter drew it -->
+                                    <sk:RenderStageView x:Name="RenderView" Width="378" Source="{Binding StageRenderShown}" Boxes="{Binding StageBoxesShown}" Selected="{Binding StageBox}"
+                                                        Busy="{Binding IsRendering}" Visibility="{Binding StageShowsRender, Converter={StaticResource BoolVis}}"/>
+                                </Grid>
                             </Border>
                         </ScrollViewer>
                     </DockPanel>
@@ -720,6 +894,193 @@
                                 <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.stage.openCode}"/></StackPanel>
                             </Button>
                         </StackPanel>
+                        <!-- the widget tools: each one changes the picked widget in the app's code (Undo takes an edit back) -->
+                        <StackPanel Visibility="{Binding HasTools, Converter={StaticResource BoolVis}}">
+                            <Border Style="{StaticResource StudioChip}" Visibility="{Binding HasToolSharedNote, Converter={StaticResource BoolVis}}" Margin="0,10,0,0" HorizontalAlignment="Left">
+                                <TextBlock Text="{Binding ToolSharedNote}" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Status.Warning}"/>
+                            </Border>
+
+                            <StackPanel Visibility="{Binding CanToolText, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc studio.fedit.text}" Style="{StaticResource StudioKicker}"/>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ApplyToolTextCommand}" Margin="6,0,0,0" Padding="8,4" VerticalAlignment="Top" ToolTip="{services:Loc studio.fedit.applyTip}">
+                                        <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="False" MaxHeight="90">
+                                        <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolTextCommand}"/></TextBox.InputBindings>
+                                    </TextBox>
+                                </DockPanel>
+                            </StackPanel>
+                            <TextBlock Text="{Binding ToolTextNote}" FontSize="11" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                       Visibility="{Binding HasToolTextNote, Converter={StaticResource BoolVis}}"/>
+
+                            <StackPanel Visibility="{Binding CanToolTextStyle, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc studio.fedit.font}" Style="{StaticResource StudioKicker}"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <DockPanel ToolTip="{services:Loc studio.fedit.fontSizeTip}">
+                                        <Button DockPanel.Dock="Left" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="fontSize:-1" Padding="7,3" Margin="0,0,4,0" Content="−"/>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="fontSize:1" Padding="7,3" Margin="4,0,0,0" Content="+"/>
+                                        <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolFontSize, UpdateSourceTrigger=PropertyChanged}" TextAlignment="Center">
+                                            <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolNumberCommand}" CommandParameter="fontSize"/></TextBox.InputBindings>
+                                        </TextBox>
+                                    </DockPanel>
+                                    <ComboBox Grid.Column="2" ItemsSource="{Binding FontWeights}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding ToolFontWeight}"
+                                              ToolTip="{services:Loc studio.fedit.weightTip}" VerticalContentAlignment="Center"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding SetToolAlignCommand}" CommandParameter="left" Padding="8,4" ToolTip="{services:Loc studio.fedit.alignLeft}">
+                                        <TextBlock Text="&#xE8E4;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding SetToolAlignCommand}" CommandParameter="center" Padding="8,4" ToolTip="{services:Loc studio.fedit.alignCenter}">
+                                        <TextBlock Text="&#xE8E3;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                    <Button Style="{StaticResource StudioToolBtn}" Command="{Binding SetToolAlignCommand}" CommandParameter="right" Padding="8,4" ToolTip="{services:Loc studio.fedit.alignRight}">
+                                        <TextBlock Text="&#xE8E2;" FontFamily="Segoe MDL2 Assets"/>
+                                    </Button>
+                                </StackPanel>
+                                <TextBlock Text="{services:Loc studio.fedit.textColor}" Style="{StaticResource StudioKicker}"/>
+                                <ItemsControl ItemsSource="{Binding Swatches}">
+                                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type vm:SwatchItem}">
+                                            <Button Width="22" Height="22" Margin="0,0,5,5" Background="{Binding Brush}" ToolTip="{Binding Tip}" Cursor="Hand" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                                    Command="{Binding DataContext.SetToolTextColorCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding Hex}">
+                                                <Button.Template><ControlTemplate TargetType="Button"><Border CornerRadius="5" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"/></ControlTemplate></Button.Template>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding SetToolTextColorCommand}" CommandParameter="" Margin="6,0,0,0" Padding="8,3" ToolTip="{services:Loc studio.fedit.colorNoneTip}">
+                                        <TextBlock Text="{services:Loc studio.fedit.colorNone}" FontSize="11.5"/>
+                                    </Button>
+                                    <TextBox Style="{StaticResource StudioMonoBox}" Text="{Binding ToolTextColorHex, UpdateSourceTrigger=PropertyChanged}" ToolTip="{services:Loc studio.fedit.hexTip}">
+                                        <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolColorHexCommand}" CommandParameter="text"/></TextBox.InputBindings>
+                                    </TextBox>
+                                </DockPanel>
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding CanToolColor, Converter={StaticResource BoolVis}}">
+                                <TextBlock Text="{services:Loc studio.fedit.color}" Style="{StaticResource StudioKicker}"/>
+                                <ItemsControl ItemsSource="{Binding Swatches}">
+                                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type vm:SwatchItem}">
+                                            <Button Width="22" Height="22" Margin="0,0,5,5" Background="{Binding Brush}" ToolTip="{Binding Tip}" Cursor="Hand" BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
+                                                    Command="{Binding DataContext.SetToolColorCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding Hex}">
+                                                <Button.Template><ControlTemplate TargetType="Button"><Border CornerRadius="5" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"/></ControlTemplate></Button.Template>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding SetToolColorCommand}" CommandParameter="" Margin="6,0,0,0" Padding="8,3" ToolTip="{services:Loc studio.fedit.colorNoneTip}">
+                                        <TextBlock Text="{services:Loc studio.fedit.colorNone}" FontSize="11.5"/>
+                                    </Button>
+                                    <TextBox Style="{StaticResource StudioMonoBox}" Text="{Binding ToolColorHex, UpdateSourceTrigger=PropertyChanged}" ToolTip="{services:Loc studio.fedit.hexTip}">
+                                        <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolColorHexCommand}" CommandParameter="color"/></TextBox.InputBindings>
+                                    </TextBox>
+                                </DockPanel>
+                            </StackPanel>
+
+                            <TextBlock Text="{services:Loc studio.fedit.spacing}" Style="{StaticResource StudioKicker}"/>
+                            <UniformGrid Columns="2">
+                                <StackPanel Margin="0,0,6,6" Visibility="{Binding CanToolPadding, Converter={StaticResource BoolVis}}" ToolTip="{services:Loc studio.fedit.paddingTip}">
+                                    <TextBlock Text="{services:Loc studio.fedit.padding}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,3"/>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Left" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="padding:-4" Padding="6,3" Margin="0,0,3,0" Content="−"/>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="padding:4" Padding="6,3" Margin="3,0,0,0" Content="+"/>
+                                        <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolPadding, UpdateSourceTrigger=PropertyChanged}" TextAlignment="Center">
+                                            <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolNumberCommand}" CommandParameter="padding"/></TextBox.InputBindings>
+                                        </TextBox>
+                                    </DockPanel>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,6,6" Visibility="{Binding CanToolMargin, Converter={StaticResource BoolVis}}" ToolTip="{services:Loc studio.fedit.marginTip}">
+                                    <TextBlock Text="{services:Loc studio.fedit.margin}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,3"/>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Left" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="margin:-4" Padding="6,3" Margin="0,0,3,0" Content="−"/>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="margin:4" Padding="6,3" Margin="3,0,0,0" Content="+"/>
+                                        <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolMargin, UpdateSourceTrigger=PropertyChanged}" TextAlignment="Center">
+                                            <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolNumberCommand}" CommandParameter="margin"/></TextBox.InputBindings>
+                                        </TextBox>
+                                    </DockPanel>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,6,6" ToolTip="{services:Loc studio.fedit.radiusTip}">
+                                    <TextBlock Text="{services:Loc studio.fedit.radius}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,3"/>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Left" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="radius:-4" Padding="6,3" Margin="0,0,3,0" Content="−"/>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding StepToolCommand}" CommandParameter="radius:4" Padding="6,3" Margin="3,0,0,0" Content="+"/>
+                                        <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolRadius, UpdateSourceTrigger=PropertyChanged}" TextAlignment="Center">
+                                            <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolNumberCommand}" CommandParameter="radius"/></TextBox.InputBindings>
+                                        </TextBox>
+                                    </DockPanel>
+                                </StackPanel>
+                                <StackPanel Margin="0,0,6,6" ToolTip="{services:Loc studio.fedit.sizeTip}">
+                                    <TextBlock Text="{services:Loc studio.fedit.size}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,0,0,3"/>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Style="{StaticResource StudioToolBtn}" Command="{Binding ApplyToolNumberCommand}" CommandParameter="size" Padding="6,3" Margin="3,0,0,0">
+                                            <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
+                                        </Button>
+                                        <UniformGrid Columns="2">
+                                            <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolWidth, UpdateSourceTrigger=PropertyChanged}" TextAlignment="Center" Margin="0,0,3,0" ToolTip="{services:Loc studio.fedit.width}">
+                                                <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolNumberCommand}" CommandParameter="size"/></TextBox.InputBindings>
+                                            </TextBox>
+                                            <TextBox Style="{StaticResource StudioBox}" Text="{Binding ToolHeight, UpdateSourceTrigger=PropertyChanged}" TextAlignment="Center" ToolTip="{services:Loc studio.fedit.height}">
+                                                <TextBox.InputBindings><KeyBinding Key="Enter" Command="{Binding ApplyToolNumberCommand}" CommandParameter="size"/></TextBox.InputBindings>
+                                            </TextBox>
+                                        </UniformGrid>
+                                    </DockPanel>
+                                </StackPanel>
+                            </UniformGrid>
+
+                            <TextBlock Text="{services:Loc studio.fedit.structure}" Style="{StaticResource StudioKicker}"/>
+                            <WrapPanel>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolMoveCommand}" CommandParameter="-1" Margin="0,0,5,5" Padding="8,4" ToolTip="{services:Loc studio.fedit.moveUp}"
+                                        IsEnabled="{Binding CanToolMoveUp}"><TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets"/></Button>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolMoveCommand}" CommandParameter="1" Margin="0,0,5,5" Padding="8,4" ToolTip="{services:Loc studio.fedit.moveDown}"
+                                        IsEnabled="{Binding CanToolMoveDown}"><TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets"/></Button>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolDuplicateCommand}" Margin="0,0,5,5" Padding="8,4" ToolTip="{services:Loc studio.fedit.duplicate}">
+                                    <TextBlock Text="&#xE8C8;" FontFamily="Segoe MDL2 Assets"/>
+                                </Button>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolUnwrapCommand}" Margin="0,0,5,5" Padding="8,4" ToolTip="{services:Loc studio.fedit.unwrap}">
+                                    <TextBlock Text="&#xE8C6;" FontFamily="Segoe MDL2 Assets"/>
+                                </Button>
+                                <Button Style="{StaticResource StudioDangerBtn}" Command="{Binding ToolDeleteCommand}" Margin="0,0,5,5" Padding="8,4" ToolTip="{services:Loc studio.fedit.delete}">
+                                    <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"/>
+                                </Button>
+                            </WrapPanel>
+                            <TextBlock Text="{services:Loc studio.fedit.wrapIn}" FontSize="11" Foreground="{DynamicResource Text.Muted}" Margin="0,4,0,4"/>
+                            <WrapPanel>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="Padding" Margin="0,0,5,5" Padding="7,3" Content="Padding"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="Center" Margin="0,0,5,5" Padding="7,3" Content="Center"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="Card" Margin="0,0,5,5" Padding="7,3" Content="Card"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="Expanded" Margin="0,0,5,5" Padding="7,3" Content="Expanded"
+                                        Visibility="{Binding CanToolExpanded, Converter={StaticResource BoolVis}}"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="SizedBox" Margin="0,0,5,5" Padding="7,3" Content="SizedBox"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="Align" Margin="0,0,5,5" Padding="7,3" Content="Align"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="InkWell" Margin="0,0,5,5" Padding="7,3" Content="InkWell"/>
+                                <Button Style="{StaticResource StudioToolBtn}" Command="{Binding ToolWrapCommand}" CommandParameter="ClipRRect" Margin="0,0,5,5" Padding="7,3" Content="ClipRRect"/>
+                            </WrapPanel>
+                        </StackPanel>
+
+                        <!-- the palette: a click puts a widget next to the picked one (inside it when it holds a list); a drag puts it where it is dropped -->
+                        <StackPanel Visibility="{Binding ShowPalette, Converter={StaticResource BoolVis}}">
+                            <TextBlock Text="{services:Loc studio.fedit.palette}" Style="{StaticResource StudioKicker}" Margin="0,20,0,4"/>
+                            <TextBlock Text="{services:Loc studio.fedit.paletteHint}" FontSize="10.5" Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                            <ItemsControl x:Name="WidgetPalette" ItemsSource="{Binding Palette}">
+                                <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:WidgetPaletteItem}">
+                                        <Button Style="{StaticResource StudioToolBtn}" Margin="0,0,5,5" Padding="8,4" ToolTip="{Binding Code}"
+                                                Command="{Binding DataContext.InsertPaletteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}">
+                                            <StackPanel Orientation="Horizontal"><TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{Binding Label}" FontSize="11.5"/></StackPanel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
                         <TextBlock Text="{services:Loc studio.stage.aiTitle}" Style="{StaticResource StudioKicker}" Margin="0,20,0,6"/>
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Style="{StaticResource StudioAccentBtn}" Command="{Binding AskAiStageCommand}" Margin="6,0,0,0" Padding="9,5" VerticalAlignment="Top">

@@ -20,8 +20,8 @@ public enum StudioProjectKind
     /// <summary>A server-rendered site (Laravel): the Studio opens it where it already runs (APP_URL, Laragon,
     /// php artisan serve, or the live site) — nothing is started, and its pages are read from routes/web.php.</summary>
     Server,
-    /// <summary>A native app (Flutter): it can't run in the Studio's browser, so its screens are simulated from the
-    /// source — wireframes read from each screen's widget tree, click a block to open its line.</summary>
+    /// <summary>A native app (Flutter, WPF): it can't run in the Studio's browser, so its screens are simulated from
+    /// the source — wireframes read from each screen's widget tree or XAML, click a block to open its line.</summary>
     Simulated,
 }
 
@@ -85,13 +85,15 @@ public static class StudioProject
                 ? new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Simulated, Framework = "flutter" }
                 : new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Unsupported, Framework = "dart", UnsupportedReason = "studio.unsupported.none" };
 
+        // A WPF app (a .csproj with UseWPF here, in the solution here, or one folder down): its windows can't run in
+        // the Studio's browser, so its views are simulated from their XAML like Flutter screens. Before the HTML
+        // check: a stray docs/index.html in the repository is not the app.
+        if (Sketch.WpfProject.IsWpf(root))
+            return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Simulated, Framework = "wpf" };
+
         string? entry = FindEntryHtml(root);
         if (entry != null)
             return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Static, Framework = "html", EntryHtml = entry, LocatorInstalled = true };
-
-        bool wpf = Directory.EnumerateFiles(root, "*.csproj", SearchOption.TopDirectoryOnly).Any(p => SafeRead(p).Contains("<UseWPF>true", StringComparison.OrdinalIgnoreCase));
-        if (wpf)
-            return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Unsupported, Framework = "wpf", UnsupportedReason = "studio.unsupported.wpf" };
 
         return new StudioProjectInfo { Root = root, Kind = StudioProjectKind.Unsupported, Framework = "", UnsupportedReason = "studio.unsupported.none" };
     }

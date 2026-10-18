@@ -315,7 +315,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         LastLogLine = "";
         foreach (var name in new[] { nameof(HasProject), nameof(NoProject), nameof(ProjectName), nameof(ProjectPath), nameof(ProjectKindText),
                      nameof(IsUnsupported), nameof(UnsupportedText), nameof(ShowLocatorBanner), nameof(ShowApproxBanner), nameof(ShowStartButton), nameof(CanUndo),
-                     nameof(IsSimulated), nameof(IsServerSite), nameof(IsLiveView) })
+                     nameof(IsSimulated), nameof(IsDesktopApp), nameof(IsServerSite), nameof(IsLiveView) })
             OnPropertyChanged(name);
     }
 

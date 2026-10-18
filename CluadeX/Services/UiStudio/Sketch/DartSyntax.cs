@@ -5,8 +5,9 @@ namespace CluadeX.Services.UiStudio.Sketch;
 internal enum DTok { Ident, Str, Num, Punct, End }
 
 /// <summary>A Dart token. For a string: <see cref="Text"/> is its value with every interpolation shown as "…"
-/// (and <see cref="Interp"/> holds the interpolated names, "$title" → "title").</summary>
-internal readonly record struct DToken(DTok Kind, string Text, int Pos, string? Interp = null);
+/// (and <see cref="Interp"/> holds the interpolated names, "$title" → "title").
+/// <see cref="End"/> is the character just past the token in the source (for a string: past its closing quote).</summary>
+internal readonly record struct DToken(DTok Kind, string Text, int Pos, string? Interp = null, int End = 0);
 
 /// <summary>
 /// Reads Dart source into tokens: identifiers, numbers, punctuation and strings (single, double, triple-quoted,
@@ -47,7 +48,7 @@ internal static class DartLexer
                 bool raw = c == 'r';
                 if (raw) i++;
                 var (text, interp, end) = ReadString(s, i, raw);
-                list.Add(new DToken(DTok.Str, text, start, interp));
+                list.Add(new DToken(DTok.Str, text, start, interp, end));
                 i = end;
                 continue;
             }
@@ -55,7 +56,7 @@ internal static class DartLexer
             {
                 int start = i;
                 while (i < n && (char.IsLetterOrDigit(s[i]) || s[i] is '_' or '$')) i++;
-                list.Add(new DToken(DTok.Ident, s[start..i], start));
+                list.Add(new DToken(DTok.Ident, s[start..i], start, null, i));
                 continue;
             }
             if (char.IsDigit(c) || c == '.' && i + 1 < n && char.IsDigit(s[i + 1]))
@@ -67,17 +68,17 @@ internal static class DartLexer
                     while (i < n && (char.IsDigit(s[i]) || s[i] == '.' && i + 1 < n && char.IsDigit(s[i + 1]))) i++;
                     if (i < n && s[i] is 'e' or 'E') { i++; if (i < n && s[i] is '+' or '-') i++; while (i < n && char.IsDigit(s[i])) i++; }
                 }
-                list.Add(new DToken(DTok.Num, s[start..i], start));
+                list.Add(new DToken(DTok.Num, s[start..i], start, null, i));
                 continue;
             }
             string? op = null;
             foreach (var o in Ops)
                 if (string.CompareOrdinal(s, i, o, 0, o.Length) == 0) { op = o; break; }
             op ??= c.ToString();
-            list.Add(new DToken(DTok.Punct, op, i));
+            list.Add(new DToken(DTok.Punct, op, i, null, i + op.Length));
             i += op.Length;
         }
-        list.Add(new DToken(DTok.End, "", n));
+        list.Add(new DToken(DTok.End, "", n, null, n));
         return list;
     }
 

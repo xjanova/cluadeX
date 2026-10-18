@@ -2534,64 +2534,12 @@
                 BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0"
                 Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}">
             <Grid>
+                <!-- Row 0 held the project's files; they live in the left sidebar under the chats now (ProjectFilesPanel). -->
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="0"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-
-                <!-- Files -->
-                <Grid Margin="0,8,0,0">
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                    <Grid Margin="14,0,6,4">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <TextBlock Text="{services:Loc chat.side.files}" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"
-                                   VerticalAlignment="Center"/>
-                        <Button Grid.Column="1" Style="{StaticResource IconButton}" Width="26" Height="26" Click="SideTreeRefresh_Click"
-                                ToolTip="{services:Loc chat.side.refreshTip}">
-                            <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
-                        </Button>
-                        <Button Grid.Column="2" Style="{StaticResource IconButton}" Width="26" Height="26" Click="SidePanelHide_Click"
-                                ToolTip="{services:Loc chat.side.hideTip}">
-                            <TextBlock Text="&#xE89F;" FontFamily="Segoe MDL2 Assets" FontSize="11"/>
-                        </Button>
-                    </Grid>
-                    <TreeView Grid.Row="1" x:Name="ProjectTreeView" ItemsSource="{Binding ProjectTree}" Background="Transparent" BorderThickness="0"
-                              Padding="6,0,6,6" MouseDoubleClick="ProjectTree_DoubleClick"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                        <TreeView.ItemContainerStyle>
-                            <Style TargetType="TreeViewItem">
-                                <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
-                                <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
-                                <Setter Property="Padding" Value="1,1"/>
-                            </Style>
-                        </TreeView.ItemContainerStyle>
-                        <TreeView.ItemTemplate>
-                            <HierarchicalDataTemplate ItemsSource="{Binding Children}">
-                                <StackPanel Orientation="Horizontal" ToolTip="{Binding FullPath}">
-                                    <TextBlock Text="{Binding Glyph}" FontFamily="Segoe MDL2 Assets" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground" Value="{DynamicResource Text.Muted}"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding Name}" FontSize="12" Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </HierarchicalDataTemplate>
-                        </TreeView.ItemTemplate>
-                    </TreeView>
-                    <StackPanel Grid.Row="1" Margin="14,4" Visibility="{Binding HasProject, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
-                        <TextBlock Text="{services:Loc chat.side.noProjectChat}" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Text.Muted}"/>
-                        <Button Content="{services:Loc chat.side.openFolder}" Command="{Binding OpenFolderCommand}" HorizontalAlignment="Left"
-                                Style="{StaticResource SecondaryButton}" Padding="10,4" Margin="0,8,0,0"/>
-                    </StackPanel>
-                </Grid>
 
                 <!-- The last image the agent looked at (a game screenshot, a page it opened) -->
                 <Border Grid.Row="1" BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="14,8,14,10"
@@ -2632,6 +2580,11 @@
             </Grid>
         </Border>
         <!-- Drag the panel's left edge to resize it (remembered); double-click puts it back to 300. -->
+        <!-- Stacked under the composer (a narrow or portrait window): drag the panel's TOP edge to share the height
+             between the conversation and the files (remembered). Shown only while stacked (ChatView.xaml.cs). -->
+        <views:ResizeGrip x:Name="SidePanelHeightGrip" Vertical="True" VerticalAlignment="Top" OnLeftEdge="True"
+                          Key="chat.sidePanel.height" MinSize="120" MaxSize="900"
+                          Target="{Binding ElementName=SidePanel}" Visibility="Collapsed"/>
         <views:ResizeGrip x:Name="SidePanelGrip" HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
                           Target="{Binding ElementName=SidePanel}"
                           Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}"/>

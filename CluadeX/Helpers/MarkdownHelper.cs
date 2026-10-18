@@ -38,6 +38,9 @@ public static class MarkdownHelper
     private const string MainFontKey = "Font.Ui";
     private const string MonoFontKey = "Font.Mono";
 
+    /// <summary>Inline code longer than this is set as a breakable run instead of an unbreakable chip.</summary>
+    private const int LongInlineCode = 32;
+
     /// <summary>Point a property of an element built here at a theme token (follows theme switches by itself).</summary>
     private static T Tok<T>(T element, DependencyProperty property, string token) where T : DependencyObject
     {
@@ -395,7 +398,11 @@ public static class MarkdownHelper
         var stack = new StackPanel { Margin = new Thickness(8, 4, 0, 4) };
         for (int i = 0; i < items.Count; i++)
         {
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
+            // A Grid, not a horizontal StackPanel: a StackPanel measures its children at infinite width, so a list
+            // item never wrapped and ran off the edge of a narrow chat (owner 2026-10-18, after paragraphs were fixed).
+            var row = new Grid { Margin = new Thickness(0, 1, 0, 1) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.Children.Add(Fg(Font(new TextBlock
             {
                 Text = bulletFn(i),
@@ -410,6 +417,7 @@ public static class MarkdownHelper
                 FontSize = 13,
             }, mono: false), TextKey);
             ApplyInlineFormatting(tb, items[i]);
+            Grid.SetColumn(tb, 1);
             row.Children.Add(tb);
             stack.Children.Add(row);
         }
@@ -631,6 +639,15 @@ public static class MarkdownHelper
                 {
                     TextDecorations = TextDecorations.Strikethrough,
                 }, MutedKey));
+            }
+            else if (m.Groups[5].Success && m.Groups[5].Value.Length > LongInlineCode) // a long `path or command`
+            {
+                // A chip (a Border in an InlineUIContainer) is one unbreakable box: a long path in one ran off a narrow
+                // chat. A Run breaks with the line; it keeps the code font and tint, without the rounded corners.
+                var run = Fg(new Run(m.Groups[5].Value) { FontSize = 12 }, CodeKey);
+                Tok(run, TextElement.FontFamilyProperty, MonoFontKey);
+                Tok(run, TextElement.BackgroundProperty, CodeBgKey);
+                tb.Inlines.Add(run);
             }
             else if (m.Groups[5].Success) // `inline code`
             {

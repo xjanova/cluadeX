@@ -1276,6 +1276,81 @@ internal static partial class Program
 
     static async Task TestContextWindow()
     {
+        // A narrow chat: a list item and a long inline path used to keep their one-line width and run off the edge
+        // (list rows were horizontal StackPanels, a long `code` an unbreakable chip) — owner 2026-10-18.
+        Log("\n## MD — markdown in a 300 px chat wraps lists and long inline code instead of overflowing");
+        {
+            var md = new StackPanel();
+            CluadeX.Helpers.MarkdownHelper.SetMarkdown(md,
+                "1. **ส่งขึ้นได้ทางเดียว:** vault ซิงก์จากเครื่องขึ้นคลาวด์ได้อย่างเดียว และส่งเฉพาะโฟลเดอร์ที่ติ๊กไว้ โน้ตเขียนไว้ตรง ๆ ว่าไม่มีทางกลับ\n"
+                + "2. ไฟล์อยู่ที่ `C:\\brainx\\cloud\\<acct>\\vault\\notes\\a\\very\\long\\path` ของ serverbrain\n\n"
+                + "- ข้อย่อยแบบจุด ที่ยาวพอจะต้องขึ้นบรรทัดใหม่ในจอแคบ ๆ แน่นอน ไม่อย่างนั้นจะโดนขอบจอบัง");
+            const double W = 300;
+            md.Measure(new Size(W, double.PositiveInfinity));
+            md.Arrange(new Rect(0, 0, W, md.DesiredSize.Height));
+            var blocks = new List<TextBlock>();
+            void Walk(DependencyObject d)
+            {
+                if (d is TextBlock t) blocks.Add(t);
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(d); i++) Walk(VisualTreeHelper.GetChild(d, i));
+            }
+            Walk(md);
+            var widest = blocks.Count == 0 ? 0 : blocks.Max(b => b.TransformToAncestor(md).TransformBounds(new Rect(b.RenderSize)).Right);
+            Check("MD list items and a long inline path stay inside the chat's width", blocks.Count > 0 && widest <= W + 0.5,
+                $"widest right edge {widest:F0} px of {W}");
+            static string TextOf(TextBlock b) =>
+                new System.Windows.Documents.TextRange(b.ContentStart, b.ContentEnd).Text;
+            var item = blocks.FirstOrDefault(b => TextOf(b).Contains("ทางเดียว"));
+            Check("MD a long list item breaks onto more lines", item != null && item.ActualHeight > item.FontSize * 2.5,
+                $"height {item?.ActualHeight:F0}");
+        }
+
+        // Claude Dev signed out: the chat used to show the CLI's raw "Not logged in · Please run /login" twice and nothing
+        // else (owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย").
+        Log("\n## AU — a signed-out Claude Dev says how to fix it");
+        {
+            const string raw = "Not logged in · Please run /login";
+            string? help = ClaudeDevProvider.AuthGuidance(raw, "{\n  \"loggedIn\": false,\n  \"authMethod\": \"none\"\n}");
+            Check("AU 'Not logged in' is recognised as a login refusal", ClaudeDevProvider.LooksLikeAuthRefusal(raw));
+            Check("AU the guidance gives the steps: /login here, or the terminal command, then Retry",
+                help != null && help.Contains("/login") && help.Contains("claude auth login") && help.Contains("ลองใหม่"), help ?? "(null)");
+            Check("AU it keeps the CLI's own words so nothing is hidden", help?.Contains(raw) == true);
+            string? noStatus = ClaudeDevProvider.AuthGuidance(raw, null);
+            Check("AU without `auth status` it still guides to sign in", noStatus?.Contains("claude auth login") == true);
+            string? billing = ClaudeDevProvider.AuthGuidance("Credit balance is too low",
+                "{ \"loggedIn\": true, \"subscriptionType\": null }");
+            Check("AU signed in without a subscription → log out and in again with the Claude plan",
+                billing?.Contains("subscription") == true && billing.Contains("claude auth logout"), billing ?? "(null)");
+            Check("AU an ordinary answer is not treated as a refusal",
+                ClaudeDevProvider.AuthGuidance("Here is the refactored function.", null) == null);
+        }
+
+        // "cluadex ต้องเปิดแชทใหม่ โปรเจคใหม่ได้ตามคำสั่ง" (owner 2026-10-18): the agent said it had no way to open a chat.
+        Log("\n## NC — the agent can open a new chat, in this project or another");
+        {
+            var mod = new CluadeX.Services.Tools.ProjectToolModule();
+            Check("NC new_chat (and its aliases) is one of the agent's tools",
+                mod.ResolveToolType("new_chat") == ToolType.NewChat && mod.ResolveToolType("start_chat") == ToolType.NewChat
+                && mod.GetToolSchemas().Any(s => s.Name == "new_chat"));
+            string? opened = null;
+            var keep = CluadeX.Services.Tools.ProjectToolModule.NewChatHandler;
+            CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = (p, m, t) => { opened = $"{p}|{m}|{t}"; return Task.FromResult("ok"); };
+            try
+            {
+                string dir = Path.GetTempPath().TrimEnd('\\');
+                var call = new ToolCall { ToolName = "new_chat", Type = ToolType.NewChat };
+                call.Arguments["path"] = dir; call.Arguments["message"] = "fix the build"; call.Arguments["title"] = "Build";
+                var r = await mod.ExecuteAsync(call, new CluadeX.Services.Tools.ToolModuleContext(), CancellationToken.None);
+                Check("NC it opens the chat in the folder given, with the first message and title", r.Success
+                    && opened == $"{Path.GetFullPath(dir).TrimEnd('\\')}|fix the build|Build", opened ?? r.Output);
+                var bad = new ToolCall { ToolName = "new_chat", Type = ToolType.NewChat };
+                bad.Arguments["path"] = @"Z:\no\such\folder\for\cluadex";
+                var rb = await mod.ExecuteAsync(bad, new CluadeX.Services.Tools.ToolModuleContext(), CancellationToken.None);
+                Check("NC a folder that does not exist is refused, nothing opened", !rb.Success);
+            }
+            finally { CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = keep; }
+        }
+
         Log("\n## L6 — the context meter uses the answering model's real window");
         Check("L6 Claude Opus 5.5 → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-opus-5-5", 12288) == 1_000_000);
         Check("L6 Claude Haiku 4.5 → 200K", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-haiku-4-5", 12288) == 200_000);

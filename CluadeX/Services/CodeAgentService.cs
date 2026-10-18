@@ -2001,7 +2001,49 @@ public partial class CodeAgentService
     /// One delegated turn to a complete agent (Claude Dev, the cowork room): a handoff brief when the chat already has
     /// work in it, Claude Dev's edit/run grant from the user's rules, the reply streamed into the chat.
     /// </summary>
+    /// <summary>How long a signed-out Claude Dev turn waits for the user to finish the browser sign-in.</summary>
+    private static readonly TimeSpan LoginWait = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// A delegated turn that heals a signed-out Claude Dev by itself (owner 2026-10-18: "ทำให้มันแก้ไขเองก่อนได้"):
+    /// 1. ask the CLI again — another Claude Code window may have renewed the token meanwhile → run the turn again;
+    /// 2. still signed out → open the sign-in (the browser opens on Anthropic's page; the one click there is the user's,
+    ///    it is their consent), wait for it while showing so, then run the same question again.
+    /// Once per turn: a second refusal ends with the step-by-step guidance. Stop cancels the wait.
+    /// </summary>
     private async Task<AgentLoopResult> RunDelegatedTurnAsync(Providers.IAiProvider provider, AiProviderType delegated,
+        List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
+    {
+        var result = await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
+        if (!result.AuthRefused || provider is not Providers.ClaudeDevProvider claudeDev) return result;
+
+        bool th = _localizationService.CurrentLanguage == "th";
+        bool loggedIn = await claudeDev.IsLoggedInAsync(ct);
+        if (!loggedIn)
+        {
+            if (!claudeDev.OpenLoginTerminal()) return result;
+            OnAgentStatus?.Invoke(th
+                ? "🔑 Claude Dev หลุดล็อกอิน — เปิดหน้าล็อกอินให้แล้ว กด Authorize ในเบราว์เซอร์ แล้วฉันจะทำต่อเอง…"
+                : "🔑 Claude Dev was signed out — opened the sign-in; press Authorize in the browser and I'll carry on…");
+            _debugLog?.Info("Agent", "Claude Dev signed out · opened the sign-in, waiting for it");
+            var until = DateTime.UtcNow + LoginWait;
+            while (!loggedIn && DateTime.UtcNow < until)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                loggedIn = await claudeDev.IsLoggedInAsync(ct);
+            }
+            if (!loggedIn)
+            {
+                _debugLog?.Info("Agent", "Claude Dev sign-in not finished in time · showing the steps");
+                return result;
+            }
+        }
+        OnAgentStatus?.Invoke(th ? "✅ ล็อกอินแล้ว — กำลังส่งคำถามเดิมอีกครั้ง…" : "✅ Signed in — asking again…");
+        _debugLog?.Info("Agent", "Claude Dev signed in · running the turn again");
+        return await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
+    }
+
+    private async Task<AgentLoopResult> RunDelegatedTurnCoreAsync(Providers.IAiProvider provider, AiProviderType delegated,
         List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
     {
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
@@ -2054,7 +2096,26 @@ public partial class CodeAgentService
             // (a limit hit mid-task) is said under it; a turn that produced nothing carries the provider's explanation.
             // A short closing remark after the real summary (a Stop hook's "saved to the brain") keeps the summary.
             string text = turn.Answer;
-            if (turn.ResultIsError && !string.IsNullOrWhiteSpace(turn.ResultText) && cdText.Length == 0)
+            // A login / billing refusal: the CLI also prints it as its "answer", so the raw "Not logged in · Please run
+            // /login" showed twice and the explanation never ran (it only runs when nothing was said). Say how to fix
+            // it instead — owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย".
+            string? authHelp = null;
+            if (turn.ResultIsError && Providers.ClaudeDevProvider.LooksLikeAuthRefusal(turn.ResultText)
+                && provider is Providers.ClaudeDevProvider claudeDev)
+            {
+                try { authHelp = await claudeDev.ExplainAuthFailureAsync(turn.ResultText, ct); }
+                catch (OperationCanceledException) { throw; }
+                catch { authHelp = null; }
+            }
+            if (authHelp != null)
+            {
+                bool answerIsTheRefusal = string.IsNullOrWhiteSpace(text)
+                    || string.Equals(text.Trim(), turn.ResultText!.Trim(), StringComparison.Ordinal);
+                text = answerIsTheRefusal ? authHelp : (text + "\n\n" + authHelp).Trim();
+                cdText.Clear();
+                cdResult.AuthRefused = true;
+            }
+            else if (turn.ResultIsError && !string.IsNullOrWhiteSpace(turn.ResultText) && cdText.Length == 0)
                 text = (text + "\n\n⚠ " + turn.ResultText.Trim()).Trim();
             if (cdText.Length > 0) text = (text + "\n\n" + cdText.ToString().Trim()).Trim();
             cdResult.FinalResponse = text;
@@ -2066,11 +2127,12 @@ public partial class CodeAgentService
             _debugLog?.Info("Agent", $"{delegated} worker turn done · steps={turn.Steps.Count} tools={cdResult.TotalToolCalls}"
                 + $" plan={turn.Plan.Count} error={turn.ResultIsError} textLen={text.Length}"
                 + (turn.CostUsd is { } usd ? $" · CLI-reported ${usd:0.000}" : ""));
-            SaveRunToBrain(userMessage, cdResult);
+            if (!cdResult.AuthRefused) SaveRunToBrain(userMessage, cdResult);   // a sign-in refusal is not a lesson
             return cdResult;
         }
         cdResult.FinalResponse = cdText.ToString().Trim();
-        cdResult.Success = cdResult.FinalResponse.Length > 0;
+        cdResult.AuthRefused = provider is Providers.ClaudeDevProvider { LastTurnAuthRefused: true };
+        cdResult.Success = cdResult.FinalResponse.Length > 0 && !cdResult.AuthRefused;
         cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
         cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
         _debugLog?.Info("Agent", $"{delegated} passthrough done · textLen={cdResult.FinalResponse.Length}");
@@ -5137,6 +5199,8 @@ public class AgentLoopResult
     public int TotalToolCalls => Steps.Sum(s => s.ToolCalls.Count);
     public int TurnCount { get; set; }
     public string StopReason { get; set; } = "end_turn"; // end_turn, max_iterations, max_tokens, error
+    /// <summary>Claude Dev refused for sign-in / billing (the CLI is logged out): the turn can heal and run again.</summary>
+    public bool AuthRefused { get; set; }
 }
 
 public class AgentResult
