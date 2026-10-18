@@ -1187,6 +1187,8 @@ public partial class ChatViewModel : ViewModelBase
             Danger = req.Reason,
         });
         Services.Safety.DangerApprovalPipe.StartServer();
+        // Claude Dev's open_project / new_chat / close_chat (CluadeX.exe --cx-tools) reach this chat page through here.
+        Services.Tools.ChatToolBridge.StartServer();
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;

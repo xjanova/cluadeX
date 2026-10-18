@@ -90,10 +90,74 @@ public class ClaudeDevProvider : IAiProvider
     /// (ClaudeDevStreamTurn). Before 2026-10-18 it was not allowed, so a Claude Dev chat never fanned out.</summary>
     private const string SubAgentTools = "Task,Agent";
 
-    /// <summary>The arguments for one call: read-only advice, or a worker that edits/runs as the grant allows.</summary>
-    public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort)
+    /// <summary>The brain's agent tools — the task queue, the agent inbox, handing a task to another agent, the cowork
+    /// room — on every turn (owner 2026-10-18: "เปิดเครื่องมือ agent ของ brainx"): a Claude Dev chat was refused
+    /// task_queue and could not hand work on. They post to the owner's own agent bus, nothing outside the machine;
+    /// agent_send (a direct message to any peer) is not among them.</summary>
+    private const string AgentTools =
+        "mcp__brainx-brain__task_queue,mcp__brainx-brain__task_handoff,mcp__brainx-brain__task_update," +
+        "mcp__brainx-brain__agent_inbox,mcp__brainx-brain__agent_peers,mcp__brainx-brain__agent_activity," +
+        "mcp__brainx-brain__cowork_join,mcp__brainx-brain__cowork_leave,mcp__brainx-brain__cowork_read," +
+        "mcp__brainx-brain__cowork_say,mcp__brainx-brain__cowork_task,mcp__brainx-brain__cowork_who";
+
+    /// <summary>Extra folders a turn may add with --add-dir.</summary>
+    public const int MaxAddDirs = 16;
+
+    /// <summary>What a turn adds besides the grant: CluadeX's chat tools (the --mcp-config file of
+    /// Tools.ChatToolBridge, null = none) and the folders the user allowed beside the project (--add-dir).</summary>
+    public sealed record TurnExtras(string? ToolsConfig, IReadOnlyList<string> AddDirs);
+
+    /// <summary>The extras for the turn in flight (set by the agent loop around its one delegated call).</summary>
+    public static readonly AsyncLocal<TurnExtras?> Extras = new();
+
+    /// <summary>
+    /// The folders a turn gets with --add-dir: the related folders open beside the project in this chat, then the folders
+    /// the user answered "Always allow" for — each once, none inside the project or inside one already added, none that
+    /// is missing or a drive root / profile / system folder (<paramref name="unsafeRoot"/>), at most <see cref="MaxAddDirs"/>.
+    /// </summary>
+    public static List<string> ExtraDirs(string cwd, IEnumerable<string?> candidates, Func<string, bool> exists, Func<string, bool> unsafeRoot)
+    {
+        static string Norm(string p)
+        {
+            try { return Path.GetFullPath(p).TrimEnd('\\', '/'); } catch { return ""; }
+        }
+        static bool Inside(string root, string p) =>
+            p.Equals(root, StringComparison.OrdinalIgnoreCase) || p.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase);
+        string home = Norm(cwd);
+        var kept = new List<string>();
+        foreach (var raw in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            string p = Norm(raw.Trim().Trim('"'));
+            if (p.Length < 3 || p.EndsWith(':')) continue;   // "" or a bare drive
+            if (home.Length > 0 && Inside(home, p)) continue;
+            if (kept.Any(k => Inside(k, p))) continue;
+            if (!exists(p) || unsafeRoot(p)) continue;
+            kept.RemoveAll(k => Inside(p, k));               // a parent replaces the children added before it
+            kept.Add(p);
+            if (kept.Count >= MaxAddDirs) break;
+        }
+        return kept;
+    }
+
+    /// <summary>The arguments for one call: read-only advice, or a worker that edits/runs as the grant allows.
+    /// <paramref name="toolsConfig"/>: CluadeX's chat tools; <paramref name="addDirs"/>: allowed folders beside the project.</summary>
+    public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
+        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
+        addDirs ??= Array.Empty<string>();
+        bool chatTools = !string.IsNullOrWhiteSpace(toolsConfig);
+        string folders = addDirs.Count == 0 ? ""
+            : "The user also allowed these folders beside the project — work in them by absolute path: " + string.Join(", ", addDirs) + ". ";
+        string reach = (chatTools
+                ? "To work in another project, call mcp__cluadex__open_project (CluadeX asks the user) or start a chat there with " +
+                  "mcp__cluadex__new_chat; a new, independent request that arrives mid-task goes to its own chat with new_chat too, " +
+                  "and mcp__cluadex__close_chat lists the chats you split off and puts finished ones away. Never answer that you " +
+                  "cannot open a chat or a folder. "
+                : "") +
+            "Other agents on this machine: task_queue / agent_inbox show work waiting, task_handoff hands a task to another agent, " +
+            "cowork_* is the shared room (brainx-brain tools). ";
         string wrapper = worker
             ? "You are 'claude-dev', the coding agent of a CluadeX chat, working directly in the project. " +
               $"Project working directory: {cwd}. " +
@@ -102,13 +166,18 @@ public class ClaudeDevProvider : IAiProvider
               "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
               "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
               "and the user watches each one on the agent map. Keep a small task to yourself. " +
-              "Stay inside the project folder. Reply in the language the user writes in."
+              folders +
+              "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
+              reach +
+              "Reply in the language the user writes in."
             : "You are 'claude-dev', answering inside the CluadeX desktop app. " +
               $"Project working directory: {cwd}. " +
               "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
+              folders + reach +
               "Reply in the language the user writes in.";
 
-        string tools = AllowedTools;
+        string tools = AllowedTools + "," + AgentTools;
+        if (chatTools) tools += "," + string.Join(",", Tools.ChatToolBridge.QualifiedToolNames);
         if (grant is { Edit: true }) tools += "," + EditTools;
         if (grant is { Run: true }) tools += ",Bash";
         if (worker) tools += "," + SubAgentTools;
@@ -118,6 +187,11 @@ public class ClaudeDevProvider : IAiProvider
         var args = new StringBuilder(worker ? "-p --output-format stream-json --verbose" : "-p --output-format text");
         args.Append(" --append-system-prompt ").Append(Quote(wrapper));
         args.Append(" --allowedTools ").Append(Quote(tools));
+        // The chat tools' server joins the user's own MCP servers (the brain stays); --add-dir lets the CLI's file tools
+        // (and acceptEdits) work in each allowed folder as they do in the project. One flag per folder: both options take
+        // a list, and a list must never swallow the flag after it.
+        if (chatTools) args.Append(" --mcp-config ").Append(Quote(toolsConfig!));
+        foreach (var dir in addDirs) args.Append(" --add-dir ").Append(Quote(dir));
         if (grant is { Run: true }) args.Append(" --disallowedTools ").Append(Quote(NeverTools));
         if (grant is { Edit: true }) args.Append(" --permission-mode acceptEdits");
         // Every worker that may edit or run carries CluadeX's PreToolUse guard (Safety.GuardHook): the CLI's own Bash
@@ -338,7 +412,8 @@ public class ClaudeDevProvider : IAiProvider
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
-        string args = BuildArgs(cwd, grant, model, effort);
+        var extras = Extras.Value;
+        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, extras?.AddDirs);
 
         var psi = new ProcessStartInfo(_cliPath, args)
         {

@@ -138,11 +138,16 @@ public partial class CodeAgentService
         return schemas.Where(ordered.Contains).ToList();   // original order for the ones that stay
     }
 
-    /// <summary>A managed server's tool, or a Chrome tool reached through a bridge ("…__chrome__&lt;tool&gt;").</summary>
+    /// <summary>A managed server's tool, a Chrome tool reached through a bridge ("…__chrome__&lt;tool&gt;"), or one of the
+    /// brain's agent tools (task_queue, agent_inbox, task_handoff, cowork_*): an OpenAI / Gemini list of 128 used to cut
+    /// them — the brain alone has 128 tools — so an API chat could not see or hand on work (owner 2026-10-18).</summary>
     private static bool IsPriorityMcpTool(string qualifiedName, IReadOnlySet<string>? managedServers)
     {
         if (!IsMcpToolName(qualifiedName)) return false;
         if (managedServers is { Count: > 0 } && managedServers.Contains(McpServerOf(qualifiedName))) return true;
+        if (Services.Mcp.McpToolClassifier.TryParseQualified(qualifiedName, out var server, out var leaf)
+            && Services.Mcp.McpServerManager.LooksLikeBrain(server)
+            && Services.Mcp.McpToolClassifier.AgentToolLeaves.Contains(leaf)) return true;
         int start = "mcp__".Length;
         int afterServer = qualifiedName.IndexOf("__", start, StringComparison.Ordinal);
         return afterServer > start
@@ -2066,6 +2071,20 @@ public partial class CodeAgentService
         var cdText = new StringBuilder();
         // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
         var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
+        // CluadeX's chat tools for the CLI (open_project / new_chat / close_chat, run here through the same gate inside
+        // this chat's run) and the folders the user allowed beside the project.
+        using var chatTools = delegated == AiProviderType.ClaudeDev
+            ? Tools.ChatToolBridge.Register(AgentRunScope.Current, (call, c) => _agentToolService.ExecuteToolAsync(call, c), folder, ct)
+            : null;
+        if (delegated == AiProviderType.ClaudeDev)
+        {
+            var allowed = (AgentRunScope.Current?.ExtraFolders ?? Array.Empty<string>())
+                .Concat(_settingsService.Settings.AllowedProjectFolders ?? new List<string>());
+            var dirs = folder == null ? new List<string>()
+                : Providers.ClaudeDevProvider.ExtraDirs(folder, allowed, Directory.Exists, p => PermissionService.IsUnsafeAcceptEditsRoot(p));
+            Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs);
+            _debugLog?.Info("Agent", $"Claude Dev extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}");
+        }
         Providers.ClaudeDevProvider.Grant.Value = grant;
         Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
         try
@@ -2089,6 +2108,7 @@ public partial class CodeAgentService
         {
             Providers.ClaudeDevProvider.Grant.Value = null;
             Providers.ClaudeDevProvider.StreamSink.Value = null;
+            Providers.ClaudeDevProvider.Extras.Value = null;
         }
         if (turn != null)
         {
