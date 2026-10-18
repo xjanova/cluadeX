@@ -126,6 +126,8 @@ internal static class ChatKeys
         ["chat.perm.allowChat"] = new() { ["en"] = "Allow in this chat", ["th"] = "อนุญาตทั้งแชทนี้" },
         ["chat.perm.allowChat.tip"] = new() { ["en"] = "Let this tool run without asking again in this chat. Other chats and new chats still ask.", ["th"] = "ให้เครื่องมือนี้ทำงานต่อโดยไม่ถามอีกในแชทนี้ แชทอื่นและแชทใหม่ยังถามเหมือนเดิม" },
         ["chat.perm.allowedChat"] = new() { ["en"] = "✓ Allowed in this chat", ["th"] = "✓ อนุญาตทั้งแชทนี้แล้ว" },
+        ["chat.login.opened"] = new() { ["en"] = "Opened the Claude Code sign-in in a console window. Finish it in the browser that opens, then press Retry — no restart needed.", ["th"] = "เปิดหน้าต่างล็อกอิน Claude Code ให้แล้ว ยืนยันบัญชีในเบราว์เซอร์ที่เด้งขึ้นมา แล้วกลับมากด ลองใหม่ ได้เลย ไม่ต้องรีสตาร์ท" },
+        ["chat.login.failed"] = new() { ["en"] = "Couldn't open the sign-in window. Open a terminal and run: claude auth login --claudeai", ["th"] = "เปิดหน้าต่างล็อกอินไม่ได้ เปิดเทอร์มินัลแล้วรัน: claude auth login --claudeai" },
         ["chat.perm.allowAlways"] = new() { ["en"] = "Always allow this folder", ["th"] = "อนุญาตโฟลเดอร์นี้เสมอ" },
         ["chat.perm.allowAlways.tip"] = new() { ["en"] = "Remember it: the agent opens this folder (and the folders inside it) in every chat without asking again. Undo on the Permissions page.", ["th"] = "จำไว้: ทุกแชทเปิดโฟลเดอร์นี้ (และโฟลเดอร์ย่อย) ได้โดยไม่ถามอีก ยกเลิกได้ที่หน้า สิทธิ์การเข้าถึง" },
         ["chat.perm.allowedAlways"] = new() { ["en"] = "✓ Always allowed — not asked again", ["th"] = "✓ อนุญาตเสมอแล้ว — จะไม่ถามอีก" },

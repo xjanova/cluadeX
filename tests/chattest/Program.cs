@@ -1305,6 +1305,26 @@ internal static partial class Program
                 $"height {item?.ActualHeight:F0}");
         }
 
+        // Claude Dev signed out: the chat used to show the CLI's raw "Not logged in · Please run /login" twice and nothing
+        // else (owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย").
+        Log("\n## AU — a signed-out Claude Dev says how to fix it");
+        {
+            const string raw = "Not logged in · Please run /login";
+            string? help = ClaudeDevProvider.AuthGuidance(raw, "{\n  \"loggedIn\": false,\n  \"authMethod\": \"none\"\n}");
+            Check("AU 'Not logged in' is recognised as a login refusal", ClaudeDevProvider.LooksLikeAuthRefusal(raw));
+            Check("AU the guidance gives the steps: /login here, or the terminal command, then Retry",
+                help != null && help.Contains("/login") && help.Contains("claude auth login") && help.Contains("ลองใหม่"), help ?? "(null)");
+            Check("AU it keeps the CLI's own words so nothing is hidden", help?.Contains(raw) == true);
+            string? noStatus = ClaudeDevProvider.AuthGuidance(raw, null);
+            Check("AU without `auth status` it still guides to sign in", noStatus?.Contains("claude auth login") == true);
+            string? billing = ClaudeDevProvider.AuthGuidance("Credit balance is too low",
+                "{ \"loggedIn\": true, \"subscriptionType\": null }");
+            Check("AU signed in without a subscription → log out and in again with the Claude plan",
+                billing?.Contains("subscription") == true && billing.Contains("claude auth logout"), billing ?? "(null)");
+            Check("AU an ordinary answer is not treated as a refusal",
+                ClaudeDevProvider.AuthGuidance("Here is the refactored function.", null) == null);
+        }
+
         Log("\n## L6 — the context meter uses the answering model's real window");
         Check("L6 Claude Opus 5.5 → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-opus-5-5", 12288) == 1_000_000);
         Check("L6 Claude Haiku 4.5 → 200K", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-haiku-4-5", 12288) == 200_000);

@@ -317,6 +317,7 @@ public class ClaudeDevProvider : IAiProvider
         string? systemPrompt = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        LastTurnAuthRefused = false;
         if (_cliPath == null) await InitializeAsync(ct);
         if (_cliPath == null)
         {
@@ -431,6 +432,7 @@ public class ClaudeDevProvider : IAiProvider
                     // problem, and printing it raw sends the user hunting in the
                     // wrong place. The CLI can say exactly what is wrong; ask it.
                     string? explained = await ExplainAuthFailureAsync(lastLine ?? err, ct);
+                    LastTurnAuthRefused = explained != null;
                     yield return explained
                         ?? (string.IsNullOrWhiteSpace(err) && string.IsNullOrWhiteSpace(lastLine)
                             ? "(claude-dev returned no output)"
@@ -473,12 +475,78 @@ public class ClaudeDevProvider : IAiProvider
     }
 
     /// <summary>Refusals the CLI prints on stdout instead of stderr.</summary>
-    private static bool LooksLikeAuthRefusal(string line) =>
+    public static bool LooksLikeAuthRefusal(string? line) => line != null && (
         line.Contains("Credit balance", StringComparison.OrdinalIgnoreCase)
         || line.Contains("Invalid API key", StringComparison.OrdinalIgnoreCase)
         || line.Contains("authentication", StringComparison.OrdinalIgnoreCase)
         || line.Contains("not logged in", StringComparison.OrdinalIgnoreCase)
-        || line.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
+        || line.Contains("/login", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("OAuth token", StringComparison.OrdinalIgnoreCase)
+        || line.Contains("rate limit", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Open a console window running `claude auth login`: the user finishes the sign-in in their browser (CluadeX
+    /// never types a password). Owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย" — a chat that
+    /// says "Not logged in" now says how, and /login does it.
+    /// </summary>
+    public static bool OpenLoginTerminal(string? cliPath = null)
+    {
+        try
+        {
+            string cli = string.IsNullOrWhiteSpace(cliPath) ? "claude" : Quote(cliPath);
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/k {cli} auth login --claudeai")
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            });
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>The last ChatAsync ended in a sign-in / billing refusal (its text is the guidance): the agent loop heals it.</summary>
+    public bool LastTurnAuthRefused { get; private set; }
+
+    /// <summary>Open the login console with this provider's CLI.</summary>
+    public bool OpenLoginTerminal() => OpenLoginTerminal(_cliPath);
+
+    /// <summary>
+    /// What to tell the user about a refusal, given `claude auth status` (null when it could not be read). Pure, so the
+    /// harness checks the wording. Null = not an auth/billing refusal.
+    /// </summary>
+    public static string? AuthGuidance(string refusal, string? authStatusJson)
+    {
+        if (!LooksLikeAuthRefusal(refusal)) return null;
+        string raw = refusal.Trim();
+        bool known = !string.IsNullOrWhiteSpace(authStatusJson);
+        bool loggedIn = known && authStatusJson!.Contains("\"loggedIn\": true", StringComparison.OrdinalIgnoreCase);
+        bool noSubscription = known && authStatusJson!.Contains("\"subscriptionType\": null", StringComparison.OrdinalIgnoreCase);
+
+        if (loggedIn && noSubscription)
+            return "🔑 **Claude Dev เข้าถึง Anthropic ได้ แต่ถูกปฏิเสธเรื่องการเรียกเก็บเงิน**\n\n"
+                 + $"ข้อความจาก Claude Code: `{raw}`\n\n"
+                 + "`claude auth status` บอกว่า **ล็อกอินอยู่ แต่ไม่มี subscription ผูกไว้** — ทุก request จึงไปคิดเงินจาก "
+                 + "Anthropic Console credits (ซึ่งหมด) แทนแพ็กเกจ Claude ของคุณ\n\n"
+                 + "**วิธีแก้ (ครั้งเดียวจบ):**\n"
+                 + "1. พิมพ์ `/login` ในช่องแชทนี้ — CluadeX จะเปิดหน้าต่างล็อกอินให้ (หรือเปิดเทอร์มินัลแล้วรัน `claude auth logout` ตามด้วย `claude auth login --claudeai`)\n"
+                 + "2. ยืนยันบัญชีในเบราว์เซอร์ที่เด้งขึ้นมา เลือกบัญชีที่มีแพ็กเกจ Claude\n"
+                 + "3. กลับมากด **ลองใหม่** — ไม่ต้องรีสตาร์ท CluadeX";
+
+        if (known && loggedIn && !raw.Contains("log", StringComparison.OrdinalIgnoreCase))
+            return $"⚠ Claude Dev ถูกปฏิเสธ: `{raw}`\n\n"
+                 + "ล็อกอินยังใช้ได้อยู่ ถ้าเป็นเรื่องโควตาหรือ rate limit ให้รอสักครู่แล้วกด **ลองใหม่** "
+                 + "หรือเปลี่ยนไปใช้โมเดลอื่นในกล่องเลือกโมเดลชั่วคราว";
+
+        return "🔑 **Claude Dev ยังไม่ได้ล็อกอิน (หรือการล็อกอินหมดอายุ)**\n\n"
+             + $"ข้อความจาก Claude Code: `{raw}`\n\n"
+             + "Claude Dev ใช้บัญชีของ Claude Code CLI ในเครื่องนี้ การล็อกอินหลุดได้เมื่อ token หมดอายุแล้วต่ออายุไม่สำเร็จ "
+             + "— มักเกิดเมื่อเปิด Claude Code หลายหน้าต่างพร้อมกันจนแย่งกันต่ออายุ หรือหลังไฟล์ `~/.claude/.credentials.json` ถูกเขียนใหม่\n\n"
+             + "**วิธีแก้:**\n"
+             + "1. พิมพ์ `/login` ในช่องแชทนี้ — CluadeX จะเปิดหน้าต่างล็อกอินให้ (หรือเปิดเทอร์มินัลแล้วรัน `claude auth login --claudeai`)\n"
+             + "2. ยืนยันบัญชีในเบราว์เซอร์ที่เด้งขึ้นมา\n"
+             + "3. กลับมากด **ลองใหม่** — ไม่ต้องรีสตาร์ท CluadeX\n\n"
+             + "ระหว่างนี้ใช้ต่อได้ด้วยการเลือกโมเดลอื่นในกล่องเลือกโมเดล (เช่น Anthropic API ที่มี key หรือโมเดลในเครื่อง)";
+    }
 
     /// <summary>
     /// Turn an auth/billing refusal into the sentence that actually fixes it, by
@@ -490,47 +558,37 @@ public class ClaudeDevProvider : IAiProvider
     /// attached, so every request billed to Console credits that are at zero. The raw
     /// message sends you looking for a billing page; the real fix is one re-login.
     /// </summary>
-    private async Task<string?> ExplainAuthFailureAsync(string? refusal, CancellationToken ct)
+    public async Task<string?> ExplainAuthFailureAsync(string? refusal, CancellationToken ct)
     {
-        if (_cliPath == null || string.IsNullOrWhiteSpace(refusal)) return null;
-        if (!LooksLikeAuthRefusal(refusal)) return null;
+        if (string.IsNullOrWhiteSpace(refusal) || !LooksLikeAuthRefusal(refusal)) return null;
+        return AuthGuidance(refusal, await ReadAuthStatusAsync(ct));
+    }
+
+    /// <summary>`claude auth status` as the CLI prints it (JSON), or null when the CLI could not be asked.</summary>
+    public async Task<string?> ReadAuthStatusAsync(CancellationToken ct)
+    {
+        await InitializeAsync(ct);
+        if (_cliPath == null) return null;
         try
         {
             var psi = new ProcessStartInfo(_cliPath, "auth status")
             {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+                UseShellExecute = false, CreateNoWindow = true, StandardOutputEncoding = Encoding.UTF8,
             };
             using var p = Process.Start(psi);
             if (p == null) return null;
             string json = await p.StandardOutput.ReadToEndAsync(ct);
             await p.WaitForExitAsync(ct);
-
-            bool loggedIn = json.Contains("\"loggedIn\": true", StringComparison.OrdinalIgnoreCase);
-            bool noSubscription = json.Contains("\"subscriptionType\": null", StringComparison.OrdinalIgnoreCase);
-
-            if (loggedIn && noSubscription)
-                return "claude-dev เข้าถึง Anthropic ได้แล้ว แต่ถูกปฏิเสธเรื่องการเรียกเก็บเงิน:\n"
-                     + $"  {refusal.Trim()}\n\n"
-                     + "`claude auth status` บอกว่า **loggedIn: true แต่ subscriptionType: null** — "
-                     + "แปลว่า login ค้างอยู่บน token ที่ไม่มี subscription ผูกไว้ ทุก request จึงไปเรียกเก็บที่ "
-                     + "Anthropic Console credits ซึ่งเป็นศูนย์ ไม่ใช่ที่ Claude subscription ของคุณ\n\n"
-                     + "แก้ครั้งเดียวจบ (ต้องทำในเทอร์มินัลเพราะเป็นการ login):\n"
-                     + "  claude auth logout\n"
-                     + "  claude auth login --claudeai\n\n"
-                     + "เสร็จแล้ว claude-dev ใช้ได้ทันทีโดยไม่ต้องใช้ API key.";
-
-            if (!loggedIn)
-                return "claude-dev ยังไม่ได้ login เข้า Anthropic\n\n"
-                     + "รันในเทอร์มินัล:  claude auth login --claudeai";
-
-            return $"claude-dev ถูกปฏิเสธ: {refusal.Trim()}\n\n`claude auth status`:\n{json.Trim()}";
+            return json;
         }
+        catch (OperationCanceledException) { throw; }
         catch { return null; }
     }
+
+    /// <summary>The CLI says it is signed in right now.</summary>
+    public async Task<bool> IsLoggedInAsync(CancellationToken ct) =>
+        (await ReadAuthStatusAsync(ct))?.Contains("\"loggedIn\": true", StringComparison.OrdinalIgnoreCase) == true;
 
     private static async Task<string?> ReadLineOrNullAsync(StreamReader reader, CancellationToken ct)
     {
