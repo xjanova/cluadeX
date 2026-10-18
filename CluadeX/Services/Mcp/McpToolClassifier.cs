@@ -35,6 +35,21 @@ public static class McpToolClassifier
         "brain_create_note", "brain_append_note", "brain_remember", "brain_mark_verified", "brain_synthesize",
     };
 
+    /// <summary>BrainX's agent coordination: handing a task to another agent, updating it, the cowork room. They post
+    /// to the owner's own agent bus on this machine (owner 2026-10-18: "เปิดเครื่องมือ agent ของ brainx" — every call
+    /// asked). agent_send (a direct message to any peer) and the remote tools (ssh_run) still ask.</summary>
+    public static readonly HashSet<string> AgentBusTools = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "task_handoff", "task_update", "cowork_join", "cowork_leave", "cowork_say", "cowork_task",
+    };
+
+    /// <summary>The agent tools a capped tool list keeps ahead of the brain's other tools (the readers and the bus).</summary>
+    public static readonly HashSet<string> AgentToolLeaves = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "task_queue", "task_handoff", "task_update", "agent_inbox", "agent_peers", "agent_activity",
+        "cowork_join", "cowork_leave", "cowork_read", "cowork_say", "cowork_task", "cowork_who",
+    };
+
     /// <summary>A bridged editor/browser tool that only looks (unity__find_gameobjects, roblox__script_read): the verb
     /// must be a whole word — "finder_launch" or "getter_x" is not a lookup.</summary>
     private static readonly Regex ReadVerb = new(
@@ -77,6 +92,7 @@ public static class McpToolClassifier
         if (serverName != null && !McpServerManager.LooksLikeBrain(serverName)) return AgentToolService.McpRisk.Risky;
         if (ReadOnlyTools.Contains(leaf)) return AgentToolService.McpRisk.Read;
         if (MemoryWriteTools.Contains(leaf)) return AgentToolService.McpRisk.MemoryWrite;
+        if (AgentBusTools.Contains(leaf)) return AgentToolService.McpRisk.AgentBus;
         // Editor/browser bridges (unity__, unreal__, roblox__, chrome__): looking is free, changing it asks.
         int sep = leaf.LastIndexOf("__", StringComparison.Ordinal);
         if (sep > 0 && sep + 2 < leaf.Length)

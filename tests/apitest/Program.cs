@@ -497,6 +497,11 @@ internal static class Program
             $"kept={capped.Count} dropped={droppedTools}");
         Check("cap", "brain recall tools survive the cut", capped.Any(t => t.Name.EndsWith("__brain_search")) && capped.Any(t => t.Name.EndsWith("__brain_get_note")), "");
         Check("cap", "original order kept", capped.Select(t => many.IndexOf(t)).SequenceEqual(capped.Select(t => many.IndexOf(t)).OrderBy(i => i)), "");
+        // Owner 2026-10-18: the brain's agent tools must survive an OpenAI / Gemini cut (the brain alone has 128 tools).
+        var withAgents = many.Concat(new[] { "task_queue", "agent_inbox", "task_handoff", "cowork_say" }.Select(n => new ToolSchema { Name = $"mcp__brainx-brain__{n}", InputSchema = emptySchema })).ToList();
+        var cappedAgents = CodeAgentService.CapToolSchemas(withAgents, 128, out _);
+        Check("cap", "task_queue / agent_inbox / task_handoff / cowork_say survive the cut", new[] { "task_queue", "agent_inbox", "task_handoff", "cowork_say" }.All(n => cappedAgents.Any(t => t.Name.EndsWith("__" + n))) && cappedAgents.Count == 128, $"kept={cappedAgents.Count}");
+        Check("cap", "a third-party server's task_queue gets no priority", !CodeAgentService.CapToolSchemas(many.Concat(new[] { new ToolSchema { Name = "mcp__other__task_queue", InputSchema = emptySchema } }).ToList(), 128, out _).Any(t => t.Name == "mcp__other__task_queue"), "");
 
         Section("offline · MCP tool risk (what may run without asking)");
         foreach (var (tool, want) in new (string, AgentToolService.McpRisk)[]
@@ -504,7 +509,7 @@ internal static class Program
             ("brain_search", AgentToolService.McpRisk.Read), ("brain_get_note", AgentToolService.McpRisk.Read),
             ("brain_create_note", AgentToolService.McpRisk.MemoryWrite), ("brain_remember", AgentToolService.McpRisk.MemoryWrite),
             ("ssh_run", AgentToolService.McpRisk.Risky), ("agent_send", AgentToolService.McpRisk.Risky),
-            ("task_handoff", AgentToolService.McpRisk.Risky), ("brain_apply_audit_fix", AgentToolService.McpRisk.Risky),
+            ("task_handoff", AgentToolService.McpRisk.AgentBus), ("cowork_say", AgentToolService.McpRisk.AgentBus), ("cowork_join", AgentToolService.McpRisk.AgentBus), ("task_queue", AgentToolService.McpRisk.Read), ("brain_apply_audit_fix", AgentToolService.McpRisk.Risky),
             ("unity__execute_code", AgentToolService.McpRisk.Risky), ("roblox__execute_luau", AgentToolService.McpRisk.Risky),
             ("unity__find_gameobjects", AgentToolService.McpRisk.Read), ("roblox__script_read", AgentToolService.McpRisk.Read),
             ("some_unknown_tool", AgentToolService.McpRisk.Risky),

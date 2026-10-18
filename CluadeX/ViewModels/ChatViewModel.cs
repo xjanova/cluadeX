@@ -1187,6 +1187,8 @@ public partial class ChatViewModel : ViewModelBase
             Danger = req.Reason,
         });
         Services.Safety.DangerApprovalPipe.StartServer();
+        // Claude Dev's open_project / new_chat / close_chat (CluadeX.exe --cx-tools) reach this chat page through here.
+        Services.Tools.ChatToolBridge.StartServer();
 
         // Update context info when messages change
         Messages.CollectionChanged += OnMessagesChanged;
@@ -2192,6 +2194,22 @@ public partial class ChatViewModel : ViewModelBase
     private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null)
     {
         parentId ??= CurrentSession?.Id;
+        // A ceiling on agent splits: each one starts a run that may split again (SplitLimits). Thrown = the tool fails
+        // with the reason, so the agent does the work itself instead of breeding chats.
+        if (parentId != null && ChatLinkStore.Current is { } store)
+        {
+            bool Working(string id) => Sessions.FirstOrDefault(s => s.Id == id) is { } s && RunOf(s) != null;
+            string? refusal = SplitLimits.Refusal(
+                store.DepthOf(parentId),
+                store.ChildrenOf(parentId).Count(k => k.Link.ArchivedAt == null && Working(k.Id)),
+                Sessions.Count(s => store.Get(s.Id) != null && RunOf(s) != null),
+                store.CreatedSince(DateTime.Now - SplitLimits.Window));
+            if (refusal != null)
+            {
+                _debugLog?.Info("Chat", $"new_chat refused · parent={parentId} · {refusal}");
+                throw new InvalidOperationException(refusal);
+            }
+        }
         string? from = Sessions.FirstOrDefault(s => s.Id == parentId)?.Title ?? CurrentSession?.Title;
         if (path != null && !string.Equals(path, _fileSystemService.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
             ApplyWorkingDirectory(path, announce: false, showEditor: false);

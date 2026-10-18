@@ -134,14 +134,18 @@ public static class GuardHook
     /// The settings file handed to every Claude Dev run that may run commands or edit files: one PreToolUse hook,
     /// this exe in guard mode. Rewritten on each call (cheap) so a moved or updated CluadeX is always the one called.
     /// </summary>
+    /// <summary>The CluadeX.exe that sits next to this code — not whatever process happens to call (a test harness).</summary>
+    public static string ExePath()
+    {
+        string here = Path.GetDirectoryName(typeof(GuardHook).Assembly.Location) ?? AppContext.BaseDirectory;
+        return File.Exists(Path.Combine(here, "CluadeX.exe")) ? Path.Combine(here, "CluadeX.exe")
+            : Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
+    }
+
     public static string SettingsFile()
     {
-        // The CluadeX.exe that sits next to this code — not whatever process happens to call (a test harness), and one
-        // file per install (the installed app and a portable copy must not point each other's runs at the wrong exe).
-        string here = Path.GetDirectoryName(typeof(GuardHook).Assembly.Location) ?? AppContext.BaseDirectory;
-        string exeFull = File.Exists(Path.Combine(here, "CluadeX.exe")) ? Path.Combine(here, "CluadeX.exe")
-            : Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
-        string exe = exeFull.Replace('\\', '/');
+        // One file per install (the installed app and a portable copy must not point each other's runs at the wrong exe).
+        string exe = ExePath().Replace('\\', '/');
         var settings = new
         {
             hooks = new

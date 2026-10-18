@@ -24,6 +24,12 @@ public static class Program
             Environment.Exit(Services.Safety.GuardHook.Run());
             return;
         }
+        // CluadeX's chat tools (open_project / new_chat / close_chat) as an MCP server for a Claude Dev run — headless too.
+        if (args.Length > 0 && args[0] == Services.Tools.ChatToolBridge.Flag)
+        {
+            Environment.Exit(Services.Tools.ChatToolBridge.RunStdioServer());
+            return;
+        }
 
         try { Velopack.VelopackApp.Build().Run(); }
         catch (Exception ex) { Debug.WriteLine($"Velopack init: {ex.Message}"); }

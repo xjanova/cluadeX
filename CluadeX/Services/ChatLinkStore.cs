@@ -102,6 +102,20 @@ public sealed class ChatLinkStore
         return true;
     }
 
+    /// <summary>How many splits up <paramref name="chatId"/> is from a chat nobody split off (0 = a top chat).</summary>
+    public int DepthOf(string? chatId)
+    {
+        int depth = 0;
+        for (string? up = Get(chatId)?.ParentId; up != null && depth < 64; up = Get(up)?.ParentId) depth++;
+        return depth;
+    }
+
+    /// <summary>Split chats opened at or after <paramref name="since"/> (local time, as <see cref="ChatLink.CreatedAt"/>).</summary>
+    public int CreatedSince(DateTime since)
+    {
+        lock (_gate) return _links.Values.Count(l => l.CreatedAt >= since);
+    }
+
     /// <summary>The chats split off <paramref name="parentId"/>, oldest first.</summary>
     public List<(string Id, ChatLink Link)> ChildrenOf(string parentId)
     {
@@ -122,5 +136,42 @@ public sealed class ChatLinkStore
             changed = gone.Count > 0;
         }
         if (changed) Save();
+    }
+}
+
+/// <summary>
+/// How far an agent may split work into new chats (new_chat). Each split chat starts its own agent run — for Claude Dev
+/// a CLI process and its tool servers — and may split again, so without a ceiling one request can breed chats without
+/// end (owner 2026-10-18: "ระวัง … ผลิตออกมาไม่หยุด"). Only agent-opened chats count; the user opens as many as they like.
+/// </summary>
+public static class SplitLimits
+{
+    /// <summary>A split chat may split once more; a chat that deep may not.</summary>
+    public const int MaxDepth = 2;
+    /// <summary>Split chats of one chat still working at once.</summary>
+    public const int MaxWorkingPerParent = 4;
+    /// <summary>Split chats working at once in the whole app.</summary>
+    public const int MaxWorkingTotal = 6;
+    /// <summary>Split chats opened in <see cref="Window"/>, all chats together.</summary>
+    public const int MaxPerWindow = 8;
+    public static readonly TimeSpan Window = TimeSpan.FromMinutes(10);
+
+    /// <summary>Why a new split chat may not open now (what the agent is told), or null when it may.
+    /// <paramref name="parentDepth"/>: how deep the asking chat already is (ChatLinkStore.DepthOf).</summary>
+    public static string? Refusal(int parentDepth, int workingUnderParent, int workingTotal, int openedInWindow)
+    {
+        if (parentDepth + 1 > MaxDepth)
+            return $"This chat is already a split of a split (depth {parentDepth}): it may not open more chats. "
+                 + "Do the work here, or say in your reply what should be split and let the user decide.";
+        if (workingUnderParent >= MaxWorkingPerParent)
+            return $"{workingUnderParent} chats split off this one are still working (at most {MaxWorkingPerParent} at once). "
+                 + "Wait for one to finish (close_chat lists them), or do this part here.";
+        if (workingTotal >= MaxWorkingTotal)
+            return $"{workingTotal} split chats are working in CluadeX right now (at most {MaxWorkingTotal} at once). "
+                 + "Do this part here, or wait until some finish.";
+        if (openedInWindow >= MaxPerWindow)
+            return $"{openedInWindow} split chats were opened in the last {Window.TotalMinutes:0} minutes (at most {MaxPerWindow}). "
+                 + "Do this part here; do not retry new_chat in a loop.";
+        return null;
     }
 }

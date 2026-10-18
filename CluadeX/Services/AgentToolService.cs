@@ -1876,7 +1876,9 @@ public class AgentToolService : IDisposable
     // Tool Implementations
     // ════════════════════════════════════════════
 
-    public enum McpRisk { Read, MemoryWrite, Risky }
+    /// <summary>Read and MemoryWrite and AgentBus (BrainX's task queue / cowork room, McpToolClassifier.AgentBusTools)
+    /// run without asking; Risky asks.</summary>
+    public enum McpRisk { Read, MemoryWrite, Risky, AgentBus }
 
     /// <summary>How much an MCP tool can do, by its leaf name (a qualified name is reduced to its leaf). Unknown
     /// tools are Risky: they ask. The rule itself lives in <see cref="McpToolClassifier.ClassifyLeaf"/>.</summary>

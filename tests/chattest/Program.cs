@@ -1417,6 +1417,36 @@ internal static partial class Program
             string none = (string)close.Invoke(vm, new object[] { a.Id, "done" })!;
             Check("SC close_chat from a chat that split nothing off says so", none.Contains("not split off"), none);
 
+            // Owner 2026-10-18: "ระวัง … ผลิตออกมาไม่หยุด" — agent splits have a ceiling (SplitLimits).
+            async Task<string?> TryNewChat(string title)
+            {
+                try { await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, title); return null; }
+                catch (Exception ex) { return ex.Message; }
+            }
+            await Open(aId);
+            string? second = await TryNewChat("SC depth 2");
+            string? third = await TryNewChat("SC depth 3");
+            Check("SC a split chat may split once more, a split of a split may not", second == null && third != null && third.Contains("split of a split"),
+                $"second={second ?? "opened"} third={third ?? "opened"}");
+            int opened = 0; string? stop = null;
+            for (int i = 0; i < 20 && stop == null; i++)
+            {
+                await Open(parentId);
+                stop = await TryNewChat($"SC burst {i}");
+                if (stop == null) opened++;
+            }
+            int inWindow = links!.CreatedSince(DateTime.Now - SplitLimits.Window);
+            Check($"SC a burst of new_chat stops at {SplitLimits.MaxPerWindow} split chats in {SplitLimits.Window.TotalMinutes:0} minutes, and says why",
+                stop != null && stop.Contains("do not retry") && inWindow == SplitLimits.MaxPerWindow && opened < 20, $"opened={opened} inWindow={inWindow} stop={stop}");
+            Check("SC working limits: per chat and in the whole app",
+                SplitLimits.Refusal(0, SplitLimits.MaxWorkingPerParent, 0, 0)!.Contains("still working")
+                && SplitLimits.Refusal(0, 0, SplitLimits.MaxWorkingTotal, 0)!.Contains("right now")
+                && SplitLimits.Refusal(0, SplitLimits.MaxWorkingPerParent - 1, SplitLimits.MaxWorkingTotal - 1, SplitLimits.MaxPerWindow - 1) == null);
+            var refusedTool = await new CluadeX.Services.Tools.ProjectToolModule().ExecuteAsync(
+                new ToolCall { Type = ToolType.NewChat, ToolName = "new_chat", Arguments = { ["title"] = "SC refused" } }, new CluadeX.Services.Tools.ToolModuleContext(), default);
+            Check("SC a refused new_chat is a failed tool call with the reason (the agent sees it)",
+                !refusedTool.Success && refusedTool.Output.Contains("do not retry"), refusedTool.Output);
+
             var mod = new CluadeX.Services.Tools.ProjectToolModule();
             Check("SC close_chat (and its aliases) is one of the agent's tools",
                 mod.ResolveToolType("close_chat") == ToolType.CloseChat && mod.ResolveToolType("archive_chat") == ToolType.CloseChat

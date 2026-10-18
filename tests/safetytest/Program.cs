@@ -49,6 +49,7 @@ internal static class Program
             Hook(work);
             HookProcess();
             ClaudeDevArgs();
+            ChatTools(work);
             RunGates(work);
             DangerGate();
             Cleanup(work);
@@ -246,6 +247,112 @@ internal static class Program
         Check("a read-only advice run starts no sub-agents", !advice.Contains("Task,Agent"), advice);
         Check("recursive deletes are not denied wholesale (the hook asks for the dangerous ones)", !args.Contains("rm -rf") && !args.Contains("Remove-Item -Recurse"), args);
         Check("rewriting git history stays denied", args.Contains("git push --force") && args.Contains("git reset --hard"), args);
+    }
+
+    /// <summary>Owner 2026-10-18: Claude Dev opens / splits / closes chats through CluadeX (an MCP server it starts:
+    /// CluadeX.exe --cx-tools), works in the folders the user allowed (--add-dir), and has the brain's agent tools.</summary>
+    static void ChatTools(string work)
+    {
+        Console.WriteLine("Claude Dev: CluadeX chat tools, allowed folders, brain agent tools");
+        var grant = new CluadeX.Services.Providers.ClaudeDevProvider.WorkerGrant(Edit: true, Run: true);
+        string a1 = Path.Combine(work, "libA"), a2 = Path.Combine(work, "libB"), proj = Path.Combine(work, "proj");
+        foreach (var d in new[] { a1, a2, proj, Path.Combine(proj, "sub"), Path.Combine(a1, "inner") }) Directory.CreateDirectory(d);
+
+        // ── which folders go to --add-dir ──
+        var dirs = CluadeX.Services.Providers.ClaudeDevProvider.ExtraDirs(proj,
+            new[] { Path.Combine(a1, "inner"), a1, a1.ToUpperInvariant(), Path.Combine(proj, "sub"), Path.Combine(work, "missing"), a2 + "\\", Root, null, "" },
+            Directory.Exists, p => PermissionService.IsUnsafeAcceptEditsRoot(p));
+        Check("add-dir: a parent replaces its child, case-insensitive duplicates once, a trailing slash trimmed",
+            dirs.Count == 2 && dirs[0].Equals(a1, StringComparison.OrdinalIgnoreCase) && dirs[1] == a2, string.Join(" | ", dirs));
+        Check("add-dir: nothing inside the project, nothing missing, never a drive root",
+            !dirs.Any(d => d.StartsWith(proj, StringComparison.OrdinalIgnoreCase)) && !dirs.Any(d => d.Contains("missing")) && !dirs.Contains(Root.TrimEnd('\\')), string.Join(" | ", dirs));
+        var many = CluadeX.Services.Providers.ClaudeDevProvider.ExtraDirs(proj, Enumerable.Range(0, 40).Select(_ => a1).Concat(new[] { a2 }), _ => true, _ => false);
+        Check("add-dir: the same folder forty times is one", many.Count == 2, string.Join(" | ", many));
+
+        // ── the CLI's arguments ──
+        string plain = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, grant, "default", "auto");
+        string advice = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "default", "auto");
+        foreach (var t in new[] { "task_queue", "agent_inbox", "task_handoff", "cowork_join", "cowork_say", "cowork_read", "cowork_task" })
+            Check($"brain agent tool {t} allowed (worker and advice turns)",
+                plain.Contains("mcp__brainx-brain__" + t) && advice.Contains("mcp__brainx-brain__" + t));
+        Check("agent_send (a DM to any peer) is not opened", !plain.Contains("agent_send"), plain);
+        Check("no chat tools and no --add-dir unless the turn has them", !plain.Contains("--mcp-config") && !plain.Contains("--add-dir") && !plain.Contains("mcp__cluadex__"), plain);
+        string cfg = Path.Combine(work, "tools.json");
+        string full = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, grant, "default", "auto", cfg, dirs);
+        Check("chat tools: --mcp-config with the turn's file, and new_chat / open_project / close_chat allowed",
+            full.Contains("--mcp-config \"" + cfg + "\"") && full.Contains("mcp__cluadex__new_chat") && full.Contains("mcp__cluadex__open_project") && full.Contains("mcp__cluadex__close_chat"), full);
+        Check("one --add-dir per allowed folder, each quoted", full.Contains("--add-dir \"" + dirs[0] + "\"") && full.Contains("--add-dir \"" + dirs[1] + "\""), full);
+        Check("the wrapper names the allowed folders and says never to answer it cannot open a chat",
+            full.Contains(dirs[1]) && full.Contains("Never answer that you cannot open a chat"), full);
+        Check("the guard hook stays on a turn with chat tools", full.Contains("--settings") && full.Contains("git push --force"), full);
+        string adviceTools = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "default", "auto", cfg, dirs);
+        Check("an advice turn gets the chat tools but still no shell or edits", adviceTools.Contains("mcp__cluadex__new_chat") && !adviceTools.Contains(",Bash") && !adviceTools.Contains("Edit,Write"), adviceTools);
+
+        // ── the protocol, without a pipe ──
+        var noRelay = new Func<string, string, JsonElement, (bool, string)>((_, _, _) => (true, "relayed"));
+        Check("a notification is never answered", CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", "t", noRelay) == null);
+        string? init = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}", "t", noRelay);
+        Check("initialize echoes the client's protocol version and the id", init != null && init.Contains("\"2025-06-18\"") && init.Contains("\"id\":1") && init.Contains("tools"), init ?? "");
+        string? list = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":\"x\",\"method\":\"tools/list\"}", "t", noRelay);
+        Check("tools/list: exactly new_chat, open_project, close_chat", list != null && list.Contains("\"new_chat\"") && list.Contains("\"open_project\"") && list.Contains("\"close_chat\"") && list.Contains("\"id\":\"x\""), list ?? "");
+        string? noTok = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"new_chat\"}}", "", noRelay);
+        Check("without a turn token nothing is relayed", noTok != null && noTok.Contains("\"isError\":true") && !noTok.Contains("relayed"), noTok ?? "");
+        string? unknown = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"resources/list\"}", "t", noRelay);
+        Check("an unknown method is an error, not a crash", unknown != null && unknown.Contains("-32601"), unknown ?? "");
+
+        // ── end to end: the real CluadeX.exe --cx-tools, a private pipe, a stand-in chat page ──
+        Environment.SetEnvironmentVariable("CLUADEX_TOOLS_PIPE", "cx-safetytest-tools-" + Guid.NewGuid().ToString("N"));
+        CluadeX.Services.Tools.ChatToolBridge.StartServer();
+        var scope = new AgentRunScope("safetytest-chat", proj);
+        var seen = new List<string>();
+        AgentRunScope? scopeSeen = null;
+        using var turnCts = new CancellationTokenSource();
+        var ticket = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) =>
+        {
+            lock (seen) { seen.Add(call.ToolName + ":" + call.GetArg("path") + ":" + call.GetArg("message")); scopeSeen = AgentRunScope.Current; }
+            return Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true, Output = "opened chat #7" });
+        }, proj, turnCts.Token);
+        Check("a turn gets a ticket with its config file", ticket != null && File.Exists(ticket.ConfigFile), ticket?.ConfigFile ?? "null");
+        if (ticket == null) return;
+        string cfgText = File.ReadAllText(ticket.ConfigFile);
+        Check("the config starts CluadeX.exe --cx-tools with the turn's token", cfgText.Contains("CluadeX.exe") && cfgText.Contains("--cx-tools") && cfgText.Contains(ticket.Token), cfgText);
+
+        string exe = Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
+        if (!File.Exists(exe) || !File.Exists(Path.Combine(AppContext.BaseDirectory, "CluadeX.runtimeconfig.json")))
+            exe = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe"));
+        int lingered = 0;
+        List<string> Talk(string token, params string[] lines)
+        {
+            var psi = new ProcessStartInfo(exe, CluadeX.Services.Tools.ChatToolBridge.Flag)
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8 };
+            psi.Environment["CLUADEX_TOOLS_TOKEN"] = token;
+            using var p = Process.Start(psi)!;
+            using (var w = new StreamWriter(p.StandardInput.BaseStream, new UTF8Encoding(false)))
+                foreach (var l in lines) w.Write(l + "\n");
+            string outText = p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(10000)) { lingered++; p.Kill(true); }
+            return outText.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
+        }
+        string newChat = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 3, method = "tools/call", @params = new { name = "new_chat", arguments = new { path = a1, message = "สวัสดี ทำงานแยก" } } });
+        string bad = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 4, method = "tools/call", @params = new { name = "run_command", arguments = new { command = "echo hi" } } });
+        var sw = Stopwatch.StartNew();
+        var replies = Talk(ticket.Token,
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", newChat, bad);
+        string Reply(int id) => replies.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
+        Check($"the process answers every request and no notification ({sw.ElapsedMilliseconds} ms)", replies.Count == 4, string.Join("\n", replies));
+        Check("new_chat reached the chat page, inside the asking chat's run, Thai intact",
+            Reply(3).Contains("opened chat #7") && Reply(3).Contains("\"isError\":false") && seen.Contains("new_chat:" + a1 + ":สวัสดี ทำงานแยก") && ReferenceEquals(scopeSeen, scope),
+            Reply(3) + " | " + string.Join(",", seen));
+        Check("any other tool is refused by the app (only the three chat tools pass)", Reply(4).Contains("\"isError\":true") && !seen.Any(s => s.StartsWith("run_command")), Reply(4));
+        var forged = Talk("0000", newChat);
+        Check("a wrong token opens nothing", forged.Count == 1 && forged[0].Contains("\"isError\":true") && seen.Count == 1, string.Join("\n", forged));
+        ticket.Dispose();
+        var after = Talk(ticket.Token, newChat);
+        Check("after the turn ends its token opens nothing, and its config file is gone",
+            after.Count == 1 && after[0].Contains("\"isError\":true") && seen.Count == 1 && !File.Exists(ticket.ConfigFile), string.Join("\n", after));
+        Check("every --cx-tools process exits by itself once the CLI closes its stdin (none left running)", lingered == 0, $"lingered={lingered}");
     }
 
     static void RunGates(string work)

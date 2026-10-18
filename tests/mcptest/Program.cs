@@ -241,7 +241,7 @@ internal static class Program
         {
             // The six tools that prompted in the 2026-10-09 run, as the native loop names them, on a registry entry
             // for brainx-brain (the server is not running here: the gate runs before the call fails).
-            mcp.ToolRegistry.UpdateServer("brainx-brain", new[] { "brain_recall", "task_queue", "brain_search", "brain_list", "agent_activity", "cowork_task" }
+            mcp.ToolRegistry.UpdateServer("brainx-brain", new[] { "brain_recall", "task_queue", "brain_search", "brain_list", "agent_activity", "cowork_task", "agent_send" }
                 .Select(n => new McpTool { ServerName = "brainx-brain", Name = n, Description = n }).ToList());
             Answer = false;
             int asked = 0;
@@ -254,7 +254,11 @@ internal static class Program
             }
             var (_, cowork, _) = await Gate("mcp__brainx-brain__cowork_task", ("task", "x"));
             Check("A6", "the 2026-10-09 run: brain_recall / task_queue / brain_search / brain_list / agent_activity no longer prompt", asked == 0, "asked: " + string.Join(",", askedNames));
-            Check("A6b", "…while cowork_task (it hands work to another agent) still asks", cowork == 1, $"prompts={cowork}");
+            // Owner 2026-10-18 ("เปิดเครื่องมือ agent ของ brainx"): handing work on through the owner's own agent bus runs
+            // without a prompt now; a direct message to any peer (agent_send) still asks.
+            Check("A6b", "…and cowork_task (hands work to another agent on the owner's bus) runs without a prompt too", cowork == 0, $"prompts={cowork}");
+            var (_, dm, _) = await Gate("mcp__brainx-brain__agent_send", ("to", "x"), ("message", "y"));
+            Check("A6c", "…while agent_send (a direct message to any peer) still asks", dm == 1, $"prompts={dm}");
             mcp.ToolRegistry.RemoveServer("brainx-brain");
         });
         await Case("A7", async () =>
