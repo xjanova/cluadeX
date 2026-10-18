@@ -326,6 +326,8 @@ public static class MarkdownHelper
 
     private static UIElement CreateHeader(string text, int level)
     {
+        // A BrainX cowork-room reply names each member before her lines ("### 💬 codex", BrainXRoomProvider).
+        if (level == 3 && SpeakerHeading.Match(text) is { Success: true } who) return CreateSpeakerHeader(text, who.Groups[1].Value);
         var (fontSize, weight) = level switch
         {
             1 => (22.0, FontWeights.Bold),
@@ -359,6 +361,69 @@ public static class MarkdownHelper
         }
 
         return tb;
+    }
+
+    private static readonly Regex SpeakerHeading = new(@"^💬\s*(\S+)\s*$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The room member speaking from here on: her round portrait, her name on a chip of her colour and a line of it
+    /// (ChatCharacter.ForRoomAgent), so each part of a cowork-room reply shows who wrote it. Where the chat's boxes keep
+    /// the theme's own look (views:CharacterLook.Show is not Visible — Classic, or outside the chat) it stays the plain
+    /// heading it always was.
+    /// </summary>
+    private static UIElement CreateSpeakerHeader(string text, string agent)
+    {
+        var who = Services.ChatCharacter.ForRoomAgent(agent);
+        var grid = new Grid { Tag = "speaker:" + agent };
+
+        var plain = Fg(Font(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 4),
+        }, mono: false), HeadingMinorKey);
+        ApplyInlineFormatting(plain, text);
+        plain.Style = ShowWhen(typeof(TextBlock), lookOn: false);
+        grid.Children.Add(plain);
+
+        var row = new Grid { Margin = new Thickness(0, 12, 0, 6), Style = ShowWhen(typeof(Grid), lookOn: true) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var face = new Grid { Width = 34, Height = 34, VerticalAlignment = VerticalAlignment.Center };
+        face.Children.Add(Tok(new System.Windows.Shapes.Ellipse(), System.Windows.Shapes.Shape.FillProperty, "Bg.Elevated"));
+        face.Children.Add(new System.Windows.Shapes.Ellipse
+        {
+            Stroke = who.AccentBrush, StrokeThickness = 2,
+            Fill = who.Image is { } img
+                ? new ImageBrush(img) { Stretch = Stretch.UniformToFill, Viewbox = new Rect(0.18, 0, 0.64, 0.32), ViewboxUnits = BrushMappingMode.RelativeToBoundingBox }
+                : who.TintBrush,
+        });
+        Panel.SetZIndex(face, 1);
+        row.Children.Add(face);
+        var chip = new Border
+        {
+            Background = who.AccentBrush, CornerRadius = new CornerRadius(10), Padding = new Thickness(14, 3, 12, 4),
+            Margin = new Thickness(-9, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            Child = Font(new TextBlock { Text = who.Name, Foreground = who.OnAccentBrush, FontSize = 12.5, FontWeight = FontWeights.SemiBold }, mono: false),
+        };
+        Grid.SetColumn(chip, 1);
+        row.Children.Add(chip);
+        var line = new Border { Height = 2, CornerRadius = new CornerRadius(1), Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            Background = new LinearGradientBrush(who.FrameBrush.Color, Color.FromArgb(0, who.Accent.R, who.Accent.G, who.Accent.B), 0) };
+        Grid.SetColumn(line, 2);
+        row.Children.Add(line);
+        grid.Children.Add(row);
+        return grid;
+    }
+
+    /// <summary>A style that shows its element only when the chat's character look is on (or only when it is off).</summary>
+    private static Style ShowWhen(Type type, bool lookOn)
+    {
+        var style = new Style(type);
+        style.Setters.Add(new Setter(UIElement.VisibilityProperty, lookOn ? Visibility.Collapsed : Visibility.Visible));
+        var on = new Trigger { Property = Views.CharacterLook.ShowProperty, Value = Visibility.Visible };
+        on.Setters.Add(new Setter(UIElement.VisibilityProperty, lookOn ? Visibility.Visible : Visibility.Collapsed));
+        style.Triggers.Add(on);
+        return style;
     }
 
     private static UIElement CreateHorizontalRule() => Tok(new Border

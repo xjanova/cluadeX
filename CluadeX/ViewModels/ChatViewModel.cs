@@ -948,6 +948,7 @@ public partial class ChatViewModel : ViewModelBase
                 PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null,
                 PermissionCanAllowAlways = info.AlwaysKey != null && !info.AlwaysAsk && info.Danger == null,
                 PermissionDanger = info.Danger,
+                Character = CharacterForBox(askRun),
             };
             prompt.PermissionCallback = allow =>
             {
@@ -1012,6 +1013,7 @@ public partial class ChatViewModel : ViewModelBase
         _memoryTimer.Start();
         InitControls(activation);
         InitSidePanel();
+        InitCharacter();
         HookPendingImages();
 
         // Auto-save every 10 seconds if dirty

@@ -123,6 +123,8 @@ internal static class ChatKeys
         ["chat.perm.dismissed"] = new() { ["en"] = "Dismissed — the chat was cleared or switched", ["th"] = "ปิดไปแล้ว — ล้างหรือสลับแชท" },
         ["chat.perm.hookBlocked"] = new() { ["en"] = "A PreToolUse hook blocked this tool: {0}", ["th"] = "ฮุก PreToolUse บล็อกเครื่องมือนี้: {0}" },
         ["chat.perm.redirect"] = new() { ["en"] = "follow a redirect from {0} to {1} (another site)", ["th"] = "ตามการเปลี่ยนเส้นทางจาก {0} ไปยัง {1} (เว็บไซต์อื่น)" },
+        ["chat.who.asks"] = new() { ["en"] = "asks you", ["th"] = "ถามบอสค่ะ" },
+        ["chat.who.permission"] = new() { ["en"] = "asks to go ahead", ["th"] = "ขออนุญาตก่อนนะคะ" },
         ["chat.perm.allowChat"] = new() { ["en"] = "Allow in this chat", ["th"] = "อนุญาตทั้งแชทนี้" },
         ["chat.perm.allowChat.tip"] = new() { ["en"] = "Let this tool run without asking again in this chat. Other chats and new chats still ask.", ["th"] = "ให้เครื่องมือนี้ทำงานต่อโดยไม่ถามอีกในแชทนี้ แชทอื่นและแชทใหม่ยังถามเหมือนเดิม" },
         ["chat.perm.allowedChat"] = new() { ["en"] = "✓ Allowed in this chat", ["th"] = "✓ อนุญาตทั้งแชทนี้แล้ว" },
