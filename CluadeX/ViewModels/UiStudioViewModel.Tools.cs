@@ -477,6 +477,8 @@ public sealed partial class UiStudioViewModel
         {
             // the same widget on the new picture (its new size and place) — the same use of a widget drawn twice
             var same = SameBox(cur);
+            // not drawn any more (a row of data with the sample data switched off): no mark left over other things
+            if (same == null && _stageBoxes.Count > 0) { StageBox = null; return; }
             if (same != null && !ReferenceEquals(same, cur))
             {
                 if (!Equals(same, cur)) { StageBox = same; return; }
@@ -677,7 +679,8 @@ public sealed partial class UiStudioViewModel
         return choice == 0;
     }
 
-    /// <summary>Set by a harness to answer the Studio's confirmations (delete a widget, undo every change) without a dialog.</summary>
+    /// <summary>Set by a harness to answer the Studio's confirmations (delete a widget, undo every change, write the AI's
+    /// sample values again, delete them) without a dialog.</summary>
     public bool? ToolConfirmOverride { get; set; }
 
     // ───────────────────────────── commands ─────────────────────────────

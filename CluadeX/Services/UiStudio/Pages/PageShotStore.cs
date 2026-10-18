@@ -33,19 +33,27 @@ public sealed class PageGalleryState
     public Dictionary<string, PageShotEntry> Shots { get; set; } = new(StringComparer.Ordinal);
     /// <summary>The user's answer to "draw this app's real screens with Flutter?" (null: not asked yet).</summary>
     public bool? FlutterRender { get; set; }
+    /// <summary>The owner switched the sample replies off: the app's requests go unanswered while its screens are drawn,
+    /// as with no network, so the error and empty states can be designed.</summary>
+    public bool SampleDataOff { get; set; }
 }
 
 /// <summary>
 /// Thumbnails of a project's pages, kept on disk under the app's data folder (never in the project): one JPEG per
 /// page and device plus an index. A thumbnail is "stale" once any source file of the project is newer than it — it
-/// is still shown (no blank flash on return) while a new one is taken.
+/// is still shown (no blank flash on return) while a new one is taken. A Flutter app's realistic sample data (the AI's
+/// <see cref="SampleOverridesFile"/>) is kept here too.
 /// </summary>
 public sealed class PageShotStore
 {
     public const int MaxWebPages = 40;
+    public const string SampleOverridesFile = "sample_overrides.json";
     private readonly string _index;
     public string Folder { get; }
     public PageGalleryState State { get; private set; } = new();
+
+    /// <summary>The realistic values the AI writes for the app's sample replies — here, never in the app.</summary>
+    public string SampleOverridesPath => Path.Combine(Folder, SampleOverridesFile);
 
     public PageShotStore(string dataRoot, string projectRoot)
     {

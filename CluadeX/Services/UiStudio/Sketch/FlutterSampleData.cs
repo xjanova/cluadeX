@@ -19,6 +19,13 @@ public sealed class SampleReply
     public int Line { get; init; }
     /// <summary>The reply as it comes over the wire — in the app's envelope when its code reads one.</summary>
     public JsonNode? Body { get; init; }
+    /// <summary>The files that declare the models the reply is read into (what each key means: the AI reads them).</summary>
+    public IReadOnlyList<string> ModelFiles { get; init; } = Array.Empty<string>();
+    /// <summary>The owner's realistic values (the AI's file) changed this reply.</summary>
+    public bool Overridden { get; init; }
+
+    /// <summary>How the override file names the request: "GET /fortune/ai-pool".</summary>
+    public string Key => Method + " " + Path;
 
     /// <summary>A regular expression for the end of a request's path (what comes before it is the base URL's).</summary>
     public string Pattern => PatternOf(Path);
@@ -43,13 +50,43 @@ public sealed class SampleData
     public string? SuccessKey { get; internal set; }
     public string? DataKey { get; internal set; }
 
+    /// <summary>Replies the owner's override file changed.</summary>
+    public int Overridden => Replies.Count(r => r.Overridden);
+    /// <summary>Requests the override file names that the code doesn't make (or whose reply it doesn't read): left out.</summary>
+    public List<string> Ignored { get; } = new();
+    /// <summary>Values of the override file that kept the sample's ("GET /shop/stats /data/items/0/sold"): another kind
+    /// of value than the code reads there.</summary>
+    public List<string> Kept { get; } = new();
+    /// <summary>Why the override file was not used (a key: studio.samples.badJson…); null when there is none or it was read.</summary>
+    public string? OverridesError { get; internal set; }
+
+    private static readonly JsonSerializerOptions Relaxed = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
     /// <summary>The file the generated test reads: [{method, pattern, weight, body}, …].</summary>
     public string ToJson()
     {
         var all = new JsonArray();
         foreach (var r in Replies)
             all.Add(new JsonObject { ["method"] = r.Method, ["pattern"] = r.Pattern, ["weight"] = r.Weight, ["body"] = r.Body?.DeepClone() });
-        return all.ToJsonString(new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        return all.ToJsonString(Relaxed);
+    }
+
+    /// <summary>The replies the way the override file is written — <c>{ "GET /path": reply, … }</c> — one request a line.</summary>
+    public string RepliesJson()
+    {
+        var sb = new System.Text.StringBuilder("{\n");
+        for (int i = 0; i < Replies.Count; i++)
+            sb.Append(JsonSerializer.Serialize(Replies[i].Key, Relaxed)).Append(": ").Append(Replies[i].Body?.ToJsonString(Relaxed) ?? "null").Append(i + 1 < Replies.Count ? ",\n" : "\n");
+        return sb.Append('}').ToString();
+    }
+
+    /// <summary>A copy that shares the replies (they are never changed).</summary>
+    internal SampleData Copy()
+    {
+        var c = new SampleData { SuccessKey = SuccessKey, DataKey = DataKey };
+        c.Replies.AddRange(Replies);
+        c.Unread.AddRange(Unread);
+        return c;
     }
 }
 
@@ -67,12 +104,17 @@ public sealed class SampleData
 /// </list>
 /// The values are made up from the key names (a count, an amount, a Thai name, three list items, recent dates). A
 /// request the code doesn't name keeps the old answer (400): nothing is ever sent to the network.
+/// The owner can have them made realistic: the AI writes an override file (kept in the Studio's own store, never in the
+/// app) that <see cref="For(string, string?, CancellationToken)"/> merges over the made-up replies (<see cref="Merge"/>).
 /// </summary>
 public static class FlutterSampleData
 {
     public const string FileName = "sample_data.json";
+    /// <summary>An override file bigger than this is not read (it is a few kB per request).</summary>
+    public const int MaxOverridesBytes = 4_000_000;
 
     private static readonly Dictionary<string, (string Stamp, SampleData Data)> Cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, (SampleData Made, string Stamp, SampleData Data)> Merged = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The sample data of a project, read again only when its lib/ code changed (every save draws the screens
     /// again; the code that answers them rarely changes).</summary>
@@ -84,6 +126,164 @@ public static class FlutterSampleData
         var data = Build(root, DateTime.Now, ct);
         lock (Cache) Cache[root] = (stamp, data);
         return data;
+    }
+
+    /// <summary>The sample data with the owner's override file (<paramref name="overridesPath"/>, written by the AI) merged
+    /// over the made-up replies. No file: the made-up ones. A file that can't be read: the made-up ones, with
+    /// <see cref="SampleData.OverridesError"/> saying why.</summary>
+    public static SampleData For(string root, string? overridesPath, CancellationToken ct = default)
+    {
+        var made = For(root, ct);
+        string stamp = OverridesStamp(overridesPath);
+        if (stamp.Length == 0) return made;
+        lock (Merged)
+            if (Merged.TryGetValue(overridesPath!, out var hit) && ReferenceEquals(hit.Made, made) && hit.Stamp == stamp) return hit.Data;
+        var data = MergeFile(made, overridesPath!);
+        lock (Merged) Merged[overridesPath!] = (made, stamp, data);
+        return data;
+    }
+
+    /// <summary>The override file as it is now (size and last write), "" when there is none.</summary>
+    public static string OverridesStamp(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path)) return "";
+            var f = new FileInfo(path);
+            return f.Exists ? $"{f.Length}:{f.LastWriteTimeUtc.Ticks}" : "";
+        }
+        catch { return ""; }
+    }
+
+    private static SampleData MergeFile(SampleData made, string path)
+    {
+        string? error = null;
+        JsonNode? node = null;
+        try
+        {
+            if (new FileInfo(path).Length > MaxOverridesBytes) error = "studio.samples.tooBig";
+            else node = JsonNode.Parse(File.ReadAllText(path), documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+        }
+        catch (JsonException) { error = "studio.samples.badJson"; }
+        catch { error = "studio.samples.unreadable"; }
+        if (error == null && node is JsonObject o) return Merge(made, o);
+        var copy = made.Copy();
+        copy.OverridesError = error ?? "studio.samples.notObject";
+        return copy;
+    }
+
+    /// <summary>
+    /// The owner's realistic values over the made-up replies. <paramref name="overrides"/> names each request as
+    /// <see cref="SampleReply.Key"/> does ("GET /shop/stats") and holds its reply, merged over the made-up one by
+    /// <see cref="MergeValue"/>. A reply in the app's envelope (<c>{success, data}</c>) may be given without it: an object
+    /// that names neither its flag nor its data key, or a list, is its data. A request the code doesn't make (or whose
+    /// reply it doesn't read) is left out (<see cref="SampleData.Ignored"/>).
+    /// </summary>
+    public static SampleData Merge(SampleData made, JsonObject overrides)
+    {
+        var data = new SampleData { SuccessKey = made.SuccessKey, DataKey = made.DataKey };
+        data.Unread.AddRange(made.Unread);
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in made.Replies)
+        {
+            if (!overrides.TryGetPropertyValue(r.Key, out var over)) { data.Replies.Add(r); continue; }
+            used.Add(r.Key);
+            if (made.DataKey is { } dk && r.Body is JsonObject env && env.ContainsKey(dk) && env.All(kv => kv.Key == dk || kv.Key == made.SuccessKey)
+                && (over is JsonArray || over is JsonObject o && !o.ContainsKey(dk) && (made.SuccessKey == null || !o.ContainsKey(made.SuccessKey))))
+                over = new JsonObject { [dk] = over!.DeepClone() };
+            var kept = new List<string>();
+            var body = MergeValue(r.Body, over, kept);
+            data.Kept.AddRange(kept.Select(k => r.Key + " " + (k.Length == 0 ? "/" : k)));
+            data.Replies.Add(new SampleReply
+            {
+                Method = r.Method, Path = r.Path, Model = r.Model, File = r.File, Line = r.Line, ModelFiles = r.ModelFiles,
+                Body = body, Overridden = !JsonNode.DeepEquals(body, r.Body),
+            });
+        }
+        foreach (var kv in overrides)
+            if (!used.Contains(kv.Key)) data.Ignored.Add(kv.Key);
+        return data;
+    }
+
+    private static readonly Regex WholeNumber = new(@"^-?\d+$");
+    /// <summary>The dates the samples are made with.</summary>
+    private static readonly Regex MadeDate = new(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$");
+    /// <summary>What Dart's DateTime.parse reads: a date, maybe a time, maybe a zone.</summary>
+    private static readonly Regex DartDate = new(@"^\d{4}-\d{2}-\d{2}([T ]\d{2}(:\d{2}(:\d{2}([.,]\d{1,9})?)?)?\s?(Z|z|[+-]\d{2}(:?\d{2})?)?)?$");
+    /// <summary>A number written as text (the code reads it with int.parse / double.parse) — not a phone number's 0…</summary>
+    private static readonly Regex NumberText = new(@"^-?(0|[1-9]\d*)(\.\d+)?$");
+    private static readonly Regex IntText = new(@"^-?\d+$");
+    private static readonly Regex DecimalText = new(@"^-?\d+(\.\d+)?$");
+
+    /// <summary>
+    /// One value of the owner's file over the made-up one, so it can't make the app's own code fail:
+    /// <list type="bullet">
+    /// <item>a map, key by key (a key the made-up reply hasn't is added: the code may read it, the AI saw the model);</item>
+    /// <item>a list, item by item over the made-up item at that place (the last one past its end): it has as many items
+    /// as the owner's list, none for []. A list that is empty in the samples stays empty (errors, failures);</item>
+    /// <item>a plain value only of the same kind: text for text (a date stays a date, a number written as text stays one),
+    /// a number for a number (whole where the sample is: the code may read an int; a whole number over a fraction is
+    /// written as a fraction, 1500 → 1500.0, since the code may read a double), true / false for a flag;</item>
+    /// <item>null stays null (a picture's address: there is no network to load it from).</item>
+    /// </list>
+    /// Anything else keeps the made-up value; where, is added to <paramref name="kept"/> ("/data/items/0/sold").
+    /// </summary>
+    public static JsonNode? MergeValue(JsonNode? made, JsonNode? over, List<string>? kept = null, string at = "")
+    {
+        switch (made)
+        {
+            case null:
+                if (over != null) kept?.Add(at);
+                return null;
+            case JsonObject mo:
+            {
+                if (over is not JsonObject oo) { kept?.Add(at); return mo.DeepClone(); }
+                var r = new JsonObject();
+                foreach (var kv in mo) r[kv.Key] = oo.TryGetPropertyValue(kv.Key, out var ov) ? MergeValue(kv.Value, ov, kept, at + "/" + kv.Key) : kv.Value?.DeepClone();
+                foreach (var kv in oo) if (!mo.ContainsKey(kv.Key)) r[kv.Key] = kv.Value?.DeepClone();
+                return r;
+            }
+            case JsonArray ma:
+            {
+                if (over is not JsonArray oa) { kept?.Add(at); return ma.DeepClone(); }
+                var r = new JsonArray();
+                if (ma.Count == 0) { if (oa.Count > 0) kept?.Add(at); return r; }
+                for (int i = 0; i < oa.Count; i++) r.Add(MergeValue(ma[Math.Min(i, ma.Count - 1)], oa[i], kept, at + "/" + i));
+                return r;
+            }
+        }
+        if (over is JsonValue v && Plain(made.AsValue(), v) is { } same) return same;
+        kept?.Add(at);
+        return made.DeepClone();
+    }
+
+    /// <summary>The owner's plain value when the code reads it the way it reads the made-up one (null: it doesn't).</summary>
+    private static JsonNode? Plain(JsonValue made, JsonValue over)
+    {
+        JsonValueKind mk = made.GetValueKind(), ok = over.GetValueKind();
+        switch (mk)
+        {
+            case JsonValueKind.True or JsonValueKind.False:
+                return ok is JsonValueKind.True or JsonValueKind.False ? over.DeepClone() : null;
+            case JsonValueKind.Number:
+            {
+                if (ok != JsonValueKind.Number) return null;
+                string m = made.ToJsonString(), o = over.ToJsonString();
+                bool mWhole = WholeNumber.IsMatch(m), oWhole = WholeNumber.IsMatch(o);
+                if (mWhole && !oWhole) return null;
+                return !mWhole && oWhole ? JsonNode.Parse(o + ".0") : over.DeepClone();
+            }
+            case JsonValueKind.String:
+            {
+                if (ok != JsonValueKind.String) return null;
+                string m = made.GetValue<string>(), o = over.GetValue<string>();
+                if (MadeDate.IsMatch(m) && !DartDate.IsMatch(o)) return null;
+                if (NumberText.IsMatch(m) && !(m.Contains('.') ? DecimalText : IntText).IsMatch(o)) return null;
+                return over.DeepClone();
+            }
+            default:
+                return null;
+        }
     }
 
     /// <summary>The Dart files of a folder as they are now: how many, their sizes, the newest write.</summary>
@@ -133,7 +333,7 @@ public static class FlutterSampleData
                 if (!raw && dataKey != null)
                     body = new JsonObject { [okKey ?? "success"] = okValue != null ? JsonValue.Create(okValue) : JsonValue.Create(true), [dataKey] = body };
                 var (line, _) = rq.Doc.LineCol(rq.Doc.T[rq.Call.NameTok].Pos);
-                data.Replies.Add(new SampleReply { Method = rq.Method, Path = path, Model = model, File = rq.File, Line = line, Body = body });
+                data.Replies.Add(new SampleReply { Method = rq.Method, Path = path, Model = model, File = rq.File, Line = line, Body = body, ModelFiles = code.ModelFiles(shape) });
             }
         }
         catch (OperationCanceledException) { throw; }
@@ -178,6 +378,24 @@ public static class FlutterSampleData
         public readonly List<(string Path, DartDoc Doc)> Files = new();
         public readonly Dictionary<string, (DartDoc Doc, int Open)> Classes = new(StringComparer.Ordinal);
         public readonly Dictionary<string, Func> Functions = new(StringComparer.Ordinal);
+        private readonly Dictionary<DartDoc, string> _paths = new();
+
+        /// <summary>The files declaring the models a reply is read into, the reply's own model first.</summary>
+        public List<string> ModelFiles(JShape shape)
+        {
+            var names = new List<string>();
+            var seen = new HashSet<JShape>();
+            void Walk(JShape s, int depth)
+            {
+                if (depth > 24 || !seen.Add(s)) return;
+                if (s.ModelName is { } m && !names.Contains(m)) names.Add(m);
+                foreach (var k in s.Order) Walk(s.Keys[k], depth + 1);
+                if (s.Item != null) Walk(s.Item, depth + 1);
+            }
+            Walk(shape, 0);
+            return names.Select(n => Classes.TryGetValue(n, out var c) ? _paths.GetValueOrDefault(c.Doc) : null).OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
 
         public static Code Load(string lib, int max, CancellationToken ct)
         {
@@ -196,6 +414,7 @@ public static class FlutterSampleData
                 catch { continue; }
                 var d = new DartDoc(text);
                 c.Files.Add((f, d));
+                c._paths[d] = f;
                 c.Index(d);
             }
             return c;

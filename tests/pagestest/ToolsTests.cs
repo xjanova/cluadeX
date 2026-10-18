@@ -803,6 +803,8 @@ class _ShopScreenState extends State<ShopScreen> {
                       $"'{vm.ToolText}' '{vm.ToolTextNote}'");
             }
             else Check("sample: the helper drew its two labels", false, $"{labels.Count}");
+
+            await SampleSwitchAndAi(vm, view, root, card, store, samples, titleLine, errorLine);
         }
         finally
         {
@@ -811,6 +813,128 @@ class _ShopScreenState extends State<ShopScreen> {
             CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
             CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
         }
+    }
+
+    /// <summary>The owner's control over the sample data, on the same real data screen: the stage's switch
+    /// ("ข้อมูลตัวอย่าง: เปิด/ปิด", kept in the project's PageShotStore state) — off draws the screen's error text, on its
+    /// rows again; then "ให้ AI ทำข้อมูลให้สมจริง" with a scripted AI: it gets the requests, their models' files and the
+    /// sample replies, writes realistic Thai values into the Studio's own store (never the app), and the screen is drawn
+    /// again with them merged in (four rows, the AI's titles); asked again it asks first; and the AI's values can be
+    /// deleted (asked first) to draw the made-up ones again.</summary>
+    static async Task SampleSwitchAndAi(UiStudioViewModel vm, UiStudioView view, string root, PageCard card, PageShotStore store, string samples, int titleLine, int errorLine)
+    {
+        var stage = (FrameworkElement)view.FindName("Stage");
+        bool Screen(string file) => file.EndsWith("shop_screen.dart", StringComparison.OrdinalIgnoreCase);
+        int Rows() => vm.StageBoxes.Count(b => b.Widget == "Text" && b.Line == titleLine && Screen(b.File));
+        bool ErrorShown() => vm.StageBoxes.Any(b => b.Line == errorLine && Screen(b.File));
+
+        // ── the switch ──
+        Check("switch: the sample-data bar shows for an app whose code makes requests — on by default",
+              await WaitUntil(() => vm.ShowSampleBar, 30000) && vm.SampleDataOn && vm.SampleRequestCount == 1 && !store.State.SampleDataOff, $"{vm.ShowSampleBar} {vm.SampleRequestCount}");
+        await Idle(200);
+        var bar = (FrameworkElement)view.FindName("SampleBar");
+        var texts = Find<System.Windows.Controls.TextBlock>(bar).Select(t => t.Text).ToList();
+        Check("switch: the bar reads ข้อมูลตัวอย่าง: เปิด | ปิด, with the AI's button and what the requests get, in Thai",
+              bar.IsVisible && texts.Contains("ข้อมูลตัวอย่าง:") && texts.Contains("เปิด") && texts.Contains("ปิด") && texts.Contains("ให้ AI ทำข้อมูลให้สมจริง") && texts.Contains("ตอบ 1 คำขอด้วยข้อมูลตัวอย่าง"),
+              string.Join(" | ", texts));
+        var radios = Find<System.Windows.Controls.RadioButton>(bar).ToList();
+        if (radios.Count != 2) { Check("switch: two segments", false, $"{radios.Count}"); return; }
+        // (the helper's label picked above is a row of data: it won't be on the error screen)
+        var picked = vm.StageBox;
+        DateTime t1 = DateTime.UtcNow;
+        radios[1].IsChecked = true;   // the ปิด segment, as a click sets it
+        Check("switch: ปิด turns it off — kept in the project's PageShotStore state",
+              !vm.SampleDataOn && store.State.SampleDataOff && File.ReadAllText(Path.Combine(store.Folder, "index.json")).Contains("\"SampleDataOff\":true", StringComparison.Ordinal));
+        bool drawn = await Redrawn(vm, store, card.Page.Id, t1);
+        await Idle(300);
+        string fed = File.Exists(samples) ? File.ReadAllText(samples) : "";
+        Check("switch: off — the screen is drawn again, the generated test is given no sample reply", drawn && fed == "[]", fed.Length > 120 ? fed[..120] : fed);
+        Check("switch: off — the screen draws its error text, no sample row", ErrorShown() && Rows() == 0,
+              string.Join(", ", vm.StageBoxes.Where(b => Screen(b.File)).Select(b => $"{b.Widget}:{b.Line}")));
+        Check("switch: off — the label picked on the data rows isn't drawn now: no pick is left marking another place", picked != null && vm.StageBox == null && !vm.HasTools,
+              $"{picked?.Widget}:{picked?.Line} → {vm.StageBox?.Widget}:{vm.StageBox?.Line}");
+        string side = store.ReadSidecar(store.Get(card.Page.Id, "app")!) ?? "";
+        Check("switch: off — the request went unanswered; the card and the note under the stage say sample data is off",
+              side.Contains("\"GET /api/shop/stats -\"", StringComparison.Ordinal) && side.Contains("\"samples\":\"off\"", StringComparison.Ordinal)
+              && card.StateText.Contains("ปิดข้อมูลตัวอย่าง", StringComparison.Ordinal) && Find<System.Windows.Controls.TextBlock>(stage).Any(t => t.Text == T(vm, "studio.render.realNoteNoSample"))
+              && vm.SampleSummary == T(vm, "studio.samples.summaryOff") && radios[1].IsChecked == true && radios[0].IsChecked == false,
+              $"'{card.StateText}' · {(side.Length > 200 ? side[^200..] : side)}");
+        SavePng(stage, "stage-sample-off.png");
+        Check("switch: the AI's button waits while sample data is off", !vm.MakeSamplesRealCommand.CanExecute(null));
+
+        DateTime t2 = DateTime.UtcNow;
+        vm.SampleDataOn = true;
+        drawn = await Redrawn(vm, store, card.Page.Id, t2);
+        await Idle(300);
+        Check("switch: on — drawn again with the three sample rows, no error text", drawn && Rows() == 3 && !ErrorShown() && !store.State.SampleDataOff && radios[0].IsChecked == true,
+              $"{Rows()} rows, error={ErrorShown()}");
+
+        // ── realistic values by the AI (a scripted stand-in: it writes the file the way the chat's AI would) ──
+        var ai = new ScriptedAi();
+        var chatAi = vm.StudioAi;
+        vm.StudioAi = ai;
+        string apiFile = Path.Combine(root, "lib", "shop_api.dart"), screenFile = Path.Combine(root, "lib", "shop_screen.dart");
+        string api = File.ReadAllText(apiFile), screen = File.ReadAllText(screenFile);
+        string? wrote = null;
+        try
+        {
+            ai.Script = async p =>
+            {
+                await Task.Delay(800);
+                wrote = System.Text.RegularExpressions.Regex.Match(p, @"Write exactly one file: (?<f>[^\r\n]+)").Groups["f"].Value.Trim();
+                File.WriteAllText(wrote, "{\n  \"GET /shop/stats\": {\"data\": {\"orders_count\": 48, \"revenue_thb\": 15890, \"items\": [" +
+                                         "{\"title\": \"ข้าวมันไก่ตอน\", \"sold\": 31}, {\"title\": \"ชาไทยเย็น\", \"sold\": 27}, {\"title\": \"ขนมครก\", \"sold\": 12}, {\"title\": \"ผัดไทยกุ้งสด\", \"sold\": \"สิบ\"}]}}\n}\n");
+                await Task.Delay(400);
+            };
+            Check("ai: the button is ready — sample data on, a request to make realistic", vm.MakeSamplesRealCommand.CanExecute(null));
+            DateTime t3 = DateTime.UtcNow;
+            vm.MakeSamplesRealCommand.Execute(null);
+            await WaitUntil(() => ai.Prompts.Count > 0, 20000);
+            string prompt = ai.Prompts.LastOrDefault() ?? "";
+            Check("ai: the AI gets the requests, their models' files, the sample replies and the one file to write — in the Studio's store",
+                  prompt.Contains("[UI Studio — sample data]", StringComparison.Ordinal) && prompt.Contains("- GET /shop/stats → ShopStats · lib/shop_api.dart · lib/shop_api.dart:", StringComparison.Ordinal)
+                  && prompt.Contains("\"GET /shop/stats\": {\"success\":true,\"data\":{\"orders_count\":12,", StringComparison.Ordinal)
+                  && prompt.Contains("Write exactly one file: " + store.SampleOverridesPath, StringComparison.Ordinal) && prompt.Contains("Do not create or change any file of the app", StringComparison.Ordinal),
+                  Clip(prompt));
+            Check("ai: the stage says the AI is writing the sample data", vm.AiWorking && vm.IsMakingSamples && vm.SessionText == T(vm, "studio.samples.working") && vm.SampleSummary == T(vm, "studio.samples.working"),
+                  $"{vm.AiWorking} {vm.IsMakingSamples} '{vm.SessionText}'");
+            bool done = await WaitUntil(() => vm.SampleOverrideCount == 1 && !vm.IsMakingSamples, 60000);
+            Check("ai: when it is done the file is checked — one request made realistic, one value of another kind kept its sample",
+                  done && vm.StatusText == T(vm, "studio.samples.doneKept", 1, 1) && vm.HasSampleOverrides, $"{vm.SampleOverrideCount} '{vm.StatusText}'");
+            Check("ai: the file is in the Studio's own store, not in the app",
+                  wrote == store.SampleOverridesPath && File.Exists(wrote) && !wrote!.StartsWith(root, StringComparison.OrdinalIgnoreCase) && !File.Exists(Path.Combine(root, PageShotStore.SampleOverridesFile)), wrote ?? "(none)");
+            drawn = await Redrawn(vm, store, card.Page.Id, t3);
+            await Idle(300);
+            fed = File.Exists(samples) ? File.ReadAllText(samples) : "";
+            Check("ai: drawn again with the AI's values merged in — four rows now", drawn && Rows() == 4, $"{Rows()} rows");
+            Check("ai: what the test fed is the merged reply — the AI's Thai titles, the whole amount as a fraction, the word for a number left out",
+                  fed.Contains("ข้าวมันไก่ตอน", StringComparison.Ordinal) && fed.Contains("\"revenue_thb\":15890.0", StringComparison.Ordinal) && !fed.Contains("สิบ", StringComparison.Ordinal)
+                  && fed.Contains("\"sold\":22", StringComparison.Ordinal), fed.Length > 400 ? fed[..400] : fed);
+            Check("ai: the bar counts the AI's values; the card still says sample data",
+                  vm.SampleSummary == T(vm, "studio.samples.summaryAi", 1, 1) && card.StateText.Contains("ใช้ข้อมูลตัวอย่าง", StringComparison.Ordinal), $"'{vm.SampleSummary}' '{card.StateText}'");
+            Check("ai: the app's files are untouched and no round is left to review", File.ReadAllText(apiFile) == api && File.ReadAllText(screenFile) == screen && !vm.HasSession && !vm.ShowSessionBar);
+            SavePng(stage, "stage-sample-ai.png");
+            SavePng(MainWin.Content as FrameworkElement ?? view, "studio-sample-ai.png");
+
+            // asked again: the AI's values are there — it asks before they are written over
+            vm.ToolConfirmOverride = false;
+            int asked = ai.Prompts.Count;
+            vm.MakeSamplesRealCommand.Execute(null);
+            await Idle(1500);
+            Check("ai: asked again it asks first — declined, nothing goes to the AI", ai.Prompts.Count == asked && File.Exists(store.SampleOverridesPath));
+
+            // back to the made-up values: asked first, then the file goes and the screen is drawn again
+            vm.ClearSampleOverridesCommand.Execute(null);
+            Check("clear: declined — the AI's values stay", File.Exists(store.SampleOverridesPath) && vm.HasSampleOverrides);
+            vm.ToolConfirmOverride = true;
+            DateTime t4 = DateTime.UtcNow;
+            vm.ClearSampleOverridesCommand.Execute(null);
+            Check("clear: confirmed — the AI's file is deleted", !File.Exists(store.SampleOverridesPath) && !vm.HasSampleOverrides && vm.StatusText == T(vm, "studio.samples.cleared"));
+            drawn = await Redrawn(vm, store, card.Page.Id, t4);
+            await Idle(300);
+            Check("clear: drawn again with the made-up values — three rows", drawn && Rows() == 3 && vm.SampleOverrideCount == 0, $"{Rows()} rows");
+        }
+        finally { vm.StudioAi = chatAi; }
     }
 
     // ═══════════════════════════════════════════ translated text ═══════════════════════════════════════════

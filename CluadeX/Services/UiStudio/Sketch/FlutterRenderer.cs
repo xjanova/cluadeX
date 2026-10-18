@@ -62,8 +62,8 @@ public sealed class RenderRun
 /// the widget inspector, the same data DevTools uses) — so a click on the picture opens the exact line.
 /// It runs under <c>flutter test</c>: no device, no window, and no network — every HTTP request is answered inside the
 /// test (with a sample reply read from the app's own code, <see cref="FlutterSampleData"/>, so a screen that loads data
-/// draws it; anything else with 400), and every plugin call with an empty reply — so nothing the app does while
-/// drawing reaches a server or the phone's storage.
+/// draws it; anything else — everything, when the owner switches sample data off — with 400), and every plugin call
+/// with an empty reply — so nothing the app does while drawing reaches a server or the phone's storage.
 /// </summary>
 public static class FlutterRenderer
 {
@@ -644,9 +644,11 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
 
     /// <summary>Draw these screens. Each gets its PNG + widget map in <paramref name="outDir"/> (named by its index in
     /// the list). Runs the app's own code under <c>flutter test</c>, through the same always-on safety check as every
-    /// command CluadeX runs.</summary>
+    /// command CluadeX runs. The app's requests get sample replies (with the owner's realistic values from
+    /// <paramref name="sampleOverrides"/> merged over them) unless <paramref name="sampleData"/> is off: then none is
+    /// answered, as before sample data existed — the screens draw their error and empty states.</summary>
     public static async Task<RenderRun> RunAsync(FlutterProject p, IReadOnlyList<StudioPage> pages, string outDir, string language,
-        CancellationToken ct, Action<string>? log = null, int width = 390, int height = 844)
+        CancellationToken ct, Action<string>? log = null, int width = 390, int height = 844, bool sampleData = true, string? sampleOverrides = null)
     {
         var run = new RenderRun();
         var sw = Stopwatch.StartNew();
@@ -683,11 +685,12 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
         foreach (var f in Directory.EnumerateFiles(outDir)) { try { File.Delete(f); } catch { } }
         string dir = Path.Combine(p.Root, Folder.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(dir);
-        // what the app's requests are answered with, read from its own code (beside the test, never in the sources)
+        // what the app's requests are answered with, read from its own code (beside the test, never in the sources);
+        // switched off, nothing ("[]": every request fails)
         string samplesPath = Path.Combine(dir, FlutterSampleData.FileName);
-        var samples = FlutterSampleData.For(p.Root, ct);
-        await File.WriteAllTextAsync(samplesPath, samples.ToJson(), new UTF8Encoding(false), ct);
-        run.SampleReplies = samples.Replies.Count;
+        var samples = sampleData ? FlutterSampleData.For(p.Root, sampleOverrides, ct) : null;
+        await File.WriteAllTextAsync(samplesPath, samples?.ToJson() ?? "[]", new UTF8Encoding(false), ct);
+        run.SampleReplies = samples?.Replies.Count ?? 0;
         string testPath = Path.Combine(dir, TestFile);
         await File.WriteAllTextAsync(testPath, Generate(setup, list, outDir, width, height, samplesPath), new UTF8Encoding(false), ct);
 

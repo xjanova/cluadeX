@@ -179,6 +179,7 @@ internal static partial class Program
             FlutterEdits(temp);
             ArbEdits(temp);
             SampleDatas(temp);
+            SampleOverrides(temp);
             WpfViews(temp);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
