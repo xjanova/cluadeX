@@ -28,22 +28,30 @@ public static class DestructiveCodeScan
         @"\b(rd|rmdir)\s+/s\b|\bdel\s+(/[a-z]\s*)*/s\b|\berase\s+(/[a-z]\s*)*/s\b|(?<!\bgit\s+)\brm\s+-[a-z]*(rf|fr|r)[a-z]*\b|\bRemove-Item\b[^\r\n]*-(Recurse|r)\b|\brimraf\b|\bshutil\.rmtree\b|\brmtree\(|\bfs(\.promises)?\.(rm|rmdir)(Sync)?\(|\bDirectory\.Delete\(|\bFileSystem\.DeleteDirectory\(|\bos\.RemoveAll\(|\bremove_dir_all\(|\bRemove-Item\b",
         Opt);
 
+    /// <summary>A home's vital folders (the list of ProtectedPaths.ProfileChildren): deleting one is deleting part of the
+    /// home, whether the home is written as ~ / %USERPROFILE% or spelled out as C:\Users\name, /c/Users/name.</summary>
+    private const string HomeVital =
+        @"(\\\\|\\|/)+(AppData((\\\\|\\|/)+(Local|Roaming|LocalLow))?|Desktop|Documents|Downloads|Pictures|Music|Videos|OneDrive|Favorites|Contacts|Links|Saved Games|Searches|\.ssh|\.gnupg|\.git|\.config|\.claude|\.cluadex|\.brainx|\.codex|\.gitconfig)";
+
     /// <summary>A target that must never be deleted: a drive root, a home, a system folder.</summary>
     private static readonly Regex ProtectedTarget = new(
         // a bare drive root: C:  C:\  C:\\  C:/  C:\*  (followed by a quote, space, bracket or the end)
         @"(?<![\w.%$-])[A-Za-z]:(\\\\|\\|/)?\*?(?=[""'`\s)\];,]|$)" +
         // a profile, Users, Windows, Program Files, ProgramData directly
         @"|(?<![\w.-])[A-Za-z]:(\\\\|\\|/)+(Users|Windows|Program Files( \(x86\))?|ProgramData)((\\\\|\\|/)+[^\\/""'\s]+)?(\\\\|\\|/)?(?=[""'`\s)\];,]|$)" +
+        // a vital folder of a profile spelled out: C:\Users\name\AppData, C:\Users\name\.cluadex … (AppData\Local\Temp\x is fine)
+        @"|(?<![\w.-])[A-Za-z]:(\\\\|\\|/)+Users(\\\\|\\|/)+[^\\/""'\s]+" + HomeVital + @"(\\\\|\\|/)*\*?(?=[""'`\s)\];,]|$)" +
         // The same in Git Bash / WSL form: /c/ (the drive itself — the trailing / tells it from a cmd switch like /c or
         // /s), /c/Users, /c/Windows, /c/Program Files … and one folder in them, /mnt/c; and `rm … /c` (rm takes no
         // switches with a slash, so a bare /c there is the drive).
         @"|(?<![\w.~$-])/(mnt/)?[A-Za-z]/+\*?(?=[""'`\s)\];,]|$)" +
         @"|(?<![\w.~$-])/(mnt/)?[A-Za-z]/+(Users|Windows|Program Files( \(x86\))?|ProgramData)(/+[^/""'\s]+)?/*\*?(?=[""'`\s)\];,]|$)" +
+        @"|(?<![\w.~$-])/(mnt/)?[A-Za-z]/+Users/+[^/""'\s]+" + HomeVital + @"/*\*?(?=[""'`\s)\];,]|$)" +
         @"|(?<![\w.~$-])/mnt/[A-Za-z](?=[""'`\s)\];,]|$)" +
         @"|\brm\s+(-\S+\s+)*/[A-Za-z](?=[""'`\s)\];,|&]|$)" +
         // a home or system folder by variable — itself, or one of its vital folders (not any sub-folder: ~/tmp/x is fine)
         @"|(?<![\w.-])(~|\$HOME|\$\{HOME\}|%USERPROFILE%|%HOMEPATH%|%HOMEDRIVE%|%SYSTEMDRIVE%|%SYSTEMROOT%|%WINDIR%|%APPDATA%|%LOCALAPPDATA%|%PROGRAMFILES%|%PROGRAMDATA%|\$env:(USERPROFILE|HOMEPATH|HOMEDRIVE|SystemDrive|SystemRoot|windir|APPDATA|LOCALAPPDATA|ProgramFiles|ProgramData))" +
-        @"((\\\\|\\|/)+(AppData|Desktop|Documents|Downloads|Pictures|OneDrive|\.ssh|\.gnupg|\.git|\.config|\.claude|\.cluadex|\.brainx))?(\\\\|\\|/)*\*?(?=[""'`\s)\];,]|$)" +
+        "(" + HomeVital + @")?(\\\\|\\|/)*\*?(?=[""'`\s)\];,]|$)" +
         // a home or a drive root handed straight to a delete API
         @"|(Delete|rmtree|rmSync|rm|RemoveAll|remove_dir_all|DeleteDirectory)\(\s*(Environment\.GetFolderPath\(\s*(Environment\.)?SpecialFolder\.(UserProfile|MyDocuments|Personal|Desktop|DesktopDirectory|ApplicationData|LocalApplicationData|Windows|System|ProgramFiles|ProgramFilesX86|CommonApplicationData)\s*\)|os\.homedir\(\)|Path\.home\(\)|os\.path\.expanduser\(\s*[""']~[""']\s*\)|Path\.GetPathRoot\([^)]*\)|os\.UserHomeDir\(\))\s*[,)]" +
         // POSIX root

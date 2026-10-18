@@ -236,7 +236,8 @@ internal static class BatchWire
             svc.Settings.BatchBackgroundWork = true;
             var bs3 = new BatchService(svc, mgr);
             var fsNow = new FileSystemService();   // no project open "now"
-            var sms = new SessionMemoryService(new MemoryService(fsNow), mgr, svc, new LocalizationService(), batchService: bs3, fileSystem: fsNow);
+            var memSvc = new MemoryService(fsNow);
+            var sms = new SessionMemoryService(memSvc, mgr, svc, new LocalizationService(), batchService: bs3, fileSystem: fsNow);
             var chat = Enumerable.Range(0, 8).Select(i => new ChatMessage { Role = i % 2 == 0 ? MessageRole.User : MessageRole.Assistant, Content = $"turn {i}: the deploy key lives in vault X" }).ToList();
             int before = mock.Count("/v1/messages/batches");
             anthState = "in_progress";
@@ -250,8 +251,9 @@ internal static class BatchWire
                 "}],\"usage\":{\"input_tokens\":10,\"output_tokens\":10}}}}\n";
             anthState = "ended";
             await bs3.PollOnceAsync(CancellationToken.None);
-            string saved = Path.Combine(proj, ".cluadex", "memory", "deploy_key_location.md");
-            check("memory", "its answer is saved as a project memory in the chat's own project folder",
+            // A project's memory lives under ~/.cluadex/projects/<slug>/memory, out of the project (MemoryService.ProjectMemoryDirFor).
+            string saved = Path.Combine(memSvc.ProjectMemoryDirFor(proj), "deploy_key_location.md");
+            check("memory", "its answer is saved as a project memory of the chat's own project (not the one open now)",
                 File.Exists(saved) && File.ReadAllText(saved).Contains("vault X") && bs3.Jobs.All(j => j.Delivered), saved);
             svc.Settings.BatchBackgroundWork = false;
             check("memory", "batch for background work switched off → it runs live instead (TrySubmit says no)",
