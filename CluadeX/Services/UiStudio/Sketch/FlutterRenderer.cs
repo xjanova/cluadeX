@@ -86,19 +86,17 @@ public static class FlutterRenderer
         s.SharedPrefs = Regex.IsMatch(pubspec, @"(?m)^\s+shared_preferences:");
         s.Localizations = Regex.IsMatch(pubspec, @"(?m)^\s+flutter_localizations:");
 
-        // translations: the gen_l10n class
-        string l10n = WebPages.SafeRead(Path.Combine(p.Root, "l10n.yaml"), 50_000);
-        if (l10n.Length > 0 || Regex.IsMatch(pubspec, @"(?m)^\s+generate:\s*true"))
+        // translations: the gen-l10n class, imported from where gen-l10n writes it (output-dir, else next to the .arb
+        // files — Flutter 3.32+ has no synthetic package — else an older Flutter's package:flutter_gen)
+        if (FlutterL10n.Load(p.Root) is { } tr)
         {
-            string cls = Regex.Match(l10n, @"(?m)^\s*output-class:\s*(?<v>\w+)").Groups["v"].Value;
-            string file = Regex.Match(l10n, @"(?m)^\s*output-localization-file:\s*(?<v>\S+)").Groups["v"].Value;
-            string dir = Regex.Match(l10n, @"(?m)^\s*output-dir:\s*(?<v>\S+)").Groups["v"].Value.Trim('/', '\\').Replace('\\', '/');
-            bool synthetic = !Regex.IsMatch(l10n, @"(?m)^\s*synthetic-package:\s*false") && dir.Length == 0;
-            s.L10nClass = cls.Length > 0 ? cls : "AppLocalizations";
-            file = file.Length > 0 ? file : "app_localizations.dart";
-            if (!synthetic && dir.StartsWith("lib/", StringComparison.Ordinal)) s.L10nImport = $"package:{s.Package}/{dir[4..]}/{file}";
-            else if (synthetic) s.L10nImport = $"package:flutter_gen/gen_l10n/{file}";
-            if (s.L10nImport == null) s.L10nClass = null;
+            s.L10nImport = tr.ImportUri(s.Package);
+            s.L10nClass = s.L10nImport != null ? tr.OutputClass : null;
+        }
+        else if (Regex.IsMatch(pubspec, @"(?m)^\s+generate:\s*true") && File.Exists(Path.Combine(p.Root, ".dart_tool", "flutter_gen", "gen_l10n", "app_localizations.dart")))
+        {
+            s.L10nClass = "AppLocalizations";
+            s.L10nImport = "package:flutter_gen/gen_l10n/app_localizations.dart";
         }
 
         // the theme: what the app's own widget tests use (they already build screens outside the app), else main.dart's
@@ -436,6 +434,14 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
         }
         if (list.Count == 0) { run.Ok = true; run.Took = sw.Elapsed; return run; }
 
+        string? flutter = FindFlutter();
+        if (flutter == null) { run.Error = "studio.render.noFlutter"; return run; }
+        // the translations first: `flutter test --no-pub` never makes them, so a changed .arb needs gen-l10n here
+        var gen = await EnsureL10nAsync(p, flutter, ct, log);
+        if (gen.Error != null) { run.Error = gen.Error; return run; }
+        if (gen.Failure != null) { run.CompileError = gen.Failure; run.Took = sw.Elapsed; return run; }
+        if (gen.Ran) setup = ReadSetup(p, language);   // the generated class may be somewhere else now
+
         Directory.CreateDirectory(outDir);
         foreach (var f in Directory.EnumerateFiles(outDir)) { try { File.Delete(f); } catch { } }
         string dir = Path.Combine(p.Root, Folder.Replace('/', Path.DirectorySeparatorChar));
@@ -443,8 +449,6 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
         string testPath = Path.Combine(dir, TestFile);
         await File.WriteAllTextAsync(testPath, Generate(setup, list, outDir, width, height), new UTF8Encoding(false), ct);
 
-        string? flutter = FindFlutter();
-        if (flutter == null) { run.Error = "studio.render.noFlutter"; return run; }
         bool pubReady = File.Exists(Path.Combine(p.Root, ".dart_tool", "package_config.json"));
         string command = $"flutter test {Folder}/{TestFile} --reporter json" + (pubReady ? " --no-pub" : "");
 
@@ -554,6 +558,98 @@ Future<void> _shot(WidgetTester t, int id, Widget Function() screen) async {
         run.Ok = run.CompileError == null;
         run.Took = sw.Elapsed;
         return run;
+    }
+
+    // ───────────────────────────── the app's translations ─────────────────────────────
+
+    /// <summary>The fingerprint of l10n.yaml and the .arb files at the last draw (in the renderer's own folder).</summary>
+    internal const string L10nStamp = "l10n.stamp";
+
+    /// <summary>What making the translations before a draw came to. Ran: gen-l10n ran and succeeded. Error: a key — it
+    /// could not run (refused, dry run, cancelled). Failure: gen-l10n's report — an .arb file has an error, so the app
+    /// can't build either.</summary>
+    internal readonly record struct L10nGen(bool Ran, string? Error, string? Failure);
+
+    /// <summary>Bring the app's generated translations up to date for a draw: <c>flutter gen-l10n</c> runs only when an
+    /// .arb file (or l10n.yaml) changed since the last draw — and on the first draw here only when the generated code
+    /// is missing or older than an .arb. Through the same gates as the draw itself (CodeRunGuard, DangerApproval,
+    /// ProcessLaunchPolicy).</summary>
+    internal static async Task<L10nGen> EnsureL10nAsync(FlutterProject p, string flutter, CancellationToken ct, Action<string>? log)
+    {
+        var l10n = FlutterL10n.Load(p.Root);
+        if (l10n == null || l10n.ArbFiles.Count == 0) return default;
+        string stamp = Path.Combine(p.Root, Folder.Replace('/', Path.DirectorySeparatorChar), L10nStamp);
+        string print = l10n.Fingerprint();
+        string? last = null;
+        try { if (File.Exists(stamp)) last = (await File.ReadAllTextAsync(stamp, ct)).Trim(); } catch (IOException) { }
+        if (last == print) return default;
+        if (last == null && l10n.GeneratedUpToDate()) { WriteStamp(stamp, print); return default; }
+
+        const string command = "flutter gen-l10n";
+        if (await Safety.DangerApproval.GateAsync("UI Studio", command, await Safety.CodeRunGuard.CheckAsync(command, p.Root)) is { } unsafeRun)
+        {
+            log?.Invoke(unsafeRun);
+            return new L10nGen(false, "studio.err.unsafe", null);
+        }
+        if (Safety.ProcessLaunchPolicy.Blocks(flutter))
+        {
+            log?.Invoke(Safety.ProcessLaunchPolicy.Report(command));
+            return new L10nGen(false, "studio.render.dryRun", null);
+        }
+        log?.Invoke("flutter gen-l10n — the translations changed since the last draw");
+        var (exit, output) = await RunToolAsync(flutter, command["flutter ".Length..], p.Root, TimeSpan.FromMinutes(6), ct);
+        if (exit == NotStarted) { log?.Invoke(output); return new L10nGen(false, "studio.render.noFlutter", null); }
+        if (exit == null) return new L10nGen(false, ct.IsCancellationRequested ? "cancelled" : "studio.render.timeout", null);
+        if (exit != 0) return new L10nGen(false, null, "flutter gen-l10n failed:\n" + Trim(output.Length > 0 ? output : "exit code " + exit));
+        WriteStamp(stamp, print);
+        return new L10nGen(true, null, null);
+    }
+
+    private static void WriteStamp(string path, string print)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, print, new UTF8Encoding(false));
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private const int NotStarted = int.MinValue;
+
+    /// <summary>Run one Flutter / Dart tool command in the project (no window, no input). Exit code (null: timed out or
+    /// cancelled; <see cref="NotStarted"/>: it could not start) and everything it printed.</summary>
+    private static async Task<(int? Exit, string Output)> RunToolAsync(string exe, string args, string cwd, TimeSpan limit, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("cmd.exe", "/d /s /c \"\"" + exe + "\" " + args + "\"")
+        {
+            WorkingDirectory = cwd, UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        };
+        psi.Environment["NO_COLOR"] = "1";
+        var output = new StringBuilder();
+        using var proc = new Process { StartInfo = psi };
+        proc.OutputDataReceived += (_, e) => { if (e.Data != null) lock (output) if (output.Length < 20000) output.AppendLine(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (output) if (output.Length < 20000) output.AppendLine(e.Data); };
+        try
+        {
+            proc.Start();
+            proc.StandardInput.Close();
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(limit);
+            await proc.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+            return (null, "");
+        }
+        catch (Exception ex) { return (NotStarted, ex.Message); }
+        lock (output) return (proc.ExitCode, output.ToString());
     }
 
     // ───────────────────────────── the save check's analyzer ─────────────────────────────

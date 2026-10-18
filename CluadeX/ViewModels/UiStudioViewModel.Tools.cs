@@ -44,6 +44,11 @@ public sealed partial class UiStudioViewModel
 {
     private FlutterWidgetInfo? _tool;
     private (string File, int Line, int Column)? _toolAt;
+    /// <summary>The picked Text shows a translation that can be typed over: its key's message in the .arb file of the
+    /// language the screen is drawn in.</summary>
+    private L10nText? _toolTr;
+    /// <summary>Why the picked Text's translation can't be typed over (a key): a placeholder, a key no .arb has.</summary>
+    private string? _toolTrNote;
     /// <summary>A widget an edit made or moved, to pick once the picture is drawn again.</summary>
     private (string File, int Line, int Column)? _pendingFocus;
 
@@ -64,10 +69,13 @@ public sealed partial class UiStudioViewModel
     public string ToolSharedNote => _toolAt is { } a && _stageCard?.Page.SourcePath is { } screen && !SameFile(a.File, screen) ? T("studio.fedit.shared", Rel(a.File)) : "";
     public bool HasToolSharedNote => ToolSharedNote.Length > 0;
 
-    public bool CanToolText => _tool?.CanText == true;
+    public bool CanToolText => _tool?.CanText == true || _toolTr != null;
     private string _toolText = "";
     public string ToolText { get => _toolText; set => SetProperty(ref _toolText, value ?? ""); }
-    public string ToolTextNote => _tool is { CanText: false, TextNote: { } k } ? T(k) : "";
+    /// <summary>Where a translated text is written (its key and .arb file), else why the text can't be typed over.</summary>
+    public string ToolTextNote =>
+        _toolTr is { } tr ? T("studio.fedit.text.arb", tr.Key, Path.GetFileName(tr.ArbPath)) + (tr.FromTemplate ? " " + T("studio.fedit.text.arbNew") : "")
+        : _tool is { CanText: false } t && (_toolTrNote ?? t.TextNote) is { } k ? T(k) : "";
     public bool HasToolTextNote => ToolTextNote.Length > 0;
 
     public bool CanToolTextStyle => _tool?.CanTextStyle == true;
@@ -150,7 +158,8 @@ public sealed partial class UiStudioViewModel
         }
         _tool = info;
         _toolAt = info != null ? at : null;
-        _toolText = info?.Text ?? "";
+        ResolveTranslation(info);
+        _toolText = _toolTr?.Shown ?? info?.Text ?? "";
         _toolFontSize = Fmt(info?.FontSize);
         _toolPadding = Fmt(info?.Padding);
         _toolMargin = Fmt(info?.Margin);
@@ -164,6 +173,26 @@ public sealed partial class UiStudioViewModel
     }
 
     private static string Fmt(double? v) => v is { } x ? x.ToString("0.##", CultureInfo.InvariantCulture) : "";
+
+    /// <summary>A Text that reads a translation (context.l10n.title): what its key says in the .arb file of the language
+    /// the screen is drawn in, to type over — never a message with a placeholder or a plural, and only an .arb file of
+    /// this project.</summary>
+    private void ResolveTranslation(FlutterWidgetInfo? info)
+    {
+        _toolTr = null;
+        _toolTrNote = null;
+        if (info?.L10nKey is not { } key || !_studio.HasProject) return;
+        FlutterL10n? l10n;
+        try { l10n = FlutterL10n.Load(_studio.Root); }
+        catch (Exception ex) { _log?.Warn("UiStudio", "reading the translations failed", ex); return; }
+        if (l10n == null) return;   // no gen-l10n setup: the general note stays
+        if (info.L10nCall) { _toolTrNote = "studio.fedit.text.l10nPlaceholder"; return; }
+        var tr = l10n.Resolve(key, _loc.CurrentLanguage, out var why);
+        string root = Path.GetFullPath(_studio.Root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (tr != null && !Path.GetFullPath(tr.ArbPath).StartsWith(root, StringComparison.OrdinalIgnoreCase)) { tr = null; why = "studio.fedit.text.l10n"; }
+        _toolTr = tr;
+        _toolTrNote = tr == null ? why : null;
+    }
 
     /// <summary>"Image.asset" is the inspector's "Image"; "Text-[<'k'>]" (a keyed widget) is "Text".</summary>
     private static bool SameWidget(string codeName, string inspectorName)
@@ -219,6 +248,32 @@ public sealed partial class UiStudioViewModel
         if (r.FocusLine > 0) SelectAt(path, r.FocusLine, r.FocusColumn, r.Text);
         else { StageBox = null; StageNode = null; }
         Status(T("studio.fedit.applied"));
+        OnPropertyChanged(nameof(CanUndo));
+    }
+
+    /// <summary>Write a translated text: only that key's message changes in its .arb file (a key the language doesn't
+    /// translate yet is added next to its neighbour). Undo takes it back, it joins the review round, and the screens
+    /// are drawn again with the translations made anew (flutter gen-l10n) — the picked Text stays picked.</summary>
+    private void RunTranslation(L10nText tr, string value)
+    {
+        if (AiWorking) { Status(T("studio.fedit.aiBusy"), error: true); return; }
+        if (IsChecking) { Status(T("studio.fedit.checkBusy"), error: true); return; }
+        string? message = ArbFile.Encode(value, tr.UseEscaping);
+        if (message == null) { Status(T("studio.fedit.text.l10nBraces"), error: true); return; }
+        CluadeX.Helpers.TextFileCodec.TextFile file;
+        try { file = CluadeX.Helpers.TextFileCodec.Read(tr.ArbPath); }
+        catch { Status(T("studio.err.read"), error: true); return; }
+        if (!file.IsValidUtf8) { Status(T("studio.err.notUtf8"), error: true); return; }
+        ArbEdit r;
+        try { r = ArbFile.SetMessage(file.Text, tr.Key, message, tr.TemplateKeys); }
+        catch (Exception ex) { _log?.Warn("UiStudio", "translation edit failed", ex); Status(T("studio.fedit.failed"), error: true); return; }
+        if (!r.Ok) { Status(T(r.Error ?? "studio.fedit.failed"), error: true); return; }
+        if (r.Text == null || r.Text == file.Text) { RefreshTools(); return; }
+        string? err = _studio.WriteEdit(tr.ArbPath, file.Text, r.Text, file.HasBom, "flutter-text");
+        if (err != null) { Status(T(err), error: true); return; }
+        NoteToolEdit(tr.ArbPath, file.Text, r.Text);
+        RefreshTools();
+        Status(T("studio.fedit.appliedArb", Path.GetFileName(tr.ArbPath)));
         OnPropertyChanged(nameof(CanUndo));
     }
 
@@ -453,6 +508,7 @@ public sealed partial class UiStudioViewModel
 
     public ICommand ApplyToolTextCommand => _applyToolTextCommand ??= new RelayCommand(() =>
     {
+        if (_toolTr is { } tr) { if (ToolText != tr.Shown) RunTranslation(tr, ToolText); return; }
         if (_tool?.CanText != true || ToolText == _tool.Text) return;
         string v = ToolText;
         RunTool("text", (t, l, c) => FlutterCodeEdit.SetText(t, l, c, v));

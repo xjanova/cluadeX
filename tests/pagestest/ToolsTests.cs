@@ -300,6 +300,160 @@ internal static partial class Program
         }
     }
 
+    // ═══════════════════════════════════════════ translated text ═══════════════════════════════════════════
+
+    const string L10nThArb = "{\n  \"@@locale\": \"th\",\n  \"welcome\": \"ยินดีต้อนรับสู่แอปพลิเคชันของเรา\",\n  \"@welcome\": { \"description\": \"The greeting on the home screen\" },\n\n" +
+                             "  \"greeting\": \"สวัสดี {name}\",\n  \"@greeting\": { \"placeholders\": { \"name\": {} } }\n}\n";
+    const string L10nEnArb = "{\n  \"@@locale\": \"en\",\n  \"welcome\": \"Welcome to our application\",\n  \"greeting\": \"Hello {name}\"\n}\n";
+
+    const string L10nHome = @"import 'package:flutter/material.dart';
+import 'l10n/app_localizations.dart';
+
+extension L10nX on BuildContext {
+  AppL10n get l10n => AppL10n.of(this);
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 40),
+          Text(context.l10n.welcome),
+          Text(context.l10n.greeting('Ann')),
+        ],
+      ),
+    );
+  }
+}
+";
+
+    /// <summary>A real Flutter app whose texts come from gen-l10n (l10n.yaml, app_th.arb as the template, app_en.arb):
+    /// the text tool shows a translated Text's Thai message, writes the new one into app_th.arb only (exactly that
+    /// string), Flutter draws the screen again after `flutter gen-l10n` (the box gets narrower), gen-l10n's own output
+    /// doesn't draw it once more, a placeholder message is refused, and Undo puts the .arb back.</summary>
+    static async Task FlutterTranslations(UiStudioViewModel vm, UiStudioView view, string fx)
+    {
+        Log("\n## Translated text (.arb) edited with the text tool, drawn for real");
+        string? flutter = FlutterRenderer.FindFlutter();
+        if (flutter == null) { Log("  (skipped: Flutter is not installed on this PC)"); return; }
+        string root = Path.Combine(fx, "flutter-l10n");
+        W(root, "pubspec.yaml", "name: cxl10n\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\ndependencies:\n  flutter:\n    sdk: flutter\n  flutter_localizations:\n    sdk: flutter\n  intl: any\n" +
+                                "dev_dependencies:\n  flutter_test:\n    sdk: flutter\nflutter:\n  uses-material-design: true\n  generate: true\n");
+        // no output-dir: Flutter 3.32+ writes the code next to the .arb files (lib/l10n/app_localizations.dart)
+        W(root, "l10n.yaml", "arb-dir: lib/l10n\ntemplate-arb-file: app_th.arb\noutput-localization-file: app_localizations.dart\noutput-class: AppL10n\nnullable-getter: false\n");
+        W(root, "lib/l10n/app_th.arb", L10nThArb);
+        W(root, "lib/l10n/app_en.arb", L10nEnArb);
+        W(root, "lib/main.dart", "import 'package:flutter/material.dart';\nimport 'l10n/app_localizations.dart';\nimport 'home_screen.dart';\n\n" +
+                                 "void main() => runApp(const MaterialApp(\n      localizationsDelegates: AppL10n.localizationsDelegates,\n      supportedLocales: AppL10n.supportedLocales,\n      home: HomeScreen(),\n    ));\n");
+        W(root, "lib/home_screen.dart", L10nHome);
+        var pub = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/d /s /c \"\"{flutter}\" pub get --offline\"")
+        { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var pubOut = pub.StandardOutput.ReadToEndAsync();
+        var pubErr = pub.StandardError.ReadToEndAsync();
+        await pub.WaitForExitAsync();
+        if (pub.ExitCode != 0 || !File.Exists(Path.Combine(root, ".dart_tool", "package_config.json")))
+        {
+            Log("  (skipped: `flutter pub get --offline` could not resolve flutter_localizations / intl from the cache) " + (await pubErr).Trim().Split('\n').LastOrDefault());
+            return;
+        }
+        _ = await pubOut;
+
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("flutter.bat");
+        CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Add("dart.bat");
+        vm.RenderConsentOverride = true;
+        vm.ToolConfirmOverride = true;
+        string th = Path.Combine(root, "lib", "l10n", "app_th.arb"), en = Path.Combine(root, "lib", "l10n", "app_en.arb");
+        int welcomeLine = LineOf(L10nHome, "Text(context.l10n.welcome)"), greetingLine = LineOf(L10nHome, "Text(context.l10n.greeting");
+        try
+        {
+            vm.OpenProject(root, autoStart: true);
+            bool drawn = await WaitUntil(() => Cards(vm).Count == 1 && Cards(vm).All(c => c.State == "done" && c.HasThumb), 300000);
+            Check("l10n: Flutter draws the app with its translations", drawn,
+                  string.Join(", ", Cards(vm).Select(c => $"{c.Page.Route}:{c.State} '{c.StateText}'")) + (vm.CompileError != null ? " COMPILE " + vm.CompileError : ""));
+            if (!drawn) return;
+            var store = (PageShotStore)GetField(vm, "_store")!;
+            // (home: with no routes table — the gallery lists it by its class, without a route)
+            var home = Cards(vm).FirstOrDefault(c => c.Page.Detail == "HomeScreen");
+            if (home == null) { Check("l10n: the home screen has a card", false, string.Join(", ", Cards(vm).Select(c => c.Page.Id))); return; }
+            vm.OpenCardCommand.Execute(home);
+            await Idle(400);
+            var welcome = Box(vm, "Text", welcomeLine);
+            if (welcome == null) { Check("l10n: the welcome text has a box", false, string.Join(", ", vm.StageBoxes.Select(b => $"{b.Widget}:{b.Line}"))); return; }
+
+            // a placeholder message is not typed over
+            if (Box(vm, "Text", greetingLine) is { } greeting)
+            {
+                vm.PickStageBox(greeting, open: false);
+                Check("l10n: a message with a placeholder is refused, with its reason", vm.HasTools && !vm.CanToolText && vm.ToolTextNote == T(vm, "studio.fedit.text.l10nPlaceholder"), $"can={vm.CanToolText} '{vm.ToolTextNote}'");
+            }
+            else Check("l10n: the greeting text has a box", false);
+
+            vm.PickStageBox(welcome, open: false);
+            Check("l10n: a translated Text offers its Thai message to type over", vm.HasTools && vm.CanToolText && vm.ToolText == "ยินดีต้อนรับสู่แอปพลิเคชันของเรา", $"can={vm.CanToolText} '{vm.ToolText}'");
+            Check("l10n: it says where the change goes (the key, app_th.arb)", vm.ToolTextNote.Contains("welcome") && vm.ToolTextNote.Contains("app_th.arb"), vm.ToolTextNote);
+            double oldW = welcome.W;
+            string dart = File.ReadAllText(Path.Combine(root, "lib", "home_screen.dart"));
+            vm.ToolText = "สวัสดี";
+            DateTime t1 = DateTime.UtcNow;
+            vm.ApplyToolTextCommand.Execute(null);
+            string thNow = File.ReadAllText(th);
+            Check("l10n: exactly that message changed in app_th.arb", thNow == L10nThArb.Replace("\"welcome\": \"ยินดีต้อนรับสู่แอปพลิเคชันของเรา\"", "\"welcome\": \"สวัสดี\""), thNow);
+            Check("l10n: the file is still strict JSON", StrictJsonOk(thNow));
+            Check("l10n: app_en.arb and the screen's code are untouched", File.ReadAllText(en) == L10nEnArb && File.ReadAllText(Path.Combine(root, "lib", "home_screen.dart")) == dart);
+            Check("l10n: the box shows what was written, the Text stays picked", vm.ToolText == "สวัสดี" && vm.StageBox?.Line == welcomeLine && vm.CanToolText, $"'{vm.ToolText}' line {vm.StageBox?.Line}");
+            Check("l10n: the change joins the review round", vm.HasSession && vm.SessionReview, vm.SessionText);
+            drawn = await Redrawn(vm, store, home.Page.Id, t1);
+            var welcome2 = Box(vm, "Text", welcomeLine);
+            Check("l10n: drawn again after gen-l10n — the shorter text has a narrower box", drawn && welcome2 != null && welcome2.W < oldW - 20, $"{oldW:0} → {welcome2?.W:0} {vm.CompileError}");
+            Check("l10n: the same Text is picked on the new picture", welcome2 != null && ReferenceEquals(vm.StageBox, welcome2) && vm.ToolText == "สวัสดี");
+            string generated = Path.Combine(root, "lib", "l10n", "app_localizations_th.dart");
+            Check("l10n: flutter gen-l10n made the Thai class again", File.Exists(generated) && File.ReadAllText(generated).Contains("'สวัสดี'"));
+            if (!drawn) return;
+            var at = store.Get(home.Page.Id, "app")!.CapturedUtc;
+            await Task.Delay(4000);
+            Check("l10n: gen-l10n's own output doesn't draw the screen once more", !vm.IsRendering && store.Get(home.Page.Id, "app")!.CapturedUtc == at);
+            SavePng((FrameworkElement)view.FindName("Stage"), "stage-l10n.png");
+
+            // braces would turn the text into a placeholder: refused, nothing written
+            vm.ToolText = "สวัสดี {name}";
+            vm.ApplyToolTextCommand.Execute(null);
+            Check("l10n: new text with { } is refused — the .arb stays as it was", File.ReadAllText(th) == thNow);
+
+            DateTime t2 = DateTime.UtcNow;
+            vm.UndoCommand.Execute(null);
+            Check("undo: the .arb is back exactly as it was", File.ReadAllText(th) == L10nThArb);
+            drawn = await Redrawn(vm, store, home.Page.Id, t2);
+            var welcome3 = Box(vm, "Text", welcomeLine);
+            Check("undo: drawn again with the long text", drawn && welcome3 != null && Math.Abs(welcome3.W - oldW) < 2, $"{oldW:0} → {welcome3?.W:0}");
+            vm.UndoAllCommand.Execute(null);
+            Check("round: undo all ends it with app_th.arb as it began", !vm.HasSession && File.ReadAllText(th) == L10nThArb);
+        }
+        finally
+        {
+            vm.RenderConsentOverride = null;
+            vm.ToolConfirmOverride = null;
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("flutter.bat");
+            CluadeX.Services.Safety.ProcessLaunchPolicy.Allowed.Remove("dart.bat");
+        }
+    }
+
+    static string T(UiStudioViewModel vm, string key) => ((CluadeX.Services.LocalizationService)GetField(vm, "_loc")!).T(key);
+
+    static bool StrictJsonOk(string text)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text, new System.Text.Json.JsonDocumentOptions { AllowTrailingCommas = false, CommentHandling = System.Text.Json.JsonCommentHandling.Disallow });
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object;
+        }
+        catch { return false; }
+    }
+
     static string FirstLine(string file, string probe) => File.ReadAllLines(file).FirstOrDefault(l => l.Contains(probe, StringComparison.Ordinal))?.Trim() ?? "(not found)";
     static string Clip(string s) => s.Length > 600 ? s[..600] + "…" : s;
 }

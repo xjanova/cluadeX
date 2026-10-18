@@ -189,7 +189,10 @@ public sealed partial class UiStudioViewModel
     {
         if (s.FullSnapshot || !_studio.HasProject) return;
         int n = 0;
-        foreach (var f in AppFiles(_studio.Root))
+        string root = Path.GetFullPath(_studio.Root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        // (translations kept outside lib/ too: arb-dir: l10n)
+        var arbs = (_l10n?.ArbFiles ?? Array.Empty<string>()).Where(f => f.StartsWith(root, StringComparison.OrdinalIgnoreCase));
+        foreach (var f in AppFiles(_studio.Root).Concat(arbs).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (s.Before.ContainsKey(f)) continue;
             try
@@ -206,6 +209,7 @@ public sealed partial class UiStudioViewModel
     {
         string root = _studio.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (string.Equals(path, root + "pubspec.yaml", StringComparison.OrdinalIgnoreCase)) return true;
+        if (_l10n?.IsArb(path) == true && path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return true;
         return path.StartsWith(root + "lib" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
                && (path.EndsWith(".dart", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".arb", StringComparison.OrdinalIgnoreCase));
     }

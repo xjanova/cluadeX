@@ -246,6 +246,7 @@ internal static partial class Program
         await FlutterApp(vm, view, fx);
         await FlutterReal(vm, view, fx);
         await FlutterTools(vm, view, fx);
+        await FlutterTranslations(vm, view, fx);
         await WpfApp(vm, view, fx);
 
         return Finish();
@@ -278,8 +279,10 @@ internal static partial class Program
                       + File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "StudioService.cs"));
         // the edit engine's refusals ("studio.fedit." + reason) and the palette's names / samples ("studio.fedit.palette." + key)
         string engine = File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "Sketch", "FlutterCodeEdit.cs"));
-        // the renderer hands back keys as plain strings ("studio.render.noFlutter") that the view model shows with T()
-        string renderer = File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "Sketch", "FlutterRenderer.cs"));
+        // the renderer and the translations' editor hand back keys as plain strings ("studio.render.noFlutter",
+        // "studio.fedit.arb.bad") that the view model shows with T()
+        string renderer = File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "Sketch", "FlutterRenderer.cs"))
+                          + File.ReadAllText(Path.Combine(repo, "CluadeX", "Services", "UiStudio", "Sketch", "FlutterL10n.cs"));
         loc.SetLanguage("th");
         var keys = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{services:Loc\s+([\w.]+)\}").Select(m => m.Groups[1].Value)
             .Concat(System.Text.RegularExpressions.Regex.Matches(code, @"\bT\(""([\w.]+)""").Select(m => m.Groups[1].Value))

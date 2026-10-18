@@ -16,6 +16,8 @@ namespace CluadeX.ViewModels;
 public sealed partial class UiStudioViewModel
 {
     private FileSystemWatcher? _libWatcher;
+    /// <summary>The app's gen-l10n setup: its .arb files are sources, the Dart gen-l10n makes from them is not.</summary>
+    private FlutterL10n? _l10n;
     private DispatcherTimer? _renderDebounce;
     private bool _rendering, _renderAgain;
     private CancellationTokenSource? _renderCts;
@@ -354,7 +356,10 @@ public sealed partial class UiStudioViewModel
         OnPropertyChanged(nameof(Palette));
         OnPropertyChanged(nameof(IsFlutterApp));
         OnPropertyChanged(nameof(ShowPalette));
+        _l10n = null;
         if (_catalog?.Flutter == null) return;
+        try { _l10n = FlutterL10n.Load(_studio.Root); }
+        catch (Exception ex) { _log?.Warn("UiStudio", "reading l10n.yaml failed", ex); }
         try
         {
             var w = new FileSystemWatcher(_studio.Root)
@@ -384,10 +389,18 @@ public sealed partial class UiStudioViewModel
         string root = _studio.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return;
         string rel = path[root.Length..].Replace('\\', '/');
-        if (!(rel.StartsWith("lib/", StringComparison.OrdinalIgnoreCase) || rel.StartsWith("assets/", StringComparison.OrdinalIgnoreCase) || rel == "pubspec.yaml")) return;
+        var l10n = _l10n;
+        bool translations = rel == "l10n.yaml" || l10n?.IsArb(path) == true;
+        if (!(translations || rel.StartsWith("lib/", StringComparison.OrdinalIgnoreCase) || rel.StartsWith("assets/", StringComparison.OrdinalIgnoreCase) || rel == "pubspec.yaml")) return;
         if (rel.EndsWith(".g.dart", StringComparison.OrdinalIgnoreCase) || rel.Contains("/.", StringComparison.Ordinal)) return;
+        // what gen-l10n writes while a screen is drawn: the .arb files were the change, this is only its result
+        if (l10n?.IsGenerated(path) == true) return;
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
+            if (rel == "l10n.yaml")
+            {
+                try { _l10n = FlutterL10n.Load(_studio.Root); } catch { _l10n = null; }
+            }
             NoteSourceChanged(path);
             _sourcesChanged = true;
             _renderDebounce ??= NewRenderDebounce();
