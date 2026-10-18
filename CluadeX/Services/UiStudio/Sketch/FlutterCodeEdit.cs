@@ -65,6 +65,10 @@ public sealed class FlutterWidgetInfo
     public string? Text { get; init; }
     /// <summary>Why the text can't be typed in here (a key): it comes from data or the app's translations.</summary>
     public string? TextNote { get; init; }
+    /// <summary>The translation key its text reads (<c>context.l10n.title</c> → "title"); the text tool changes it in the .arb file.</summary>
+    public string? L10nKey { get; init; }
+    /// <summary>The key is called with values (<c>l10n.greeting(name)</c>): a message with placeholders.</summary>
+    public bool L10nCall { get; init; }
     public bool CanText { get; init; }
     public bool CanTextStyle { get; init; }
     public double? FontSize { get; init; }
@@ -162,12 +166,13 @@ public static class FlutterCodeEdit
         var slot = d.SlotOf(c);
         string cls = c.ClassName;
         var tc = TextCallFor(d, c);
-        string? textNote = null;
-        string? literal = null;
+        string? textNote = null, literal = null, l10nKey = null;
+        bool l10nCall = false;
         if (tc != null)
         {
             var a = tc.Positional(0);
             if (a != null && LiteralOf(d, a) is { } s) literal = s;
+            else if (a != null && TranslationKey(d, a, out l10nCall) is { } key) { l10nKey = key; textNote = "studio.fedit.text.l10n"; }
             else textNote = a != null && IsL10n(d.Text[a.ValueStart..a.ValueEnd]) ? "studio.fedit.text.l10n" : "studio.fedit.text.data";
         }
         var style = tc?.Named("style");
@@ -179,6 +184,8 @@ public static class FlutterCodeEdit
             Name = c.Name,
             Text = literal,
             TextNote = textNote,
+            L10nKey = l10nKey,
+            L10nCall = l10nCall,
             CanText = literal != null,
             CanTextStyle = tc != null,
             FontSize = Num(d, styleCall?.Named("fontSize")),
@@ -258,6 +265,94 @@ public static class FlutterCodeEdit
     private static bool IsL10n(string src) =>
         src.Contains("l10n", StringComparison.OrdinalIgnoreCase) || src.Contains("AppLocalizations", StringComparison.Ordinal)
         || System.Text.RegularExpressions.Regex.IsMatch(src, @"^\s*(S|L10n|AppL10n|Strings|tr)\b") || src.Contains(".tr(", StringComparison.Ordinal);
+
+    /// <summary>The translation key a value reads — <c>context.l10n.title</c>, <c>AppL10n.of(context).title</c>,
+    /// <c>AppLocalizations.of(context)!.title</c>, <c>l10n.title</c> (a variable or parameter that holds the app's
+    /// translations), <c>… ?? 'fallback'</c> — and whether it is called with values (<c>l10n.greeting(name)</c>: a
+    /// message with placeholders). Null for anything else, data that merely ends in a name included (<c>stats.total</c>).</summary>
+    internal static string? TranslationKey(DartDoc d, DartItem a, out bool call)
+    {
+        call = false;
+        int first = a.FirstTok, last = a.LastTok;
+        for (int k = first; k <= last; k++)
+        {
+            if (d.IsOpener(k) && d.Match[k] > k) { k = d.Match[k]; continue; }
+            if (d.Is(k, "??")) { last = k - 1; break; }
+        }
+        bool called = d.Is(last, ")") && d.Match[last] > first;
+        if (called) last = d.Match[last] - 1;
+        if (last - 2 < first || d.T[last].Kind != DTok.Ident || !(d.Is(last - 1, ".") || d.Is(last - 1, "?."))) return null;
+        string key = d.T[last].Text;
+        // gen-l10n's keys are Dart identifiers that start with a lowercase letter
+        if (!System.Text.RegularExpressions.Regex.IsMatch(key, "^[a-z][A-Za-z0-9_]*$")) return null;
+        int end = last - 2;
+        if (d.Is(end, "!")) end--;
+        if (!TranslationsAt(d, first, end, 0)) return null;
+        call = called;
+        return key;
+    }
+
+    /// <summary>The tokens [from, to] are the app's translations object.</summary>
+    private static bool TranslationsAt(DartDoc d, int from, int to, int depth)
+    {
+        if (depth > 3 || to < from) return false;
+        if (d.Is(to, ")") && d.Match[to] > from)
+        {
+            // AppL10n.of(context) — and Localizations.of<AppL10n>(context, AppL10n)
+            int j = d.Match[to] - 1;
+            if (d.Is(j, ">")) j = d.AngleOpenBefore(j) - 1;
+            return j - 2 == from && d.IsIdent(j, "of") && d.Is(j - 1, ".") && d.T[from].Kind == DTok.Ident && L10nClass(d.T[from].Text);
+        }
+        if (d.T[to].Kind != DTok.Ident) return false;
+        string name = d.T[to].Text;
+        // context.l10n, widget.l10n — and S.current
+        if (to - 2 >= from && d.Is(to - 1, "."))
+            return TrustedName(name) || name == "current" && to - 2 == from && L10nClass(d.T[from].Text);
+        if (to != from) return false;
+        // a variable or parameter: what it is declared as decides; a name like l10n speaks for itself
+        return DeclaredTranslations(d, name, d.T[from].Pos, depth) ?? TrustedName(name);
+    }
+
+    /// <summary>What <paramref name="name"/> is declared as, nearest before <paramref name="pos"/>: true when it holds the
+    /// app's translations (<c>final t = AppL10n.of(context);</c>, <c>AppL10n l10n</c>), false when it holds something
+    /// else (<c>final s = ref.watch(stats);</c>), null when the file doesn't say.</summary>
+    private static bool? DeclaredTranslations(DartDoc d, string name, int pos, int depth)
+    {
+        int startTok = d.T.FindIndex(t => t.Pos >= pos);
+        for (int i = (startTok < 0 ? d.T.Count : startTok) - 1; i >= 1; i--)
+        {
+            if (d.T[i].Kind != DTok.Ident || d.T[i].Text != name || d.Is(i - 1, ".")) continue;
+            if (d.Is(i + 1, "="))
+            {
+                // its value, up to the ; that ends the statement
+                int e = i + 2;
+                while (e < d.T.Count && !d.Is(e, ";") && !d.Is(e, ",") && !(d.T[e].Kind == DTok.Punct && d.T[e].Text is ")" or "]" or "}"))
+                    e = d.IsOpener(e) && d.Match[e] > e ? d.Match[e] + 1 : e + 1;
+                int v = e - 1;
+                if (d.Is(v, "!")) v--;
+                return TranslationsAt(d, i + 2, v, depth + 1);
+            }
+            // a typed declaration without a value: a parameter (AppL10n l10n) or a field (final AppL10n t;)
+            int type = d.Is(i - 1, "?") ? i - 2 : i - 1;
+            if (type >= 0 && d.T[type].Kind == DTok.Ident && char.IsUpper(d.T[type].Text[0])
+                && (d.Is(i + 1, ",") || d.Is(i + 1, ")") || d.Is(i + 1, ";") || d.Is(i + 1, "}")))
+                return L10nClass(d.T[type].Text);
+        }
+        return null;
+    }
+
+    /// <summary>A class that holds an app's translations: gen-l10n's (AppLocalizations, AppL10n, any output-class
+    /// named so), flutter_intl's S, Flutter's own Localizations.</summary>
+    private static bool L10nClass(string cls) =>
+        cls is "S" or "L10n" or "Localizations" || cls.EndsWith("L10n", StringComparison.Ordinal) || cls.EndsWith("Localizations", StringComparison.Ordinal)
+        || cls.EndsWith("Localization", StringComparison.Ordinal) || cls.EndsWith("Translations", StringComparison.Ordinal);
+
+    /// <summary>A name only translations go by (l10n, appL10n, loc, localizations, i18n, translations).</summary>
+    private static bool TrustedName(string name)
+    {
+        string n = name.TrimStart('_').ToLowerInvariant();
+        return n.Contains("l10n", StringComparison.Ordinal) || n is "loc" or "i18n" || n.Contains("localization", StringComparison.Ordinal) || n.Contains("translation", StringComparison.Ordinal);
+    }
 
     private static string Src(DartDoc d, DartItem v) => d.Text[v.ValueStart..v.ValueEnd].Trim();
 

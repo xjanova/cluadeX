@@ -168,6 +168,7 @@ internal static partial class Program
             DartReading();
             FlutterScreens(temp);
             FlutterEdits(temp);
+            ArbEdits(temp);
             WpfViews(temp);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
