@@ -141,6 +141,12 @@ public class ClaudeDevProvider : IAiProvider
         return args.ToString();
     }
 
+    /// <summary>The model the CLI said it runs (its init line) — what "default" resolved to. Null before the first run.</summary>
+    public static string? ReportedModel { get; private set; }
+
+    /// <summary>The context window the CLI reported for its last run (result.modelUsage.*.contextWindow). Null before one.</summary>
+    public static int? ReportedContextWindow { get; private set; }
+
     /// <summary>One stream-json line → the text the chat shows (assistant text, a short line per tool call, the final
     /// result's text only when it is an error). Null = nothing to show. <paramref name="isError"/> is set by a result
     /// line that failed.</summary>
@@ -154,6 +160,22 @@ public class ClaudeDevProvider : IAiProvider
             using var doc = System.Text.Json.JsonDocument.Parse(line);
             var root = doc.RootElement;
             string type = root.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "";
+            // The CLI says which model "default" really is (init) and how big its window is (result.modelUsage) —
+            // the status bar's "of N tokens" used to be a fixed 200K for every Claude Dev model (owner 2026-10-18:
+            // "ทำไมมันไม่ใช่ 1 ล้านเหรอ").
+            if (type == "system" && root.TryGetProperty("subtype", out var st) && st.GetString() == "init"
+                && root.TryGetProperty("model", out var im) && im.ValueKind == System.Text.Json.JsonValueKind.String
+                && im.GetString() is { Length: > 0 } initModel)
+                ReportedModel = initModel;
+            if (type == "result" && root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                int window = 0;
+                foreach (var m in mu.EnumerateObject())
+                    if (m.Value.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && m.Value.TryGetProperty("contextWindow", out var cw) && cw.TryGetInt32(out int w))
+                        window = Math.Max(window, w);
+                if (window > 0) ReportedContextWindow = window;
+            }
             if (type == "result")
             {
                 isError = root.TryGetProperty("is_error", out var e) && e.ValueKind == System.Text.Json.JsonValueKind.True;

@@ -126,6 +126,10 @@ internal static class ChatKeys
         ["chat.perm.allowChat"] = new() { ["en"] = "Allow in this chat", ["th"] = "อนุญาตทั้งแชทนี้" },
         ["chat.perm.allowChat.tip"] = new() { ["en"] = "Let this tool run without asking again in this chat. Other chats and new chats still ask.", ["th"] = "ให้เครื่องมือนี้ทำงานต่อโดยไม่ถามอีกในแชทนี้ แชทอื่นและแชทใหม่ยังถามเหมือนเดิม" },
         ["chat.perm.allowedChat"] = new() { ["en"] = "✓ Allowed in this chat", ["th"] = "✓ อนุญาตทั้งแชทนี้แล้ว" },
+        ["chat.perm.allowAlways"] = new() { ["en"] = "Always allow this folder", ["th"] = "อนุญาตโฟลเดอร์นี้เสมอ" },
+        ["chat.perm.allowAlways.tip"] = new() { ["en"] = "Remember it: the agent opens this folder (and the folders inside it) in every chat without asking again. Undo on the Permissions page.", ["th"] = "จำไว้: ทุกแชทเปิดโฟลเดอร์นี้ (และโฟลเดอร์ย่อย) ได้โดยไม่ถามอีก ยกเลิกได้ที่หน้า สิทธิ์การเข้าถึง" },
+        ["chat.perm.allowedAlways"] = new() { ["en"] = "✓ Always allowed — not asked again", ["th"] = "✓ อนุญาตเสมอแล้ว — จะไม่ถามอีก" },
+        ["chat.perm.openFolder"] = new() { ["en"] = "Open a folder outside the project: {0}", ["th"] = "เปิดโฟลเดอร์นอกโปรเจกต์: {0}" },
 
         // ─── Agent tool results (web_fetch, repl) ───
         ["chat.web.invalidUrl"] = new() { ["en"] = "Only http:// and https:// URLs can be fetched: {0}", ["th"] = "ดึงข้อมูลได้เฉพาะ URL แบบ http:// และ https:// เท่านั้น: {0}" },

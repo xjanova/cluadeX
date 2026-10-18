@@ -78,9 +78,71 @@ public sealed class ProjectToolModule : IAgentToolModule
 
     public string? GetRefusal(ToolType type) => null;
 
-    public ToolPermission DescribePermission(ToolCall call, ToolModuleContext context) =>
-        // Opening a folder reads nothing and changes nothing; every write after it still goes through its own gate.
-        ToolPermission.Free("read", call.GetArg("path"));
+    private static string L(string key) => LocalizedResources.Instance[key];
+
+    /// <summary>
+    /// Opening a folder reads nothing and changes nothing by itself — but reaching into ANOTHER project is the user's
+    /// call (owner 2026-10-18: "ให้ cluadex ฉลาดมากในการเปิดโฟลเดอร์แก้งานที่เกี่ยวข้องได้เลย โดยเราไม่ต้องระบุ แต่ต้อง
+    /// ขออนุญาตในการเปิดโฟลเดอร์อื่น จะให้ถามเสมอ หรือไม่ต้องถามอีกก็ได้"). Free: the first project of a chat with none
+    /// open, a folder already open or inside one, a folder the user answered "Always allow", or every folder when the
+    /// setting says "allow". Anything else asks once per folder per chat, with "Always allow this folder" on the card.
+    /// </summary>
+    public ToolPermission DescribePermission(ToolCall call, ToolModuleContext context)
+    {
+        string path = call.GetArg("path");
+        string? full = FullPathOrNull(path);
+        if (full == null || string.IsNullOrWhiteSpace(context.WorkingDirectory)) return ToolPermission.Free("read", path);
+        var s = _settings?.Settings;
+        if (string.Equals(s?.RelatedFolderAccess?.Trim(), "allow", StringComparison.OrdinalIgnoreCase))
+            return ToolPermission.Free("read", full);
+
+        var open = new List<string> { context.WorkingDirectory! };
+        if (AgentRunScope.Current is { } scope) open.AddRange(scope.ExtraFolders);
+        if (open.Any(o => IsSameOrInside(o, full)) || (s?.AllowedProjectFolders ?? new()).Any(a => IsSameOrInside(a, full)))
+            return ToolPermission.Free("read", full);
+
+        return new ToolPermission
+        {
+            Scope = "read",
+            Resource = full,
+            Detail = string.Format(L("chat.perm.openFolder"), full),
+            OnceKey = "open-folder|" + full.ToLowerInvariant(),
+            OnAllowedAlways = s == null ? null : () =>
+            {
+                if (s.AllowedProjectFolders.Any(a => IsSameOrInside(a, full))) return;
+                s.AllowedProjectFolders.Add(full);
+                _settings!.Save();
+            },
+        };
+    }
+
+    private static string? FullPathOrNull(string raw)
+    {
+        raw = (raw ?? "").Trim().Trim('"', '\'');
+        if (raw.Length == 0) return null;
+        raw = Environment.ExpandEnvironmentVariables(raw);
+        if (raw.StartsWith("~")) raw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), raw.TrimStart('~', '/', '\\'));
+        if (!Path.IsPathRooted(raw)) return null;
+        try
+        {
+            string full = Path.GetFullPath(raw).TrimEnd('\\', '/');
+            return full.EndsWith(':') ? full + "\\" : full;
+        }
+        catch { return null; }
+    }
+
+    /// <summary><paramref name="path"/> is <paramref name="root"/> or inside it (case-insensitive, whole segments).</summary>
+    public static bool IsSameOrInside(string root, string path)
+    {
+        try
+        {
+            string r = Path.GetFullPath(root).TrimEnd('\\', '/');
+            string p = Path.GetFullPath(path).TrimEnd('\\', '/');
+            return p.Equals(r, StringComparison.OrdinalIgnoreCase)
+                || p.StartsWith(r + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
 
     public Task<ToolResult> ExecuteAsync(ToolCall call, ToolModuleContext context, CancellationToken ct)
     {
@@ -165,11 +227,24 @@ public sealed class ProjectToolModule : IAgentToolModule
 
     public IReadOnlyCollection<string> LocalCoreToolNames { get; } = new[] { ToolName };
 
-    /// <summary>The projects opened before, so a named one opens without a search (offered only with no folder open).</summary>
+    /// <summary>The projects opened before, so a named one opens without a search. With a project open, the same list
+    /// tells the agent which RELATED projects exist — it opens one beside this one by itself when the work crosses
+    /// into it (the user is asked first, unless they said to always allow it).</summary>
     public string? GetPromptSection(PromptSectionContext context)
     {
         // A run's scope says where its tools work; with no scope (a prompt built outside a run) the UI's folder does.
         bool hasProject = AgentRunScope.Current is { } scope ? scope.WorkingDirectory != null : context.HasProject;
-        return hasProject ? null : (_registry ?? ProjectRegistryService.Current)?.PromptList();
+        var registry = _registry ?? ProjectRegistryService.Current;
+        if (!hasProject) return registry?.PromptList();
+        var recent = registry?.Recent(10) ?? Array.Empty<ProjectRegistryService.Entry>();
+        string? current = AgentRunScope.Current?.WorkingDirectory;
+        var others = recent.Where(e => current == null || !IsSameOrInside(current, e.Path)).ToList();
+        string list = others.Count == 0 ? "" : "\nOther projects on this machine:\n" + string.Join("\n", others.Select(e => $"- {e.Name} — {e.Path}"));
+        return "# Related projects\n"
+            + "When the task needs code that lives in ANOTHER project (a shared library, the server an app calls, the tool "
+            + "whose behaviour you are fixing), do not stop and ask the user to open it: find its path (the list below, or "
+            + "brain_search) and call open_project with add=\"true\", then work in it by absolute path. The app asks the user "
+            + "for permission itself — do not ask in chat first. If they deny, carry on with what you can and say what is left."
+            + list;
     }
 }

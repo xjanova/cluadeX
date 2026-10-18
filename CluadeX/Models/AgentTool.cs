@@ -266,6 +266,11 @@ public class PermissionRequestInfo
     public string? ChatScopeKey { get; set; }
     /// <summary>The user answered "Allow in this chat": the same tool runs without asking again in this chat.</summary>
     public bool AllowedForChat { get; set; }
+    /// <summary>Set when the prompt may be answered "Always allow" (remembered in settings, never asked again) — a
+    /// folder outside the project the agent wants to open. Null = not offered.</summary>
+    public string? AlwaysKey { get; set; }
+    /// <summary>The user answered "Always allow".</summary>
+    public bool AllowedAlways { get; set; }
 }
 
 /// <summary>

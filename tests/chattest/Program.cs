@@ -1281,6 +1281,10 @@ internal static partial class Program
         Check("L6 Claude Haiku 4.5 → 200K", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-haiku-4-5", 12288) == 200_000);
         Check("L6 Claude Sonnet 4.6 → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-sonnet-4-6", 12288) == 1_000_000);
         Check("L6 unknown Claude id → conservative 200K", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "my-proxy-model", 12288) == 200_000);
+        Check("L6 Claude Dev on its default model → the default model's 1M, not a fixed 200K",
+            ContextMemoryService.ContextWindowFor(AiProviderType.ClaudeDev, "default", 12288) == 1_000_000);
+        Check("L6 Claude Dev picked haiku-4-5 → 200K", ContextMemoryService.ContextWindowFor(AiProviderType.ClaudeDev, "claude-haiku-4-5", 12288) == 200_000);
+        Check("L6 a [1m] id → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Anthropic, "claude-sonnet-4-5[1m]", 12288) == 1_000_000);
         Check("L6 GPT-4o → 128K", ContextMemoryService.ContextWindowFor(AiProviderType.OpenAI, "gpt-4o", 12288) == 128_000);
         Check("L6 Gemini → 1M", ContextMemoryService.ContextWindowFor(AiProviderType.Gemini, "gemini-2.5-pro", 12288) == 1_048_576);
         Check("L6 local GGUF → the configured ContextSize", ContextMemoryService.ContextWindowFor(AiProviderType.Local, null, 12288) == 12288);

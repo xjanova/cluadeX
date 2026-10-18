@@ -28,6 +28,7 @@ public partial class ChatViewModel
             AiProviderType.OpenAI => "codex",
             AiProviderType.Gemini => "gemini",
             AiProviderType.BrainX => "brainx",
+            AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama => "mai",   // local = มายด์ (AgentPersona)
             _ => "cluadex",
         };
         public System.Windows.Media.ImageSource? GirlImage => GirlArt.Image(Girl);

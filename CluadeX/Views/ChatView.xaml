@@ -58,6 +58,8 @@
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <!-- The side panel moves here, under the composer, when the chat is too narrow to keep it beside (ChatView.xaml.cs) -->
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- ═══ IN-CHAT SEARCH BAR (Ctrl+F) ═══ -->
@@ -125,6 +127,7 @@
                                     Padding="{TemplateBinding Padding}">
                                 <ScrollViewer Style="{StaticResource SlimScrollViewer}"
                                               Focusable="False"
+                                              HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
                                               CanContentScroll="True">
                                     <ItemsPresenter/>
                                 </ScrollViewer>
@@ -519,6 +522,13 @@
                                                     Visibility="{Binding PermissionCanAllowForChat, Converter={StaticResource BoolVis}}"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionAllowChat"
                                                     Click="PermissionAllowChat_Click"/>
+                                            <!-- A folder outside the project: remember it, never ask again (owner 2026-10-18) -->
+                                            <Button Content="{services:Loc chat.perm.allowAlways}" Padding="14,3" Margin="0,0,8,0"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    FontSize="12"
+                                                    ToolTip="{services:Loc chat.perm.allowAlways.tip}"
+                                                    Visibility="{Binding PermissionCanAllowAlways, Converter={StaticResource BoolVis}}"
+                                                    Click="PermissionAllowAlways_Click"/>
                                             <Button Content="{services:Loc chat.deny}" Padding="14,3"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
@@ -539,6 +549,9 @@
                                                             <DataTrigger Binding="{Binding PermissionAllowedForChat}" Value="True">
                                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                             </DataTrigger>
+                                                            <DataTrigger Binding="{Binding PermissionAllowedAlways}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
@@ -546,6 +559,9 @@
                                             <TextBlock Text="{services:Loc chat.perm.allowedChat}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Success}"
                                                        Visibility="{Binding PermissionAllowedForChat, Converter={StaticResource BoolVis}}"/>
+                                            <TextBlock Text="{services:Loc chat.perm.allowedAlways}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Status.Success}"
+                                                       Visibility="{Binding PermissionAllowedAlways, Converter={StaticResource BoolVis}}"/>
                                             <TextBlock Text="{services:Loc chat.perm.denied}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Danger}">
                                                 <TextBlock.Style>
@@ -2511,8 +2527,8 @@
         </Border>
 
         <!-- ═══ RIGHT PANEL — the project's files, the last image the agent looked at, its last run ═══ -->
-        <!-- SidePanelHost: the view hides it where it does not belong — inside the Edit page (which has its own
-             explorer and terminal) and when the chat itself is too narrow to give up 300 px. -->
+        <!-- SidePanelHost: the view hides it only inside the Edit page (which has its own explorer and terminal). On a
+             narrow chat it first gives up width, then moves under the composer across the whole width (ChatView.xaml.cs). -->
         <Grid x:Name="SidePanelHost" Grid.Column="1" Grid.RowSpan="4">
         <Border x:Name="SidePanel" Width="300" Background="{DynamicResource Bg.Panel}"
                 BorderBrush="{DynamicResource Border.Subtle}" BorderThickness="1,0,0,0"
@@ -2616,7 +2632,7 @@
             </Grid>
         </Border>
         <!-- Drag the panel's left edge to resize it (remembered); double-click puts it back to 300. -->
-        <views:ResizeGrip HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
+        <views:ResizeGrip x:Name="SidePanelGrip" HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
                           Target="{Binding ElementName=SidePanel}"
                           Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}"/>
         </Grid>

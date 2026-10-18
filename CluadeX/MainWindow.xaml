@@ -411,8 +411,9 @@
                             <Button.Template>
                                 <ControlTemplate TargetType="Button">
                                     <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6">
-                                        <TextBlock Text="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                                   FontSize="13" Foreground="{DynamicResource Status.Success}"
+                                        <!-- E8B7 Folder — E838 drew as a half-open bracket the owner read as a broken icon -->
+                                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="14" Foreground="{DynamicResource Status.Success}"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
                                     <ControlTemplate.Triggers>
@@ -1189,7 +1190,8 @@
                         <!-- How full the context is: tokens used of the window, as a bar -->
                         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0"
                                     ToolTip="{services:Loc chat.ctxTip}">
-                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                            <!-- A gauge (SpeedHigh), not E8A5 "Document": at 11 px the page read as an empty square box. -->
+                            <TextBlock Text="&#xEC4A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
                                        Foreground="{DynamicResource Text.Muted}" VerticalAlignment="Center" Margin="0,0,6,0"/>
                             <TextBlock FontSize="12" Foreground="{DynamicResource StatusBar.Foreground}" VerticalAlignment="Center">
                                 <Run Text="{Binding ChatVM.ContextUsageText, Mode=OneWay}"/>

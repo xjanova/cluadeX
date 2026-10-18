@@ -82,10 +82,49 @@ public class PermissionsViewModel : ViewModelBase
     public RelayCommand AddAllowCommand { get; }
     public RelayCommand AddDenyCommand { get; }
 
-    public PermissionsViewModel(PermissionService permissionService, LocalizationService loc)
+    // ─── Folders outside the project (open_project) ───
+    private readonly SettingsService? _settings;
+
+    /// <summary>On: the agent asks before it opens a folder outside the project (default). Off: it never asks.</summary>
+    public bool AskBeforeOtherFolders
+    {
+        get => !string.Equals(_settings?.Settings.RelatedFolderAccess?.Trim(), "allow", StringComparison.OrdinalIgnoreCase);
+        set
+        {
+            if (_settings == null || value == AskBeforeOtherFolders) return;
+            _settings.Settings.RelatedFolderAccess = value ? "ask" : "allow";
+            _settings.Save();
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>Folders answered "Always allow this folder" on a prompt.</summary>
+    public ObservableCollection<string> AllowedFolders { get; } = new();
+    public RelayCommand<string> RemoveAllowedFolderCommand { get; }
+
+    private void RebuildAllowedFolders()
+    {
+        AllowedFolders.Clear();
+        foreach (var f in _settings?.Settings.AllowedProjectFolders ?? new()) AllowedFolders.Add(f);
+    }
+
+    private void RemoveAllowedFolder(string? folder)
+    {
+        if (_settings == null || string.IsNullOrEmpty(folder)) return;
+        var answer = MessageBox.Show(_loc.T("perms.folders.removeConfirm", folder), "CluadeX",
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+        if (answer != MessageBoxResult.Yes) return;
+        _settings.Settings.AllowedProjectFolders.RemoveAll(f => string.Equals(f, folder, StringComparison.OrdinalIgnoreCase));
+        _settings.Save();
+        RebuildAllowedFolders();
+    }
+
+    public PermissionsViewModel(PermissionService permissionService, LocalizationService loc, SettingsService? settings = null)
     {
         _permissionService = permissionService;
         _loc = loc;
+        _settings = settings;
+        RemoveAllowedFolderCommand = new RelayCommand<string>(RemoveAllowedFolder);
 
         AddRuleCommand = new RelayCommand(AddRule, () => !string.IsNullOrWhiteSpace(NewPattern));
         RemoveRuleCommand = new RelayCommand(RemoveRule, () => SelectedRule != null);
@@ -196,6 +235,8 @@ public class PermissionsViewModel : ViewModelBase
         if (MigrateLegacyScopes(_permissionService.Rules))
             _permissionService.SaveRules();
         RebuildItems();
+        RebuildAllowedFolders();
+        OnPropertyChanged(nameof(AskBeforeOtherFolders));
     }
 
     /// <summary>

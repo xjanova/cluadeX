@@ -330,6 +330,21 @@ public class ChatMessage : INotifyPropertyChanged
         return ResolvePermission(PermissionOutcome.Allowed);
     }
 
+    /// <summary>The prompt offers "Always allow" (a folder outside the project: remembered, never asked again).</summary>
+    public bool PermissionCanAllowAlways { get; set; }
+
+    /// <summary>It was answered with "Always allow".</summary>
+    public bool PermissionAllowedAlways { get; private set; }
+
+    /// <summary>Answer "Always allow". False when the prompt does not offer it or was already answered.</summary>
+    public bool AllowPermissionAlways()
+    {
+        if (!PermissionCanAllowAlways || PermissionAnswered) return false;
+        PermissionAllowedAlways = true;
+        OnPropertyChanged(nameof(PermissionAllowedAlways));
+        return ResolvePermission(PermissionOutcome.Allowed);
+    }
+
     private PermissionOutcome _permissionOutcome;
     /// <summary>How the prompt was answered. Notifies, so the Allow/Deny buttons collapse and the outcome label
     /// appears the moment it is answered — they used to stay clickable and the answer was appended to the
