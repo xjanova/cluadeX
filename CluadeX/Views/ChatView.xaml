@@ -2632,6 +2632,11 @@
             </Grid>
         </Border>
         <!-- Drag the panel's left edge to resize it (remembered); double-click puts it back to 300. -->
+        <!-- Stacked under the composer (a narrow or portrait window): drag the panel's TOP edge to share the height
+             between the conversation and the files (remembered). Shown only while stacked (ChatView.xaml.cs). -->
+        <views:ResizeGrip x:Name="SidePanelHeightGrip" Vertical="True" VerticalAlignment="Top" OnLeftEdge="True"
+                          Key="chat.sidePanel.height" MinSize="120" MaxSize="900"
+                          Target="{Binding ElementName=SidePanel}" Visibility="Collapsed"/>
         <views:ResizeGrip x:Name="SidePanelGrip" HorizontalAlignment="Left" OnLeftEdge="True" Key="chat.sidePanel" MinSize="220" MaxSize="760"
                           Target="{Binding ElementName=SidePanel}"
                           Visibility="{Binding SidePanelVisible, Converter={StaticResource BoolVis}}"/>

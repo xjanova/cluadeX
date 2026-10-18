@@ -2772,6 +2772,20 @@ public partial class ChatViewModel : ViewModelBase
             NewSession();
             return;
         }
+        // Claude Dev's CLI is signed out: open its login in a console; the user finishes it in the browser. Before the
+        // provider check on purpose — a signed-out Claude Dev is exactly when the provider is not ready.
+        if (input.Equals("/login", StringComparison.OrdinalIgnoreCase))
+        {
+            ClearBox();
+            bool opened = Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
+            Messages.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                Content = opened ? "🔑 " + Loc("chat.login.opened") : "⚠ " + Loc("chat.login.failed"),
+            });
+            ScrollToBottom?.Invoke();
+            return;
+        }
 
         if (!await EnsureProviderReadyAsync()) return;
 
