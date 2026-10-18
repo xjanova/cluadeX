@@ -542,11 +542,18 @@ internal static partial class Program
         });
         await Case("G8", async () =>
         {
-            Fs.WorkingDirectory = @"E:\Code\ClaudeClient";           // read-only search over the real repo
+            // Read-only search over the CluadeX repo this harness was built from (not a fixed path: the main checkout
+            // also holds .claude/worktrees copies and is not the code under test). One warm-up run first, so a cold
+            // disk cache or a busy machine is not mistaken for a slow search.
+            string repo = AppContext.BaseDirectory;
+            while (repo != null && !File.Exists(Path.Combine(repo, "CluadeX", "CluadeX.csproj"))) repo = Path.GetDirectoryName(repo);
+            repo ??= @"E:\Code\ClaudeClient";
+            Fs.WorkingDirectory = repo;
+            await T("grep_search", ("pattern", "ExecuteToolAsync"), ("output_mode", "files_with_matches"));
             var r = await T("grep_search", ("pattern", "ExecuteToolAsync"), ("output_mode", "files_with_matches"));
             long ms = LastMs;
             Fs.WorkingDirectory = Root;
-            Check("G8", $"search over the real CluadeX repo is fast ({ms} ms)", r.Success && Seen(r).Contains("AgentToolService.cs") && ms < 3000, Seen(r));
+            Check("G8", $"search over the real CluadeX repo is fast ({ms} ms, warm, {repo})", r.Success && Seen(r).Contains("AgentToolService.cs") && ms < 3000, Seen(r));
         });
 
         await Case("G9", async () =>
@@ -1154,26 +1161,71 @@ internal static partial class Program
                 string blockedPrefix = blockedTemplate[..blockedTemplate.IndexOf("{0}", StringComparison.Ordinal)];
                 try
                 {
+                    // Owner's rule (d191c59 / 374b331, 2026-10-18): a clean-up delete in the project runs; only a delete
+                    // aimed at a drive / home / system folder is put to the user on the red prompt (DangerApproval).
                     settings.Settings.Features.DangerousCommandBlocking = true;
+                    bool Refused(CodeExecutionResult r) => !r.Success && ((r.Error ?? "").StartsWith(blockedPrefix) || (r.Error ?? "").Contains("CluadeX safety"));
                     var r1 = await exec.ExecuteAsync($"del /q \"{victim}\"", "batch");
-                    Check("PG13", "a batch code block `del /q <file>` is refused before it runs (localized reason naming the line); the file survives",
-                        !r1.Success && r1.Error.StartsWith(blockedPrefix) && r1.Error.Contains("del /q") && File.Exists(victim), r1.Error);
+                    Check("PG13", "a batch code block `del /q <temp file>` is a clean-up delete: it runs and the file goes",
+                        !Refused(r1) && !File.Exists(victim), $"success={r1.Success} {r1.Error}");
+                    File.WriteAllText(victim, "x");
                     var r2 = await exec.ExecuteAsync($"echo harmless\r\ndel /q \"{victim}\"", "cmd");
-                    Check("PG13b", "…also when the dangerous line is not the first one (every line is checked)", !r2.Success && File.Exists(victim), r2.Error);
+                    Check("PG13b", "…also when the delete is not the first line", !Refused(r2) && !File.Exists(victim), $"success={r2.Success} {r2.Error}");
+                    File.WriteAllText(victim, "x");
                     var r3 = await exec.ExecuteAsync($"Write-Output hi\nRemove-Item -Recurse -Force '{victim}'", "powershell");
-                    Check("PG13c", "…a powershell block with Remove-Item -Recurse -Force", !r3.Success && r3.Error.StartsWith(blockedPrefix) && File.Exists(victim), r3.Error);
+                    Check("PG13c", "…a powershell block with Remove-Item -Recurse -Force on a temp file", !Refused(r3) && !File.Exists(victim), $"success={r3.Success} {r3.Error}");
+                    File.WriteAllText(victim, "x");
                     var r4 = await exec.ExecuteAsync("rm -rf ./cluadex-harness-nothing-here", "bash");
-                    Check("PG13d", "…a bash block with rm -rf", !r4.Success && r4.Error.StartsWith(blockedPrefix), r4.Error);
+                    Check("PG13d", "…a bash block with rm -rf ./… is not refused", !Refused(r4), r4.Error);
 
-                    string reason = auto.VerifyCommandBlockReason($"del /q \"{victim}\"");
-                    Check("PG13e", "the autonomous build/test command goes through the blocklist (localized reason); a normal one passes",
-                        reason != null && reason.Contains("del /q") && auto.VerifyCommandBlockReason("dotnet build -clp:ErrorsOnly --nologo") == null, reason ?? "(null)");
+                    // A drive root as the target goes to the red prompt; the answer here is always No, and dry-run is on
+                    // so nothing could start even if the gate let it through. The target is a drive that does not exist.
+                    string noDrive = Enumerable.Range(0, 10).Select(i => (char)('Z' - i) + ":\\").FirstOrDefault(d => !Directory.Exists(d)) ?? "Z:\\";
+                    string rootDel = "rd" + " /s /q " + noDrive;
+                    var asks = new List<CluadeX.Services.Safety.DangerRequest>();
+                    var keepHandler = CluadeX.Services.Safety.DangerApproval.Handler;
+                    bool keepDry = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+                    CluadeX.Services.Safety.DangerApproval.Handler = req => { lock (asks) asks.Add(req); return Task.FromResult(false); };
+                    CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+                    try
+                    {
+                        var r6 = await exec.ExecuteAsync($"echo harmless\r\n{rootDel}", "batch");
+                        Check("PG13d2", "a batch block deleting a drive root is put to the user (red prompt, names the line); on No it is refused",
+                            !r6.Success && (r6.Error ?? "").Contains("did not approve") && asks.Count == 1 && asks[0].Reason.Contains(noDrive.TrimEnd('\\')),
+                            $"asks={asks.Count} {r6.Error}");
+                        asks.Clear();
+                        CluadeX.Services.Safety.DangerApproval.Handler = null;
+                        var r7 = await exec.ExecuteAsync(rootDel, "batch");
+                        Check("PG13d3", "…and with nobody to ask (no handler) it is refused", !r7.Success && (r7.Error ?? "").Contains("CluadeX safety"), r7.Error);
+                    }
+                    finally
+                    {
+                        CluadeX.Services.Safety.DangerApproval.Handler = keepHandler;
+                        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = keepDry;
+                    }
+
+                    Check("PG13e", "the autonomous build/test command: a clean-up delete and a normal build pass; a drive-root delete is refused",
+                        auto.VerifyCommandBlockReason($"del /q \"{victim}\"") == null && auto.VerifyCommandBlockReason("dotnet build -clp:ErrorsOnly --nologo") == null
+                        && auto.VerifyCommandBlockReason(rootDel) is { } rootReason && rootReason.Contains("CluadeX safety"),
+                        auto.VerifyCommandBlockReason(rootDel) ?? "(null)");
                     var run = typeof(AutonomousCodingService).GetMethod("RunCommandAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
                     var (ok, output) = await (Task<(bool, string)>)run.Invoke(auto, new object[] { $"del /q \"{victim}\"", CancellationToken.None })!;
-                    Check("PG13f", "…and the runner itself refuses it — the file survives", !ok && output == reason && File.Exists(victim), output);
+                    Check("PG13f", "…and the runner runs the clean-up delete — the temp file goes", !File.Exists(victim), $"ok={ok} {output}");
+                    File.WriteAllText(victim, "x");
+                    var (okRoot, outRoot) = await (Task<(bool, string)>)run.Invoke(auto, new object[] { rootDel, CancellationToken.None })!;
+                    Check("PG13f2", "…and refuses the drive-root delete itself, before any shell", !okRoot && outRoot == auto.VerifyCommandBlockReason(rootDel), outRoot);
+                    bool keepDry3 = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+                    CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+                    try
+                    {
+                        var (okDry, outDry) = await (Task<(bool, string)>)run.Invoke(auto, new object[] { $"del /q \"{victim}\"", CancellationToken.None })!;
+                        Check("PG13f3", "…and in dry-run the runner starts nothing (it reports the command; the temp file stays)",
+                            okDry && outDry.StartsWith("[dry-run]") && File.Exists(victim), $"ok={okDry} {outDry}");
+                    }
+                    finally { CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = keepDry3; }
 
-                    // Negative controls: with Dangerous Command Blocking off, the very same block / command RUNS
-                    // (the file goes) — so it was the check, not chance, that stopped them above.
+                    // With Dangerous Command Blocking off the clean-up delete runs the same way (the switch never
+                    // decided deletes; the drive-root gate above cannot be switched off).
                     settings.Settings.Features.DangerousCommandBlocking = false;
                     var r5 = await exec.ExecuteAsync($"del /q \"{victim}\"", "batch");
                     Check("PG13g", "control: blocking off → the same batch block runs and deletes the file", !File.Exists(victim), $"success={r5.Success} {r5.FullOutput}");
@@ -1389,15 +1441,45 @@ internal static partial class Program
                         Seen(commit));
                     var ps = await T("powershell", ("command", "$t = @'\nformat the totals as currency\n'@\nWrite-Output $t"));
                     Check("PG17rb", "powershell: a here-string with a 'format …' line runs", ps.Success && Seen(ps).Contains("format the totals as currency"), Seen(ps));
+                    // A clean-up delete on a real second line runs (owner's rule, 374b331); the same line aimed at a drive
+                    // root is put to the red prompt. The answer here is No, dry-run is on, and the drive does not exist.
                     var second = await T("run_command", ("command", "echo hi\nrm -rf ./cluadex-harness-nothing-here"));
-                    Check("PG17rc", "run_command: a real second line `rm -rf ./…` is still refused", !second.Success && Seen(second).Contains("blocked for safety"), Seen(second));
+                    Check("PG17rc", "run_command: a real second line `rm -rf ./…` is a clean-up delete — it runs",
+                        !Seen(second).Contains("blocked for safety") && !Seen(second).Contains("CluadeX safety"), Seen(second));
+                    string noDrive = Enumerable.Range(0, 10).Select(i => (char)('z' - i)).FirstOrDefault(c => !Directory.Exists(char.ToUpperInvariant(c) + ":\\"), 'z').ToString();
+                    var asks = new List<CluadeX.Services.Safety.DangerRequest>();
+                    var keepHandler = CluadeX.Services.Safety.DangerApproval.Handler;
+                    bool keepDry = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+                    CluadeX.Services.Safety.DangerApproval.Handler = req => { lock (asks) asks.Add(req); return Task.FromResult(false); };
+                    CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+                    try
+                    {
+                        var rootSecond = await T("run_command", ("command", "echo hi\n" + "rm" + " -rf /" + noDrive + "/"));
+                        Check("PG17rc2", "run_command: a second line `rm -rf /<drive>/` asks on the red prompt and, on No, is refused",
+                            !rootSecond.Success && Seen(rootSecond).Contains("did not approve") && asks.Count == 1 && asks[0].Tool == "run_command",
+                            $"asks={asks.Count} {Seen(rootSecond)}");
+                    }
+                    finally
+                    {
+                        CluadeX.Services.Safety.DangerApproval.Handler = keepHandler;
+                        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = keepDry;
+                    }
 
                     var exec = provider.GetRequiredService<CodeExecutionService>();
                     string blockedTemplate = loc.T("chat.exec.blocked");
                     string blockedPrefix = blockedTemplate[..blockedTemplate.IndexOf("{0}", StringComparison.Ordinal)];
                     var bat = await exec.ExecuteAsync($"echo Don't\r\ndel /q \"{victim}\"\r\necho won't", "batch");
-                    Check("PG17rd", "a batch block `echo Don't ⏎ del /q <file> ⏎ echo won't` is refused (cmd has no ' quotes); the file survives",
-                        !bat.Success && (bat.Error ?? "").StartsWith(blockedPrefix) && File.Exists(victim), bat.Error);
+                    Check("PG17rd", "a batch block `echo Don't ⏎ del /q <temp file> ⏎ echo won't`: cmd has no ' quotes, so the delete is a real line — it runs and the file goes",
+                        bat.Success && !(bat.Error ?? "").StartsWith(blockedPrefix) && !File.Exists(victim), $"success={bat.Success} {bat.Error}");
+                    var keepDry2 = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+                    CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+                    try
+                    {
+                        var batRoot = await exec.ExecuteAsync("echo Don't\r\n" + "rd" + " /s /q " + char.ToUpperInvariant(noDrive[0]) + ":\\\r\necho won't", "batch");
+                        Check("PG17rd2", "…the same shape aimed at a drive root is refused (nobody to say yes here)",
+                            !batRoot.Success && (batRoot.Error ?? "").Contains("CluadeX safety"), batRoot.Error);
+                    }
+                    finally { CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = keepDry2; }
                     var heredoc = await exec.ExecuteAsync("cat <<'EOF'\nformat the totals as currency\nEOF", "bash");
                     Check("PG17re", "a bash block with a heredoc line 'format …' is not refused by the blocklist",
                         !(heredoc.Error ?? "").StartsWith(blockedPrefix), heredoc.Error);

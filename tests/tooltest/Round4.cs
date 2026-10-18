@@ -102,9 +102,29 @@ internal static partial class Program
                         Check(id, $"{label}: Git Bash really runs the hidden line (a marker appears through run_command) — and with `rm -rf ~` there it is blocked",
                             File.Exists(marker) && blocked != null, $"marker={File.Exists(marker)} blocked={Q(blocked)} run={Q(Seen(run))}");
                     }
-                    var refused = await T("run_command", ("command", "echo \"$(echo x\nrm -rf ./cx-harness-nothing-here\necho y)\""));
-                    Check("PG19e7", "run_command refuses `rm -rf ./…` hidden in a multi-line $( ) inside \"…\"",
-                        !refused.Success && Seen(refused).Contains("blocked for safety"), Seen(refused));
+                    // Owner's rule (374b331): a clean-up delete runs wherever it sits; one aimed at a drive / home / system
+                    // folder is put to the red prompt even hidden in a multi-line $( ). Here the answer is No, dry-run is
+                    // on, and the target is a drive that does not exist.
+                    var cleanup = await T("run_command", ("command", "echo \"$(echo x\nrm -rf ./cx-harness-nothing-here\necho y)\""));
+                    Check("PG19e7", "run_command runs a clean-up `rm -rf ./…` hidden in a multi-line $( ) inside \"…\"",
+                        cleanup.Success && !Seen(cleanup).Contains("blocked for safety") && !Seen(cleanup).Contains("CluadeX safety"), Seen(cleanup));
+                    char noDrive = Enumerable.Range(0, 10).Select(i => (char)('z' - i)).FirstOrDefault(c => !Directory.Exists(char.ToUpperInvariant(c) + ":\\"), 'z');
+                    var asks = new List<CluadeX.Services.Safety.DangerRequest>();
+                    var keepHandler = CluadeX.Services.Safety.DangerApproval.Handler;
+                    bool keepDry = CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun;
+                    CluadeX.Services.Safety.DangerApproval.Handler = req => { lock (asks) asks.Add(req); return Task.FromResult(false); };
+                    CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = true;
+                    try
+                    {
+                        var hidden = await T("run_command", ("command", "echo \"$(echo x\n" + "rm" + " -rf /" + noDrive + "/\necho y)\""));
+                        Check("PG19e8", "…the same $( ) shape aimed at a drive root asks on the red prompt and, on No, is refused",
+                            !hidden.Success && Seen(hidden).Contains("did not approve") && asks.Count == 1, $"asks={asks.Count} {Seen(hidden)}");
+                    }
+                    finally
+                    {
+                        CluadeX.Services.Safety.DangerApproval.Handler = keepHandler;
+                        CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = keepDry;
+                    }
                 }
                 else GapIf("PG19e2", "Git Bash end-to-end proofs (Git Bash not found)", false);
 
