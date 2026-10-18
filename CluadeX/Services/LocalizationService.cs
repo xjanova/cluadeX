@@ -974,6 +974,8 @@ public class LocalizationService
         ["chat.model.thisPc"] = new() { ["en"] = "on this PC", ["th"] = "ในเครื่องนี้" },
         ["chat.model.switchFailed"] = new() { ["en"] = "Couldn't switch the model — details in the Debug Log", ["th"] = "เปลี่ยนโมเดลไม่สำเร็จ — ดูรายละเอียดใน Debug Log" },
         ["chat.model.notOffered"] = new() { ["en"] = "{0} is not one of CluadeX's models (an API model with a key)", ["th"] = "{0} ไม่ได้อยู่ในรายการโมเดลของ CluadeX (โมเดล API ที่ใส่คีย์แล้ว)" },
+        ["chat.effort.cliPerTurn"] = new() { ["en"] = "CLI picks per turn", ["th"] = "CLI เลือกเองทุกเทิร์น" },
+        ["chat.effort.cliDefault"] = new() { ["en"] = "CLI default", ["th"] = "ค่าเริ่มต้นของ CLI" },
         ["chat.effort.notOffered"] = new() { ["en"] = "Effort '{0}' is not one of CluadeX's levels", ["th"] = "effort '{0}' ไม่ได้อยู่ในระดับที่ CluadeX มี" },
         ["chat.model.providerBusy"] = new() { ["en"] = "A run is in progress — switch provider when it ends (a model of the same provider can change now)", ["th"] = "มีงานกำลังรันอยู่ — เปลี่ยนผู้ให้บริการได้เมื่องานจบ (เปลี่ยนโมเดลของผู้ให้บริการเดิมได้เลย)" },
         ["chat.approval.label"] = new() { ["en"] = "Approvals", ["th"] = "การอนุมัติ" },

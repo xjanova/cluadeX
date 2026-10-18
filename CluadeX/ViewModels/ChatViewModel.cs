@@ -552,7 +552,16 @@ public partial class ChatViewModel : ViewModelBase
     /// no run is going or the effort is not "auto". The effort box shows it after "auto".</summary>
     public string LiveEffortLevel =>
         EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto
-            ? RunOf(CurrentSession)?.Scope?.LiveEffort ?? "" : "";
+            ? EffortShown(RunOf(CurrentSession)?.Scope?.LiveEffort) ?? "" : "";
+
+    /// <summary>A run's live effort in words: a level as it is; Claude Dev's "auto", which the CLI does not report as a level,
+    /// as what it is — the CLI picking per turn, or the CLI's default (ClaudeDevProvider.CliAutoEffort).</summary>
+    private string? EffortShown(string? live) => live switch
+    {
+        "per-turn" => Loc("chat.effort.cliPerTurn"),
+        "cli-default" => Loc("chat.effort.cliDefault"),
+        _ => live,
+    };
 
     /// <summary>"⚡ auto → medium" — the effort this chat's requests really use, shown in the model boxes next to the
     /// selected model (the closed box only; the drop-down lists models).</summary>
@@ -561,7 +570,7 @@ public partial class ChatViewModel : ViewModelBase
         get
         {
             string setting = EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
-            string? live = RunOf(CurrentSession)?.Scope?.LiveEffort;
+            string? live = EffortShown(RunOf(CurrentSession)?.Scope?.LiveEffort);
             return "⚡ " + (live != null && setting == EffortLevels.Auto ? $"auto → {live}" : setting);
         }
     }
@@ -573,7 +582,7 @@ public partial class ChatViewModel : ViewModelBase
         get
         {
             string setting = EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
-            string? live = RunOf(CurrentSession)?.Scope?.LiveEffort;
+            string? live = EffortShown(RunOf(CurrentSession)?.Scope?.LiveEffort);
             string effort = live != null && setting == EffortLevels.Auto ? $"auto → {live}" : setting;
             return string.IsNullOrWhiteSpace(ActiveModelLabel) ? effort : $"{ActiveModelLabel} · {effort}";
         }
@@ -4038,6 +4047,15 @@ public partial class ChatViewModel : ViewModelBase
         m.Role == MessageRole.ToolAction && m.ToolSuccess && !m.HasDiff && m.ThumbnailPath == null
         && (m.IsCollapsedGroup || m.ToolKind != null && Groupable(GetToolCategory(m.ToolKind)));
 
+    private static readonly HashSet<string> FileEditTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "multi_edit", "write_file" };
+
+    /// <summary>A successful edit row of the same file that the next edit to that file folds into.</summary>
+    internal static bool FoldsEditInto(ChatMessage row, string toolName, string? target) =>
+        row.Role == MessageRole.ToolAction && row.ToolSuccess && row.HasDiff && !row.IsCollapsedGroup
+        && row.ToolKind != null && FileEditTools.Contains(row.ToolKind) && FileEditTools.Contains(toolName)
+        && !string.IsNullOrEmpty(target)
+        && (row.EditCount > 1 ? row.ToolTarget == $"{target} ×{row.EditCount}" : row.ToolTarget == target);
+
     /// <summary>"mcp__brainx-brain__task_update" → "brainx-brain/task_update" for a group row's list.</summary>
     private static string ShortToolName(string toolName) =>
         toolName.StartsWith("mcp__", StringComparison.Ordinal) && toolName.Split("__") is { Length: >= 3 } p
@@ -4201,6 +4219,17 @@ public partial class ChatViewModel : ViewModelBase
                 lastMsg.ToolName = LocF("chat.tools.groupName", 2);
                 lastMsg.ToolOutput = CapGroupOutput((lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? ""));
                 lastMsg.ToolOutputLines += outputLines;
+                ScrollToBottom?.Invoke();
+                return;
+            }
+
+            // Edits to one file in a row are one row (owner 2026-10-18: "ทำไมมันเยอะจังกล่องการแก้ไข ไม่ได้รวมไว้เหรอ"):
+            // the +/− add up and its diff shows each change in turn. Another file, a failure or a line between them starts a new row.
+            string? editTarget = ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory);
+            if (lastMsg != null && toolResult.Success && toolResult.Diff is { Lines.Count: > 0 } editDiff
+                && FoldsEditInto(lastMsg, toolResult.ToolName, editTarget))
+            {
+                lastMsg.AppendEdit(editDiff, toolElapsed, toolResult.Output, outputLines, editTarget);
                 ScrollToBottom?.Invoke();
                 return;
             }

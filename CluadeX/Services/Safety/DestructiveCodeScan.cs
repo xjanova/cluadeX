@@ -79,13 +79,30 @@ public static class DestructiveCodeScan
     {
         if (line.Length > 4000) line = line[..4000];
         if (AlwaysWipe.Match(line) is { Success: true } w) return $"wipes a disk or system state ({w.Value.Trim()})";
-        if (DeleteVerb.Match(line) is { Success: true } v)
+        if (DeleteVerb.Match(line) is not { Success: true } v) return null;
+        // A shell delete anywhere on the line (rd /s, rm -rf, Remove-Item … even inside a string) is read strictly.
+        for (var s = v; s.Success; s = s.NextMatch())
+            if (!s.Value.EndsWith('(')) { v = s; break; }
+        if (!v.Value.EndsWith('('))
         {
             if (ProtectedTarget.Match(line) is { Success: true } t) return $"deletes ({v.Value.Trim()}) aimed at {t.Value.Trim()}";
             if (BroadTarget.Match(line) is { Success: true } b) return $"deletes ({v.Value.Trim()}) everything in the folder it runs in ({b.Value.Trim()})";
+            return null;
         }
+        // A delete API in code (Directory.Delete(, rmtree(, fs.rm( …): judged without its comments, and a bare / or /*
+        // there is a comment or a division, not the POSIX root (owner 2026-10-18: the red prompt came up on every
+        // build for `try { Directory.Delete(Root, recursive: true); } catch { /* a child may still be exiting */ }`).
+        // "Everything here" (., *) is a shell form; in code a spaced * is a multiplication.
+        string code = CodeComment.Replace(line, " ");
+        if (DeleteVerb.Match(code) is not { Success: true } cv) return null;   // the delete itself was commented out
+        for (var t = ProtectedTarget.Match(code); t.Success; t = t.NextMatch())
+            if (t.Value.Trim() is not ("/" or "/*")) return $"deletes ({cv.Value.Trim()}) aimed at {t.Value.Trim()}";
         return null;
     }
+
+    /// <summary>Comments on a line of code: a closed /* … */, an unclosed /* to the end, a // to the end — each only where it
+    /// starts outside a string (after a space, a bracket or ; , so "/*" and "C://x" in quotes stay).</summary>
+    private static readonly Regex CodeComment = new(@"(?<=^|[\s{}();,])/\*.*?(\*/|$)|(?<=^|[\s{}();,])//.*$", Opt);
 
     public static List<DestructiveFinding> ScanText(string text, string fileLabel)
     {

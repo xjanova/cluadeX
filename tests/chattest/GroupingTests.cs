@@ -46,6 +46,37 @@ internal static partial class Program
         Check("G3 edits stay one row each (their own diff); a failed command stays visible on its own",
             rows.Count == 5 && !rows[1].IsCollapsedGroup && !rows[2].IsCollapsedGroup && !rows[3].ToolSuccess && !rows[4].IsCollapsedGroup,
             string.Join(" | ", rows.Select(r => $"{r.ToolName}:{r.ToolSuccess}:{r.CollapsedCount}")));
+
+        // G3b — edits to ONE file in a row are one row (owner 2026-10-18: "ทำไมมันเยอะจังกล่องการแก้ไข"): +/− add up, the
+        // diff keeps every change, times add up. Another file starts a new row; a failed edit stays on its own.
+        void Edit(string path, int add, int rem, bool ok = true) => fire.Invoke(Vm, [new ToolResult
+        {
+            ToolName = "edit_file", Type = ToolType.EditFile, Success = ok, Output = "edited", FilePath = path,
+            Arguments = new() { ["path"] = path },
+            Diff = ok ? new EditDiffResult
+            {
+                Added = add, Removed = rem,
+                Lines = Enumerable.Range(0, add).Select(i => new EditDiffLine { Kind = EditDiffKind.Add, Text = $"{path} line {i}" })
+                    .Concat(Enumerable.Range(0, rem).Select(i => new EditDiffLine { Kind = EditDiffKind.Remove, Text = $"old {i}" })).ToList(),
+            } : null,
+        }]);
+        int before = Vm.Messages.Count(m => m.Role == MessageRole.ToolAction);
+        Edit("Services/Cloud/CloudSyncEngine.cs", 10, 0); Edit("Services/Cloud/CloudSyncEngine.cs", 10, 2); Edit("Services/Cloud/CloudSyncEngine.cs", 8, 5);
+        Edit("Services/Cloud/CloudSyncTypes.cs", 13, 0);
+        Edit("Services/Cloud/CloudSyncTypes.cs", 1, 0, ok: false);
+        await Settle();
+        var edits = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).Skip(before).ToList();
+        Check("G3b three edits to one file are ONE row: +28 −7, every change in its diff, '×3' on the target",
+            edits.Count == 3 && edits[0].EditCount == 3 && edits[0].DiffAdded == 28 && edits[0].DiffRemoved == 7
+            && edits[0].DiffLines!.Count(l => l.Kind != EditDiffKind.Hunk) == 35 && edits[0].DiffLines!.Count(l => l.Kind == EditDiffKind.Hunk) == 2
+            && edits[0].ToolTarget!.EndsWith("×3") && edits[0].DiffPairs!.Count > 0,
+            string.Join(" | ", edits.Select(r => $"{r.ToolTarget}:{r.EditCount}:+{r.DiffAdded}-{r.DiffRemoved}:{r.DiffLines?.Count}")));
+        Check("G3c an edit to another file starts its own row; a failed edit stays on its own",
+            edits.Count == 3 && edits[1].EditCount == 1 && edits[1].DiffAdded == 13 && !edits[2].ToolSuccess,
+            string.Join(" | ", edits.Select(r => $"{r.ToolTarget}:{r.ToolSuccess}")));
+        Check("G3d folded times add up: 1.5s + 1.7s = 3.2s, 6.0s + 7.0s = 13s, an unreadable one is dropped",
+            ChatMessage.SumElapsed("1.5s", "1.7s") == "3.2s" && ChatMessage.SumElapsed("6.0s", "7.0s") == "13s" && ChatMessage.SumElapsed("1.5s", null) == "1.5s",
+            $"{ChatMessage.SumElapsed("1.5s", "1.7s")} {ChatMessage.SumElapsed("6.0s", "7.0s")}");
         Tool("mcp__cluadex-chrome__tabs_context_mcp", ok: false, output: "Browser extension is not connected. Please ensure the Claude browser extension is installed");
         Tool("mcp__cluadex-chrome__tabs_context_mcp", ok: false, output: "Browser extension is not connected. Please ensure the Claude browser extension is installed");
         await Settle();

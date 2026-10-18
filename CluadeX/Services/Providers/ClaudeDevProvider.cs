@@ -218,6 +218,20 @@ public class ClaudeDevProvider : IAiProvider
     /// <summary>The model the CLI said it runs (its init line) — what "default" resolved to. Null before the first run.</summary>
     public static string? ReportedModel { get; private set; }
 
+    /// <summary>The CLI's init line said it picks the effort itself, turn by turn (per_turn_effort_active) — what "auto"
+    /// means on Claude Dev, which sends no --effort then. Null before the first run.</summary>
+    public static bool? ReportedPerTurnEffort { get; private set; }
+
+    /// <summary>What "auto" really runs at on Claude Dev, for the chat's effort display (owner 2026-10-18: "เมื่อเลือก claude
+    /// dev และเลือก effort auto ควรแสดงให้รู้ขณะใช้ว่า ใช้ effort ไหน"): a CLAUDE_EFFORT the CLI inherits from CluadeX
+    /// ("low" … "max"), else "per-turn" when the CLI said it picks per turn, else "cli-default". The CLI reports no level.</summary>
+    public static string CliAutoEffort()
+    {
+        string env = Environment.GetEnvironmentVariable("CLAUDE_EFFORT")?.Trim().ToLowerInvariant() ?? "";
+        if (Array.IndexOf(Models.EffortLevels.All, env) > 0) return env;
+        return ReportedPerTurnEffort == true ? "per-turn" : "cli-default";
+    }
+
     /// <summary>The context window the CLI reported for its last run (result.modelUsage.*.contextWindow). Null before one.</summary>
     public static int? ReportedContextWindow { get; private set; }
 
@@ -241,6 +255,9 @@ public class ClaudeDevProvider : IAiProvider
                 && root.TryGetProperty("model", out var im) && im.ValueKind == System.Text.Json.JsonValueKind.String
                 && im.GetString() is { Length: > 0 } initModel)
                 ReportedModel = initModel;
+            if (type == "system" && root.TryGetProperty("subtype", out var st2) && st2.GetString() == "init"
+                && root.TryGetProperty("per_turn_effort_active", out var pt) && pt.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)
+                ReportedPerTurnEffort = pt.ValueKind == System.Text.Json.JsonValueKind.True;
             if (type == "result" && root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == System.Text.Json.JsonValueKind.Object)
             {
                 int window = 0;
@@ -414,6 +431,9 @@ public class ClaudeDevProvider : IAiProvider
         string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
         var extras = Extras.Value;
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, extras?.AddDirs);
+        // The level the chat shows next to the picker: the sent one (xhigh / max go out as high), or what "auto" is on the CLI.
+        var effortScope = AgentRunScope.Current;
+        if (effortScope != null) effortScope.LiveEffort = effort == Models.EffortLevels.Auto ? CliAutoEffort() : effort is "xhigh" or "max" ? "high" : effort;
 
         var psi = new ProcessStartInfo(_cliPath, args)
         {
@@ -470,6 +490,7 @@ public class ClaudeDevProvider : IAiProvider
                 if (worker)
                 {
                     string? shown = RenderStreamLine(line, out bool failed, out string? result);
+                    if (effortScope != null && effort == Models.EffortLevels.Auto) effortScope.LiveEffort = CliAutoEffort();   // after init
                     // The structured events (rows, plan, steps) — the agent loop renders them. A UI handler that throws
                     // must not end a half-hour task.
                     try { sink?.Invoke(line); } catch { }

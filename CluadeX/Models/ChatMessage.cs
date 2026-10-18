@@ -297,6 +297,50 @@ public class ChatMessage : INotifyPropertyChanged
         if (GroupSteps.Count == 1) OnPropertyChanged(nameof(HasGroupSteps));
     }
 
+    /// <summary>How many edits this row holds (1 for a plain edit row; more once later edits to the same file folded in).</summary>
+    public int EditCount { get; set; } = 1;
+
+    /// <summary>The diff lines one row keeps: a long run of edits to one file stops growing the row's diff here
+    /// (the +/− counts stay exact).</summary>
+    public const int MaxFoldedDiffLines = 1500;
+
+    /// <summary>A later edit to the same file folds into this row: the +/− add up, its diff follows the earlier ones after
+    /// a separator, the times add up and its output follows. Raises change for everything the row shows.</summary>
+    public void AppendEdit(EditDiffResult diff, string? elapsed, string? output, int outputLines, string? target)
+    {
+        EditCount++;
+        DiffAdded += diff.Added;
+        DiffRemoved += diff.Removed;
+        var lines = new List<EditDiffLine>(DiffLines ?? new());
+        if (lines.Count < MaxFoldedDiffLines)
+        {
+            lines.Add(new EditDiffLine { Kind = EditDiffKind.Hunk, Text = $"── #{EditCount} ──" });
+            lines.AddRange(diff.Lines.Take(MaxFoldedDiffLines - lines.Count));
+        }
+        DiffLines = lines;
+        _diffPairs = null;
+        DiffStat = $"+{DiffAdded}  -{DiffRemoved}";
+        ToolElapsedTime = SumElapsed(ToolElapsedTime, elapsed);
+        ToolOutput = string.IsNullOrEmpty(ToolOutput) ? output : ToolOutput + "\n---\n" + output;
+        ToolOutputLines += outputLines;
+        ToolTarget = target == null ? ToolTarget : $"{target} ×{EditCount}";
+        foreach (var name in new[] { nameof(DiffAdded), nameof(DiffRemoved), nameof(DiffAddedText), nameof(DiffRemovedText),
+                     nameof(DiffLines), nameof(DiffPairs), nameof(HasDiff), nameof(DiffStat), nameof(ToolElapsedTime),
+                     nameof(ToolOutput), nameof(ToolOutputLines), nameof(EditCount) })
+            OnPropertyChanged(name);
+    }
+
+    /// <summary>"1.5s" + "1.7s" → "3.2s" (at or over 10 s without the decimal, like a single row). An unreadable one is dropped.</summary>
+    public static string? SumElapsed(string? a, string? b)
+    {
+        static double? Sec(string? s) => s != null && s.EndsWith('s')
+            && double.TryParse(s[..^1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : null;
+        double? x = Sec(a), y = Sec(b);
+        if (x == null && y == null) return a ?? b;
+        double sum = (x ?? 0) + (y ?? 0);
+        return sum < 10 ? sum.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "s" : sum.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "s";
+    }
+
     // ─── ask_user question ───
     public List<string> QuestionOptions { get; set; } = new();
     /// <summary>Resolves the agent's waiting ask_user with the answer (null on a row read back from the database).</summary>

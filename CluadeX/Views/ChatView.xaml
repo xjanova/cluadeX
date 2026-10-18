@@ -560,8 +560,47 @@
                                 </Grid>
 
                                 <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
-                                <Border Grid.Row="1" HorizontalAlignment="Left"
-                                        Margin="20,4,40,4"
+                                <!-- The one who asks stands beside her prompt, full figure, as she does beside a question (owner
+                                     2026-10-18: "รูปเต็มตัวอวาต้า ที่ต้องอยู่ข้างกล่องโต้ตอบทำไมไม่ขึ้น"). Not on the red prompt,
+                                     not in Classic (Fx.Flourish), and gone once the prompt is answered. -->
+                                <Grid Grid.Row="1" HorizontalAlignment="Left" Margin="20,4,40,4">
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.PermissionRequest}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Visibility="{DynamicResource Fx.Flourish}" Panel.ZIndex="2" VerticalAlignment="Bottom">
+                                        <Image Source="{Binding Character.Image}" Height="170" VerticalAlignment="Bottom" Margin="0,-18,-14,-4"
+                                               RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False"
+                                               AutomationProperties.AutomationId="CxGuard.PermissionGirl">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding PermissionAnswered}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsPermissionDanger}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                            <Image.Effect>
+                                                <DropShadowEffect Color="{Binding Character.Accent}" BlurRadius="20" ShadowDepth="0" Opacity="0.55"/>
+                                            </Image.Effect>
+                                        </Image>
+                                    </Grid>
+                                <Border Grid.Column="1" HorizontalAlignment="Left" VerticalAlignment="Bottom"
                                         AutomationProperties.AutomationId="CxGuard.PermissionCard">
                                     <Border.Style>
                                         <Style TargetType="Border">
@@ -799,6 +838,7 @@
                                         </Grid>
                                     </StackPanel>
                                 </Border>
+                                </Grid>
 
                                 <!-- ═══ Compaction marker: where the model's context now starts ═══ -->
                                 <Border Grid.Row="1" Margin="40,10,40,10" Padding="12,8" CornerRadius="8"

@@ -1006,9 +1006,11 @@
                                                                 </Grid.Triggers>
                                                             </Grid>
                                                             <!-- done -->
+                                                            <!-- The pop animates FontSize, not a RenderTransform: a chat that is already "done" when its row is built (a
+                                                                 Stop, a reload) starts this trigger while the template still holds a frozen transform, and
+                                                                 WPF threw "Cannot animate 'RenderTransform.(0)' on an immutable object instance" (owner 2026-10-18). -->
                                                             <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Status.Success}"
-                                                                       RenderTransformOrigin="0.5,0.5">
-                                                                <TextBlock.RenderTransform><ScaleTransform/></TextBlock.RenderTransform>
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center">
                                                                 <TextBlock.Style>
                                                                     <Style TargetType="TextBlock">
                                                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -1018,12 +1020,10 @@
                                                                                 <DataTrigger.EnterActions>
                                                                                     <BeginStoryboard>
                                                                                         <Storyboard>
-                                                                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" From="0.2" To="1" Duration="0:0:0.45">
+                                                                                            <DoubleAnimation Storyboard.TargetProperty="FontSize" From="3" To="12" Duration="0:0:0.45">
                                                                                                 <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
                                                                                             </DoubleAnimation>
-                                                                                            <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" From="0.2" To="1" Duration="0:0:0.45">
-                                                                                                <DoubleAnimation.EasingFunction><BackEase EasingMode="EaseOut" Amplitude="0.6"/></DoubleAnimation.EasingFunction>
-                                                                                            </DoubleAnimation>
+                                                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.25"/>
                                                                                         </Storyboard>
                                                                                     </BeginStoryboard>
                                                                                 </DataTrigger.EnterActions>

@@ -110,6 +110,10 @@ internal static class Program
             ("format a drive", "format " + "D:" + " /q"),
             ("diskpart", "diskpart /s wipe.txt"),
             ("cipher /w", "cipher /w:" + Root),
+            // Comments are set aside only for a delete API — a shell delete on the same line is still read strictly.
+            ("a delete API and an rm of the root in a string", "Directory.Delete(x, true); Run(\"" + RmRf + "/* \");"),
+            ("a delete API on a quoted root", "fs.rmSync(\"/\", { recursive: true });"),
+            ("a delete API on a drive root after a comment", "/* tidy */ Directory.Delete(\"" + "C:" + "\\\\\", true);"),
         })
             Check($"flags: {label}", DestructiveCodeScan.JudgeLine(line) != null, line);
 
@@ -125,6 +129,13 @@ internal static class Program
             ("the recommended inert sentinel", "echo CX-SENTINEL " + RdSQ + "Z:\\cx-sentinel-nonexistent"),
             ("a URL", "fetch('https://example.com/rm -rf')"),
             ("CSS", ".a { color: red; } /* format */"),
+            // Owner 2026-10-18: the red prompt came up on every build for a C# comment read as the POSIX root.
+            ("a delete API with a /* comment */ after it", "try { Directory.Delete(Root, recursive: true); } catch { /* a child may still be exiting */ }"),
+            ("a delete API with an unclosed /* comment", "Directory.Delete(dir, true); /* keep going"),
+            ("a delete API with a // comment naming C:", "Directory.Delete(cache, true); // never " + "C:" + " itself"),
+            ("a delete API next to a division", "Directory.Delete(Path.Combine(root, (n / 2).ToString()), true);"),
+            ("a delete API next to a multiplication", "fs.rmSync(dir, { recursive: true, maxRetries: tries * 2 });"),
+            ("a commented-out delete", "// Directory.Delete(" + "C:" + "\\\\, true);"),
         })
             Check($"passes: {label}", DestructiveCodeScan.JudgeLine(line) == null, line + " → " + DestructiveCodeScan.JudgeLine(line));
 
@@ -192,14 +203,34 @@ internal static class Program
         Check("CodeRunGuard.CheckCode refuses a code block that would wipe home", CodeRunGuard.CheckCode("import shutil, os\nshutil.rmtree(os.path.expanduser('~'))") != null);
     }
 
+    /// <summary>The CluadeX.exe to start with --cx-guard / --cx-tools: one whose version is the linked DLL's. An older exe
+    /// does not know those flags and opens the whole app instead (owner 2026-10-18: "ทำไมเปิดเวอร์ชั่น 117") — so a
+    /// stale one is reported as a failure and never started. Looked for in this bin, then in CluadeX's own bin.</summary>
+    static string? MatchingExe()
+    {
+        string want = typeof(GuardHook).Assembly.GetName().Version?.ToString() ?? "";
+        var candidates = new List<string>();
+        if (File.Exists(Path.Combine(AppContext.BaseDirectory, "CluadeX.runtimeconfig.json"))) candidates.Add(Path.Combine(AppContext.BaseDirectory, "CluadeX.exe"));
+        candidates.Add(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe")));
+        var seen = new List<string>();
+        foreach (var c in candidates.Where(File.Exists))
+        {
+            string have = FileVersionInfo.GetVersionInfo(c).FileVersion ?? "";
+            if (have == want) return c;
+            seen.Add($"{c} = {have}");
+        }
+        Check($"a CluadeX.exe of the linked DLL's version ({want}) to start — rebuild CluadeX into its own bin", false,
+            seen.Count == 0 ? "none found" : "stale, not started: " + string.Join("; ", seen));
+        return null;
+    }
+
     static void HookProcess()
     {
         Console.WriteLine("CluadeX.exe --cx-guard (the real hook process; it only parses)");
         // A CluadeX.exe in this harness's own bin is runnable only with its runtimeconfig beside it: a stray copy without
         // one (left by a build pointed at another CluadeXBin) starts as "self-contained" and fails before Main.
-        string exe = Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
-        if (!File.Exists(exe) || !File.Exists(Path.Combine(AppContext.BaseDirectory, "CluadeX.runtimeconfig.json"))) exe =Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe"));
-        if (!File.Exists(exe)) { Check("CluadeX.exe found", false, exe); return; }
+        string? exe = MatchingExe();
+        if (exe == null) return;
         (int Code, string Err) Ask(string json)
         {
             var psi = new ProcessStartInfo(exe, GuardHook.Flag) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
@@ -317,9 +348,8 @@ internal static class Program
         string cfgText = File.ReadAllText(ticket.ConfigFile);
         Check("the config starts CluadeX.exe --cx-tools with the turn's token", cfgText.Contains("CluadeX.exe") && cfgText.Contains("--cx-tools") && cfgText.Contains(ticket.Token), cfgText);
 
-        string exe = Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
-        if (!File.Exists(exe) || !File.Exists(Path.Combine(AppContext.BaseDirectory, "CluadeX.runtimeconfig.json")))
-            exe = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\CluadeX\bin\DebugBuild\net8.0-windows\CluadeX.exe"));
+        string? exe = MatchingExe();
+        if (exe == null) return;
         int lingered = 0;
         List<string> Talk(string token, params string[] lines)
         {

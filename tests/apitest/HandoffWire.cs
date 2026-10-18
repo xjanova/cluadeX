@@ -126,6 +126,22 @@ internal static class HandoffWire
             ClaudeDevProvider.RenderStreamLine("{\"type\":\"system\",\"subtype\":\"init\"}", out _, out _) == null
             && ClaudeDevProvider.RenderStreamLine("not json", out _, out _) == null, "");
 
+        // ─── what "auto" effort is on Claude Dev (owner 2026-10-18: show which effort is in use) ───
+        string? envEffort = Environment.GetEnvironmentVariable("CLAUDE_EFFORT");
+        Environment.SetEnvironmentVariable("CLAUDE_EFFORT", null);
+        ClaudeDevProvider.RenderStreamLine("{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-fable-5-1\",\"per_turn_effort_active\":true}", out _, out _);
+        string perTurn = ClaudeDevProvider.CliAutoEffort();
+        ClaudeDevProvider.RenderStreamLine("{\"type\":\"system\",\"subtype\":\"init\",\"per_turn_effort_active\":false}", out _, out _);
+        string cliDefault = ClaudeDevProvider.CliAutoEffort();
+        Environment.SetEnvironmentVariable("CLAUDE_EFFORT", "medium");
+        string fromEnv = ClaudeDevProvider.CliAutoEffort();
+        Environment.SetEnvironmentVariable("CLAUDE_EFFORT", "bogus");
+        string badEnv = ClaudeDevProvider.CliAutoEffort();
+        Environment.SetEnvironmentVariable("CLAUDE_EFFORT", envEffort);
+        check("effort", "auto on Claude Dev: per-turn from the init line, else the CLI default, a CLAUDE_EFFORT it inherits wins",
+            perTurn == "per-turn" && cliDefault == "cli-default" && fromEnv == "medium" && badEnv == "cli-default",
+            $"{perTurn} {cliDefault} {fromEnv} {badEnv}");
+
         // ─── quota failover: which errors mean "the account cannot pay" ───
         check("failover", "credit, quota and usage-limit errors count as exhausted",
             CodeAgentService.IsQuotaExhausted("Your credit balance is too low to access the Anthropic API")

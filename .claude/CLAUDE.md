@@ -1,9 +1,9 @@
 # CluadeX — Claude Code Instructions
 
-## ⚠ CHECK THE BRANCH BEFORE EDITING ANYTHING
-Active development lives on **`feat/claude-code-style-status-display`**, not `main`.
-`main` has been left far behind (v2.2.x) and its files look plausibly current, so editing there
-means silently working on a months-old codebase. First two commands of every session:
+## Branch
+Development happens on `main` (3.0.1xx). The old `feat/claude-code-style-status-display` branch was merged and
+deleted on 2026-10-18 (a bundle of the removed branches is at `E:\cluadex-backups-branches-20261018.bundle`).
+First two commands of every session:
 ```bash
 git branch --show-current
 grep -m1 "<Version>" CluadeX/CluadeX.csproj
