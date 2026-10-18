@@ -1215,6 +1215,15 @@ public class LocalizationService
         return key;
     }
 
+    /// <summary>A key's text in a given language, without switching the app's language — null when the key is unknown
+    /// (the UI Studio reads a WPF view's {services:Loc key} texts with it, on a background thread: the tables never
+    /// change after start-up).</summary>
+    public static string? Lookup(string key, string language)
+    {
+        if (!Translations.TryGetValue(key, out var dict)) return null;
+        return dict.TryGetValue(language, out var val) ? val : dict.TryGetValue("en", out var en) ? en : null;
+    }
+
     /// <summary>Get translation with format args.</summary>
     public string T(string key, params object[] args)
     {

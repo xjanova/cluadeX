@@ -50,7 +50,7 @@ internal sealed class DartFile
 }
 
 /// <summary>A constructor parameter: its name, named or positional, and where its default value is written (-1: none).</summary>
-internal sealed record DartParam(string Name, bool Named, int Index, int DefaultAt = -1);
+internal sealed record DartParam(string Name, bool Named, int Index, int DefaultAt = -1, bool Required = false);
 
 /// <summary>A class declared in the project: its superclass, constructor parameters, members and fields.</summary>
 internal sealed class DartClass
@@ -67,6 +67,9 @@ internal sealed class DartClass
     public Dictionary<string, int> Members { get; } = new(StringComparer.Ordinal);
     /// <summary>Field name → token index of its initializer.</summary>
     public Dictionary<string, int> Fields { get; } = new(StringComparer.Ordinal);
+    /// <summary>Field name → its declared type as written ("int", "String?", "List&lt;Widget&gt;").</summary>
+    public Dictionary<string, string> FieldTypes { get; } = new(StringComparer.Ordinal);
+    public bool ConstCtor { get; set; }
     public int Line => File.LineOf(File.Tokens[Open].Pos);
 
     public bool IsWidget => FlutterProject.WidgetBases.Contains(Super) || FlutterProject.StatefulBases.Contains(Super);
@@ -79,7 +82,7 @@ internal sealed class DartClass
 /// screens and draw each one as a wireframe without running the app (Flutter can't run inside the Studio's browser,
 /// and many apps don't build for the web at all).
 /// </summary>
-public sealed class FlutterProject
+public sealed class FlutterProject : IScreenSketcher
 {
     internal static readonly HashSet<string> WidgetBases = new(StringComparer.Ordinal)
         { "StatelessWidget", "ConsumerWidget", "HookWidget", "HookConsumerWidget", "GetView", "GetWidget", "StatelessHookWidget" };
@@ -176,7 +179,11 @@ public sealed class FlutterProject
                 if (tk.Text == "(" && p > 0 && t[p - 1].Kind == DTok.Ident && t[p - 1].Text == c.Name
                     && !(p > 1 && t[p - 2].Kind == DTok.Punct && t[p - 2].Text == "."))
                 {
-                    if (c.Params.Count == 0) ReadParams(c.File, p, c.Params);
+                    if (c.Params.Count == 0)
+                    {
+                        ReadParams(c.File, p, c.Params);
+                        c.ConstCtor = p > 1 && t[p - 2].Kind == DTok.Ident && t[p - 2].Text == "const";
+                    }
                 }
                 else if (tk.Text == "(" && p > 1 && t[p - 1].Kind == DTok.Ident && IsDeclStart(t, p - 1, c.Name))
                 {
@@ -198,6 +205,20 @@ public sealed class FlutterProject
             {
                 c.Fields.TryAdd(tk.Text, p + 2);
             }
+            // field type:  final int readingId;  /  final List<Widget>? actions;  /  String title = 'x';
+            if (tk.Kind == DTok.Ident && t[p + 1].Kind == DTok.Punct && t[p + 1].Text is ";" or "=" && p > c.Open + 1)
+            {
+                var type = new List<string>();
+                for (int b = p - 1; b > c.Open; b--)
+                {
+                    var bt = t[b];
+                    if (bt.Kind == DTok.Punct && bt.Text is ";" or "{" or "}" or ")" or "]" or "=" or "=>") break;
+                    if (bt.Kind == DTok.Ident && bt.Text is "final" or "late" or "static" or "const" or "covariant" or "var" or "external") break;
+                    if (bt.Kind == DTok.Punct && bt.Text == "@") break;
+                    type.Insert(0, bt.Text);
+                }
+                if (type.Count > 0 && type.Count < 12) c.FieldTypes.TryAdd(tk.Text, string.Concat(type));
+            }
             p++;
         }
     }
@@ -217,7 +238,7 @@ public sealed class FlutterProject
     {
         var t = f.Tokens;
         int close = f.Match[open];
-        bool named = false;
+        bool named = false, optionalPositional = false;
         int index = 0;
         var part = new List<DToken>();
         void Flush()
@@ -235,7 +256,8 @@ public sealed class FlutterProject
                 if (name == null && part[k].Text is "this" or "super" && k + 2 < part.Count && part[k + 1].Text == ".") { name = part[k + 2].Text; k += 2; continue; }
                 if (part[k].Kind == DTok.Ident && part[k].Text is not ("required" or "final" or "covariant" or "const" or "this" or "super")) name = part[k].Text;
             }
-            if (name != null && name != "key") into.Add(new DartParam(name, named, named ? -1 : index++, defaultAt));
+            bool required = named ? part.Any(x => x.Kind == DTok.Ident && x.Text == "required") : !optionalPositional;
+            if (name != null && name != "key") into.Add(new DartParam(name, named, named ? -1 : index++, defaultAt, required && defaultAt < 0));
             else if (name == "key" && !named) index++;
             part.Clear();
         }
@@ -248,7 +270,7 @@ public sealed class FlutterProject
                 if (tk.Text is "{" or "[")
                 {
                     // the start of the named {…} / optional […] group — not a default value like "this.actions = const []"
-                    if (depth == 0 && part.Count == 0) { named = tk.Text == "{"; continue; }
+                    if (depth == 0 && part.Count == 0) { named = tk.Text == "{"; optionalPositional = tk.Text == "["; continue; }
                     depth++;
                 }
                 else if (tk.Text is "}" or "]")

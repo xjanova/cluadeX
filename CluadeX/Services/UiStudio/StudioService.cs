@@ -391,6 +391,46 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         });
     }
 
+    /// <summary>Write a whole-file edit made by the Studio's own tools (the Flutter widget tools) — only while the
+    /// file is still exactly <paramref name="before"/> (nothing else changed it since it was read); it joins the undo
+    /// stack like every Studio edit. Returns null or an error key.</summary>
+    public string? WriteEdit(string path, string before, string after, bool bom, string label)
+    {
+        string now;
+        try { now = CluadeX.Helpers.TextFileCodec.Read(path).Text; }
+        catch (Exception ex) { _log?.Warn("UiStudio", "read failed " + path, ex); return "studio.err.read"; }
+        if (now != before) return "studio.fedit.changedMeanwhile";
+        try { CluadeX.Helpers.TextFileCodec.Write(path, after, bom); }
+        catch (Exception ex) { _log?.Warn("UiStudio", "write failed " + path, ex); return "studio.err.write"; }
+        _undo.Push(new UndoEntry(path, before, after, bom, label));
+        TrimUndo();
+        _log?.Info("UiStudio", $"{label} → {path}");
+        SourceWritten?.Invoke(path);
+        return null;
+    }
+
+    /// <summary>Put files back as they were (the review's "undo all"): each path gets its old text, a file that did
+    /// not exist (null) is deleted. The undo stack is cleared — its entries no longer match the files. Returns the
+    /// paths that could not be restored.</summary>
+    public List<string> RestoreFiles(IReadOnlyDictionary<string, string?> before)
+    {
+        var failed = new List<string>();
+        foreach (var (path, text) in before)
+        {
+            try
+            {
+                if (text == null) { if (File.Exists(path)) File.Delete(path); continue; }
+                if (File.Exists(path) && CluadeX.Helpers.TextFileCodec.Read(path).Text == text) continue;
+                bool bom = File.Exists(path) && CluadeX.Helpers.TextFileCodec.Read(path).HasBom;
+                CluadeX.Helpers.TextFileCodec.Write(path, text, bom);
+                SourceWritten?.Invoke(path);
+            }
+            catch (Exception ex) { _log?.Warn("UiStudio", "restore failed " + path, ex); failed.Add(path); }
+        }
+        _undo.Clear();
+        return failed;
+    }
+
     private void TrimUndo()
     {
         if (_undo.Count <= MaxUndo) return;

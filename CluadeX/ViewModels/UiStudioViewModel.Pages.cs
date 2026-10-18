@@ -42,21 +42,28 @@ public sealed class PageCard : ViewModelBase
     public ImageSource? Thumb
     {
         get => _thumb;
-        set { if (SetProperty(ref _thumb, value)) { OnPropertyChanged(nameof(HasThumb)); OnPropertyChanged(nameof(ShowPlaceholder)); } }
+        set { if (SetProperty(ref _thumb, value)) { OnPropertyChanged(nameof(HasThumb)); OnPropertyChanged(nameof(ShowPlaceholder)); OnPropertyChanged(nameof(ShowSketch)); } }
     }
     public ScreenSketch? Sketch
     {
         get => _sketch;
-        set { if (SetProperty(ref _sketch, value)) { OnPropertyChanged(nameof(HasSketch)); OnPropertyChanged(nameof(ShowPlaceholder)); } }
+        set { if (SetProperty(ref _sketch, value)) { OnPropertyChanged(nameof(HasSketch)); OnPropertyChanged(nameof(ShowPlaceholder)); OnPropertyChanged(nameof(ShowSketch)); } }
     }
     public bool HasThumb => _thumb != null;
     public bool HasSketch => _sketch != null;
+    /// <summary>The wireframe shows until Flutter's real picture of the screen is there.</summary>
+    public bool ShowSketch => _sketch != null && _thumb == null;
     public bool ShowPlaceholder => _thumb == null && _sketch == null;
+
+    private int _problems;
+    /// <summary>Problems Flutter reported while drawing this screen (overflow, an exception in build).</summary>
+    public int Problems { get => _problems; set { if (SetProperty(ref _problems, value)) OnPropertyChanged(nameof(HasProblems)); } }
+    public bool HasProblems => _problems > 0;
 
     /// <summary>none · queued · shooting · done · failed · params · risky · noServer · manual · sketch</summary>
     public string State { get => _state; private set => SetProperty(ref _state, value); }
     public string StateText { get => _stateText; private set => SetProperty(ref _stateText, value); }
-    public bool IsBusy => _state is "queued" or "shooting";
+    public bool IsBusy => _state is "queued" or "shooting" or "rendering";
     public bool CanShootByHand => _state is "manual" or "risky" or "failed" or "done";
 
     public void SetState(string state, string text)
@@ -115,6 +122,8 @@ public sealed partial class UiStudioViewModel
     public ObservableCollection<PageCard> ScreenCards { get; } = new();
 
     public bool IsSimulated => _studio.Project.Kind == StudioProjectKind.Simulated;
+    /// <summary>A simulated desktop app (WPF): its screens are landscape windows, not phone screens.</summary>
+    public bool IsDesktopApp => IsSimulated && _studio.Project.Framework == "wpf";
     public bool IsServerSite => _studio.Project.Kind == StudioProjectKind.Server;
     /// <summary>The project shows in the live browser (not a simulated app).</summary>
     public bool IsLiveView => HasProject && !IsSimulated;
@@ -156,13 +165,15 @@ public sealed partial class UiStudioViewModel
         set { value = Math.Clamp(value, 1, 12); if (SetProperty(ref _galleryColumns, value)) RebuildRows(); }
     }
 
-    /// <summary>Phone-shaped thumbnails (an app's screens, or the Studio set to a mobile width).</summary>
-    public bool IsPhoneLayout => IsSimulated || Device == "mobile";
+    /// <summary>Phone-shaped thumbnails (a mobile app's screens, or the Studio set to a mobile width); a desktop
+    /// app's windows are landscape like a web page's shot.</summary>
+    public bool IsPhoneLayout => IsSimulated ? !IsDesktopApp : Device == "mobile";
     public double CardWidth => IsPhoneLayout ? 184 : 272;
     public double ThumbHeight => IsPhoneLayout ? 360 : 170;
 
     private void NotifyLayout()
     {
+        OnPropertyChanged(nameof(IsDesktopApp));
         OnPropertyChanged(nameof(IsPhoneLayout));
         OnPropertyChanged(nameof(CardWidth));
         OnPropertyChanged(nameof(ThumbHeight));
@@ -194,6 +205,18 @@ public sealed partial class UiStudioViewModel
 
     private void ResetPages()
     {
+        StopWatchingAppSources();
+        _renderWanted.Clear();
+        _compileErrors.Clear();
+        CompileError = null;
+        _checkCts?.Cancel();
+        _selfWrites.Clear();
+        _pendingFocus = null;
+        _swatches = null;
+        _palette = null;
+        EndSession();
+        CheckPassed = null;
+        CheckFindings.Clear();
         _pagesCts.Cancel();
         _pagesCts = new CancellationTokenSource();
         lock (_queue) _queue.Clear();
@@ -203,6 +226,8 @@ public sealed partial class UiStudioViewModel
         PageSections.Clear();
         ScreenCards.Clear();
         _catalog = null;
+        OnPropertyChanged(nameof(IsFlutterApp));
+        OnPropertyChanged(nameof(ShowPalette));
         _store = null;
         _openWhenServing = null;
         StageCard = null;
@@ -247,8 +272,23 @@ public sealed partial class UiStudioViewModel
             }
             BuildCards();
             _store.Prune(_allCards.Select(c => c.Page.Id).ToList());
-            if (IsSimulated && StageCard == null && ScreenCards.FirstOrDefault(c => c.Page.Route != null) is { } first) OpenStage(first, closeGallery: false);
+            if (IsSimulated)
+            {
+                ApplyCachedRenders();
+                WatchAppSources();
+            }
+            // the stage starts on the first routed screen (a desktop app has no routes: its main window)
+            if (IsSimulated && StageCard == null && (ScreenCards.FirstOrDefault(c => c.Page.Route != null) ?? ScreenCards.FirstOrDefault()) is { } first)
+                OpenStage(first, closeGallery: false);
             _ = SketchAllAsync();
+            if (IsSimulated)
+            {
+                // the real screens: what is missing or older than the code (asked once per project)
+                var order = new List<PageCard>();
+                if (_stageCard != null) order.Add(_stageCard);
+                order.AddRange(ScreenCards.Where(c => !ReferenceEquals(c, _stageCard)));
+                RenderScreens(order.Where(c => !c.HasThumb || c.IsStale), ask: true);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -298,6 +338,13 @@ public sealed partial class UiStudioViewModel
                 PageSections.Add(new PageSection { Key = "~routed", Label = T("studio.pages.routed"), Count = routed });
                 PageSections.Add(new PageSection { Key = "~other", Label = T("studio.pages.otherScreens"), Count = _allCards.Count - routed });
             }
+            else
+            {
+                // a desktop app: its views (the pages inside the main window) and its windows (dialogs, tools)
+                foreach (var g in _allCards.Where(c => c.Page.Group != null).GroupBy(c => c.Page.Group!).OrderBy(g => g.Key == "window" ? 1 : 0))
+                    if (g.Count() < _allCards.Count)
+                        PageSections.Add(new PageSection { Key = "~group:" + g.Key, Label = g.Key == "window" ? T("studio.pages.windows") : T("studio.pages.views"), Count = g.Count() });
+            }
             return;
         }
         foreach (var g in _allCards.Where(c => !c.IsExternal && c.Page.Route != null)
@@ -330,6 +377,7 @@ public sealed partial class UiStudioViewModel
                 "~web" => c.IsExternal,
                 "~routed" => c.Page.Route != null,
                 "~other" => c.Page.Route == null,
+                _ when _section.StartsWith("~group:", StringComparison.Ordinal) => c.Page.Group == _section["~group:".Length..],
                 _ => c.Page.Route != null && ("/" + FirstSegment(c.Page.Route)).Equals(_section, StringComparison.OrdinalIgnoreCase),
             };
             if (!inSection) return false;
@@ -426,7 +474,7 @@ public sealed partial class UiStudioViewModel
         return e.Status >= 400 ? T("studio.pages.httpError", e.Status, when) : T("studio.pages.shotAt", when);
     }
 
-    internal static ImageSource? LoadImage(string path)
+    internal static ImageSource? LoadImage(string path, int decodeWidth = 520)
     {
         try
         {
@@ -434,7 +482,7 @@ public sealed partial class UiStudioViewModel
             bmp.BeginInit();
             bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bmp.DecodePixelWidth = 520;
+            if (decodeWidth > 0) bmp.DecodePixelWidth = decodeWidth;
             bmp.UriSource = new Uri(path);
             bmp.EndInit();
             bmp.Freeze();
@@ -520,7 +568,7 @@ public sealed partial class UiStudioViewModel
     /// <summary>Draw every screen of a simulated app, one by one in the background.</summary>
     private async Task SketchAllAsync()
     {
-        if (_sketching || _catalog?.Flutter is not { } flutter) return;
+        if (_sketching || _catalog?.Screens is not { } screens) return;
         _sketching = true;
         var ct = _pagesCts.Token;
         try
@@ -529,13 +577,13 @@ public sealed partial class UiStudioViewModel
             {
                 if (ct.IsCancellationRequested) break;
                 ScreenSketch? sk = null;
-                try { sk = await Task.Run(() => flutter.Sketch(c.Page), ct); }
+                try { sk = await Task.Run(() => screens.Sketch(c.Page), ct); }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex) { _log?.Warn("UiStudio", "sketch failed " + c.Page.Id, ex); }
                 c.Sketched = true;
                 c.Sketch = sk;
                 if (sk?.Title is { Length: > 0 } t && t != "…") c.Title = t;
-                c.SetState(sk != null ? "sketch" : "failed", sk != null ? T("studio.pages.simulated") : T("studio.pages.noSketch"));
+                if (!c.HasThumb && !c.IsBusy) c.SetState(sk != null ? "sketch" : "failed", sk != null ? T("studio.pages.simulated") : T("studio.pages.noSketch"));
                 if (ReferenceEquals(c, StageCard)) StageSketch = sk;
             }
             UpdateSummary();
@@ -718,8 +766,11 @@ public sealed partial class UiStudioViewModel
             if (!SetProperty(ref _stageCard, value)) return;
             if (value != null) EnsureSketch(value);
             StageSketch = value?.Sketch;
+            StageBox = null;
+            LoadStageRender();
             StageNode = null;
             OnPropertyChanged(nameof(HasStage));
+            OnPropertyChanged(nameof(ShowPalette));
             OnPropertyChanged(nameof(StageTitle));
             OnPropertyChanged(nameof(StageRoute));
             OnPropertyChanged(nameof(StageFile));
@@ -741,15 +792,20 @@ public sealed partial class UiStudioViewModel
         set
         {
             if (!SetProperty(ref _stageNode, value)) return;
+            if (value != null && _stageBox != null) { _stageBox = null; OnPropertyChanged(nameof(StageBox)); }
+            if (value != null) _pendingFocus = null;
             foreach (var n in new[] { nameof(HasStageNode), nameof(StageNodeLabel), nameof(StageNodeText), nameof(StageNodeWhere), nameof(StageNodeUse) })
                 OnPropertyChanged(n);
+            RefreshTools();
         }
     }
-    public bool HasStageNode => _stageNode != null;
-    public string StageNodeLabel => _stageNode == null ? "" : (_stageNode.Widget ?? _stageNode.Kind.ToString());
-    public string StageNodeText => _stageNode?.Text ?? _stageNode?.Items.FirstOrDefault() ?? "";
-    public string StageNodeWhere => _stageNode?.File is { } f ? Rel(f) + ":" + _stageNode.Line : "";
-    public string StageNodeUse => _stageNode?.UseFile is { } f ? T("studio.stage.usedAt", Rel(f) + ":" + _stageNode.UseLine) : "";
+    public bool HasStageNode => _stageNode != null || _stageBox != null;
+    public string StageNodeLabel => _stageBox != null ? _stageBox.Widget : _stageNode == null ? "" : (_stageNode.Widget ?? _stageNode.Kind.ToString());
+    public string StageNodeText => _stageBox != null ? "" : _stageNode?.Text ?? _stageNode?.Items.FirstOrDefault() ?? "";
+    public string StageNodeWhere => _stageBox != null ? Rel(_stageBox.File) + ":" + _stageBox.Line
+        : _stageNode?.File is { } f ? Rel(f) + ":" + _stageNode.Line : "";
+    public string StageNodeUse => _stageBox != null ? (UseSiteOf(_stageBox) is { } u ? T("studio.stage.usedAt", Rel(u.File) + ":" + u.Line) : "")
+        : _stageNode?.UseFile is { } f ? T("studio.stage.usedAt", Rel(f) + ":" + _stageNode.UseLine) : "";
 
     private string Rel(string full)
     {
@@ -766,7 +822,7 @@ public sealed partial class UiStudioViewModel
     /// <summary>Draw a screen now when the background pass hasn't reached it yet (the user opened it first).</summary>
     private void EnsureSketch(PageCard c)
     {
-        if (c.Sketched || !c.IsScreen || _catalog?.Flutter is not { } f) return;
+        if (c.Sketched || !c.IsScreen || _catalog?.Screens is not { } f) return;
         try { c.Sketch = f.Sketch(c.Page); } catch (Exception ex) { _log?.Warn("UiStudio", "sketch failed", ex); }
         c.Sketched = true;
         if (c.Sketch?.Title is { Length: > 0 } t && t != "…") c.Title = t;
@@ -782,7 +838,7 @@ public sealed partial class UiStudioViewModel
 
     private void OpenStageNode()
     {
-        var (file, line) = _stageNode?.Target ?? (null, 0);
+        var (file, line) = _stageBox != null ? (_stageBox.File, _stageBox.Line) : _stageNode?.Target ?? (null, 0);
         file ??= _stageCard?.Page.SourcePath;
         if (file == null || !File.Exists(file)) return;
         _ = _editor.OpenAtLineAsync(file, Math.Max(1, line));
@@ -795,31 +851,42 @@ public sealed partial class UiStudioViewModel
     private void AskAiAboutStage()
     {
         if (_stageCard == null || string.IsNullOrWhiteSpace(StageRequest)) return;
-        if (!_chat.SendFromStudio(BuildStagePrompt(StageRequest.Trim()))) { Status(T("studio.ai.busy"), error: true); return; }
-        StageRequest = "";
-        Status(T("studio.ai.sent"));
+        if (AskAi(BuildStagePrompt(StageRequest.Trim()))) StageRequest = "";
     }
 
     /// <summary>The screen, its route and file, and the block the user picked (where it is written and where the
     /// screen uses it) — so the AI edits the right widget without searching the app.</summary>
-    internal string BuildStagePrompt(string request)
+    internal string BuildStagePrompt(string request, bool revising = false)
     {
         var c = _stageCard!;
         var sb = new StringBuilder();
-        sb.AppendLine($"[UI Studio] Change a screen of this {(_studio.Project.Framework is { Length: > 0 } fw ? fw : "app")} app.");
+        string framework = _studio.Project.Framework switch { "wpf" => "WPF", { Length: > 0 } fw => fw, _ => "app" };
+        sb.AppendLine(revising
+            ? "[UI Studio] More changes to the screen you just changed: the user watched it drawn and wants this too."
+            : $"[UI Studio] Change a screen of this {framework} app.");
         sb.AppendLine();
         sb.AppendLine("Request: " + request);
         sb.AppendLine();
         sb.AppendLine($"Screen: {c.Page.Detail} — \"{c.Title}\"" + (c.Page.Route != null ? $", route {c.Page.Route}" : ""));
-        if (c.Page.SourcePath != null) sb.AppendLine($"Screen file: {Rel(c.Page.SourcePath)} (class at line {c.Page.SourceLine})");
-        if (_stageNode is { } n)
+        if (c.Page.SourcePath != null) sb.AppendLine($"Screen file: {Rel(c.Page.SourcePath)} ({(IsDesktopApp ? "root element" : "class")} at line {c.Page.SourceLine})");
+        if (_stageBox is { } box)
+        {
+            sb.AppendLine($"The part the user picked: <{box.Widget}> written at {Rel(box.File)}:{box.Line}:{box.Column}");
+            if (UseSiteOf(box) is { } use) sb.AppendLine($"  used by the screen at {Rel(use.File)}:{use.Line}");
+            if (StageProblems.Count > 0) sb.AppendLine("Problems Flutter reported while drawing this screen: " + string.Join(" | ", StageProblems.Take(5)));
+        }
+        else if (_stageNode is { } n)
         {
             sb.AppendLine($"The part the user picked: <{n.Widget ?? n.Kind.ToString()}>" + (n.Text is { Length: > 0 } t && t != "…" ? $" showing \"{t}\"" : ""));
             if (n.File != null) sb.AppendLine($"  written at {Rel(n.File)}:{n.Line}");
             if (n.UseFile != null) sb.AppendLine($"  used by the screen at {Rel(n.UseFile)}:{n.UseLine}");
         }
         sb.AppendLine();
-        sb.AppendLine("Edit only what the request needs. If the part is a shared widget used by other screens, change it only when the request is about every screen; otherwise change this screen's use of it. Keep the app's existing theme and widget kit.");
+        sb.AppendLine(IsDesktopApp
+            ? "Edit only what the request needs. If the part is a UserControl or a style shared with other views, change it only when the request is about every view; otherwise change this view's use of it. Keep the app's existing theme resources ({DynamicResource} brushes), styles and translations ({services:Loc} keys, each with its Thai text)."
+            : "Edit only what the request needs. If the part is a shared widget used by other screens, change it only when the request is about every screen; otherwise change this screen's use of it. Keep the app's existing theme and widget kit.");
+        if (IsFlutterApp)
+            sb.AppendLine("The UI Studio draws the screen again with Flutter every time a file is saved, and the user is watching: save each step as you finish it. Afterwards the user reviews the change (keep / undo all / ask for more) and the save check runs dart analyze and draws every screen.");
         return sb.ToString();
     }
 
