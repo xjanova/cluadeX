@@ -98,6 +98,10 @@ public sealed record ToolPermission
     /// <summary>Extra lines for the prompt: the code about to run, the target folder, the risky items.</summary>
     public string? Detail { get; init; }
 
+    /// <summary>When set, the prompt also offers "Always allow"; answered so, this runs (it remembers the answer, e.g.
+    /// a folder in the settings) and the call goes ahead.</summary>
+    public Action? OnAllowedAlways { get; init; }
+
     /// <summary>A call that needs no permission at all.</summary>
     public static ToolPermission Free(string scope = "read", string resource = "") =>
         new() { Scope = scope, Resource = resource, IsFree = true };

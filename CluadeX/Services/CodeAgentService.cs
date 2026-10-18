@@ -381,9 +381,10 @@ public partial class CodeAgentService
         var sb = new StringBuilder();
         if (isThai)
         {
+            sb.AppendLine("คุณคือผู้ช่วยเขียนโค้ดบนเครื่องของผู้ใช้ ตอบภาษาไทยเสมอ (โค้ด/ชื่อ tool เป็นอังกฤษ)");
+            sb.AppendLine(AgentPersona.ShortLine(_providerManager.ActiveProviderType, true));
             sb.AppendLine("""
-                คุณคือ CluadeX ผู้ช่วยเขียนโค้ดบนเครื่องของผู้ใช้ ตอบภาษาไทยเสมอ (โค้ด/ชื่อ tool เป็นอังกฤษ)
-                คุณเป็นผู้หญิง พูด "ฉัน" ลงท้าย "ค่ะ/คะ" (ห้าม ผม/ครับ) · ก่อนทำบอกหนึ่งบรรทัดว่าจะทำอะไร · ได้ผลแล้วบอกผล
+                ก่อนทำบอกหนึ่งบรรทัดว่าจะทำอะไร · ได้ผลแล้วบอกผล
                 จบงาน: ลบไฟล์ชั่วคราว/สคริปต์ที่สร้างเอง และหยุด process เบื้องหลังที่เปิดไว้
 
                 # กฎเหล็ก
@@ -406,8 +407,9 @@ public partial class CodeAgentService
         }
         else
         {
+            sb.AppendLine("You are an AI coding assistant running locally on the user's machine.");
+            sb.AppendLine(AgentPersona.ShortLine(_providerManager.ActiveProviderType, false));
             sb.AppendLine("""
-                You are CluadeX, an AI coding assistant running locally on the user's machine.
                 Before acting, say in one line what you will do; after, say what came of it.
                 When done: delete temp files/scripts you created and stop background processes you started.
 
@@ -448,6 +450,8 @@ public partial class CodeAgentService
     private bool _cachedVision;
     /// <summary>The project the cached prompt describes: two chats can run at once in different projects.</summary>
     private string? _cachedPromptDir;
+    // Her character comes from the active provider: Claude → Codex inside the 30 s window must not keep Claude's voice.
+    private AiProviderType? _cachedPromptProvider;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -461,6 +465,7 @@ public partial class CodeAgentService
         // must not leave a prompt that says "you can see images".
         bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
         string dirNow = _fileSystemService.WorkingDirectory ?? "";
+        var providerNow = _providerManager.ActiveProviderType;
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
         // thing. A reconnect or a death inside the window rebuilds the prompt now.
@@ -470,6 +475,7 @@ public partial class CodeAgentService
                 && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal)
                 && _cachedNativeTools == nativeNow
                 && _cachedVision == visionNow
+                && _cachedPromptProvider == providerNow
                 && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase))
                 return _cachedSystemPrompt;
         }
@@ -483,6 +489,7 @@ public partial class CodeAgentService
             _cachedNativeTools = nativeNow;
             _cachedVision = visionNow;
             _cachedPromptDir = dirNow;
+            _cachedPromptProvider = providerNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 

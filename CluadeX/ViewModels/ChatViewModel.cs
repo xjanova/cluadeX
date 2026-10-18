@@ -943,11 +943,13 @@ public partial class ChatViewModel : ViewModelBase
                 DiffStat = info.Diff?.Stat,
                 PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null,
                 PermissionCanAllowForChat = info.ChatScopeKey != null && !info.AlwaysAsk && info.Danger == null,
+                PermissionCanAllowAlways = info.AlwaysKey != null && !info.AlwaysAsk && info.Danger == null,
                 PermissionDanger = info.Danger,
             };
             prompt.PermissionCallback = allow =>
             {
                 if (allow && prompt.PermissionAllowedForChat) info.AllowedForChat = true;   // read by the asking tool
+                if (allow && prompt.PermissionAllowedAlways) info.AllowedAlways = true;
                 tcs.TrySetResult(allow);
                 reg.Dispose();
             };

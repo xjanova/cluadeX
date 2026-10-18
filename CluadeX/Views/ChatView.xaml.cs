@@ -60,6 +60,10 @@ public partial class ChatView : UserControl
                 Dispatcher.InvokeAsync(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
         };
         SizeChanged += (_, _) => UpdateSidePanelRoom();
+        // A dragged grip (or the grip restoring its saved width) changes Width: refit, as the Edit page does.
+        var panelWidth = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(WidthProperty, typeof(FrameworkElement));
+        Loaded += (_, _) => panelWidth.AddValueChanged(SidePanel, OnSidePanelWidthChanged);
+        Unloaded += (_, _) => panelWidth.RemoveValueChanged(SidePanel, OnSidePanelWidthChanged);
 
         InputBox.PreviewKeyDown += (_, e) =>
         {
@@ -109,14 +113,59 @@ public partial class ChatView : UserControl
     private bool _hostedInEditor;
 
     /// <summary>The conversation keeps at least this much width beside the side panel (whatever width it was dragged to).</summary>
-    private const double MinConversationWidth = 600;
+    public const double MinConversationWidth = 420, MinSidePanelWidth = 220;
+
+    // The panel used to vanish whole below 600 + its width (owner 2026-10-18: "รายชื่อไฟล์หรือโฟลเดอร์ ด้านขวาก็หายไปเลย
+    // ซึ่งมันควรมีการจัดคอลัมน์เองแบบฉลาด หน้า editor มีการทำเรื่องนี้แล้ว"). Now, like the Edit page: it gives up width
+    // first (MaxWidth only — the dragged width comes back when the window widens), and when even its minimum does not fit
+    // beside the conversation, or the window stands portrait, it moves under the composer across the whole width.
+    private bool _panelStacked;
+    private double _panelSideWidth = 300;
+    private bool _fittingPanel;
+
+    /// <summary>Side by side, or stacked under the chat? Too narrow for both minimums, or a portrait window.</summary>
+    public static bool StackSidePanel(double width, double height) =>
+        width < MinConversationWidth + MinSidePanelWidth || CodeEditorView.IsPortrait(width, height);
 
     private void UpdateSidePanelRoom()
     {
-        double panel = double.IsNaN(SidePanel.Width) ? 300 : SidePanel.Width;
-        bool room = !_hostedInEditor && ActualWidth >= panel + MinConversationWidth;
-        SidePanelHost.Visibility = room ? Visibility.Visible : Visibility.Collapsed;
+        if (ActualWidth <= 0 || _fittingPanel) return;
+        if (_hostedInEditor) { SidePanelHost.Visibility = Visibility.Collapsed; return; }
+        SidePanelHost.Visibility = Visibility.Visible;
+        _fittingPanel = true;
+        try
+        {
+            bool stack = StackSidePanel(ActualWidth, ActualHeight);
+            if (stack)
+            {
+                // Stacked it stretches (Width NaN). Any width that shows up here (the side width on the way in, or the
+                // grip restoring its saved one on Loaded while stacked) is the side width to come back to.
+                if (!double.IsNaN(SidePanel.Width)) _panelSideWidth = SidePanel.Width;
+                // Column 0 only: the Auto column 1 then holds nothing and folds to zero, so the chat keeps the full width.
+                Grid.SetColumn(SidePanelHost, 0); Grid.SetColumnSpan(SidePanelHost, 1);
+                Grid.SetRow(SidePanelHost, 4); Grid.SetRowSpan(SidePanelHost, 1);
+                SidePanel.Width = double.NaN;
+                SidePanel.MaxWidth = double.PositiveInfinity;
+                SidePanel.Height = Math.Clamp(ActualHeight * 0.32, 160, 320);
+                SidePanel.BorderThickness = new Thickness(0, 1, 0, 0);
+                SidePanelGrip.Opacity = 0; SidePanelGrip.IsHitTestVisible = false;
+            }
+            else
+            {
+                if (_panelStacked) SidePanel.Width = _panelSideWidth;
+                Grid.SetColumn(SidePanelHost, 1); Grid.SetColumnSpan(SidePanelHost, 1);
+                Grid.SetRow(SidePanelHost, 0); Grid.SetRowSpan(SidePanelHost, 4);
+                SidePanel.Height = double.NaN;
+                SidePanel.MaxWidth = Math.Max(MinSidePanelWidth, ActualWidth - MinConversationWidth);
+                SidePanel.BorderThickness = new Thickness(1, 0, 0, 0);
+                SidePanelGrip.Opacity = 1; SidePanelGrip.IsHitTestVisible = true;
+            }
+            _panelStacked = stack;
+        }
+        finally { _fittingPanel = false; }
     }
+
+    private void OnSidePanelWidthChanged(object? sender, EventArgs e) => UpdateSidePanelRoom();
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
@@ -429,6 +478,12 @@ public partial class ChatView : UserControl
     {
         if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
             msg.AllowPermissionForChat();
+    }
+
+    private void PermissionAllowAlways_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AllowPermissionAlways();
     }
 
     private void PermissionDeny_Click(object sender, RoutedEventArgs e)

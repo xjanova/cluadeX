@@ -127,6 +127,9 @@ public class ContextMemoryService
             case AiProviderType.Anthropic:
             {
                 // Claude Opus/Sonnet 4.6+, Fable/Mythos and Haiku 5.5+: 1M. Haiku 4.5 and older: 200K.
+                if (id.EndsWith("[1m]")) return 1_000_000;
+                if (id is "opus" or "sonnet" or "fable") return 1_000_000;   // Claude Code aliases: the current models
+                if (id == "haiku") return ContextWindowFor(provider, "claude-haiku-5-5", localContextSize);
                 var m = Regex.Match(id, @"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d)(?!\d))?");
                 if (!m.Success) return 200_000;
                 string family = m.Groups[1].Value;
@@ -147,8 +150,21 @@ public class ContextMemoryService
                 return id.StartsWith("gemini-1.5-pro") ? 2_097_152 : 1_048_576;
 
             case AiProviderType.ClaudeDev:
+            {
+                // It was a fixed 200K: Opus 5.5 behind "default" read as a fifth of its real window. Now: what the CLI
+                // itself reported for its last run (only when "default" is what ran it — an explicit pick is its own
+                // model), else the model's published window like the API provider.
+                bool byDefault = id is "" or "default" or "auto";
+                string? reported = Providers.ClaudeDevProvider.ReportedModel?.Trim().ToLowerInvariant();
+                if (Providers.ClaudeDevProvider.ReportedContextWindow is int w && w > 0
+                    && (byDefault || (reported != null && reported.StartsWith(id))))
+                    return w;
+                string model = !byDefault ? id : reported ?? Providers.AnthropicProvider.DefaultModel;
+                return ContextWindowFor(AiProviderType.Anthropic, model, localContextSize);
+            }
+
             case AiProviderType.BrainX:
-                return 200_000;   // the Claude Code CLI's standard window (the room's agents are of that class)
+                return 200_000;   // the room's agents run the Claude Code CLI's standard window
 
             default:
                 return 128_000;

@@ -397,11 +397,17 @@ public class AgentToolService : IDisposable
             ToolName = call.ToolName, Detail = detail,
             AlwaysAsk = perm.AlwaysAsk || askRule,
             ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
+            AlwaysKey = perm.OnAllowedAlways != null ? resource : null,
         };
         bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
         if (!allowed) return Fail(call, $"User denied permission for {scope}: {resource}");
         if (!perm.AlwaysAsk) RememberOnceApproval(perm.OnceKey);
         if (info.AllowedForChat && info.ChatScopeKey != null) RememberOnceApproval(info.ChatScopeKey);
+        if (info.AllowedAlways)
+        {
+            try { perm.OnAllowedAlways?.Invoke(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[permission] always-allow failed: {ex.Message}"); }
+        }
         return null;
     }
 

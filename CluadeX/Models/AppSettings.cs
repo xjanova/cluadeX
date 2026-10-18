@@ -70,6 +70,13 @@ public class AppSettings
     /// INSIDE the open project run without a prompt (never execute, MCP, browse or paths outside the project).</summary>
     public bool AcceptEditsDefault { get; set; } = false;
 
+    /// <summary>The agent opening a folder OUTSIDE the open project (a related repo it found on its own, open_project):
+    /// "ask" (default — a prompt with "Always allow this folder") or "allow" (never ask). Owner 2026-10-18: "ต้องขออนุญาต
+    /// ในการเปิดโฟลเดอร์อื่น จะให้ถามเสมอ หรือไม่ต้องถามอีกก็ได้".</summary>
+    public string RelatedFolderAccess { get; set; } = "ask";
+    /// <summary>Folders answered "Always allow": the agent opens them (and anything inside) without asking.</summary>
+    public List<string> AllowedProjectFolders { get; set; } = new();
+
     // ─── Dev Preview: background processes + built-in browser (feature.devPreview) ───
     /// <summary>Built-in browser engine: "auto" (WebView2, else an installed Edge/Chrome over CDP), "webview2" or "cdp".</summary>
     public string BrowserEngine { get; set; } = "auto";

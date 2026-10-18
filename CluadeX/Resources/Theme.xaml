@@ -224,6 +224,11 @@
     </Style>
 
     <Style x:Key="SlimScrollViewer" TargetType="ScrollViewer">
+        <!-- The template below has no horizontal bar. ScrollViewer's own default (Hidden) still measures the
+             content at infinite width, so text never wraps and a narrow window cuts it off with no way to
+             scroll to it. Disabled hands the content the real width. A view that wants sideways scrolling
+             sets Auto locally and must use a template that draws the bar. -->
+        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollViewer">
