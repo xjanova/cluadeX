@@ -40,9 +40,17 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// </summary>
     public static Func<string?, string?, string?, Task<string>>? NewChatHandler;
 
+    public const string CloseChatToolName = "close_chat";
+
+    /// <summary>
+    /// close_chat (UI thread work, set by the chat page): the asking chat's split chats — list them (target "" / "list"),
+    /// or put away the finished ones ("done") or one by id / title. Returns what the tool reports. Null in harnesses.
+    /// </summary>
+    public static Func<string, Task<string>>? CloseChatHandler;
+
     public string Id => "project";
 
-    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat };
+    public IReadOnlyCollection<ToolType> ToolTypes { get; } = new[] { ToolType.OpenProject, ToolType.NewChat, ToolType.CloseChat };
 
     public bool WorksWithoutProject => true;
 
@@ -50,6 +58,7 @@ public sealed class ProjectToolModule : IAgentToolModule
     {
         "open_project" or "open_folder" or "set_project" or "open_workspace" or "set_working_directory" => ToolType.OpenProject,
         "new_chat" or "open_new_chat" or "start_chat" or "new_session" or "create_chat" => ToolType.NewChat,
+        "close_chat" or "archive_chat" or "finish_chat" or "close_chats" or "cleanup_chats" or "list_split_chats" => ToolType.CloseChat,
         _ => null,
     };
 
@@ -113,10 +122,36 @@ public sealed class ProjectToolModule : IAgentToolModule
         {
             Name = NewChatToolName,
             Description = "Open a NEW chat in CluadeX — in this project or another folder — and start a task there; it runs "
-                + "beside this chat and the user can switch to it in the sidebar. Use it when the user asks for a new chat / "
-                + "new session / to work on another project in its own chat, or to hand a separate piece of work to its own "
-                + "chat. Never answer that you cannot open a chat.",
+                + "beside this chat (in parallel) and the sidebar shows it under this chat as a split. Use it when the user "
+                + "asks for a new chat / new session / to work on another project in its own chat, to hand a separate piece of "
+                + "work to its own chat, or when the user adds a NEW, independent request while you are still working on "
+                + "something else (a note that arrives mid-task): start that request in its own chat so both run at once, and "
+                + "keep corrections or follow-ups of the current task here. The message must be complete — that chat does not "
+                + "see this one. Never answer that you cannot open a chat.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(chatSchema)).RootElement.Clone(),
+        };
+
+        // Owner 2026-10-18: "ปิดแชทเก็บกวาดงานแยกที่เสร็จแล้วได้ … เพื่อทำให้แชทฮิสทอรี่สะอาด".
+        var closeSchema = new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>
+            {
+                ["chat"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "Which split chat to put away: its id or title, or \"done\" for every finished one. "
+                        + "Omit (or \"list\") to only list this chat's split chats and how each stands.",
+                },
+            },
+        };
+        yield return new ToolSchema
+        {
+            Name = CloseChatToolName,
+            Description = "The chats THIS chat split off with new_chat: list them with how each stands (working / finished / put "
+                + "away), or put finished ones away so the chat list stays tidy. Put away = hidden from the list, kept, the user "
+                + "can bring it back; a chat still working is never closed. Use it once a split chat's result is in.",
+            InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(closeSchema)).RootElement.Clone(),
         };
     }
 
@@ -193,6 +228,23 @@ public sealed class ProjectToolModule : IAgentToolModule
         catch (Exception ex) { return Fail("The new chat could not be opened: " + ex.Message); }
     }
 
+    /// <summary>close_chat: list this chat's split chats, or put finished ones away.</summary>
+    private static async Task<ToolResult> ExecuteCloseChatAsync(ToolCall call)
+    {
+        if (CloseChatHandler == null)
+        {
+            const string none = "No chat page is running here, so there are no split chats to close.";
+            return new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = none, Error = none };
+        }
+        string target = call.GetArg("chat").Trim().Trim('"', '\'');
+        string said = await CloseChatHandler(target);
+        return new ToolResult
+        {
+            Type = call.Type, ToolName = call.ToolName, Success = true, Output = said,
+            Summary = target.Length == 0 || target.Equals("list", StringComparison.OrdinalIgnoreCase) ? "💬 split chats" : "🗃 " + target,
+        };
+    }
+
     private static string? FullPathOrNull(string raw)
     {
         raw = (raw ?? "").Trim().Trim('"', '\'');
@@ -224,6 +276,7 @@ public sealed class ProjectToolModule : IAgentToolModule
     public Task<ToolResult> ExecuteAsync(ToolCall call, ToolModuleContext context, CancellationToken ct)
     {
         if (call.Type == ToolType.NewChat) return ExecuteNewChatAsync(call);
+        if (call.Type == ToolType.CloseChat) return ExecuteCloseChatAsync(call);
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
 
         string raw = call.GetArg("path").Trim().Trim('"', '\'');
