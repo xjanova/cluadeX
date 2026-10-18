@@ -393,9 +393,7 @@ public static class MarkdownHelper
         face.Children.Add(new System.Windows.Shapes.Ellipse
         {
             Stroke = who.AccentBrush, StrokeThickness = 2,
-            Fill = who.Image is { } img
-                ? new ImageBrush(img) { Stretch = Stretch.UniformToFill, Viewbox = new Rect(0.18, 0, 0.64, 0.32), ViewboxUnits = BrushMappingMode.RelativeToBoundingBox }
-                : who.TintBrush,
+            Fill = (Brush?)who.FaceBrush ?? who.TintBrush,
         });
         Panel.SetZIndex(face, 1);
         row.Children.Add(face);

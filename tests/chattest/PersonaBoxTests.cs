@@ -42,6 +42,12 @@ internal static partial class Program
             Check("PB1 the model box's portrait is the same girl as the boxes'",
                 Enum.GetValues<AiProviderType>().All(p => new ChatViewModel.ChatModelChoice(p, "m", "x", "").Girl == ChatCharacter.ForProvider(p).Girl));
             Check("PB1 every girl has her own colour (no two the same)", ChatCharacter.All.Select(c => c.Accent).Distinct().Count() == ChatCharacter.All.Count);
+            var badFace = ChatCharacter.All.Where(c => c.FaceBrush is not { } f || f.Viewbox.Left < 0 || f.Viewbox.Top < 0 || f.Viewbox.Right > 1 || f.Viewbox.Bottom > 0.25
+                || Math.Abs(f.Viewbox.Width * ((System.Windows.Media.Imaging.BitmapSource)c.Image!).PixelWidth - f.Viewbox.Height * ((System.Windows.Media.Imaging.BitmapSource)c.Image!).PixelHeight) > 1)
+                .Select(c => c.Name).ToList();
+            Check("PB1 every round portrait is her face: a square crop inside the top quarter of her picture (not the whole figure)", badFace.Count == 0, string.Join(",", badFace));
+            Check("PB1 the model box's round portrait is the same face crop",
+                Enum.GetValues<AiProviderType>().All(p => new ChatViewModel.ChatModelChoice(p, "m", "x", "").GirlFace == ChatCharacter.ForProvider(p).FaceBrush));
 
             // PB2 — cowork room member → girl.
             (string id, ChatCharacter who)[] room =

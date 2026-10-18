@@ -31,12 +31,8 @@
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Grid Width="30" Height="30" VerticalAlignment="Center" Panel.ZIndex="1">
                     <Ellipse Fill="{DynamicResource Bg.Elevated}"/>
-                    <Ellipse Stroke="{Binding AccentBrush}" StrokeThickness="2">
-                        <Ellipse.Fill>
-                            <ImageBrush ImageSource="{Binding Image}" Stretch="UniformToFill"
-                                        Viewbox="0.18,0.0,0.64,0.32" ViewboxUnits="RelativeToBoundingBox"/>
-                        </Ellipse.Fill>
-                    </Ellipse>
+                    <!-- her face fills the circle (ChatCharacter.FaceBrush: a square around her face in her picture) -->
+                    <Ellipse Stroke="{Binding AccentBrush}" StrokeThickness="2" Fill="{Binding FaceBrush}"/>
                 </Grid>
                 <Border Background="{Binding AccentBrush}" CornerRadius="9" Padding="12,2,10,3" Margin="-8,0,0,0"
                         VerticalAlignment="Center">
@@ -2500,14 +2496,9 @@
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <!-- the vendor's girl, a round portrait (her head from the full figure); not in Classic -->
+                                                    <!-- the vendor's girl, a round portrait of her face (ChatCharacter.FaceBrush); not in Classic -->
                                                     <Grid Width="26" Height="26" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{DynamicResource Fx.Flourish}">
-                                                        <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2">
-                                                            <Ellipse.Fill>
-                                                                <ImageBrush ImageSource="{Binding GirlImage}" Stretch="UniformToFill"
-                                                                            Viewbox="0.18,0.0,0.64,0.32" ViewboxUnits="RelativeToBoundingBox"/>
-                                                            </Ellipse.Fill>
-                                                        </Ellipse>
+                                                        <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2" Fill="{Binding GirlFace}"/>
                                                     </Grid>
                                                     <StackPanel VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>

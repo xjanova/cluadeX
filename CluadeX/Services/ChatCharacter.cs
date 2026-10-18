@@ -34,11 +34,43 @@ public sealed class ChatCharacter
 
     public ImageSource? Image => GirlArt.Image(Girl);
 
-    private ChatCharacter(string girl, string name, Color accent)
+    /// <summary>Where her face is in her full-figure picture: its centre (fractions of the width / height).</summary>
+    private readonly double _faceX, _faceY;
+    /// <summary>The side of the square around her face, as a fraction of the picture's height.</summary>
+    private const double FaceSide = 0.108;
+    private ImageBrush? _faceBrush;
+
+    /// <summary>Her face, filling a round portrait (owner 2026-10-18: "รูปในวงกลม อวาต้า ให้โฟกัส หน้าเป็นหลัก"): a square
+    /// around her face — each girl's pose puts it somewhere else — cut from her picture. Null without the picture.</summary>
+    public ImageBrush? FaceBrush => _faceBrush ??= MakeFaceBrush();
+
+    /// <summary>The face square in the picture's relative units (x, y, width, height), for a picture w × h pixels.</summary>
+    public System.Windows.Rect FaceViewbox(double w, double h)
+    {
+        double fw = FaceSide * h / w;
+        return new System.Windows.Rect(Math.Clamp(_faceX - fw / 2, 0, 1 - fw), Math.Clamp(_faceY - FaceSide / 2, 0, 1 - FaceSide), fw, FaceSide);
+    }
+
+    private ImageBrush? MakeFaceBrush()
+    {
+        if (Image is not System.Windows.Media.Imaging.BitmapSource bmp || bmp.PixelWidth == 0) return null;
+        var b = new ImageBrush(bmp)
+        {
+            Stretch = Stretch.UniformToFill,
+            ViewboxUnits = BrushMappingMode.RelativeToBoundingBox,
+            Viewbox = FaceViewbox(bmp.PixelWidth, bmp.PixelHeight),
+        };
+        b.Freeze();
+        return b;
+    }
+
+    private ChatCharacter(string girl, string name, Color accent, double faceX, double faceY)
     {
         Girl = girl;
         Name = name;
         Accent = accent;
+        _faceX = faceX;
+        _faceY = faceY;
         AccentBrush = Frozen(accent);
         FrameBrush = Frozen(Color.FromArgb(0xA0, accent.R, accent.G, accent.B));
         TintBrush = Frozen(Color.FromArgb(0x1E, accent.R, accent.G, accent.B));
@@ -61,13 +93,14 @@ public sealed class ChatCharacter
 
     // ─── the girls ───
 
-    public static readonly ChatCharacter Claude = new("claude", "Claude", Color.FromRgb(0xF0, 0x84, 0x3C));    // the orange girl
-    public static readonly ChatCharacter Codex = new("codex", "Codex", Color.FromRgb(0x3C, 0xA8, 0xFF));
-    public static readonly ChatCharacter Gemini = new("gemini", "Gemini", Color.FromRgb(0xA8, 0x8C, 0xFF));
-    public static readonly ChatCharacter Grok = new("grok", "Grok", Color.FromRgb(0xA3, 0xE6, 0x35));
-    public static readonly ChatCharacter Mind = new("mai", "มายด์", Color.FromRgb(0xC3, 0x9B, 0xFF));
-    public static readonly ChatCharacter BrainX = new("brainx", "BrainX", Color.FromRgb(0x3E, 0x9B, 0xFF));
-    public static readonly ChatCharacter CluadeX = new("cluadex", "CluadeX", Color.FromRgb(0xB9, 0x8C, 0xFF));
+    // The last two numbers: her face's centre in her picture (fraction of width, of height), measured on each PNG.
+    public static readonly ChatCharacter Claude = new("claude", "Claude", Color.FromRgb(0xF0, 0x84, 0x3C), 0.53, 0.095);    // the orange girl
+    public static readonly ChatCharacter Codex = new("codex", "Codex", Color.FromRgb(0x3C, 0xA8, 0xFF), 0.50, 0.107);
+    public static readonly ChatCharacter Gemini = new("gemini", "Gemini", Color.FromRgb(0xA8, 0x8C, 0xFF), 0.50, 0.114);
+    public static readonly ChatCharacter Grok = new("grok", "Grok", Color.FromRgb(0xA3, 0xE6, 0x35), 0.53, 0.090);
+    public static readonly ChatCharacter Mind = new("mai", "มายด์", Color.FromRgb(0xC3, 0x9B, 0xFF), 0.52, 0.100);
+    public static readonly ChatCharacter BrainX = new("brainx", "BrainX", Color.FromRgb(0x3E, 0x9B, 0xFF), 0.46, 0.120);
+    public static readonly ChatCharacter CluadeX = new("cluadex", "CluadeX", Color.FromRgb(0xB9, 0x8C, 0xFF), 0.52, 0.128);
 
     public static IReadOnlyList<ChatCharacter> All { get; } = [Claude, Codex, Gemini, Grok, Mind, BrainX, CluadeX];
 
@@ -107,7 +140,7 @@ public sealed class ChatCharacter
         lock (_roomStrangers)
         {
             if (!_roomStrangers.TryGetValue(a, out var c))
-                _roomStrangers[a] = c = new ChatCharacter(BrainX.Girl, agent!.Trim(), BrainX.Accent);
+                _roomStrangers[a] = c = new ChatCharacter(BrainX.Girl, agent!.Trim(), BrainX.Accent, BrainX._faceX, BrainX._faceY);
             return c;
         }
     }

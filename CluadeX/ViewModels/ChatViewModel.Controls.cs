@@ -24,6 +24,8 @@ public partial class ChatViewModel
         /// <summary>The girl who stands for this vendor (Assets\Girls), shown as a small portrait in the box.</summary>
         public string Girl => ChatCharacter.ForProvider(Provider).Girl;
         public System.Windows.Media.ImageSource? GirlImage => GirlArt.Image(Girl);
+        /// <summary>Her face for the round portrait (ChatCharacter.FaceBrush).</summary>
+        public System.Windows.Media.Brush? GirlFace => ChatCharacter.ForProvider(Provider).FaceBrush;
     }
 
     /// <summary>"$2 / $10" — input / output per million tokens.</summary>
