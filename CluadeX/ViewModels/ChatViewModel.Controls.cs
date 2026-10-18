@@ -22,16 +22,10 @@ public partial class ChatViewModel
     public sealed record ChatModelChoice(AiProviderType Provider, string Model, string ProviderLabel, string PriceLabel, bool NeedsKey = false)
     {
         /// <summary>The girl who stands for this vendor (Assets\Girls), shown as a small portrait in the box.</summary>
-        public string Girl => Provider switch
-        {
-            AiProviderType.Anthropic or AiProviderType.ClaudeDev => "claude",
-            AiProviderType.OpenAI => "codex",
-            AiProviderType.Gemini => "gemini",
-            AiProviderType.BrainX => "brainx",
-            AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama => "mai",   // local = มายด์ (AgentPersona)
-            _ => "cluadex",
-        };
+        public string Girl => ChatCharacter.ForProvider(Provider).Girl;
         public System.Windows.Media.ImageSource? GirlImage => GirlArt.Image(Girl);
+        /// <summary>Her face for the round portrait (ChatCharacter.FaceBrush).</summary>
+        public System.Windows.Media.Brush? GirlFace => ChatCharacter.ForProvider(Provider).FaceBrush;
     }
 
     /// <summary>"$2 / $10" — input / output per million tokens.</summary>

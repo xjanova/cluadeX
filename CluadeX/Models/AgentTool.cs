@@ -155,6 +155,7 @@ public enum ToolType
 
     // Chats (Services/Tools/ProjectToolModule) — appended last: a ToolType is stored by number
     NewChat,           // Open a new chat (optionally in another project) and start a task there
+    CloseChat,         // List this chat's split chats, or put the finished ones away
 }
 
 /// <summary>

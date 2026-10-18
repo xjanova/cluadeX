@@ -318,12 +318,14 @@ public partial class ChatViewModel
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null) return Task.FromResult("(no answer: CluadeX has no window open)");
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var who = CharacterForBox(run);   // the girl who asks: the provider's, or the room member answering
         var msg = new ChatMessage
         {
             Role = MessageRole.Question,
             Content = "❓ " + question.Trim(),
             QuestionOptions = options,
-            QuestionGirl = Services.GirlArt.PickName(),
+            QuestionGirl = who.Girl,
+            Character = who,
             QuestionCallback = answer => tcs.TrySetResult(answer),
         };
         var token = run?.Cts?.Token ?? CancellationToken.None;
@@ -402,8 +404,31 @@ public partial class ChatViewModel
         }
         done.TrySetResult();
         RaiseRunStateChanged();
+        if (run != null) TellParentSplitFinished(run.Session);
         if (run != null && leftover is { Count: > 0 }) SendLeftoverNotes(run, leftover);
         // A stop/finish elsewhere frees nothing on screen, but the bar text changes.
+    }
+
+    /// <summary>
+    /// A split chat finished its turn: the chat that opened it hears so (a side note in its live list, when it is
+    /// running or on screen) and the sidebar's tree updates its count — so the asking chat, or the owner, can put the
+    /// finished one away (close_chat / the sidebar's box button).
+    /// </summary>
+    private void TellParentSplitFinished(ChatSession child)
+    {
+        if (child.ParentId is not { } pid) return;
+        var parent = Sessions.FirstOrDefault(s => s.Id == pid);
+        if (parent != null)
+        {
+            var list = RunOf(parent)?.Messages ?? (ReferenceEquals(parent, CurrentSession) ? Messages : null);
+            list?.Add(new ChatMessage
+            {
+                Role = MessageRole.System,
+                IsSideNote = true,
+                Content = "✅ " + LocF("chat.split.finishedNote", child.Title),
+            });
+        }
+        RebuildVisibleSessions();
     }
 
     private void OnSubAgentEvent(ChatRun? run, CodeAgentService.SubAgentEvent e)

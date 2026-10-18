@@ -52,7 +52,41 @@ public class ChatMessage : INotifyPropertyChanged
     public string Content
     {
         get => _content;
-        set { if (_content != value) { _content = value; OnPropertyChanged(); } }
+        set
+        {
+            if (_content == value) return;
+            _content = value;
+            OnPropertyChanged();
+            if (Role == MessageRole.Assistant) NoteRoomSpeaker();
+        }
+    }
+
+    // ─── who is talking (ChatCharacter) ───
+
+    private Services.ChatCharacter? _character;
+    /// <summary>The girl this box belongs to — the one who asks (question / permission prompt): her portrait, her colour.
+    /// Set when the box is made, from the provider answering (or the room member speaking); a row read back from the
+    /// database has none and stands as its <see cref="QuestionGirl"/>, else CluadeX's own girl.</summary>
+    public Services.ChatCharacter Character
+    {
+        get => _character ?? Services.ChatCharacter.ForGirl(QuestionGirl);
+        set { _character = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuestionGirlGlow)); }
+    }
+
+    private string? _roomSpeaker;
+    /// <summary>A BrainX cowork-room reply: the member speaking last in it ("### 💬 codex" — BrainXRoomProvider), or null.</summary>
+    public string? RoomSpeaker => _roomSpeaker;
+
+    /// <summary>Any reply's room speaker changed (the composer's frame follows whoever answers now).</summary>
+    public static event Action<ChatMessage>? RoomSpeakerChanged;
+
+    private void NoteRoomSpeaker()
+    {
+        string? s = Services.ChatCharacter.LastRoomSpeakerIn(_content);
+        if (string.Equals(s, _roomSpeaker, StringComparison.Ordinal)) return;
+        _roomSpeaker = s;
+        OnPropertyChanged(nameof(RoomSpeaker));
+        RoomSpeakerChanged?.Invoke(this);
     }
 
     public DateTime Timestamp { get; set; } = DateTime.Now;
@@ -274,7 +308,7 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The girl standing beside this question (an Assets\Girls name), picked at random when it was asked.</summary>
     public string? QuestionGirl { get; set; }
     public System.Windows.Media.ImageSource? QuestionGirlImage => Services.GirlArt.Image(QuestionGirl);
-    public System.Windows.Media.Color QuestionGirlGlow => Services.GirlArt.Glow(QuestionGirl);
+    public System.Windows.Media.Color QuestionGirlGlow => Character.Accent;
     private string _answerDraft = "";
     public string AnswerDraft { get => _answerDraft; set { _answerDraft = value; OnPropertyChanged(); } }
 
@@ -440,11 +474,96 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
         ? ""
         : System.IO.Path.GetFileName(ProjectPath.TrimEnd('\\', '/'));
 
+    // ─── split chats (the agent's new_chat): read live from the link store, so a reloaded chat object keeps them ───
+
+    /// <summary>The chat this one was split off, or null.</summary>
+    public string? ParentId => CluadeX.Services.ChatLinkStore.Current?.Get(Id)?.ParentId;
+
+    /// <summary>What this chat was split off to do (the task the asking chat gave it), or "".</summary>
+    public string SplitTask => CluadeX.Services.ChatLinkStore.Current?.Get(Id)?.Task ?? "";
+
+    /// <summary>It was split off another chat.</summary>
+    public bool IsSplit => ParentId != null;
+
+    /// <summary>A finished split chat that was put away: hidden from the list, kept, can be brought back.</summary>
+    public bool IsArchived => CluadeX.Services.ChatLinkStore.Current?.Get(Id)?.ArchivedAt != null;
+
+    private int _splitDepth;
+    /// <summary>Its level in the sidebar's tree (0 = top, 1 = split off a chat shown above it, …). Set by the sidebar.</summary>
+    public int SplitDepth
+    {
+        get => _splitDepth;
+        set { if (_splitDepth != value) { _splitDepth = value; Raise(nameof(SplitDepth)); Raise(nameof(SplitIndent)); } }
+    }
+
+    /// <summary>The row's left indent for <see cref="SplitDepth"/>.</summary>
+    public System.Windows.Thickness SplitIndent => new(Math.Min(_splitDepth, 4) * 14, 0, 0, 0);
+
+    private string _splitSummary = "";
+    /// <summary>On a chat that split work off: "↳ 3 split chats · 2 done · 1 put away". "" when none.</summary>
+    public string SplitSummary
+    {
+        get => _splitSummary;
+        set { if (_splitSummary != value) { _splitSummary = value; Raise(nameof(SplitSummary)); } }
+    }
+
+    private bool _isLastSplit;
+    /// <summary>The last split chat under its parent: its tree line ends in a rounded corner (╰) instead of going on (├).</summary>
+    public bool IsLastSplit
+    {
+        get => _isLastSplit;
+        set { if (_isLastSplit != value) { _isLastSplit = value; Raise(nameof(IsLastSplit)); } }
+    }
+
+    private bool _projectAsParent;
+    /// <summary>A split chat working in the same project as its parent: its project line would only repeat the parent's.</summary>
+    public bool ProjectAsParent
+    {
+        get => _projectAsParent;
+        set { if (_projectAsParent != value) { _projectAsParent = value; Raise(nameof(ProjectAsParent)); Raise(nameof(ShowProjectLine)); } }
+    }
+
+    /// <summary>The row shows the project: it has one, and (for a split chat) it is not the parent's — that line then says
+    /// WHERE the work went.</summary>
+    public bool ShowProjectLine => ProjectName.Length > 0 && !_projectAsParent;
+
+    private int _openSplitCount;
+    /// <summary>Split chats of this chat that are not put away — the number on its branch badge (0 = no badge).</summary>
+    public int OpenSplitCount
+    {
+        get => _openSplitCount;
+        set { if (_openSplitCount != value) { _openSplitCount = value; Raise(nameof(OpenSplitCount)); Raise(nameof(HasOpenSplits)); } }
+    }
+    public bool HasOpenSplits => _openSplitCount > 0;
+
+    private bool _hasFinishedSplits;
+    /// <summary>It has split chats that are finished and not put away yet (offers "put the finished ones away").</summary>
+    public bool HasFinishedSplits
+    {
+        get => _hasFinishedSplits;
+        set { if (_hasFinishedSplits != value) { _hasFinishedSplits = value; Raise(nameof(HasFinishedSplits)); } }
+    }
+
+    private string? _groupOverride;
+    /// <summary>A split chat sits in its parent's day group, under it, not in its own.</summary>
+    public string? GroupOverride
+    {
+        get => _groupOverride;
+        set { if (_groupOverride != value) { _groupOverride = value; Raise(nameof(DateGroupLabel)); } }
+    }
+
+    /// <summary>The link store changed for this chat: re-read everything derived from it.</summary>
+    public void RaiseSplitChanged()
+    {
+        Raise(nameof(ParentId)); Raise(nameof(SplitTask)); Raise(nameof(IsSplit)); Raise(nameof(IsArchived));
+    }
+
     /// <summary>Display-only: the sidebar's group — today, yesterday, this week, earlier (in the UI language).</summary>
     public string DateGroupLabel
     {
         get
         {
+            if (_groupOverride != null) return _groupOverride;
             var day = UpdatedAt.Date;
             var today = DateTime.Today;
             string key = day >= today ? "sidebar.group.today"

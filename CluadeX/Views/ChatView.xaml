@@ -6,7 +6,8 @@
              xmlns:helpers="clr-namespace:CluadeX.Helpers"
              xmlns:services="clr-namespace:CluadeX.Services"
              xmlns:vm="clr-namespace:CluadeX.ViewModels"
-             xmlns:views="clr-namespace:CluadeX.Views">
+             xmlns:views="clr-namespace:CluadeX.Views"
+             views:CharacterLook.Show="{DynamicResource Fx.Flourish}">
 
     <UserControl.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
@@ -22,6 +23,119 @@
         <conv:BoolToStringConverter x:Key="BoolStr"/>
         <conv:ContextUsageBrushConverter x:Key="CtxBrush"/>
         <conv:ContextLedGateConverter x:Key="CtxLedGate"/>
+
+        <!-- ═══ Who is talking (ChatCharacter): her round portrait and her name on a chip of her colour. The boxes she
+             opens (question, options, permission) and the composer wear her colour where views:CharacterLook.Show is
+             Visible — the theme's Fx.Flourish, set on this view's root; Classic keeps every box in its own look. ═══ -->
+        <DataTemplate x:Key="CxCharTag">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Grid Width="30" Height="30" VerticalAlignment="Center" Panel.ZIndex="1">
+                    <Ellipse Fill="{DynamicResource Bg.Elevated}"/>
+                    <!-- her face fills the circle (ChatCharacter.FaceBrush: a square around her face in her picture) -->
+                    <Ellipse Stroke="{Binding AccentBrush}" StrokeThickness="2" Fill="{Binding FaceBrush}"/>
+                </Grid>
+                <Border Background="{Binding AccentBrush}" CornerRadius="9" Padding="12,2,10,3" Margin="-8,0,0,0"
+                        VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Name}" Foreground="{Binding OnAccentBrush}" FontSize="11.5" FontWeight="SemiBold"
+                               FontFamily="{DynamicResource Font.Ui.Display}"/>
+                </Border>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- The box's main button (Answer / Allow): a fill of her colour, text in whichever of ink or white reads on it -->
+        <Style x:Key="CxCharPrimary" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                    <Setter Property="Background" Value="{Binding Character.AccentBrush}"/>
+                    <Setter Property="Foreground" Value="{Binding Character.OnAccentBrush}"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="border" Background="{TemplateBinding Background}" CornerRadius="8"
+                                        Padding="{TemplateBinding Padding}" RenderTransformOrigin="0.5,0.5">
+                                    <Border.RenderTransform><ScaleTransform/></Border.RenderTransform>
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="border" Property="Opacity" Value="0.85"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="border" Property="RenderTransform">
+                                            <Setter.Value><ScaleTransform ScaleX="0.97" ScaleY="0.97"/></Setter.Value>
+                                        </Setter>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="border" Property="Opacity" Value="0.4"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- An ask_user option: a pill. Its DataContext is the option text; the question is the ItemsControl's. -->
+        <Style x:Key="CxCharPill" TargetType="Button">
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+            <Setter Property="Background" Value="{DynamicResource Surface.Chip}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="pill" CornerRadius="16" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}" RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform><ScaleTransform/></Border.RenderTransform>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="pill" Property="Background" Value="{DynamicResource State.Hover}"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" To="1.05" Duration="0:0:0.15"/>
+                                            <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" To="1.05" Duration="0:0:0.15"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <!-- her look: hovering fills the pill with her colour -->
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="views:CharacterLook.Show" Value="Visible"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="pill" Property="Background" Value="{Binding DataContext.Character.AccentBrush, RelativeSource={RelativeSource AncestorType=ItemsControl}}"/>
+                                <Setter Property="Foreground" Value="{Binding DataContext.Character.OnAccentBrush, RelativeSource={RelativeSource AncestorType=ItemsControl}}"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                    <Setter Property="Background" Value="{Binding DataContext.Character.TintBrush, RelativeSource={RelativeSource AncestorType=ItemsControl}}"/>
+                    <Setter Property="BorderBrush" Value="{Binding DataContext.Character.AccentBrush, RelativeSource={RelativeSource AncestorType=ItemsControl}}"/>
+                    <Setter Property="BorderThickness" Value="1.5"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
 
         <!-- Colours and fonts: every one is a theme token ({DynamicResource …}, Resources/Themes/Tokens.md), so
              this view follows a theme switch live. The old "neon retheme" block that redefined the Catppuccin keys
@@ -338,13 +452,48 @@
                                     </Image>
                                     </Grid>
 
-                                    <Border Grid.Column="1" CornerRadius="14" Padding="16,12,16,10" BorderThickness="1"
-                                            BorderBrush="{DynamicResource Accent.1}" Background="{DynamicResource Bg.Elevated}" MinWidth="280"
-                                            Effect="{DynamicResource Fx.Card.Glow}">
+                                    <Border Grid.Column="1" CornerRadius="14" Padding="16,12,16,10"
+                                            Background="{DynamicResource Bg.Elevated}" MinWidth="280"
+                                            AutomationProperties.AutomationId="CxGuard.QuestionCard">
+                                        <!-- the theme's look; with the flourishes on (not Classic), the look of the girl who asks -->
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="BorderThickness" Value="1"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
+                                                <Setter Property="Effect" Value="{DynamicResource Fx.Card.Glow}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                                                        <Setter Property="BorderThickness" Value="1.5"/>
+                                                        <Setter Property="BorderBrush" Value="{Binding Character.AccentBrush}"/>
+                                                        <Setter Property="Effect" Value="{Binding Character.GlowEffect}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <Grid>
-                                            <!-- a soft tint of the accent over the card's surface -->
-                                            <Border CornerRadius="12" Margin="-15,-11,-15,-9" Background="{DynamicResource Accent.1}" Opacity="0.07" IsHitTestVisible="False"/>
+                                            <!-- a soft tint over the card's surface: the theme accent, or her colour washed from her corner -->
+                                            <Border CornerRadius="12" Margin="-15,-11,-15,-9" IsHitTestVisible="False">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource Accent.1}"/>
+                                                        <Setter Property="Opacity" Value="0.07"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                                                                <Setter Property="Background" Value="{Binding Character.WashBrush}"/>
+                                                                <Setter Property="Opacity" Value="1"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                            </Border>
                                             <StackPanel>
+                                                <!-- who asks: her portrait and name (not in Classic) -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,8" Visibility="{DynamicResource Fx.Flourish}"
+                                                            AutomationProperties.AutomationId="CxGuard.QuestionWho">
+                                                    <ContentControl Content="{Binding Character}" ContentTemplate="{StaticResource CxCharTag}" Focusable="False"/>
+                                                    <TextBlock Text="{services:Loc chat.who.asks}" Foreground="{DynamicResource Text.Muted}" FontSize="11.5"
+                                                               VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                </StackPanel>
                                                 <TextBlock Text="{Binding Content}" Foreground="{DynamicResource Text.Primary}"
                                                            FontSize="13.5" FontFamily="{DynamicResource Font.Ui}" TextWrapping="Wrap" Margin="0,0,0,10"
                                                            LineHeight="20"/>
@@ -356,53 +505,53 @@
                                                         </ItemsControl.ItemsPanel>
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
-                                                                <Button Content="{Binding}" Padding="14,6" Margin="0,0,8,8" FontSize="12.5" Cursor="Hand"
-                                                                        Foreground="{DynamicResource Text.Primary}" Background="{DynamicResource Surface.Chip}"
-                                                                        BorderBrush="{DynamicResource Accent.1}" BorderThickness="1"
+                                                                <Button Content="{Binding}" Style="{StaticResource CxCharPill}"
                                                                         Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                                         AutomationProperties.AutomationId="CxGuard.QuestionOption"
-                                                                        Click="QuestionOption_Click">
-                                                                    <Button.Template>
-                                                                        <ControlTemplate TargetType="Button">
-                                                                            <Border x:Name="pill" CornerRadius="16" Background="{TemplateBinding Background}"
-                                                                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                                                                    Padding="{TemplateBinding Padding}" RenderTransformOrigin="0.5,0.5">
-                                                                                <Border.RenderTransform><ScaleTransform/></Border.RenderTransform>
-                                                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                                            </Border>
-                                                                            <ControlTemplate.Triggers>
-                                                                                <Trigger Property="IsMouseOver" Value="True">
-                                                                                    <Setter TargetName="pill" Property="Background" Value="{DynamicResource State.Hover}"/>
-                                                                                    <Trigger.EnterActions>
-                                                                                        <BeginStoryboard>
-                                                                                            <Storyboard>
-                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" To="1.05" Duration="0:0:0.15"/>
-                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" To="1.05" Duration="0:0:0.15"/>
-                                                                                            </Storyboard>
-                                                                                        </BeginStoryboard>
-                                                                                    </Trigger.EnterActions>
-                                                                                    <Trigger.ExitActions>
-                                                                                        <BeginStoryboard>
-                                                                                            <Storyboard>
-                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" To="1" Duration="0:0:0.2"/>
-                                                                                                <DoubleAnimation Storyboard.TargetName="pill" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" To="1" Duration="0:0:0.2"/>
-                                                                                            </Storyboard>
-                                                                                        </BeginStoryboard>
-                                                                                    </Trigger.ExitActions>
-                                                                                </Trigger>
-                                                                            </ControlTemplate.Triggers>
-                                                                        </ControlTemplate>
-                                                                    </Button.Template>
-                                                                </Button>
+                                                                        Click="QuestionOption_Click"/>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
                                                     </ItemsControl>
                                                     <Grid>
                                                         <Grid.ColumnDefinitions><ColumnDefinition MinWidth="200"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                                        <TextBox AutomationProperties.AutomationId="CxGuard.QuestionAnswer" Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
-                                                                 ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
+                                                        <!-- The plain box (Classic: its implicit TextBox style must reach it, so it carries no Style) -->
+                                                        <Grid>
+                                                            <Grid.Style>
+                                                                <Style TargetType="Grid">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Grid.Style>
+                                                            <TextBox AutomationProperties.AutomationId="CxGuard.QuestionAnswer" Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
+                                                                     ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"/>
+                                                        </Grid>
+                                                        <!-- …and in her look: the theme's input surface edged in her colour -->
+                                                        <Grid Visibility="{DynamicResource Fx.Flourish}">
+                                                            <TextBox AutomationProperties.AutomationId="CxGuard.QuestionAnswer" Text="{Binding AnswerDraft, UpdateSourceTrigger=PropertyChanged}" FontSize="12.5" Padding="8,5"
+                                                                     ToolTip="{services:Loc chat.ask.placeholder}" KeyDown="QuestionBox_KeyDown"
+                                                                     Background="{DynamicResource Surface.Input}" Foreground="{DynamicResource Text.Primary}"
+                                                                     CaretBrush="{DynamicResource Text.Primary}" BorderBrush="{Binding Character.FrameBrush}">
+                                                                <TextBox.Template>
+                                                                    <ControlTemplate TargetType="TextBox">
+                                                                        <Border x:Name="box" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                                                                BorderThickness="1.5" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                                                                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False" VerticalScrollBarVisibility="Hidden"
+                                                                                          HorizontalScrollBarVisibility="Hidden"/>
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                                                <Setter TargetName="box" Property="BorderBrush" Value="{Binding Character.AccentBrush}"/>
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </TextBox.Template>
+                                                            </TextBox>
+                                                        </Grid>
                                                         <Button Grid.Column="1" Content="{services:Loc chat.ask.send}" Padding="14,4" Margin="8,0,0,0"
-                                                                FontSize="12.5" Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="CxGuard.QuestionSend" Click="QuestionSend_Click"/>
+                                                                FontSize="12.5" Style="{StaticResource CxCharPrimary}" AutomationProperties.AutomationId="CxGuard.QuestionSend" Click="QuestionSend_Click"/>
                                                     </Grid>
                                                 </StackPanel>
                                             </StackPanel>
@@ -413,11 +562,12 @@
                                 <!-- ═══ Permission Request: inline Yes/No prompt ═══ -->
                                 <Border Grid.Row="1" HorizontalAlignment="Left"
                                         Margin="20,4,40,4"
-                                        CornerRadius="0,6,6,0"
-                                        Padding="10,6">
+                                        AutomationProperties.AutomationId="CxGuard.PermissionCard">
                                     <Border.Style>
                                         <Style TargetType="Border">
                                             <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Setter Property="CornerRadius" Value="0,6,6,0"/>
+                                            <Setter Property="Padding" Value="10,6"/>
                                             <Setter Property="Background" Value="{DynamicResource Chat.Permission.Background}"/>
                                             <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning}"/>
                                             <Setter Property="BorderThickness" Value="2,0,0,0"/>
@@ -425,8 +575,19 @@
                                                 <DataTrigger Binding="{Binding Role}" Value="{x:Static models:MessageRole.PermissionRequest}">
                                                     <Setter Property="Visibility" Value="Visible"/>
                                                 </DataTrigger>
-                                                <!-- The red prompt: a delete aimed at a drive / home / system folder (Safety.DangerApproval) -->
+                                                <!-- With the flourishes on (not Classic): the look of the girl who asks -->
+                                                <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                                                    <Setter Property="CornerRadius" Value="4,12,12,4"/>
+                                                    <Setter Property="Padding" Value="12,8,14,10"/>
+                                                    <Setter Property="Background" Value="{Binding Character.WashBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{Binding Character.AccentBrush}"/>
+                                                    <Setter Property="BorderThickness" Value="4,1.5,1.5,1.5"/>
+                                                </DataTrigger>
+                                                <!-- The red prompt: a delete aimed at a drive / home / system folder (Safety.DangerApproval).
+                                                     Last, so it wins over her look: it stays red whoever asks. -->
                                                 <DataTrigger Binding="{Binding IsPermissionDanger}" Value="True">
+                                                    <Setter Property="CornerRadius" Value="0,6,6,0"/>
+                                                    <Setter Property="Padding" Value="10,6"/>
                                                     <Setter Property="Background" Value="{DynamicResource Chat.Diff.Removed.Background}"/>
                                                     <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger}"/>
                                                     <Setter Property="BorderThickness" Value="4,2,2,2"/>
@@ -435,6 +596,26 @@
                                         </Style>
                                     </Border.Style>
                                     <StackPanel>
+                                        <!-- who asks: her portrait and name (not in Classic, never on the red prompt) -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8" AutomationProperties.AutomationId="CxGuard.PermissionWho">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible"/>
+                                                                <Condition Binding="{Binding IsPermissionDanger}" Value="False"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
+                                            <ContentControl Content="{Binding Character}" ContentTemplate="{StaticResource CxCharTag}" Focusable="False"/>
+                                            <TextBlock Text="{services:Loc chat.who.permission}" Foreground="{DynamicResource Text.Muted}" FontSize="11.5"
+                                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        </StackPanel>
                                         <!-- Dangerous action: say so in red, in plain words, with the guard's full finding -->
                                         <StackPanel Margin="0,0,0,8"
                                                     Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
@@ -449,8 +630,22 @@
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                             <TextBlock Text="&#xE8D7;" FontFamily="Segoe MDL2 Assets"
-                                                       FontSize="14" Foreground="{DynamicResource Status.Warning}"
-                                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                                       FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                        <Style.Triggers>
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible"/>
+                                                                    <Condition Binding="{Binding IsPermissionDanger}" Value="False"/>
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter Property="Foreground" Value="{Binding Character.AccentBrush}"/>
+                                                            </MultiDataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                             <TextBlock Text="{Binding Content}"
                                                        Foreground="{DynamicResource Text.Primary}"
                                                        FontSize="13" FontFamily="{DynamicResource Font.Ui.Display}"
@@ -502,7 +697,7 @@
                                         <StackPanel Orientation="Horizontal" Margin="22,0,0,0"
                                                     Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
                                             <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,0"
-                                                    Style="{StaticResource PrimaryButton}"
+                                                    Style="{StaticResource CxCharPrimary}"
                                                     FontSize="12"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionAllow"
                                                     Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
@@ -2140,6 +2335,13 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
+                <!-- Who answers this chat: her tag on the card's top edge (not in Classic) -->
+                <ContentControl x:Name="ComposerWho" Grid.Row="1" Panel.ZIndex="3" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Margin="0,-15,16,0" IsHitTestVisible="False" Focusable="False"
+                                Content="{Binding ActiveCharacter}" ContentTemplate="{StaticResource CxCharTag}"
+                                Visibility="{DynamicResource Fx.Flourish}"
+                                AutomationProperties.AutomationId="CxGuard.ComposerWho"/>
+
                 <!-- The card -->
                 <Border x:Name="ComposerCard" Grid.Row="1" CornerRadius="12" BorderThickness="1" Padding="14,10,10,8"
                         AllowDrop="True" PreviewDragOver="Composer_PreviewDragOver" PreviewDrop="Composer_PreviewDrop">
@@ -2151,6 +2353,19 @@
                                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                     <Setter Property="BorderBrush" Value="{DynamicResource Accent.1}"/>
                                 </Trigger>
+                                <!-- With the flourishes on (not Classic): framed in the colour of the girl answering this chat
+                                     (the cowork room: the member answering now) — softer until the box has the focus -->
+                                <DataTrigger Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible">
+                                    <Setter Property="BorderThickness" Value="1.5"/>
+                                    <Setter Property="BorderBrush" Value="{Binding ActiveCharacter.FrameBrush}"/>
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding (views:CharacterLook.Show), RelativeSource={RelativeSource Self}}" Value="Visible"/>
+                                        <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource Self}}" Value="True"/>
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="BorderBrush" Value="{Binding ActiveCharacter.AccentBrush}"/>
+                                </MultiDataTrigger>
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
@@ -2281,14 +2496,9 @@
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <!-- the vendor's girl, a round portrait (her head from the full figure); not in Classic -->
+                                                    <!-- the vendor's girl, a round portrait of her face (ChatCharacter.FaceBrush); not in Classic -->
                                                     <Grid Width="26" Height="26" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{DynamicResource Fx.Flourish}">
-                                                        <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2">
-                                                            <Ellipse.Fill>
-                                                                <ImageBrush ImageSource="{Binding GirlImage}" Stretch="UniformToFill"
-                                                                            Viewbox="0.18,0.0,0.64,0.32" ViewboxUnits="RelativeToBoundingBox"/>
-                                                            </Ellipse.Fill>
-                                                        </Ellipse>
+                                                        <Ellipse Stroke="{DynamicResource Accent.1}" StrokeThickness="1.2" Fill="{Binding GirlFace}"/>
                                                     </Grid>
                                                     <StackPanel VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding Model}" FontFamily="{DynamicResource Font.Mono}" FontSize="12" VerticalAlignment="Center"/>

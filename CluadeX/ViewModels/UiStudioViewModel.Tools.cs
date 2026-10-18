@@ -49,6 +49,12 @@ public sealed partial class UiStudioViewModel
     private L10nText? _toolTr;
     /// <summary>Why the picked Text's translation can't be typed over (a key): a placeholder, a key no .arb has.</summary>
     private string? _toolTrNote;
+    /// <summary>The picked Text shows a parameter of its widget (<c>Text(label)</c> in class _Tag) and the use that drew
+    /// it passes a literal (<c>_Tag(label: 'ยอดขาย')</c>): that literal is what the text tool types over.</summary>
+    private sealed record ToolArg(string File, int Line, int Column, FlutterParamText Param, string Literal);
+    private ToolArg? _toolArg;
+    /// <summary>Why a text passed in through a parameter can't be typed over (already localized: it names the use).</summary>
+    private string? _toolArgWhy;
     /// <summary>A widget an edit made or moved, to pick once the picture is drawn again.</summary>
     private (string File, int Line, int Column)? _pendingFocus;
 
@@ -69,13 +75,16 @@ public sealed partial class UiStudioViewModel
     public string ToolSharedNote => _toolAt is { } a && _stageCard?.Page.SourcePath is { } screen && !SameFile(a.File, screen) ? T("studio.fedit.shared", Rel(a.File)) : "";
     public bool HasToolSharedNote => ToolSharedNote.Length > 0;
 
-    public bool CanToolText => _tool?.CanText == true || _toolTr != null;
+    public bool CanToolText => _tool?.CanText == true || _toolTr != null || _toolArg != null;
     private string _toolText = "";
     public string ToolText { get => _toolText; set => SetProperty(ref _toolText, value ?? ""); }
-    /// <summary>Where a translated text is written (its key and .arb file), else why the text can't be typed over.</summary>
+    /// <summary>Where a translated text is written (its key and .arb file), or a text passed in through a parameter (the
+    /// widget's use), else why the text can't be typed over.</summary>
     public string ToolTextNote =>
         _toolTr is { } tr ? T("studio.fedit.text.arb", tr.Key, Path.GetFileName(tr.ArbPath)) + (tr.FromTemplate ? " " + T("studio.fedit.text.arbNew") : "")
-        : _tool is { CanText: false } t && (_toolTrNote ?? t.TextNote) is { } k ? T(k) : "";
+        : _toolArg is { } arg ? T("studio.fedit.text.param", Rel(arg.File) + ":" + arg.Line)
+        : _tool is { CanText: false } t ? _toolArgWhy ?? ((_toolTrNote ?? t.TextNote) is { } k ? T(k) : "")
+        : "";
     public bool HasToolTextNote => ToolTextNote.Length > 0;
 
     public bool CanToolTextStyle => _tool?.CanTextStyle == true;
@@ -158,8 +167,9 @@ public sealed partial class UiStudioViewModel
         }
         _tool = info;
         _toolAt = info != null ? at : null;
-        ResolveTranslation(info);
-        _toolText = _toolTr?.Shown ?? info?.Text ?? "";
+        ResolveTranslation(info?.L10nKey, info?.L10nCall == true);
+        ResolveUse(info);
+        _toolText = _toolTr?.Shown ?? _toolArg?.Literal ?? info?.Text ?? "";
         _toolFontSize = Fmt(info?.FontSize);
         _toolPadding = Fmt(info?.Padding);
         _toolMargin = Fmt(info?.Margin);
@@ -174,24 +184,129 @@ public sealed partial class UiStudioViewModel
 
     private static string Fmt(double? v) => v is { } x ? x.ToString("0.##", CultureInfo.InvariantCulture) : "";
 
-    /// <summary>A Text that reads a translation (context.l10n.title): what its key says in the .arb file of the language
-    /// the screen is drawn in, to type over — never a message with a placeholder or a plural, and only an .arb file of
-    /// this project.</summary>
-    private void ResolveTranslation(FlutterWidgetInfo? info)
+    /// <summary>A Text that reads a translation (context.l10n.title) — itself, or what the widget's use passes it: what
+    /// its key says in the .arb file of the language the screen is drawn in, to type over — never a message with a
+    /// placeholder or a plural (<paramref name="call"/>: the key is called with values), and only an .arb file of this
+    /// project.</summary>
+    private void ResolveTranslation(string? key, bool call)
     {
         _toolTr = null;
         _toolTrNote = null;
-        if (info?.L10nKey is not { } key || !_studio.HasProject) return;
+        if (key == null || !_studio.HasProject) return;
         FlutterL10n? l10n;
         try { l10n = FlutterL10n.Load(_studio.Root); }
         catch (Exception ex) { _log?.Warn("UiStudio", "reading the translations failed", ex); return; }
         if (l10n == null) return;   // no gen-l10n setup: the general note stays
-        if (info.L10nCall) { _toolTrNote = "studio.fedit.text.l10nPlaceholder"; return; }
+        if (call) { _toolTrNote = "studio.fedit.text.l10nPlaceholder"; return; }
         var tr = l10n.Resolve(key, _loc.CurrentLanguage, out var why);
         string root = Path.GetFullPath(_studio.Root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (tr != null && !Path.GetFullPath(tr.ArbPath).StartsWith(root, StringComparison.OrdinalIgnoreCase)) { tr = null; why = "studio.fedit.text.l10n"; }
         _toolTr = tr;
         _toolTrNote = tr == null ? why : null;
+    }
+
+    /// <summary>One use of a widget: its call's place (as the widget inspector gives it), and its box on the picture.</summary>
+    private sealed record WidgetUse(string File, int Line, int Column, WidgetBox? Box);
+
+    /// <summary>The picked Text shows a parameter of its widget (<c>Text(label)</c> in class _Tag): follow it to the use
+    /// that drew this one — on the real picture the _Tag box around the picked box says which call created it — and offer
+    /// the literal that use passes (<c>_Tag(label: 'ยอดขาย')</c>). A text passed on from further up (<c>_Tag(label: title)</c>
+    /// inside _Section) is followed to where _Section is used; a translation there is typed over in its .arb file.</summary>
+    private void ResolveUse(FlutterWidgetInfo? info)
+    {
+        _toolArg = null;
+        _toolArgWhy = null;
+        if (info?.ParamText is not { } p || _toolAt is not { } at || !_studio.HasProject) return;
+        try { FollowUse(p, at.File); }
+        catch (Exception ex)
+        {
+            // (the general reason stays: the Text's own note)
+            _log?.Warn("UiStudio", "following a widget's use failed", ex);
+            _toolArg = null;
+            _toolArgWhy = null;
+        }
+    }
+
+    private void FollowUse(FlutterParamText p, string classFile)
+    {
+        var from = _stageBox;
+        // (a few widgets deep at most: each one passes the text on to the next)
+        for (int hop = 0; hop < 6; hop++)
+        {
+            var use = UseOf(p, classFile, from, out var why);
+            if (use == null) { _toolArgWhy = why; return; }
+            string where = Rel(use.File) + ":" + use.Line;
+            var arg = IsEditable(use.File) && ReadSource(use.File) is { } text
+                ? FlutterCodeEdit.ArgText(text, use.Line, use.Column, p)
+                : new FlutterArgText { Kind = FlutterArgKind.Data };
+            switch (arg.Kind)
+            {
+                case FlutterArgKind.Literal:
+                    _toolArg = new ToolArg(use.File, use.Line, use.Column, p, arg.Literal!);
+                    return;
+                case FlutterArgKind.Translation:
+                    ResolveTranslation(arg.L10nKey, arg.L10nCall);
+                    if (_toolTr == null && _toolTrNote == null) _toolArgWhy = T("studio.fedit.text.l10n");
+                    return;
+                case FlutterArgKind.PassedOn:
+                    p = arg.PassedOn!;
+                    classFile = use.File;
+                    from = use.Box;
+                    continue;
+                case FlutterArgKind.Default:
+                    _toolArgWhy = T("studio.fedit.text.paramDefault", where);
+                    return;
+                case FlutterArgKind.Stale:
+                    _toolArgWhy = T("studio.fedit.stale");
+                    return;
+                default:
+                    _toolArgWhy = T("studio.fedit.text.paramData", where);
+                    return;
+            }
+        }
+        _toolArgWhy = T("studio.fedit.text.data");
+    }
+
+    /// <summary>The use of <paramref name="p"/>'s widget class that drew the widget at <paramref name="from"/>: on the real
+    /// picture the nearest box of that class around it; else (a wireframe pick, no such box) the only call of the class
+    /// in the code — a private class's in its own file — or the one on the line the wireframe block says the screen
+    /// uses it at. Null, with the reason, when there is none or nothing tells several apart.</summary>
+    private WidgetUse? UseOf(FlutterParamText p, string classFile, WidgetBox? from, out string? why)
+    {
+        why = null;
+        if (from != null)
+        {
+            var box = _stageBoxes
+                .Where(b => b.Depth < from.Depth && SameWidget(p.Class, b.Widget)
+                            && b.X <= from.X + 0.5 && b.Y <= from.Y + 0.5 && b.X + b.W >= from.X + from.W - 0.5 && b.Y + b.H >= from.Y + from.H - 0.5)
+                .OrderByDescending(b => b.Depth).FirstOrDefault();
+            if (box != null) return new WidgetUse(box.File, box.Line, box.Column, box);
+        }
+        var found = new List<WidgetUse>();
+        var files = p.Class.StartsWith('_') ? new List<string> { classFile } : LibDartFiles();
+        foreach (var f in files)
+        {
+            if (!IsEditable(f) || ReadSource(f) is not { } text) continue;
+            foreach (var (l, c) in FlutterCodeEdit.CallsOf(text, p.Class)) found.Add(new WidgetUse(f, l, c, null));
+        }
+        if (found.Count > 1 && _stageNode is { UseFile: { } uf, UseLine: > 0 } n)
+        {
+            var there = found.Where(u => SameFile(u.File, uf) && u.Line == n.UseLine).ToList();
+            if (there.Count == 1) return there[0];
+        }
+        if (found.Count == 1) return found[0];
+        why = found.Count == 0 ? T("studio.fedit.text.paramNone") : T("studio.fedit.text.paramMany", found.Count);
+        return null;
+    }
+
+    private List<string> LibDartFiles()
+    {
+        try
+        {
+            string lib = Path.Combine(_studio.Root, "lib");
+            return Directory.Exists(lib) ? Directory.EnumerateFiles(lib, "*.dart", SearchOption.AllDirectories).Take(3000).ToList() : new List<string>();
+        }
+        catch { return new List<string>(); }
     }
 
     /// <summary>"Image.asset" is the inspector's "Image"; "Text-[<'k'>]" (a keyed widget) is "Text".</summary>
@@ -222,8 +337,9 @@ public sealed partial class UiStudioViewModel
     // ───────────────────────────── running an edit ─────────────────────────────
 
     /// <summary>Apply one tool to the picked widget (or <paramref name="target"/>): the file is written (Undo takes it
-    /// back), the boxes follow the code until the picture is drawn again, and the edited widget stays picked.</summary>
-    private void RunTool(string label, Func<string, int, int, FlutterEdit> op, (string File, int Line, int Column)? target = null)
+    /// back), the boxes follow the code until the picture is drawn again, and the edited widget stays picked — or, with
+    /// <paramref name="keepPick"/> (an edit of the widget's use, somewhere else), the widget that was picked.</summary>
+    private void RunTool(string label, Func<string, int, int, FlutterEdit> op, (string File, int Line, int Column)? target = null, bool keepPick = false, string? done = null)
     {
         if ((target ?? _toolAt) is not { } at) return;
         if (AiWorking) { Status(T("studio.fedit.aiBusy"), error: true); return; }
@@ -243,13 +359,36 @@ public sealed partial class UiStudioViewModel
 
         // until Flutter draws it again, the boxes follow the code (what the edit rewrote has no box for now)
         string path = at.File;
+        var picked = _stageBox;
         StageBoxes = _stageBoxes.Select(b => !SameFile(b.File, path) ? b : r.Map(b.Line, b.Column) is { } p ? b with { Line = p.Line, Column = p.Column } : null)
                                 .Where(b => b != null).Select(b => b!).ToList();
-        if (r.FocusLine > 0) SelectAt(path, r.FocusLine, r.FocusColumn, r.Text);
+        if (keepPick) KeepPicked(picked, path, r);
+        else if (r.FocusLine > 0) SelectAt(path, r.FocusLine, r.FocusColumn, r.Text);
         else { StageBox = null; StageNode = null; }
-        Status(T("studio.fedit.applied"));
+        Status(done ?? T("studio.fedit.applied"));
         OnPropertyChanged(nameof(CanUndo));
     }
+
+    /// <summary>After an edit somewhere else (the picked widget's use): the widget picked before stays picked, on its box
+    /// as the boxes follow the code, and the tools read it again.</summary>
+    private void KeepPicked(WidgetBox? picked, string edited, FlutterEdit r)
+    {
+        if (picked != null)
+        {
+            var at = SameFile(picked.File, edited) ? r.Map(picked.Line, picked.Column) : (picked.Line, picked.Column);
+            var now = at is { } p ? SameBox(picked with { Line = p.Line, Column = p.Column }) : null;
+            if (now == null) { StageBox = null; StageNode = null; return; }
+            if (!ReferenceEquals(now, _stageBox)) { StageBox = now; return; }
+        }
+        RefreshTools();
+    }
+
+    /// <summary>The box among the current ones that is <paramref name="old"/>: the same place in the code — and for a
+    /// widget drawn more than once (a shared widget used twice: one line of code, two boxes) the one nearest to where
+    /// the old one was.</summary>
+    private WidgetBox? SameBox(WidgetBox old) =>
+        _stageBoxes.Where(b => SameFile(b.File, old.File) && b.Line == old.Line && b.Column == old.Column)
+                   .OrderBy(b => b.Depth == old.Depth ? 0 : 1).ThenBy(b => Math.Abs(b.X - old.X) + Math.Abs(b.Y - old.Y)).FirstOrDefault();
 
     /// <summary>Write a translated text: only that key's message changes in its .arb file (a key the language doesn't
     /// translate yet is added next to its neighbour). Undo takes it back, it joins the review round, and the screens
@@ -281,12 +420,13 @@ public sealed partial class UiStudioViewModel
     /// the picture is drawn again.</summary>
     private void SelectAt(string file, int line, int column, string text)
     {
-        var hit = _stageBoxes.FirstOrDefault(b => SameFile(b.File, file) && b.Line == line && b.Column == column);
+        var prev = _stageBox;
+        var probe = new WidgetBox(prev?.Widget ?? "", file, line, column, prev?.X ?? 0, prev?.Y ?? 0, 0, 0, prev?.Depth ?? 0);
+        var hit = SameBox(probe);
         if (hit != null) { _pendingFocus = null; StageBox = hit; return; }
         _pendingFocus = (file, line, column);
-        var prev = _stageBox;
         string name = FlutterCodeEdit.Inspect(text, line, column)?.Name.Split('.')[0] ?? prev?.Widget ?? "";
-        StageBox = new WidgetBox(name, file, line, column, prev?.X ?? 0, prev?.Y ?? 0, 0, 0, prev?.Depth ?? 0);
+        StageBox = probe with { Widget = name };
     }
 
     /// <summary>After a new picture: the widget an edit made (or moved) is picked on it.</summary>
@@ -294,13 +434,13 @@ public sealed partial class UiStudioViewModel
     {
         if (_pendingFocus is { } p)
         {
-            var hit = _stageBoxes.FirstOrDefault(b => SameFile(b.File, p.File) && b.Line == p.Line && b.Column == p.Column);
+            var hit = SameBox(new WidgetBox("", p.File, p.Line, p.Column, _stageBox?.X ?? 0, _stageBox?.Y ?? 0, 0, 0, _stageBox?.Depth ?? 0));
             if (hit != null) { _pendingFocus = null; StageBox = hit; return; }
         }
         else if (_stageBox is { } cur)
         {
-            // the same widget on the new picture (its new size and place)
-            var same = _stageBoxes.FirstOrDefault(b => SameFile(b.File, cur.File) && b.Line == cur.Line && b.Column == cur.Column);
+            // the same widget on the new picture (its new size and place) — the same use of a widget drawn twice
+            var same = SameBox(cur);
             if (same != null && !ReferenceEquals(same, cur)) { StageBox = same; return; }
         }
         RefreshTools();
@@ -509,8 +649,16 @@ public sealed partial class UiStudioViewModel
     public ICommand ApplyToolTextCommand => _applyToolTextCommand ??= new RelayCommand(() =>
     {
         if (_toolTr is { } tr) { if (ToolText != tr.Shown) RunTranslation(tr, ToolText); return; }
-        if (_tool?.CanText != true || ToolText == _tool.Text) return;
         string v = ToolText;
+        if (_toolArg is { } use)
+        {
+            // written where the widget is used: only the literal that one use passes changes, and the Text stays picked
+            if (v != use.Literal)
+                RunTool("text", (t, l, c) => FlutterCodeEdit.SetArgText(t, l, c, use.Param, v, expect: use.Literal), (use.File, use.Line, use.Column), keepPick: true,
+                        done: T("studio.fedit.appliedParam", Rel(use.File) + ":" + use.Line));
+            return;
+        }
+        if (_tool?.CanText != true || v == _tool.Text) return;
         RunTool("text", (t, l, c) => FlutterCodeEdit.SetText(t, l, c, v));
     }, () => CanToolText);
 
