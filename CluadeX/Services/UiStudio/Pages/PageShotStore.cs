@@ -31,6 +31,8 @@ public sealed class PageGalleryState
     public string? BaseUrl { get; set; }
     public List<WebPageRef> WebPages { get; set; } = new();
     public Dictionary<string, PageShotEntry> Shots { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>The user's answer to "draw this app's real screens with Flutter?" (null: not asked yet).</summary>
+    public bool? FlutterRender { get; set; }
 }
 
 /// <summary>
@@ -101,6 +103,20 @@ public sealed class PageShotStore
         string path = ImagePath(e);
         if (Path.GetFileName(path) == "invalid.jpg" || !Path.GetFullPath(path).StartsWith(Path.GetFullPath(Folder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;
         try { File.Delete(path); } catch { }
+        try { File.Delete(Path.ChangeExtension(path, ".json")); } catch { }
+    }
+
+    /// <summary>What goes with a picture (a rendered screen's widget map and problems) — next to it, same name.</summary>
+    public string SidecarPath(PageShotEntry e) => Path.ChangeExtension(ImagePath(e), ".json");
+
+    public void SaveSidecar(PageShotEntry e, string json)
+    {
+        try { File.WriteAllText(SidecarPath(e), json); } catch { }
+    }
+
+    public string? ReadSidecar(PageShotEntry e)
+    {
+        try { string p = SidecarPath(e); return File.Exists(p) ? File.ReadAllText(p) : null; } catch { return null; }
     }
 
     /// <summary>Save a page's JPEG (overwrites the old one) and remember it.</summary>

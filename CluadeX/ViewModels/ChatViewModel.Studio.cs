@@ -27,7 +27,22 @@ public partial class ChatViewModel
         if (IsGenerating || string.IsNullOrWhiteSpace(prompt)) return false;
         UserInput = prompt;
         if (!SendMessageCommand.CanExecute(null)) return false;
+        _studioChat = CurrentSession;
         SendMessageCommand.Execute(null);
         return true;
+    }
+
+    /// <summary>The chat the Studio's last request went to.</summary>
+    private Models.ChatSession? _studioChat;
+
+    /// <summary>The reply to the Studio's last request is still being written — in that chat, whichever chat is on
+    /// screen now (the user may switch chats while the AI edits the screen).</summary>
+    public bool IsStudioRunGoing
+    {
+        get
+        {
+            var s = _studioChat;
+            return s != null && _runs.Any(r => ReferenceEquals(r.Session, s) || r.Session.Id == s.Id);
+        }
     }
 }

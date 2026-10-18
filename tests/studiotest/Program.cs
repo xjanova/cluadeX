@@ -81,6 +81,22 @@ internal static partial class Program
                 Console.WriteLine($"  {pg.Kind,-8} {pg.Route ?? "-",-34} {pg.Title,-30} {(pg.NeedsParams ? "[params] " : "")}{(pg.Risky ? "[risky] " : "")}{(pg.NeedsLogin ? "[login] " : "")}{(pg.InShell ? "[shell] " : "")}{pg.Detail} {(pg.SourcePath != null ? Path.GetRelativePath(args[1], pg.SourcePath) + ":" + pg.SourceLine : "")}");
             return 0;
         }
+        // studiotest render <flutter folder> <out folder> [route…] — draw real screens with `flutter test` (runs the app's
+        // code in Flutter's test renderer: no device, no network). Dry-run is switched off for this explicit command only.
+        if (args.Length >= 3 && args[0] == "render")
+        {
+            CluadeX.Services.Safety.ProcessLaunchPolicy.DryRun = false;
+            var found = CluadeX.Services.UiStudio.Pages.PageCatalog.Discover(StudioProject.Detect(args[1]), "th");
+            var wanted = args.Skip(3).ToHashSet();
+            var pages = found.Pages.Where(p => wanted.Count == 0 || wanted.Contains(p.Route ?? "") || wanted.Contains(p.Detail ?? "")).ToList();
+            var run = CluadeX.Services.UiStudio.Sketch.FlutterRenderer.RunAsync(found.Flutter!, pages, args[2], "th", CancellationToken.None,
+                line => { if (line != "·") Console.WriteLine("  | " + line); else Console.Write("·"); }).GetAwaiter().GetResult();
+            Console.WriteLine($"\nok={run.Ok} error={run.Error} took={run.Took.TotalSeconds:0.0}s");
+            if (run.CompileError != null) Console.WriteLine("COMPILE:\n" + run.CompileError);
+            foreach (var (s, pg) in run.Screens.Zip(pages))
+                Console.WriteLine($"  {pg.Route ?? pg.Detail,-28} {(s.PngPath != null ? "png" : "---")} boxes={s.Boxes.Count,4} noise={s.Noise,3} {s.Skipped}{(s.Problems.Count > 0 ? " PROBLEMS: " + string.Join(" | ", s.Problems.Take(3)) : "")}");
+            return run.Ok ? 0 : 1;
+        }
         // studiotest tree <flutter folder> <route or class> — print one screen's wireframe blocks (to see what the sketch read).
         if (args.Length == 3 && args[0] == "tree")
         {
@@ -146,6 +162,7 @@ internal static partial class Program
             ShotStore(temp);
             DartReading();
             FlutterScreens(temp);
+            FlutterEdits(temp);
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { Directory.Delete(temp, true); } catch { } }
