@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
@@ -12,8 +13,35 @@ using Microsoft.Win32;
 
 namespace CluadeX.ViewModels;
 
-/// <summary>A category filter choice: the key the catalog uses + its localized label.</summary>
-public sealed record ModelCategoryOption(string Key, string Label);
+/// <summary>
+/// A filter / sort choice: the key the code uses + its localized label (+ a Segoe MDL2 glyph for chips). The label is
+/// updated in place on a language change: replacing the option lists cleared the chips' and the sort box's selection.
+/// </summary>
+public sealed class ModelCategoryOption : System.ComponentModel.INotifyPropertyChanged
+{
+    public ModelCategoryOption(string key, string label, string glyph = "")
+    {
+        Key = key;
+        _label = label;
+        Glyph = glyph;
+    }
+
+    public string Key { get; }
+    public string Glyph { get; }
+    private string _label;
+    public string Label
+    {
+        get => _label;
+        set
+        {
+            if (_label == value) return;
+            _label = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Label)));
+        }
+    }
+    public override string ToString() => Label;
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+}
 
 public class ModelManagerViewModel : ViewModelBase
 {
@@ -27,7 +55,8 @@ public class ModelManagerViewModel : ViewModelBase
     private readonly DebugLogService? _log;
     private CancellationTokenSource? _downloadCts;
     private CancellationTokenSource? _searchCts;
-    private GpuInfo? _gpu;
+    private HardwareProfile? _hw;
+    private RecommendedModel? _downloadingModel;
 
     private string _searchQuery = string.Empty;
     private bool _isSearching;
@@ -39,18 +68,15 @@ public class ModelManagerViewModel : ViewModelBase
     private string? _selectedModelPath;
     private string _gpuRecommendation = string.Empty;
     private int _availableVramMB;
-    private string _selectedCategory = "All";
     private string _searchResultInfo = string.Empty;
 
     public ObservableCollection<ModelInfo> LocalModels { get; } = new();
+    /// <summary>The catalog after the job filter, text filter, "older models" switch and sort.</summary>
     public ObservableCollection<RecommendedModel> RecommendedModels { get; } = new();
+    /// <summary>Up to three "Best for your PC" picks for the selected job.</summary>
+    public ObservableCollection<RecommendedModel> TopPicks { get; } = new();
     public ObservableCollection<ModelInfo> SearchResults { get; } = new();
     public ObservableCollection<ModelSource> ModelSources { get; } = new();
-
-    private static readonly string[] CategoryKeys = { "All", "Coding", "General", "Reasoning" };
-    private List<ModelCategoryOption> _categories = new();
-    /// <summary>Category filter choices (Key is what the catalog uses; Label is shown).</summary>
-    public List<ModelCategoryOption> Categories { get => _categories; private set => SetProperty(ref _categories, value); }
 
     public string SearchQuery { get => _searchQuery; set => SetProperty(ref _searchQuery, value); }
     public bool IsSearching { get => _isSearching; set => SetProperty(ref _isSearching, value); }
@@ -60,19 +86,83 @@ public class ModelManagerViewModel : ViewModelBase
     public string ModelLoadStatus { get => _modelLoadStatus; set => SetProperty(ref _modelLoadStatus, value); }
     public bool IsLoadingModel { get => _isLoadingModel; set => SetProperty(ref _isLoadingModel, value); }
     public string? SelectedModelPath { get => _selectedModelPath; set => SetProperty(ref _selectedModelPath, value); }
+    /// <summary>One-line hardware verdict (kept for the status line and older callers).</summary>
     public string GpuRecommendation { get => _gpuRecommendation; set => SetProperty(ref _gpuRecommendation, value); }
     public int AvailableVramMB { get => _availableVramMB; set => SetProperty(ref _availableVramMB, value); }
     public string SearchResultInfo { get => _searchResultInfo; set => SetProperty(ref _searchResultInfo, value); }
 
-    // ─── Pagination for Recommended Models ───
-    private int _currentPage = 1;
-    private int _itemsPerPage = 12;
-    public int CurrentPage { get => _currentPage; set { if (SetProperty(ref _currentPage, value)) FilterRecommendedModels(); } }
-    public int TotalPages => Math.Max(1, (int)Math.Ceiling(_filteredCount / (double)_itemsPerPage));
-    private int _filteredCount;
-    public string PageInfo => $"{_currentPage} / {TotalPages}";
-    public ICommand NextPageCommand => new RelayCommand(() => { if (_currentPage < TotalPages) CurrentPage++; }, () => _currentPage < TotalPages);
-    public ICommand PrevPageCommand => new RelayCommand(() => { if (_currentPage > 1) CurrentPage--; }, () => _currentPage > 1);
+    // ─── Hardware card ───
+    private string _hwGpuText = "", _hwGpuDetail = "", _hwRamText = "", _hwRamDetail = "", _hwBackendText = "", _hwBackendDetail = "", _hwNote = "";
+    private bool _isDetecting = true;
+    public string HwGpuText { get => _hwGpuText; private set => SetProperty(ref _hwGpuText, value); }
+    public string HwGpuDetail { get => _hwGpuDetail; private set => SetProperty(ref _hwGpuDetail, value); }
+    public string HwRamText { get => _hwRamText; private set => SetProperty(ref _hwRamText, value); }
+    public string HwRamDetail { get => _hwRamDetail; private set => SetProperty(ref _hwRamDetail, value); }
+    public string HwBackendText { get => _hwBackendText; private set => SetProperty(ref _hwBackendText, value); }
+    public string HwBackendDetail { get => _hwBackendDetail; private set => SetProperty(ref _hwBackendDetail, value); }
+    /// <summary>A warning about the hardware (non-NVIDIA GPU, low VRAM free right now); empty when none.</summary>
+    public string HwNote { get => _hwNote; private set => SetProperty(ref _hwNote, value); }
+    public bool IsDetecting { get => _isDetecting; private set => SetProperty(ref _isDetecting, value); }
+    /// <summary>VRAM in use (0-100) for the meter on the hardware card.</summary>
+    private double _vramUsedPercent;
+    public double VramUsedPercent { get => _vramUsedPercent; private set => SetProperty(ref _vramUsedPercent, value); }
+
+    // ─── Filters ───
+    private static readonly (string Key, ModelTasks Task, string Glyph)[] TaskDefs =
+    {
+        ("All", ModelTasks.None, ""),
+        ("Coding", ModelTasks.Coding, ""),
+        ("Chat", ModelTasks.Chat, ""),
+        ("Reasoning", ModelTasks.Reasoning, ""),
+        ("Vision", ModelTasks.Vision, ""),
+        ("Thai", ModelTasks.Thai, ""),
+    };
+    private static readonly string[] SortKeys = { "Best", "Newest", "Fastest", "Smallest", "Name" };
+
+    private List<ModelCategoryOption> _taskOptions = new();
+    public List<ModelCategoryOption> TaskOptions { get => _taskOptions; private set => SetProperty(ref _taskOptions, value); }
+    private List<ModelCategoryOption> _sortOptions = new();
+    public List<ModelCategoryOption> SortOptions { get => _sortOptions; private set => SetProperty(ref _sortOptions, value); }
+
+    private string _selectedTask = "All";
+    /// <summary>The job the recommendations are for: All / Coding / Chat / Reasoning / Vision / Thai.</summary>
+    public string SelectedTask
+    {
+        get => _selectedTask;
+        set { if (value != null && SetProperty(ref _selectedTask, value)) RebuildCatalog(); }
+    }
+
+    private string _selectedSort = "Best";
+    public string SelectedSort
+    {
+        get => _selectedSort;
+        set { if (value != null && SetProperty(ref _selectedSort, value)) RebuildCatalog(); }
+    }
+
+    private string _catalogFilter = "";
+    /// <summary>Text filter over the curated catalog (name, maker, description, architecture).</summary>
+    public string CatalogFilter
+    {
+        get => _catalogFilter;
+        set { if (SetProperty(ref _catalogFilter, value ?? "")) RebuildCatalog(); }
+    }
+
+    private bool _showLegacy;
+    /// <summary>Also list the older generation (Qwen2.5, Llama 3.x, Gemma 3 …).</summary>
+    public bool ShowLegacy
+    {
+        get => _showLegacy;
+        set { if (SetProperty(ref _showLegacy, value)) RebuildCatalog(); }
+    }
+
+    private string _catalogCountText = "";
+    public string CatalogCountText { get => _catalogCountText; private set => SetProperty(ref _catalogCountText, value); }
+    private string _topPicksTitle = "";
+    public string TopPicksTitle { get => _topPicksTitle; private set => SetProperty(ref _topPicksTitle, value); }
+    public bool HasTopPicks => TopPicks.Count > 0;
+    /// <summary>"Nothing runs well here" — only once the hardware is known (not while it is still being read).</summary>
+    public bool ShowNoPicks => TopPicks.Count == 0 && _hw != null && !IsDetecting;
+    public string InstalledCountText => LocalModels.Count > 0 ? LocalModels.Count.ToString(CultureInfo.InvariantCulture) : "";
 
     // ─── Search Pagination ───
     private int _searchPage = 1;
@@ -91,23 +181,8 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand NextSearchPageCommand => new RelayCommand(() => { if (_searchPage < SearchTotalPages) SearchPage++; }, () => _searchPage < SearchTotalPages);
     public ICommand PrevSearchPageCommand => new RelayCommand(() => { if (_searchPage > 1) SearchPage--; }, () => _searchPage > 1);
 
-    public string SelectedCategory
-    {
-        get => _selectedCategory;
-        set
-        {
-            if (SetProperty(ref _selectedCategory, value))
-            {
-                // Back to page 1: on page 3 a smaller category showed an empty list and "3 / 1".
-                _currentPage = 1;
-                OnPropertyChanged(nameof(CurrentPage));
-                FilterRecommendedModels();
-            }
-        }
-    }
-
-    // Catalog layout: List (vertical cards) or Grid (2-column tiles).
-    // Toggled from the page header; persisted via SettingsService so the user's choice survives restarts.
+    // Catalog layout: List (one card per row) or Grid (as many columns as fit).
+    // Toggled from the filter bar; persisted via SettingsService so the user's choice survives restarts.
     private bool _isGridView;
     public bool IsGridView
     {
@@ -126,9 +201,11 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand SwitchToGridViewCommand => new RelayCommand(() => IsGridView = true);
 
     public ICommand RefreshLocalModelsCommand { get; }
+    public ICommand RefreshHardwareCommand { get; }
     public ICommand LoadModelCommand { get; }
     public ICommand UnloadModelCommand { get; }
     public ICommand DownloadRecommendedCommand { get; }
+    public ICommand DownloadProjectorCommand { get; }
     public ICommand SearchModelsCommand { get; }
     public ICommand CancelSearchCommand { get; }
     public ICommand DownloadSearchResultCommand { get; }
@@ -139,16 +216,18 @@ public class ModelManagerViewModel : ViewModelBase
     public ICommand OpenUrlCommand { get; }
     public ICommand OpenModelFolderCommand { get; }
     public ICommand ApplyFitCommand { get; }
+    public ICommand ClearCatalogFilterCommand { get; }
 
     /// <summary>One-click "Apply recommended settings": persist the card's suggested -ngl
     /// (GpuLayerCount) so the next model load uses it — closes the old do-it-manually gap.</summary>
     private void ApplyFit(RecommendedModel? model)
     {
         if (model == null) return;
-        _settingsService.UpdateSettings(s => s.GpuLayerCount = model.RecommendedGpuLayers);
-        ModelLoadStatus = model.RecommendedGpuLayers == -1
+        int layers = model.RecommendedGpuLayers;
+        _settingsService.UpdateSettings(s => s.GpuLayerCount = layers);
+        ModelLoadStatus = layers == -1
             ? _loc.T("modelsm.fitAppliedAll", model.DisplayName)
-            : _loc.T("modelsm.fitAppliedLayers", model.RecommendedGpuLayers, model.DisplayName);
+            : _loc.T("modelsm.fitAppliedLayers", layers, model.DisplayName);
     }
 
     private List<RecommendedModel> _allRecommended = new();
@@ -172,11 +251,14 @@ public class ModelManagerViewModel : ViewModelBase
         _loc = loc;
         _log = log;
         _isGridView = settingsService.Settings.ModelCatalogGridView;
+        _selectedModelPath = settingsService.Settings.SelectedModelPath;
 
         RefreshLocalModelsCommand = new RelayCommand(RefreshLocalModels);
+        RefreshHardwareCommand = new RelayCommand(() => DetectHardwareAsync(clearCache: true), () => !IsDetecting);
         LoadModelCommand = new AsyncRelayCommand<string>(LoadModel);
         UnloadModelCommand = new AsyncRelayCommand(UnloadModel);
         DownloadRecommendedCommand = new AsyncRelayCommand<RecommendedModel>(DownloadRecommended);
+        DownloadProjectorCommand = new AsyncRelayCommand<RecommendedModel>(DownloadProjector);
         SearchModelsCommand = new AsyncRelayCommand(SearchModels);
         CancelSearchCommand = new RelayCommand(() => _searchCts?.Cancel(), () => IsSearching);
         DownloadSearchResultCommand = new AsyncRelayCommand<ModelInfo>(DownloadSearchResult);
@@ -187,20 +269,19 @@ public class ModelManagerViewModel : ViewModelBase
         OpenUrlCommand = new RelayCommand<string>(OpenUrl);
         OpenModelFolderCommand = new RelayCommand(OpenModelFolder);
         ApplyFitCommand = new RelayCommand<RecommendedModel>(ApplyFit);
+        ClearCatalogFilterCommand = new RelayCommand(() => CatalogFilter = "");
 
         BuildModelSources();
-        BuildCategories();
+        BuildOptions();
         _loc.LanguageChanged += () =>
         {
             BuildModelSources();
-            string keep = SelectedCategory;
-            BuildCategories();
-            _selectedCategory = keep;
-            OnPropertyChanged(nameof(SelectedCategory));
-            UpdateGpuRecommendation();
-            FilterRecommendedModels();   // re-labels the fit badges
+            BuildOptions();   // relabels in place — the selection stays
+            UpdateHardwareText();
+            RefreshLocalModels();   // re-labels the fit badges, then rebuilds the catalog
         };
 
+        _allRecommended = _huggingFaceService.GetRecommendedModels(null);
         Initialize();
     }
 
@@ -222,157 +303,296 @@ public class ModelManagerViewModel : ViewModelBase
         }
     }
 
-    private void BuildCategories() =>
-        Categories = CategoryKeys.Select(k => new ModelCategoryOption(k, _loc.T("modelsm.cat" + k))).ToList();
+    private void BuildOptions()
+    {
+        if (TaskOptions.Count == 0)
+        {
+            TaskOptions = TaskDefs.Select(t => new ModelCategoryOption(t.Key, "", t.Glyph)).ToList();
+            SortOptions = SortKeys.Select(k => new ModelCategoryOption(k, "")).ToList();
+        }
+        foreach (var t in TaskOptions) t.Label = _loc.T("modelsm.task" + t.Key);
+        foreach (var o in SortOptions) o.Label = _loc.T("modelsm.sort" + o.Key);
+    }
 
     private void Initialize()
     {
+        RefreshLocalModels();
+        DetectHardwareAsync(clearCache: false);
+    }
+
+    /// <summary>Read GPU / RAM off the UI thread (nvidia-smi and WMI can take a second), then re-rank.</summary>
+    private void DetectHardwareAsync(bool clearCache)
+    {
+        IsDetecting = true;
+        OnPropertyChanged(nameof(ShowNoPicks));
+        HwGpuText = _loc.T("modelsm.hwDetecting");
+        string backend = _settingsService.Settings.GpuBackend;
+        bool loaded = _localProvider.IsReady;
         Task.Run(() =>
         {
-            GpuInfo gpu;
-            try { gpu = _gpuDetectionService.DetectGpu(); }
+            HardwareProfile hw;
+            try
+            {
+                if (clearCache) _gpuDetectionService.ClearCache();
+                hw = _gpuDetectionService.DetectHardware(backend, loaded);
+            }
             catch (Exception ex)
             {
-                _log?.Warn("Models", "GPU detection failed", ex);
-                gpu = new GpuInfo();
+                _log?.Warn("Models", "Hardware detection failed", ex);
+                hw = new HardwareProfile { SystemRamMB = 8192 };
             }
-            App.Current?.Dispatcher.Invoke(() =>
-            {
-                _gpu = gpu;
-                AvailableVramMB = gpu.VramTotalMB;
-                UpdateGpuRecommendation();
-                // Show the full catalog and use FitTier badges to signal which models run
-                // well on this GPU. Previously we silently filtered out anything larger than
-                // the user's VRAM — that hid useful options (bigger models still run via
-                // CPU offload) and made the catalog look incomplete.
-                _allRecommended = _huggingFaceService.GetRecommendedModels(null);
-                FilterRecommendedModels();
-            });
+            try { App.Current?.Dispatcher.Invoke(() => ApplyHardware(hw)); }
+            catch (Exception ex) { _log?.Warn("Models", "Applying the hardware reading failed", ex); }   // app closing
         });
+    }
+
+    /// <summary>Use a hardware profile (also the harness's way in: no nvidia-smi, any PC it likes).</summary>
+    public void ApplyHardware(HardwareProfile hw)
+    {
+        _hw = hw;
+        AvailableVramMB = hw.VramTotalMB;
+        IsDetecting = false;
+        UpdateHardwareText();
         RefreshLocalModels();
+        CommandManager.InvalidateRequerySuggested();
     }
 
-    private void UpdateGpuRecommendation()
+    public HardwareProfile? Hardware => _hw;
+
+    private int ContextTokens => (int)Math.Clamp(_settingsService.Settings.ContextSize, 2048u, 262144u);
+
+    private static string Gb(int mb) => (mb / 1024.0).ToString("0.#", CultureInfo.InvariantCulture);
+
+    private void UpdateHardwareText()
     {
-        if (_gpu == null) return;
-        var rec = _gpu.GetRecommendation();
-        GpuRecommendation = _gpu.VramTotalMB <= 0
-            ? _loc.T("modelsm.gpuNone", rec.RecommendedParameterBillions)
-            : _loc.T("modelsm.gpuLine", _gpu.Name, _gpu.VramTotalGB.ToString("F1"), rec.RecommendedParameterBillions,
-                rec.RecommendedQuantization, rec.MaxParameterBillions);
-    }
-
-    private void FilterRecommendedModels()
-    {
-        // Build a set of local filenames for quick lookup
-        var localFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var localPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var m in LocalModels)
+        var hw = _hw;
+        if (hw == null) return;
+        if (hw.VramTotalMB > 0)
         {
-            if (!string.IsNullOrEmpty(m.FileName))
-            {
-                localFiles.Add(m.FileName);
-                localPaths[m.FileName] = m.LocalPath ?? "";
-            }
+            HwGpuText = hw.GpuCount > 1 ? _loc.T("modelsm.hwGpuMulti", hw.GpuCount, hw.GpuName) : hw.GpuName;
+            HwGpuDetail = hw.VramFreeMB > 0
+                ? _loc.T("modelsm.hwVramFree", Gb(hw.VramTotalMB), Gb(hw.VramFreeMB))
+                : _loc.T("modelsm.hwVram", Gb(hw.VramTotalMB));
+            VramUsedPercent = hw.VramFreeMB > 0 ? Math.Clamp(100.0 * (hw.VramTotalMB - hw.VramFreeMB) / hw.VramTotalMB, 0, 100) : 0;
         }
-
-        var filtered = _selectedCategory == "All"
-            ? _allRecommended
-            : _allRecommended.Where(m => m.Category == _selectedCategory).ToList();
-
-        _filteredCount = filtered.Count;
-        if (_currentPage > TotalPages) { _currentPage = TotalPages; OnPropertyChanged(nameof(CurrentPage)); }
-
-        // Apply pagination
-        var paged = filtered
-            .Skip((_currentPage - 1) * _itemsPerPage)
-            .Take(_itemsPerPage)
-            .ToList();
-
-        RecommendedModels.Clear();
-        foreach (var model in paged)
-        {
-            model.IsInstalled = localFiles.Contains(model.FileName);
-            model.InstalledPath = model.IsInstalled && localPaths.TryGetValue(model.FileName, out var p) ? p : null;
-            ComputeFit(model, AvailableVramMB);
-            RecommendedModels.Add(model);
-        }
-
-        OnPropertyChanged(nameof(TotalPages));
-        OnPropertyChanged(nameof(PageInfo));
-    }
-
-    /// <summary>
-    /// Decide how well a model fits the user's GPU, and suggest a reasonable <c>-ngl</c>
-    /// (gpu_layer_count) value so the UI can show a green/yellow/red fit badge.
-    ///
-    /// Heuristic: reserve ~15% of VRAM for KV cache + context, then compare the model's
-    /// quoted RequiredVramMB against what's left. If the model is bigger, we estimate how
-    /// much CPU offload would be needed. A model whose size is more than ~2× the available
-    /// VRAM runs so slowly via CPU offload that we label it TooLarge.
-    /// </summary>
-    private void ComputeFit(RecommendedModel model, int availableVramMB)
-    {
-        if (availableVramMB <= 0)
-        {
-            // No GPU detected → everything is CPU-only. Small models are still usable.
-            model.FitTier = model.ParameterBillions <= 3 ? ModelFitTier.Partial : ModelFitTier.Poor;
-            model.FitLabel = _loc.T("modelsm.fitCpuOnly");
-            model.FitHint = _loc.T("modelsm.fitCpuOnlyHint");
-            model.RecommendedGpuLayers = 0;
-            return;
-        }
-
-        // Reserve ~15% of VRAM for KV-cache and activations. Cap the reserve at 1.5 GB so
-        // huge cards don't over-reserve, and floor at 512 MB so tiny cards still have a buffer.
-        int reserved = Math.Clamp(availableVramMB / 7, 512, 1536);
-        int usable = Math.Max(availableVramMB - reserved, 512);
-        int needed = model.RequiredVramMB;
-
-        // Excellent: comfortable headroom (usable is 130%+ of needed)
-        if (needed > 0 && usable >= needed * 1.3)
-        {
-            model.FitTier = ModelFitTier.Excellent;
-            model.FitLabel = _loc.T("modelsm.fitFast");
-            model.FitHint = _loc.T("modelsm.fitFastHint", usable, needed);
-            model.RecommendedGpuLayers = -1;
-        }
-        // Good: fits but tight
-        else if (usable >= needed)
-        {
-            model.FitTier = ModelFitTier.Good;
-            model.FitLabel = _loc.T("modelsm.fitGood");
-            model.FitHint = _loc.T("modelsm.fitGoodHint", usable, needed);
-            model.RecommendedGpuLayers = -1;
-        }
-        // Partial: model bigger than VRAM but within ~1.5× — partial offload works OK
-        else if (needed <= availableVramMB * 1.5)
-        {
-            double fraction = (double)usable / needed;
-            int suggestedLayers = Math.Clamp((int)Math.Round(fraction * 40), 10, 40);
-            model.FitTier = ModelFitTier.Partial;
-            model.FitLabel = _loc.T("modelsm.fitPartial");
-            model.FitHint = _loc.T("modelsm.fitPartialHint", suggestedLayers, (int)(fraction * 100));
-            model.RecommendedGpuLayers = suggestedLayers;
-        }
-        // Poor: heavy CPU offload
-        else if (needed <= availableVramMB * 2.5)
-        {
-            double fraction = (double)usable / needed;
-            int suggestedLayers = Math.Clamp((int)Math.Round(fraction * 40), 5, 20);
-            model.FitTier = ModelFitTier.Poor;
-            model.FitLabel = _loc.T("modelsm.fitSlow");
-            model.FitHint = _loc.T("modelsm.fitSlowHint");
-            model.RecommendedGpuLayers = suggestedLayers;
-        }
-        // Too large — not recommended
         else
         {
-            model.FitTier = ModelFitTier.TooLarge;
-            model.FitLabel = _loc.T("modelsm.fitTooLarge");
-            model.FitHint = _loc.T("modelsm.fitTooLargeHint", needed, availableVramMB);
-            model.RecommendedGpuLayers = 5;
+            HwGpuText = _loc.T("modelsm.hwNoGpu");
+            HwGpuDetail = _loc.T("modelsm.hwNoGpuDetail");
+            VramUsedPercent = 0;
         }
+        HwRamText = _loc.T("modelsm.hwRam", Gb(hw.SystemRamMB));
+        HwRamDetail = _loc.T("modelsm.hwRamDetail", hw.CpuThreads, Math.Round(hw.RamBandwidthGBs));
+        HwBackendText = hw.CanOffload ? _loc.T("modelsm.hwBackendGpu") : _loc.T("modelsm.hwBackendCpu");
+        HwBackendDetail = _loc.T("modelsm.hwContext", ContextTokens.ToString("N0", CultureInfo.InvariantCulture), Gb(hw.UsableVramMB), Gb(hw.RamBudgetMB));
+
+        string note = "";
+        if (hw.VramTotalMB > 0 && !hw.CanOffload)
+            note = string.Equals(_settingsService.Settings.GpuBackend, "CPU", StringComparison.OrdinalIgnoreCase)
+                ? _loc.T("modelsm.hwNoteCpuChosen")
+                : _loc.T("modelsm.hwNoteNotNvidia", hw.GpuName);
+        else if (hw.CanOffload && hw.VramFreeMB > 0 && !hw.LocalModelLoaded && hw.VramFreeMB < hw.VramTotalMB * 0.6)
+            note = _loc.T("modelsm.hwNoteVramBusy", Gb(hw.VramTotalMB - hw.VramFreeMB));
+        HwNote = note;
+
+        GpuRecommendation = hw.VramTotalMB > 0
+            ? $"{HwGpuText} — {HwGpuDetail} · {HwRamText}"
+            : $"{HwGpuText} · {HwRamText}";
+    }
+
+    private static ModelTasks TaskOf(string key) => TaskDefs.FirstOrDefault(t => t.Key == key).Task;
+
+    // ─── Catalog ───
+
+    /// <summary>Evaluate every catalog model on this PC, then filter / sort / pick. Cheap: pure arithmetic.</summary>
+    private void RebuildCatalog()
+    {
+        var installed = new Dictionary<string, ModelInfo>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in LocalModels)
+            if (!string.IsNullOrEmpty(m.FileName)) installed.TryAdd(m.FileName, m);
+
+        var hw = _hw;
+        var task = TaskOf(_selectedTask);
+        var today = DateTime.Today;
+        string? customBackend = _settingsService.Settings.CustomLlamaCppBackendPath;
+
+        foreach (var model in _allRecommended)
+        {
+            model.ArchSupported = LlamaBackendInfo.SupportsArchitecture(model.Architecture, customBackend);
+            model.DescriptionText = LocalizedOr("modelsm.desc." + model.Id, model.Description);
+            model.ParamsText = model.IsMoE
+                ? _loc.T("modelsm.paramsMoe", FmtB(model.TotalParamsB), FmtB(model.ActiveParamsB))
+                : _loc.T("modelsm.params", FmtB(model.TotalParamsB > 0 ? model.TotalParamsB : model.ParameterBillions));
+            model.ContextText = model.NativeContext > 0 ? _loc.T("modelsm.ctx", ModelAdvisor.ContextShort(model.NativeContext)) : "";
+            model.ReleasedText = FormatReleased(model.Released);
+            model.TaskChips = TaskDefs.Where(t => t.Task != ModelTasks.None && model.Tasks.HasFlag(t.Task))
+                                      .Select(t => _loc.T("modelsm.task" + t.Key)).ToList();
+
+            // Installed: any quant of this model in the model folders.
+            var file = model.AllQuants.Select(q => installed.TryGetValue(Path.GetFileName(q.FileName), out var lm) ? (q, lm) : default)
+                                      .FirstOrDefault(x => x.lm != null);
+            model.IsInstalled = file.lm != null;
+            model.InstalledPath = file.lm?.LocalPath;
+            model.InstalledQuant = file.q?.Name ?? "";
+            model.IsLoaded = model.IsInstalled && SamePath(model.InstalledPath, SelectedModelPath) && _localProvider.IsReady;
+            model.ProjectorSupported = LlamaBackendInfo.SupportsProjectorType(model.ProjectorType, customBackend);
+            model.VisionReady = model.IsInstalled && model.Projector != null && VisionProjector.FindFor(model.InstalledPath) != null;
+
+            if (hw == null) { model.Plans = new(); model.SelectedPlan = null; model.Reasons = new(); model.Score = 0; continue; }
+
+            var (pick, all) = ModelAdvisor.PickQuant(model, hw, ContextTokens);
+            var plans = all.OrderBy(e => e.Quant.SizeBytes).Select(e => ToPlan(e, ReferenceEquals(e, pick), hw)).ToList();
+            // A quant the user picked by hand survives a refresh (new hardware reading, language, a finished download).
+            string? userChoice = model.SelectedPlan is { IsAuto: false } chosen ? chosen.Name : null;
+            model.Plans = plans;
+            // An installed quant is what the card should describe; otherwise the advisor's pick.
+            model.SelectedPlan = plans.FirstOrDefault(p => model.IsInstalled && p.Name == model.InstalledQuant)
+                                 ?? plans.FirstOrDefault(p => p.Name == userChoice)
+                                 ?? plans.First(p => p.IsAuto);
+            model.Score = ModelAdvisor.Score(model, pick, task, today);
+            model.Reasons = ModelAdvisor.Reasons(model, pick, hw, task, today).Select(r => _loc.T(r.Key, r.Args)).ToList();
+            model.PickRank = 0;
+        }
+
+        // Top picks for the job.
+        TopPicks.Clear();
+        if (hw != null)
+        {
+            var picks = _allRecommended
+                .Where(m => m.SelectedPlan != null)
+                .Select(m => (m, est: ModelAdvisor.PickQuant(m, hw, ContextTokens).Pick))
+                .Where(x => ModelAdvisor.IsPickable(x.m, x.est, task))
+                .OrderByDescending(x => x.m.Score)
+                .Take(3)
+                .ToList();
+            for (int i = 0; i < picks.Count; i++)
+            {
+                picks[i].m.PickRank = i + 1;
+                TopPicks.Add(picks[i].m);
+            }
+        }
+        TopPicksTitle = _loc.T("modelsm.topPicksFor", _loc.T("modelsm.taskFor" + _selectedTask));
+        OnPropertyChanged(nameof(HasTopPicks));
+        OnPropertyChanged(nameof(ShowNoPicks));
+
+        // The list.
+        string q = _catalogFilter.Trim();
+        var list = _allRecommended.Where(m => _showLegacy || !m.IsLegacy)
+                                  .Where(m => task == ModelTasks.None || m.Tasks.HasFlag(task))
+                                  .Where(m => q.Length == 0 || Matches(m, q))
+                                  .ToList();
+        IEnumerable<RecommendedModel> sorted = _selectedSort switch
+        {
+            "Newest" => list.OrderByDescending(m => m.Released).ThenByDescending(m => m.Score),
+            "Fastest" => list.OrderByDescending(m => m.SelectedPlan?.TokensPerSecond ?? 0),
+            "Smallest" => list.OrderBy(m => m.SelectedPlan?.SizeBytes ?? m.ApproxSizeBytes),
+            "Name" => list.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase),
+            _ => list.OrderBy(m => m.IsLegacy).ThenByDescending(m => m.Score),
+        };
+        RecommendedModels.Clear();
+        foreach (var m in sorted) RecommendedModels.Add(m);
+
+        int hiddenLegacy = _showLegacy ? 0 : _allRecommended.Count(m => m.IsLegacy && (task == ModelTasks.None || m.Tasks.HasFlag(task)));
+        CatalogCountText = hiddenLegacy > 0
+            ? _loc.T("modelsm.countHidden", RecommendedModels.Count, hiddenLegacy)
+            : _loc.T("modelsm.count", RecommendedModels.Count);
+    }
+
+    private static bool Matches(RecommendedModel m, string q) =>
+        m.DisplayName.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || m.Publisher.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || m.RepoId.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || m.Architecture.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || m.DescriptionText.Contains(q, StringComparison.OrdinalIgnoreCase)
+        || m.TaskChips.Any(c => c.Contains(q, StringComparison.OrdinalIgnoreCase));
+
+    private string LocalizedOr(string key, string fallback)
+    {
+        string text = _loc.T(key);
+        return text == key ? fallback : text;
+    }
+
+    private static string FmtB(double b) =>
+        b.ToString(b >= 10 || b == Math.Floor(b) ? "0" : "0.#", CultureInfo.InvariantCulture);
+
+    private string FormatReleased(string released)
+    {
+        if (!DateTime.TryParseExact(released, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)) return released;
+        var culture = _loc.CurrentLanguage == "th" ? new CultureInfo("th-TH") { DateTimeFormat = { Calendar = new GregorianCalendar() } } : CultureInfo.GetCultureInfo("en-US");
+        return d.ToString("MMM yyyy", culture);
+    }
+
+    private QuantPlan ToPlan(QuantEstimate e, bool isAuto, HardwareProfile hw)
+    {
+        var (label, hint) = FitText(e, hw);
+        string speed = SpeedText(e.TokensPerSecond, e.Tier);
+        string memory = e.Tier == ModelFitTier.TooLarge || e.GpuFraction >= 1 || hw.UsableVramMB <= 0
+            ? _loc.T("modelsm.memNeed", Gb(e.NeedMB))
+            : _loc.T("modelsm.memSplit", Gb(e.NeedMB), (int)Math.Round(e.GpuFraction * 100));
+        return new QuantPlan
+        {
+            Quant = e.Quant,
+            NeedMB = e.NeedMB,
+            GpuFraction = e.GpuFraction,
+            TokensPerSecond = e.TokensPerSecond,
+            FitTier = e.Tier,
+            SuggestedGpuLayers = e.SuggestedGpuLayers,
+            IsAuto = isAuto,
+            FitLabel = label,
+            FitHint = hint,
+            SpeedText = speed,
+            MemoryText = memory,
+            Label = (isAuto ? "★ " : "") + $"{e.Quant.Name} · {ModelInfo.FormatFileSize(e.Quant.SizeBytes)} · {label}",
+        };
+    }
+
+    private string SpeedText(double tps, ModelFitTier tier) =>
+        tier == ModelFitTier.TooLarge || tps <= 0 ? "" : _loc.T("modelsm.speed", tps >= 10 ? Math.Round(tps).ToString(CultureInfo.InvariantCulture) : tps.ToString("0.#", CultureInfo.InvariantCulture));
+
+    /// <summary>Badge text + its explanation for an estimate.</summary>
+    private (string Label, string Hint) FitText(QuantEstimate e, HardwareProfile hw)
+    {
+        string need = Gb(e.NeedMB), usable = Gb(hw.UsableVramMB);
+        if (hw.UsableVramMB <= 0)
+        {
+            return e.Tier == ModelFitTier.TooLarge
+                ? (_loc.T("modelsm.fitTooLarge"), _loc.T("modelsm.fitTooLargeRamHint", need, Gb(hw.RamBudgetMB)))
+                : (_loc.T("modelsm.fitCpuOnly"), _loc.T("modelsm.fitCpuHint", need));
+        }
+        return e.Tier switch
+        {
+            ModelFitTier.Excellent => (_loc.T("modelsm.fitFast"), _loc.T("modelsm.fitFastHint2", need, usable)),
+            ModelFitTier.Good => (_loc.T("modelsm.fitGood"), _loc.T("modelsm.fitGoodHint2", need, usable)),
+            ModelFitTier.Partial => (_loc.T("modelsm.fitPartial"), _loc.T("modelsm.fitPartialHint2", (int)Math.Round(e.GpuFraction * 100), e.SuggestedGpuLayers)),
+            ModelFitTier.Poor => (_loc.T("modelsm.fitSlow"), _loc.T("modelsm.fitSlowHint2", (int)Math.Round(e.GpuFraction * 100))),
+            _ => (_loc.T("modelsm.fitTooLarge"), _loc.T("modelsm.fitTooLargeHint2", need, usable, Gb(hw.RamBudgetMB))),
+        };
+    }
+
+    /// <summary>Badge + speed for a GGUF file that is not (or not necessarily) in the catalog.</summary>
+    private void DescribeFile(ModelInfo info)
+    {
+        var hw = _hw;
+        if (hw == null || info.FileSize <= 0) return;
+        string leaf = Path.GetFileName(info.FileName);
+        var catalog = _allRecommended.FirstOrDefault(m => m.AllQuants.Any(q => string.Equals(Path.GetFileName(q.FileName), leaf, StringComparison.OrdinalIgnoreCase)));
+        QuantEstimate e;
+        if (catalog != null)
+        {
+            var q = catalog.AllQuants.First(x => string.Equals(Path.GetFileName(x.FileName), leaf, StringComparison.OrdinalIgnoreCase));
+            e = ModelAdvisor.Estimate(catalog, new QuantOption(q.Name, q.FileName, info.FileSize), hw, ContextTokens);
+            info.CatalogName = catalog.DisplayName;
+        }
+        else
+        {
+            double.TryParse(info.ParameterDisplay.TrimEnd('B'), NumberStyles.Float, CultureInfo.InvariantCulture, out double paramsB);
+            e = ModelAdvisor.EstimateFile(info.FileSize, paramsB, hw, ContextTokens);
+        }
+        var (label, hint) = FitText(e, hw);
+        info.FitTier = e.Tier;
+        info.FitLabel = label;
+        info.FitHint = hint;
+        info.SpeedText = SpeedText(e.TokensPerSecond, e.Tier);
     }
 
     private void RefreshLocalModels()
@@ -385,11 +605,17 @@ public class ModelManagerViewModel : ViewModelBase
             models = new List<ModelInfo>();
         }
         LocalModels.Clear();
-        foreach (var model in models) LocalModels.Add(model);
+        foreach (var model in models)
+        {
+            model.IsLoaded = SamePath(model.LocalPath, SelectedModelPath) && _localProvider.IsReady;
+            model.HasVision = VisionProjector.FindFor(model.LocalPath) != null;
+            DescribeFile(model);
+            LocalModels.Add(model);
+        }
+        OnPropertyChanged(nameof(InstalledCountText));
 
-        // Re-filter recommended models to update IsInstalled status
-        if (_allRecommended.Count > 0)
-            FilterRecommendedModels();
+        // Re-evaluate the catalog: installed state, fit badges.
+        RebuildCatalog();
     }
 
     private async Task LoadModel(string? path)
@@ -412,7 +638,9 @@ public class ModelManagerViewModel : ViewModelBase
             await _localProvider.LoadModelAsync(path, progress);
 
             SelectedModelPath = path;
-            ModelLoadStatus = _loc.T("modelsm.loaded", name);
+            ModelLoadStatus = _localProvider.LoadedProjectorPath != null ? _loc.T("modelsm.loadedVision", name)
+                : _localProvider.VisionFallbackReason.Length > 0 ? _loc.T("modelsm.loadedNoVision", name, _localProvider.VisionFallbackReason)
+                : _loc.T("modelsm.loaded", name);
             _settingsService.UpdateSettings(s =>
             {
                 s.SelectedModelPath = path;
@@ -429,7 +657,11 @@ public class ModelManagerViewModel : ViewModelBase
                 _ => _loc.T("modelsm.loadFailed", name),
             };
         }
-        finally { IsLoadingModel = false; }
+        finally
+        {
+            IsLoadingModel = false;
+            RefreshLocalModels();
+        }
     }
 
     private async Task UnloadModel()
@@ -448,6 +680,7 @@ public class ModelManagerViewModel : ViewModelBase
             s.SelectedModelPath = null;
             s.SelectedModelName = null;
         });
+        RefreshLocalModels();
     }
 
     /// <summary>Browse for any GGUF file on disk and load it immediately.</summary>
@@ -532,55 +765,122 @@ public class ModelManagerViewModel : ViewModelBase
 
     // ─── Downloads ───
 
-    private Task DownloadRecommended(RecommendedModel? model) =>
-        model == null ? Task.CompletedTask : RunDownloadAsync(model.RepoId, model.FileName, model.DisplayName);
+    /// <summary>
+    /// Downloads the quant the card shows (the advisor's pick unless the user chose another) and, for a model that can
+    /// see images with this backend, its vision projector next to it ("&lt;stem&gt;.mmproj-F16.gguf").
+    /// </summary>
+    private Task DownloadRecommended(RecommendedModel? model)
+    {
+        if (model == null) return Task.CompletedTask;
+        string file = model.SelectedPlan?.FileName ?? model.FileName;
+        string label = model.SelectedPlan != null ? $"{model.DisplayName} {model.SelectedPlan.Name}" : model.DisplayName;
+        string target = Path.Combine(_settingsService.Settings.ModelDirectory, Path.GetFileName(file));
+        var jobs = new List<DownloadJob> { new(model.RepoId, file, target, label, IsProjector: false) };
+        if (model is { CanSeeImages: true, Projector: { } pj })
+            jobs.Add(new(model.RepoId, pj.FileName, ProjectorTarget(target, pj), label, IsProjector: true));
+        return RunDownloadsAsync(jobs, model);
+    }
+
+    /// <summary>"Add vision": only the projector, next to the model file that is already there.</summary>
+    private Task DownloadProjector(RecommendedModel? model)
+    {
+        if (model is not { CanSeeImages: true, Projector: { } pj } || string.IsNullOrEmpty(model.InstalledPath)) return Task.CompletedTask;
+        var job = new DownloadJob(model.RepoId, pj.FileName, ProjectorTarget(model.InstalledPath, pj), model.DisplayName, IsProjector: true);
+        return RunDownloadsAsync(new List<DownloadJob> { job }, model);
+    }
+
+    private static string ProjectorTarget(string modelPath, QuantOption projector) =>
+        Path.Combine(Path.GetDirectoryName(modelPath) ?? "", VisionProjector.LocalFileName(Path.GetFileName(modelPath), projector.FileName));
 
     private Task DownloadSearchResult(ModelInfo? model) =>
         model == null || string.IsNullOrEmpty(model.RepoId)
             ? Task.CompletedTask
-            : RunDownloadAsync(model.RepoId, model.FileName, Path.GetFileName(model.FileName));
+            : RunDownloadsAsync(new List<DownloadJob>
+              {
+                  new(model.RepoId, model.FileName, Path.Combine(_settingsService.Settings.ModelDirectory, Path.GetFileName(model.FileName)),
+                      Path.GetFileName(model.FileName), IsProjector: false),
+              }, null);
 
-    private async Task RunDownloadAsync(string repoId, string repoFileName, string displayName)
+    private sealed record DownloadJob(string RepoId, string RepoFileName, string TargetPath, string Label, bool IsProjector);
+
+    /// <summary>
+    /// One download job (the model, then its projector). Files already on disk are skipped. A failed projector never
+    /// undoes the model: the model stays, the status says vision is missing, and "Add vision" offers it again.
+    /// </summary>
+    private async Task RunDownloadsAsync(List<DownloadJob> jobs, RecommendedModel? card)
     {
         if (IsDownloading) return;
-        string targetPath = Path.Combine(_settingsService.Settings.ModelDirectory, Path.GetFileName(repoFileName));
-        if (File.Exists(targetPath)) { DownloadStatus = _loc.T("modelsm.alreadyDownloaded", displayName); return; }
+        var todo = jobs.Where(j => !File.Exists(j.TargetPath)).ToList();
+        if (todo.Count == 0) { DownloadStatus = _loc.T("modelsm.alreadyDownloaded", jobs[0].Label); return; }
 
         IsDownloading = true;
         DownloadProgress = 0;
-        DownloadStatus = _loc.T("modelsm.downloading", displayName);
+        _downloadingModel = card;
+        if (card != null) card.IsDownloadingThis = true;
         _downloadCts = new CancellationTokenSource();
+        bool modelDone = false;
+        DownloadJob current = todo[0];
         try
         {
-            // Created on the UI thread → callbacks are posted back to it.
-            var progress = new Progress<HuggingFaceService.DownloadProgressInfo>(p =>
+            foreach (var job in todo)
             {
-                DownloadProgress = p.Fraction * 100;
-                DownloadStatus = FormatProgress(displayName, p);
-            });
-            await _huggingFaceService.DownloadModelAsync(repoId, repoFileName, targetPath, progress, _downloadCts.Token);
-            DownloadStatus = _loc.T("modelsm.downloadDone", displayName);
+                current = job;
+                string shown = job.IsProjector ? _loc.T("modelsm.visionPartOf", job.Label) : job.Label;
+                DownloadProgress = 0;
+                DownloadStatus = _loc.T("modelsm.downloading", shown);
+                // Created on the UI thread → callbacks are posted back to it.
+                var progress = new Progress<HuggingFaceService.DownloadProgressInfo>(p =>
+                {
+                    DownloadProgress = p.Fraction * 100;
+                    DownloadStatus = FormatProgress(shown, p);
+                });
+                try
+                {
+                    await _huggingFaceService.DownloadModelAsync(job.RepoId, job.RepoFileName, job.TargetPath, progress, _downloadCts.Token);
+                }
+                catch (Exception ex) when (job.IsProjector && modelDone && ex is not OperationCanceledException)
+                {
+                    _log?.Error("Models", $"Vision projector {job.RepoId}/{job.RepoFileName} failed", ex);
+                    DownloadStatus = _loc.T("modelsm.dlVisionFailed", job.Label, DownloadFailureMessage(ex));
+                    RefreshLocalModels();
+                    return;
+                }
+                if (!job.IsProjector) modelDone = true;
+            }
+            DownloadStatus = todo.Any(j => j.IsProjector) && todo.Any(j => !j.IsProjector)
+                ? _loc.T("modelsm.downloadDoneVision", jobs[0].Label)
+                : todo.All(j => j.IsProjector) ? _loc.T("modelsm.visionAdded", jobs[0].Label)
+                : _loc.T("modelsm.downloadDone", jobs[0].Label);
             RefreshLocalModels();
         }
         catch (OperationCanceledException)
         {
             // The partial file is invisible in "My Models" (it is not a .gguf yet) — so say what is left behind
             // and let the user choose instead of silently keeping gigabytes.
-            var answer = MessageBox.Show(_loc.T("modelsm.cancelKeepConfirm", displayName), "CluadeX",
+            string shown = current.IsProjector ? _loc.T("modelsm.visionPartOf", current.Label) : current.Label;
+            var answer = MessageBox.Show(_loc.T("modelsm.cancelKeepConfirm", shown), "CluadeX",
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
             if (answer == MessageBoxResult.No)
             {
-                try { HuggingFaceService.DeletePartialDownload(targetPath); DownloadStatus = _loc.T("modelsm.cancelDeleted"); }
+                try { HuggingFaceService.DeletePartialDownload(current.TargetPath); DownloadStatus = _loc.T("modelsm.cancelDeleted"); }
                 catch (Exception ex) { _log?.Warn("Models", "Deleting a partial download failed", ex); DownloadStatus = _loc.T("modelsm.cancelDeleteFailed"); }
             }
             else DownloadStatus = _loc.T("modelsm.cancelKept");
+            if (modelDone) RefreshLocalModels();
         }
         catch (Exception ex)
         {
-            _log?.Error("Models", $"Download of {repoId}/{repoFileName} failed", ex);
+            _log?.Error("Models", $"Download of {current.RepoId}/{current.RepoFileName} failed", ex);
             DownloadStatus = DownloadFailureMessage(ex);
         }
-        finally { IsDownloading = false; _downloadCts?.Dispose(); _downloadCts = null; }
+        finally
+        {
+            IsDownloading = false;
+            if (_downloadingModel != null) _downloadingModel.IsDownloadingThis = false;
+            _downloadingModel = null;
+            _downloadCts?.Dispose();
+            _downloadCts = null;
+        }
     }
 
     private string FormatProgress(string name, HuggingFaceService.DownloadProgressInfo p)
@@ -664,7 +964,7 @@ public class ModelManagerViewModel : ViewModelBase
                     var local = LocalModels.FirstOrDefault(lm =>
                         string.Equals(lm.FileName, leaf, StringComparison.OrdinalIgnoreCase));
 
-                    _allSearchResults.Add(new ModelInfo
+                    var info = new ModelInfo
                     {
                         Id = $"{result.ModelId}/{file.RFilename}",
                         Name = shortName,
@@ -679,7 +979,9 @@ public class ModelManagerViewModel : ViewModelBase
                         QuantizationType = ExtractQuantFromFile(file.RFilename),
                         IsDownloaded = local != null,
                         LocalPath = local?.LocalPath,
-                    });
+                    };
+                    DescribeFile(info);
+                    _allSearchResults.Add(info);
                     fileCount++;
                 }
             }
@@ -732,7 +1034,7 @@ public class ModelManagerViewModel : ViewModelBase
     private static string ExtractQuantFromFile(string filename)
     {
         string upper = filename.ToUpperInvariant();
-        string[] quantTypes = ["Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q5_0", "Q4_K_M", "Q4_K_S", "Q4_0", "Q3_K_M", "Q3_K_S", "Q2_K", "IQ4_XS", "IQ3_XXS", "F16", "F32"];
+        string[] quantTypes = ["Q8_0", "Q6_K", "Q5_K_M", "Q5_K_S", "Q5_0", "Q4_K_M", "Q4_K_S", "Q4_0", "Q3_K_M", "Q3_K_S", "Q2_K", "IQ4_XS", "IQ3_XXS", "MXFP4", "BF16", "F16", "F32"];
         foreach (string q in quantTypes)
         {
             if (upper.Contains(q)) return q;
@@ -744,9 +1046,12 @@ public class ModelManagerViewModel : ViewModelBase
 
     // ─── Delete ───
 
-    private static bool SamePath(string? a, string? b) =>
-        !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b)
-        && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+    private static bool SamePath(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+        catch { return false; }
+    }
 
     /// <summary>
     /// Delete a model file — any .gguf the page lists, including ones in the user's own folders, so it asks
@@ -758,8 +1063,15 @@ public class ModelManagerViewModel : ViewModelBase
     {
         if (model?.LocalPath == null) return;
         string path = model.LocalPath;
-        var answer = MessageBox.Show(_loc.T("modelsm.deleteConfirm", model.FileName, model.FileSizeDisplay, path), "CluadeX",
-            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        // Its vision projector goes too — unless another model file in the folder pairs with the same one.
+        string? projector = VisionProjector.FindFor(path);
+        if (projector != null && LocalModels.Any(m => m != model && !SamePath(m.LocalPath, path)
+                                                      && SamePath(VisionProjector.FindFor(m.LocalPath), projector)))
+            projector = null;
+        string question = projector == null
+            ? _loc.T("modelsm.deleteConfirm", model.FileName, model.FileSizeDisplay, path)
+            : _loc.T("modelsm.deleteConfirmVision", model.FileName, model.FileSizeDisplay, path, Path.GetFileName(projector));
+        var answer = MessageBox.Show(question, "CluadeX", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
         if (answer != MessageBoxResult.Yes) return;
 
         try
@@ -768,6 +1080,9 @@ public class ModelManagerViewModel : ViewModelBase
                 await UnloadModel();
 
             _huggingFaceService.DeleteModel(path);
+            if (projector != null)
+                try { File.Delete(projector); }
+                catch (Exception ex) { _log?.Warn("Models", $"Deleting the projector {projector} failed", ex); }
             RefreshLocalModels();
             DownloadStatus = _loc.T("modelsm.deleted", model.FileName);
         }

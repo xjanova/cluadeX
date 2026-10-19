@@ -225,6 +225,8 @@ public class MainViewModel : ViewModelBase
     public WatchViewModel? WatchVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
     public McpServersViewModel McpServersVM { get; }
+    /// <summary>The setup page ("ตัวช่วยติดตั้ง"); null only in harnesses that build the window without it.</summary>
+    public SetupViewModel? SetupVM { get; }
     public TimeMachineViewModel TimeMachineVM { get; }
     public CodeEditorViewModel CodeEditorVM { get; }
     public SubAgentsViewModel SubAgentsVM { get; }
@@ -257,7 +259,7 @@ public class MainViewModel : ViewModelBase
             ("Chat", "Chat", ""), ("Code", "Code Editor", ""),
             ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
             ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
-            ("McpServers", "MCP Servers", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
+            ("McpServers", "MCP Servers", ""), ("Setup", "Setup · ตัวช่วยติดตั้ง", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
             ("UiStudio", "UI Studio", ""), ("NodeGraph", "Node Graph", ""),
             ("Permissions", "Permissions", ""), ("Features", "Features", ""),
             ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
@@ -379,7 +381,8 @@ public class MainViewModel : ViewModelBase
         DebugLogService? log = null,
         WatchViewModel? watchVM = null,
         UiStudioViewModel? uiStudioVM = null,
-        NodeGraphViewModel? nodeGraphVM = null)
+        NodeGraphViewModel? nodeGraphVM = null,
+        SetupViewModel? setupVM = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
@@ -406,6 +409,18 @@ public class MainViewModel : ViewModelBase
         if (nodeGraphVM != null) nodeGraphVM.OpenPageRequested += NavigateTo;
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
+        SetupVM = setupVM;
+        // A setup row opens another page: Settings at the provider's key, the MCP page, the license window.
+        if (setupVM != null) setupVM.NavigateRequested += (target, provider) =>
+        {
+            if (target == "License") { OpenLicense(null); return; }
+            if (target == "Settings")
+            {
+                settingsVM.SelectedCategory = "provider";
+                if (Enum.TryParse<Models.AiProviderType>(provider, out var type)) settingsVM.SelectedProvider = type;
+            }
+            NavigateTo(target);
+        };
         TimeMachineVM = timeMachineVM;
         HexEditorVM = hexEditorVM;
         CodeEditorVM = codeEditorVM;
@@ -810,6 +825,7 @@ public class MainViewModel : ViewModelBase
             "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,
             "Features" => FeaturesVM,
             "McpServers" => McpServersVM,
+            "Setup" => (ViewModelBase?)SetupVM ?? ChatVM,
             "TimeMachine" => TimeMachineVM,
             "HexEditor" => HexEditorVM,
             "Code" => CodeEditorVM,

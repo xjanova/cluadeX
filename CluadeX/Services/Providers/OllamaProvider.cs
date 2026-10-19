@@ -43,20 +43,24 @@ public class OllamaProvider : ApiProviderBase
     /// HttpClient waits 5 minutes, which is for generation, not for "is anything there".</summary>
     private static readonly TimeSpan TagsTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>The chat's background "is Ollama there" check: a running Ollama answers /api/tags at once.</summary>
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+
     private enum TagsFailure { None, Unreachable, HttpError, Timeout, BadReply }
 
     /// <summary>One GET /api/tags. <c>Models</c> is null when the list didn't come, and <c>Failure</c> says why;
     /// a 2xx with an empty list is a success. Only the caller's own cancel escapes.</summary>
-    private async Task<(List<string>? Models, TagsFailure Failure, int Status)> FetchTagsAsync(string baseUrl, CancellationToken ct)
+    private async Task<(List<string>? Models, TagsFailure Failure, int Status)> FetchTagsAsync(string baseUrl, CancellationToken ct, bool quiet = false)
     {
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(TagsTimeout);
+        limit.CancelAfter(quiet ? ProbeTimeout : TagsTimeout);
+        var log = quiet ? null : _log;
         try
         {
             using var response = await _httpClient.GetAsync($"{baseUrl}/api/tags", limit.Token);
             if (!response.IsSuccessStatusCode)
             {
-                _log?.Warn("Ollama", $"{baseUrl}/api/tags answered HTTP {(int)response.StatusCode}");
+                log?.Warn("Ollama", $"{baseUrl}/api/tags answered HTTP {(int)response.StatusCode}");
                 return (null, TagsFailure.HttpError, (int)response.StatusCode);
             }
 
@@ -65,7 +69,7 @@ public class OllamaProvider : ApiProviderBase
             if (doc.RootElement.ValueKind != JsonValueKind.Object
                 || !doc.RootElement.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
             {
-                _log?.Warn("Ollama", $"{baseUrl}/api/tags did not answer with a model list");
+                log?.Warn("Ollama", $"{baseUrl}/api/tags did not answer with a model list");
                 return (null, TagsFailure.BadReply, (int)response.StatusCode);
             }
 
@@ -79,17 +83,17 @@ public class OllamaProvider : ApiProviderBase
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (OperationCanceledException ex)
         {
-            _log?.Warn("Ollama", $"{baseUrl}/api/tags: no answer within {TagsTimeout.TotalSeconds:0} s", ex);
+            log?.Warn("Ollama", $"{baseUrl}/api/tags: no answer within {TagsTimeout.TotalSeconds:0} s", ex);
             return (null, TagsFailure.Timeout, 0);
         }
         catch (JsonException ex)
         {
-            _log?.Warn("Ollama", $"{baseUrl}/api/tags: the reply isn't JSON", ex);
+            log?.Warn("Ollama", $"{baseUrl}/api/tags: the reply isn't JSON", ex);
             return (null, TagsFailure.BadReply, 0);
         }
         catch (Exception ex)
         {
-            _log?.Warn("Ollama", $"{baseUrl}/api/tags failed", ex);
+            log?.Warn("Ollama", $"{baseUrl}/api/tags failed", ex);
             return (null, TagsFailure.Unreachable, 0);
         }
     }
@@ -121,6 +125,15 @@ public class OllamaProvider : ApiProviderBase
 
     /// <summary>The models Ollama has — or, when it can't be asked, the last list it gave (the failure is raised as a
     /// localized error; the details are in the Debug Log).</summary>
+    /// <summary>Ask Ollama for its models without raising or logging a failure — the chat's model box polls this to list
+    /// Ollama's models while it answers. Null = not reachable now.</summary>
+    public async Task<List<string>?> ProbeModelsAsync(CancellationToken ct = default)
+    {
+        var (models, _, _) = await FetchTagsAsync(GetBaseUrl(), ct, quiet: true);
+        if (models != null) _availableModels = models;
+        return models;
+    }
+
     public async Task<List<string>> GetAvailableModelsAsync(CancellationToken ct = default)
     {
         string baseUrl = GetBaseUrl();

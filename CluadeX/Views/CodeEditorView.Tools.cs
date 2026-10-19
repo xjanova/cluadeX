@@ -269,6 +269,17 @@ public partial class CodeEditorView
         b.ContextMenu.IsOpen = true;
     }
 
+    /// <summary>Toolbar ▸ AI comments. Its items bind to the view model (checks, commands), so the menu takes the
+    /// button's DataContext before it opens — a context menu lives in its own visual tree.</summary>
+    private void OnAiCommentsMenu(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.ContextMenu == null) return;
+        b.ContextMenu.DataContext = b.DataContext;
+        b.ContextMenu.PlacementTarget = b;
+        b.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        b.ContextMenu.IsOpen = true;
+    }
+
     private void OnDuplicateLines(object sender, RoutedEventArgs e) => DuplicateLines();
     private void OnDeleteLines(object sender, RoutedEventArgs e) => DeleteLines();
     private void OnMoveLinesUp(object sender, RoutedEventArgs e) => MoveLines(up: true);

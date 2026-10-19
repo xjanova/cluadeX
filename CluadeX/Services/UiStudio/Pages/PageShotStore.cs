@@ -36,6 +36,9 @@ public sealed class PageGalleryState
     /// <summary>The owner switched the sample replies off: the app's requests go unanswered while its screens are drawn,
     /// as with no network, so the error and empty states can be designed.</summary>
     public bool SampleDataOff { get; set; }
+    /// <summary>The user has run this project's dev server from the Studio before: it may be started in the
+    /// background when the chat opens the project (a project's own scripts never run unasked the first time).</summary>
+    public bool DevServerApproved { get; set; }
 }
 
 /// <summary>

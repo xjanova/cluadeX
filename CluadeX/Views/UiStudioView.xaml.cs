@@ -60,8 +60,8 @@ public partial class UiStudioView : UserControl
     {
         InitializeComponent();
         DataContextChanged += (_, _) => Attach(DataContext as UiStudioViewModel);
-        IsVisibleChanged += (_, e) => { if (e.NewValue is true) _vm?.PageShown(); };
-        Loaded += (_, _) => { Attach(DataContext as UiStudioViewModel); _init ??= InitWebAsync(); };
+        IsVisibleChanged += (_, e) => OnShownChanged(e.NewValue is true);
+        Loaded += (_, _) => { Attach(DataContext as UiStudioViewModel); _init ??= InitWebAsync(); if (!IsVisible) QueueSuspend(); };
         Loaded += (_, _) => WatchOverlays();
         Unloaded += (_, _) => UnwatchOverlays();
         ((System.Collections.Specialized.INotifyCollectionChanged)LogList.Items).CollectionChanged += (_, _) =>
@@ -145,6 +145,7 @@ public partial class UiStudioView : UserControl
         _studio.NavigateRequested += Navigate;
         _studio.ScriptRequested += Run;
         _studio.ReloadRequested += OnReloadRequested;
+        _studio.WakeRequested += Wake;
         _studio.Evaluate = EvaluateAsync;
         vm.Shooter = ShootAsync;
         vm.NavigateTo += Navigate;
@@ -164,7 +165,55 @@ public partial class UiStudioView : UserControl
             if (e.PropertyName is nameof(UiStudioViewModel.CardWidth)) UpdateColumns();
         };
         UpdateWebVisibility();
+        vm.SetOnScreen(IsVisible);
         if (IsVisible) vm.PageShown();
+    }
+
+    // ───────────────────────────── on screen / asleep ─────────────────────────────
+
+    private System.Windows.Threading.DispatcherTimer? _suspendTimer;
+
+    /// <summary>A hidden page already draws nothing; after a while off screen its renderer is also suspended (no
+    /// scripts, no timers, no network polling). It wakes at once when shown, or when anything needs it (a script
+    /// from the Node Graph, a navigation, a reload) — its state, scroll and DOM are all kept.</summary>
+    private void OnShownChanged(bool shown)
+    {
+        _vm?.SetOnScreen(shown);
+        if (shown)
+        {
+            _suspendTimer?.Stop();
+            Wake();
+            _vm?.PageShown();
+        }
+        else QueueSuspend();
+    }
+
+    private void QueueSuspend()
+    {
+        _suspendTimer ??= NewSuspendTimer();
+        _suspendTimer.Stop();
+        _suspendTimer.Start();
+    }
+
+    private System.Windows.Threading.DispatcherTimer NewSuspendTimer()
+    {
+        var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+        t.Tick += async (_, _) =>
+        {
+            t.Stop();
+            var core = Web.CoreWebView2;
+            if (core == null || IsVisible || _studio?.KeepPageAwake == true || core.IsSuspended) return;
+            try { await core.TrySuspendAsync(); }
+            catch { /* still marked visible by the control, or the page is busy: it simply stays awake */ }
+        };
+        return t;
+    }
+
+    private void Wake()
+    {
+        try { if (Web.CoreWebView2 is { IsSuspended: true } core) core.Resume(); }
+        catch { }
+        if (!IsVisible && IsLoaded) QueueSuspend();   // woken while hidden (a script, a reload): back to sleep later
     }
 
     // ───────────────────────────── what may cover the page ─────────────────────────────
@@ -266,7 +315,7 @@ public partial class UiStudioView : UserControl
                 });
             };
             if (_pendingUrl != null) { core.Navigate(_pendingUrl); _pendingUrl = null; }
-            else if (_studio.PageUrl != null) core.Navigate(_studio.PageUrl);
+            else if ((_studio.PageUrl ?? _studio.LastRequestedUrl) is { } url) core.Navigate(url);   // asked before this browser existed
         }
         catch (Exception ex)
         {
@@ -281,6 +330,7 @@ public partial class UiStudioView : UserControl
     private void Navigate(string url)
     {
         if (Web.CoreWebView2 == null) { _pendingUrl = url; _init ??= InitWebAsync(); return; }
+        Wake();
         try { Web.CoreWebView2.Navigate(url); }
         catch (ArgumentException) { _vm?.Status(Loc("studio.err.badUrl"), error: true); }
     }
@@ -289,6 +339,7 @@ public partial class UiStudioView : UserControl
     {
         var core = Web.CoreWebView2;
         if (core == null) return;
+        Wake();
         _ = core.ExecuteScriptAsync(js);
     }
 
@@ -296,6 +347,7 @@ public partial class UiStudioView : UserControl
     {
         var core = Web.CoreWebView2;
         if (core == null) return null;
+        Wake();
         try { return await core.ExecuteScriptAsync(js); }
         catch { return null; }
     }
@@ -304,6 +356,7 @@ public partial class UiStudioView : UserControl
     {
         var core = Web.CoreWebView2;
         if (core == null) return;
+        Wake();
         if (cssOnly) { Run("window.__cx && __cx.reloadCss(); window.__cx && setTimeout(() => __cx.refreshSelection(), 120)"); return; }
         _reselectSrc = _studio?.Selection?.Src;
         _reselectSelector = _studio?.Selection?.Selector;

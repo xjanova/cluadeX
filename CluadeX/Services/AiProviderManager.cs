@@ -58,6 +58,8 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.ClaudeDev] = new ClaudeDevProvider(settingsService, fileSystemService);
         // The BrainX cowork room as a model: the turn goes to the agents in the room (BrainXRoomProvider).
         _providers[AiProviderType.BrainX] = new BrainXRoomProvider(fileSystemService);
+        // The installed Gemini CLI as a model, the way Claude Dev is Claude Code (GeminiDevProvider).
+        _providers[AiProviderType.GeminiDev] = new GeminiDevProvider(settingsService, fileSystemService);
 
         // Set initial active provider
         var activeType = settingsService.Settings.ActiveProvider;

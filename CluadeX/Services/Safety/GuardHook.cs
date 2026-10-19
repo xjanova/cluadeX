@@ -22,6 +22,126 @@ public static class GuardHook
 {
     public const string Flag = "--cx-guard";
 
+    /// <summary><c>CluadeX.exe --cx-effort</c>: the Stop hook every Claude Dev run carries. It only reads the hook input's
+    /// effort.level (Claude Code puts the level the turn REALLY ran at there — the CLI reports it nowhere else) into
+    /// <see cref="EffortReportEnv"/>'s file, and never blocks.</summary>
+    public const string EffortFlag = "--cx-effort";
+
+    /// <summary>The file a run's hooks write the CLI's effort level into (ClaudeDevProvider sets it per run; the CLI passes
+    /// its environment on to its hooks).</summary>
+    public const string EffortReportEnv = "CLUADEX_EFFORT_REPORT";
+
+    /// <summary>The level in a Claude Code hook input (<c>"effort":{"level":"high"}</c>), or null.</summary>
+    public static string? EffortLevelOf(string hookJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(hookJson);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("effort", out var e)) return null;
+            string? level = e.ValueKind switch
+            {
+                JsonValueKind.Object when e.TryGetProperty("level", out var l) && l.ValueKind == JsonValueKind.String => l.GetString(),
+                JsonValueKind.String => e.GetString(),
+                _ => null,
+            };
+            level = level?.Trim().ToLowerInvariant();
+            return level is { Length: > 0 and <= 16 } && level.All(char.IsLetter) ? level : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>The model of the newest assistant entry in a Claude Code transcript (its last 64 KB), or null. A plain chat
+    /// runs the CLI in text mode, which names no model; the transcript does.</summary>
+    public static string? ModelFromTranscript(string? transcriptPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(transcriptPath) || !File.Exists(transcriptPath)) return null;
+            using var fs = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            long start = Math.Max(0, fs.Length - 65536);
+            fs.Seek(start, SeekOrigin.Begin);
+            var buf = new byte[fs.Length - start];
+            int read = 0;
+            while (read < buf.Length) { int n = fs.Read(buf, read, buf.Length - read); if (n <= 0) break; read += n; }
+            string tail = Encoding.UTF8.GetString(buf, 0, read);
+            var hits = System.Text.RegularExpressions.Regex.Matches(tail, @"""model""\s*:\s*""(claude-[A-Za-z0-9.\-\[\]]{3,60})""");
+            return hits.Count > 0 ? hits[^1].Groups[1].Value : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The report line for a hook input: "level" or "level model" (null when the input names no level).</summary>
+    public static string? EffortReportOf(string hookJson)
+    {
+        if (EffortLevelOf(hookJson) is not { } level) return null;
+        string? transcript = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(hookJson);
+            if (doc.RootElement.TryGetProperty("transcript_path", out var tp) && tp.ValueKind == JsonValueKind.String) transcript = tp.GetString();
+        }
+        catch (JsonException) { }
+        return ModelFromTranscript(transcript) is { } model ? level + " " + model : level;
+    }
+
+    /// <summary>Write the hook input's effort level (and the transcript's model) to the run's report file
+    /// (no file named, no level: nothing).</summary>
+    public static void ReportEffort(string hookJson)
+    {
+        try
+        {
+            string? path = Environment.GetEnvironmentVariable(EffortReportEnv);
+            if (string.IsNullOrWhiteSpace(path) || EffortReportOf(hookJson) is not { } report) return;
+            string tmp = path + "." + Environment.ProcessId + ".tmp";
+            File.WriteAllText(tmp, report, new UTF8Encoding(false));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch { /* a report is never worth failing a tool call */ }
+    }
+
+    /// <summary>Read a run's report file: (level, model) — model null when the report named none.</summary>
+    public static (string? Level, string? Model) ReadEffortReport(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return (null, null);
+            string[] parts = File.ReadAllText(path).Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length == 0 ? (null, null) : (parts[0], parts.Length > 1 ? parts[1] : null);
+        }
+        catch { return (null, null); }
+    }
+
+    /// <summary>The Stop hook's entry point: report, then exit 0 (a Stop hook that exits 2 would make the CLI go on).</summary>
+    public static int RunEffortReport()
+    {
+        try
+        {
+            using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+            ReportEffort(stdin.ReadToEnd());
+        }
+        catch { }
+        return 0;
+    }
+
+    /// <summary>Set in a Gemini Dev run that may run commands but not edit (the CLI's yolo mode allows both): the guard
+    /// then refuses Gemini's file-writing tools outright.</summary>
+    public const string NoEditEnv = "CLUADEX_GUARD_NO_EDIT";
+
+    /// <summary>Gemini CLI's tool names (Gemini Dev runs carry this hook as a BeforeTool hook, same exe).</summary>
+    private static bool IsGeminiTool(string tool) => tool is "run_shell_command" or "write_file" or "replace";
+
+    /// <summary>What Claude Dev is never let run headless (ClaudeDevProvider.NeverTools, passed to the CLI as
+    /// --disallowedTools). Gemini CLI has no such flag, so a Gemini Dev command is checked here: refused outright.</summary>
+    public static string? NeverRun(string command)
+    {
+        string c = System.Text.RegularExpressions.Regex.Replace(command ?? "", @"\s+", " ").Trim().ToLowerInvariant();
+        foreach (var bad in new[] { "git push --force", "git push -f", "git reset --hard", "git clean", "shutdown" })
+            if (c.StartsWith(bad, StringComparison.Ordinal) || c.Contains("&& " + bad) || c.Contains("; " + bad) || c.Contains("| " + bad))
+                return $"CluadeX safety: `{bad}` is never run by a headless agent — ask the user to run it themselves.";
+        return null;
+    }
+
     /// <summary>The hook's entry point. Exit 0 = allow, 2 = block.</summary>
     public static int Run()
     {
@@ -32,6 +152,22 @@ public static class GuardHook
             input = stdin.ReadToEnd();
         }
         catch { return Block("CluadeX safety: the guard could not read the tool call — refused."); }
+        ReportEffort(input);   // the level this turn really runs at, for the chat (mid-turn, before the Stop hook says it)
+
+        // Refused outright, no prompt: what a headless agent never does (Gemini Dev has no --disallowedTools), and file
+        // writes in a Gemini Dev run that was granted commands only.
+        try
+        {
+            using var doc = JsonDocument.Parse(input);
+            var root = doc.RootElement;
+            string called = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
+            if (called is "write_file" or "replace" && Environment.GetEnvironmentVariable(NoEditEnv) == "1")
+                return Block("CluadeX safety: this run may run commands but not edit files — propose the change as a diff instead.");
+            if (called == "run_shell_command" && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
+                && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String && NeverRun(cmd.GetString() ?? "") is { } never)
+                return Block(never);
+        }
+        catch (JsonException) { return Block("CluadeX safety: the guard could not read the tool call — refused."); }
 
         string? reason;
         try { reason = Decide(input); }
@@ -53,12 +189,13 @@ public static class GuardHook
             using var doc = JsonDocument.Parse(hookJson);
             var root = doc.RootElement;
             string tool = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
-            if (!root.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return ("Claude Dev " + tool, "");
+            string who = IsGeminiTool(tool) ? "Gemini Dev " : "Claude Dev ";
+            if (!root.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return (who + tool, "");
             string Str(string name) => ti.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
             string action = Str("command") is { Length: > 0 } c ? c
                 : Str("file_path") is { Length: > 0 } f ? "write " + f
                 : Str("notebook_path");
-            return ("Claude Dev " + tool, action.Length > 4000 ? action[..4000] + "…" : action);
+            return (who + tool, action.Length > 4000 ? action[..4000] + "…" : action);
         }
         catch { return ("Claude Dev", ""); }
     }
@@ -89,6 +226,7 @@ public static class GuardHook
         {
             case "Bash":
             case "PowerShell":
+            case "run_shell_command":   // Gemini Dev
             {
                 string command = Str("command");
                 var dialect = tool == "PowerShell" ? DangerousCommandCheck.Dialect.PowerShell : DangerousCommandCheck.Dialect.Unknown;
@@ -104,8 +242,10 @@ public static class GuardHook
                 return null;
             }
             case "Write":
+            case "write_file":   // Gemini Dev
                 return CheckWritten(Str("file_path"), Str("content"));
             case "Edit":
+            case "replace":      // Gemini Dev
                 return CheckWritten(Str("file_path"), Str("new_string"));
             case "MultiEdit":
                 if (ti.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
@@ -142,13 +282,18 @@ public static class GuardHook
             : Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "CluadeX.exe");
     }
 
-    public static string SettingsFile()
+    public static string SettingsFile() => WriteSettings(guard: true);
+
+    /// <summary>The settings file for a Claude Dev run that may not edit or run (plain chat): the Stop hook that reports
+    /// the effort the turn really ran at, nothing else.</summary>
+    public static string ReportSettingsFile() => WriteSettings(guard: false);
+
+    /// <summary>The hooks a Claude Dev run's settings carry, as JSON: the guard (workers only) and the effort report.</summary>
+    public static string SettingsJson(string exe, bool guard)
     {
-        // One file per install (the installed app and a portable copy must not point each other's runs at the wrong exe).
-        string exe = ExePath().Replace('\\', '/');
-        var settings = new
-        {
-            hooks = new
+        var stop = new[] { new { hooks = new[] { new { type = "command", command = $"\"{exe}\" {EffortFlag}", timeout = 15 } } } };
+        object hooks = guard
+            ? new
             {
                 PreToolUse = new[]
                 {
@@ -159,13 +304,21 @@ public static class GuardHook
                         hooks = new[] { new { type = "command", command = $"\"{exe}\" {Flag}", timeout = 300 } },
                     },
                 },
-            },
-        };
+                Stop = stop,
+            }
+            : new { Stop = stop };
+        return JsonSerializer.Serialize(new { hooks }, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string WriteSettings(bool guard)
+    {
+        // One file per install (the installed app and a portable copy must not point each other's runs at the wrong exe).
+        string exe = ExePath().Replace('\\', '/');
         string dir = Path.Combine(Path.GetTempPath(), "cluadex-guard");
         Directory.CreateDirectory(dir);
         string id = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(exe.ToLowerInvariant())))[..10];
-        string path = Path.Combine(dir, $"claude-dev-settings-{id}.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true }), new UTF8Encoding(false));
+        string path = Path.Combine(dir, guard ? $"claude-dev-settings-{id}.json" : $"claude-dev-report-{id}.json");
+        File.WriteAllText(path, SettingsJson(exe, guard), new UTF8Encoding(false));
         return path;
     }
 }

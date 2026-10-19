@@ -374,8 +374,6 @@
                                     <Button Content="{services:Loc settings.testConnection}" Style="{StaticResource SecondaryButton}"
                                             Command="{Binding TestConnectionCommand}" Margin="0,0,10,0"
                                             Visibility="{Binding CanTestConnection, Converter={StaticResource BoolVis}}"/>
-                                    <Button Content="{services:Loc settings.applyProvider}" Style="{StaticResource PrimaryButton}"
-                                            Command="{Binding ApplyProviderCommand}"/>
                                 </StackPanel>
                                 <TextBlock Text="{Binding ConnectionTestResult}" Foreground="{DynamicResource Accent.1}"
                                            FontSize="12" TextWrapping="Wrap"/>

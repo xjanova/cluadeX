@@ -194,6 +194,9 @@ public partial class App : Application
                     // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
                     // Not installed: invite, once.
                     var auto = await mcpManager.AutoConnectInstalledBrainAsync();
+                    // Connections CluadeX kept in its own list move into BrainX once it is installed (BrainX first, never both).
+                    try { await _serviceProvider.GetRequiredService<Services.Connections.ConnectionService>().ReconcileAsync(); }
+                    catch (Exception ex) { dbg?.Warn("Connections", "moving connections to BrainX failed", ex); }
                     var brainSettings = _serviceProvider.GetRequiredService<SettingsService>().Settings;
                     if (auto != Services.Mcp.McpServerManager.BrainAutoConnect.NotNeeded)
                     {
@@ -1018,6 +1021,7 @@ public partial class App : Application
         services.AddSingleton(sp => new ProjectRegistryService(sp.GetService<FileSystemService>(), sp.GetService<SettingsService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.ProjectToolModule(sp.GetService<SettingsService>(), sp.GetService<ProjectRegistryService>()));
         services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AppRestartToolModule());
+        services.AddSingleton<Services.Tools.IAgentToolModule>(sp => new Services.Tools.AttachmentToolModule(sp.GetService<SettingsService>()));
         services.AddChromeConnector();
         Services.UiStudio.UiStudioRegistration.AddUiStudioModule(services);
 
@@ -1032,6 +1036,9 @@ public partial class App : Application
         services.AddSingleton<WatchViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
+        services.AddSingleton<Services.Connections.ConnectionService>();
+        services.AddSingleton<Services.Setup.SystemSetupService>();
+        services.AddSingleton<SetupViewModel>();
         services.AddSingleton<TimeMachineViewModel>();
         services.AddSingleton<HexEditorViewModel>();
         services.AddSingleton<CodeEditorViewModel>();

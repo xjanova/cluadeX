@@ -258,6 +258,16 @@ internal static partial class Program
         Fake = new FakeProvider();
         SetField(Providers, "_activeProvider", Fake);
 
+        // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
+        {
+            if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PB") await TestPersonaBoxes();
+            await TestPlainPermission();
+            Log($"\n## Result (CHATTEST_ONLY=PP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         await TestPermissionPrompt();         // C1
         await TestStatusRows();               // L4 (screen)
         await TestThinkingBlock();            // L8 (screen)
@@ -269,6 +279,7 @@ internal static partial class Program
         await TestTypeWhileWorking();         // W: typing while a reply runs reaches it
         await TestChatOpensItsProject();      // F: an old chat brings its project back
         await TestAttachedImages();           // X: images pasted / dropped / picked into a message
+        await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
@@ -292,6 +303,7 @@ internal static partial class Program
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
+        await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();
@@ -897,6 +909,81 @@ internal static partial class Program
         Check("X5 a picture with no text sends: the bubble has only the picture, the model gets a line with it",
             onlyPicture is { Content: "" } && onlyPicture.HasAttachedImages && (Fake.Calls.LastOrDefault()?.Input ?? "").StartsWith("Look at the attached image"),
             Fake.Calls.LastOrDefault()?.Input ?? "");
+    }
+
+    /// <summary>XF — any file attached to a message (owner 2026-10-19: วาง zip ต้องแตกได้, PDF ต้องอ่านได้, ใช้ภาพทำงานได้):
+    /// copied in under its own name, shown as a chip, its content and path sent with the message, an archive unpacked
+    /// next to it, stored with the chat, and named again (by path) on later turns.</summary>
+    static async Task TestAttachedFiles()
+    {
+        Log("\n## XF — files attached to a message: read, unpacked, by path, stored");
+        await FreshChat();
+        Directory.CreateDirectory(PipeRoot);
+        string tag = Guid.NewGuid().ToString("N")[..6];
+        string notes = Path.Combine(PipeRoot, $"brief-{tag}.md");
+        File.WriteAllText(notes, "สีหลักของเว็บ: น้ำเงิน #1E40AF", new System.Text.UTF8Encoding(false));
+        string zip = Path.Combine(PipeRoot, $"site-{tag}.zip");
+        using (var z = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            using (var w = new StreamWriter(z.CreateEntry("index.html").Open())) w.Write("<h1>Home</h1>");
+            using (var w = new StreamWriter(z.CreateEntry("../escape.txt").Open())) w.Write("bad");
+        }
+        string folder = Path.Combine(PipeRoot, $"folder-{tag}");
+        Directory.CreateDirectory(folder);
+
+        int added = await Vm.AttachFilesAsync([notes, zip, folder]);
+        Check("XF1 dropped files are copied in under their own names; a folder is refused with a localized hint",
+            added == 2 && Vm.PendingFiles.Count == 2 && Vm.PendingFiles.All(File.Exists)
+            && Path.GetFileName(Vm.PendingFiles[0]) == Path.GetFileName(notes) && Path.GetFileName(Vm.PendingFiles[1]) == Path.GetFileName(zip)
+            && Vm.StatusText.Contains(LocSvc.T("chat.attach.folder")) && !Vm.StatusText.Contains("Exception"),
+            Vm.StatusText + " | " + string.Join(", ", Vm.PendingFiles));
+        await Render();
+        var chips = FindVisual<ItemsControl>(View, ic => ReferenceEquals(ic.ItemsSource, Vm.PendingFiles));
+        Check("XF1 the files show as chips above the input", chips is { IsVisible: true } && chips.Items.Count == 2);
+        Vm.RemovePendingFileCommand.Execute(Vm.PendingFiles[0]);
+        Check("XF1 × takes one off", Vm.PendingFiles.Count == 1);
+        await Vm.AttachFilesAsync([notes]);
+        var attached = Vm.PendingFiles.ToList();
+
+        Fake.ScriptFor["[XF2]"] = new Queue<FakeStep>([FakeStep.Reply("Got them.")]);
+        await Send("[XF2] use these for the site");
+        await WaitUntil(() => !Vm.IsGenerating, 15000);
+        var userMsg = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.User);
+        string sent = Fake.Calls.LastOrDefault()?.Input ?? "";
+        string copiedZip = attached.First(p => p.EndsWith(".zip"));
+        string unpacked = Path.Combine(Path.GetDirectoryName(copiedZip)!, Path.GetFileNameWithoutExtension(copiedZip));
+        Check("XF2 sent: the message carries the files, the strip is empty, the bubble text is only what was typed",
+            userMsg != null && userMsg.AttachedFiles.SequenceEqual(attached) && !Vm.HasPendingFiles && userMsg.Content == "[XF2] use these for the site");
+        Check("XF2 the model gets each file's path and the text file's content",
+            attached.All(sent.Contains) && sent.Contains("สีหลักของเว็บ: น้ำเงิน #1E40AF"), sent);
+        Check("XF2 the zip is unpacked next to its copy (the ../ entry refused) and its files are listed for the model",
+            File.Exists(Path.Combine(unpacked, "index.html")) && !File.Exists(Path.Combine(Path.GetDirectoryName(copiedZip)!, "escape.txt"))
+            && sent.Contains("Unpacked to " + unpacked) && sent.Contains("index.html"), sent);
+        await Render();
+        var bubbleChips = FindVisual<ItemsControl>(View, ic => ReferenceEquals(ic.ItemsSource, userMsg?.AttachedFiles));
+        Check("XF2 the bubble shows the files as chips", bubbleChips is { IsVisible: true } && bubbleChips.Items.Count == 2);
+
+        var stored = Persist.LoadSession(Vm.CurrentSession!.Id)?.Messages.FirstOrDefault(m => m.Role == MessageRole.User && m.Content.StartsWith("[XF2]"));
+        Check("XF3 stored with the chat: reloaded, the message still has its files (and no tool columns)",
+            stored != null && stored.AttachedFiles.SequenceEqual(attached) && stored.ToolName == null && stored.ToolOutput == null,
+            stored == null ? "not stored" : string.Join(", ", stored.AttachedFiles));
+
+        Fake.ScriptFor["[XF4]"] = new Queue<FakeStep>([FakeStep.Reply("ok")]);
+        await Send("[XF4] and now?");
+        await WaitUntil(() => !Vm.IsGenerating, 15000);
+        var hist = Fake.Calls.LastOrDefault()?.History ?? new();
+        var earlier = hist.FirstOrDefault(h => h.Role == MessageRole.User && h.Content.StartsWith("[XF2]")).Content ?? "";
+        Check("XF4 a later turn names the earlier files by path (and where the zip went), without resending their text",
+            earlier.Contains("[the user attached a file: " + attached[0]) && earlier.Contains("(unpacked to " + unpacked + ")") && !earlier.Contains("#1E40AF"),
+            earlier);
+
+        await Vm.AttachFilesAsync([notes]);
+        Fake.ScriptFor["Look at the attached file"] = new Queue<FakeStep>([FakeStep.Reply("A brief.")]);
+        Vm.UserInput = "";
+        Vm.SendMessageCommand.Execute(null);
+        await WaitUntil(() => Vm.Messages.Any(m => m.Content.Contains("A brief.")), 15000);
+        Check("XF5 a file with no text sends: the model gets a line with it",
+            (Fake.Calls.LastOrDefault()?.Input ?? "").StartsWith("Look at the attached file(s)."), Fake.Calls.LastOrDefault()?.Input ?? "");
     }
 
     /// <summary>V — speaking instead of typing. The mic button opens Chrome's speech page (here a fake launcher: a

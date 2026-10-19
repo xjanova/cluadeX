@@ -118,12 +118,65 @@ public class BrainXInviteViewModel : ViewModelBase
         Refresh();
         if (State == McpServerManager.BrainInstall.NotInstalled)
         {
-            Open(DownloadUrl);
+            // One click: download from xman4289.com, check it, run its installer — the browser page only when the site
+            // does not hand over the installer (or CluadeX runs inside another app's package).
+            bool? done = await InstallInOneClickAsync();
+            if (done == null) return;   // Coming Soon: the message is on screen, nothing to wait for
+            if (done == false) Open(DownloadUrl);
             Say(T("brainx.waitingInstall"), error: false);
             WatchForInstall();
             return;
         }
         await ConnectAsync();
+    }
+
+    /// <summary>Download, verify and run the BrainX installer. False when the page should be opened instead; null when
+    /// BrainX is still Coming Soon (said in the window, not as an error).</summary>
+    private async Task<bool?> InstallInOneClickAsync()
+    {
+        if (Services.Setup.SystemSetupService.InsidePackage()) return false;
+        var installer = new Services.Connections.BrainXInstaller();
+        string? file = null;
+        IsBusy = true;
+        try
+        {
+            var progress = new Progress<(long Done, long? Total)>(p =>
+                Say(T("brainx.note.downloading", p.Total is { } t && t > 0 ? $"{p.Done * 100 / t}%" : $"{p.Done / 1048576} MB"), error: false));
+            file = await installer.DownloadAsync(progress);
+            Say(T("brainx.note.checking"), error: false);
+            var sig = await Task.Run(() => Services.Connections.BrainXInstaller.VerifySignature(file));
+            if (sig == Services.Connections.SignatureCheck.Invalid) { Say(T("brainx.err.signature"), error: true); return true; }
+            if (sig == Services.Connections.SignatureCheck.Unsigned)
+            {
+                string sha = await Task.Run(() => Services.Connections.BrainXInstaller.Sha256(file));
+                if (Views.Editor.ChoiceDialog.Show(T("brainx.unsigned.title"), T("brainx.unsigned.body", sha),
+                        new[] { T("setup.confirm.cancel"), T("brainx.unsigned.run") }) != 1) return true;
+            }
+            Say(T("brainx.note.running"), error: false);
+            await installer.RunAsync(file);
+            return true;
+        }
+        catch (InvalidOperationException ex) when (ex.Message == Services.Connections.BrainXInstaller.ComingSoon)
+        {
+            Say(T("brainx.note.comingSoon"), error: false);
+            return null;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("brainx.err.", StringComparison.Ordinal))
+        {
+            Say(T(ex.Message), error: true);
+            return ex.Message is not ("brainx.err.host" or "brainx.err.notFile");
+        }
+        catch (Exception ex)
+        {
+            _mcp.LogDiagnostic("BrainX window: one-click install failed", ex);
+            return false;
+        }
+        finally
+        {
+            IsBusy = false;
+            if (file != null) Services.Connections.BrainXInstaller.TryDelete(file);
+            CommandManager.InvalidateRequerySuggested();
+        }
     }
 
     private async Task ConnectAsync()

@@ -531,7 +531,9 @@ public partial class ChatViewModel : ViewModelBase
             if (SetProperty(ref _reasoningEffort, v))
             {
                 _settingsService.UpdateSettings(s => s.ReasoningEffort = v);
-                OnPropertyChanged(nameof(LiveModelEffortText)); OnPropertyChanged(nameof(LiveEffortSuffix)); OnPropertyChanged(nameof(LiveEffortLevel));
+                // The last request's effort belongs to the old pick: show the new one until a request carries it.
+                LiveModelReport.Forget(_providerManager.ActiveProviderType);
+                OnPropertyChanged(nameof(LiveModelEffortText)); OnPropertyChanged(nameof(LiveModelEffortTip)); OnPropertyChanged(nameof(LiveEffortSuffix)); OnPropertyChanged(nameof(LiveEffortLevel));
             }
         }
     }
@@ -550,9 +552,58 @@ public partial class ChatViewModel : ViewModelBase
 
     /// <summary>The level "auto" is really using in this chat's run right now ("low" / "medium" / "high" / "xhigh"), "" when
     /// no run is going or the effort is not "auto". The effort box shows it after "auto".</summary>
-    public string LiveEffortLevel =>
-        EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto
-            ? RunOf(CurrentSession)?.Scope?.LiveEffort ?? "" : "";
+    public string LiveEffortLevel
+    {
+        get
+        {
+            if (EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) != EffortLevels.Auto) return "";
+            string? sent = LiveSnapshot()?.Effort;
+            return sent switch
+            {
+                null => EffortShown(RunOf(CurrentSession)?.Scope?.LiveEffort) ?? "",
+                LiveModelReport.NoEffort => "",   // the Effort box is not shown for such a provider; the chip says it
+                _ when EffortShown(sent) is { } named && named != sent => named,
+                LiveModelReport.ModelDefault => Loc("live.effort.modelDefault"),
+                _ => sent,
+            };
+        }
+    }
+
+    /// <summary>What really answers this chat now (LiveModelReport): this chat's run's last request, else the provider's
+    /// latest — or, for a provider with no effort at all (a model on this PC, Gemini CLI, the BrainX room), that fact.
+    /// A report for another model than the one picked (the user switched since) is not shown.</summary>
+    private LiveModelReport.Snapshot? LiveSnapshot()
+    {
+        var type = _providerManager.ActiveProviderType;
+        var run = RunOf(CurrentSession);
+        var snap = LiveModelReport.For(run?.Scope, type);
+        if (snap != null && run == null && !ReportMatchesPick(type, snap.Model)) snap = null;
+        // A run whose loop picked a level but whose provider reports nothing (yet): that pick is what goes out.
+        if (snap == null && run?.Scope?.LiveEffort is { Length: > 0 } picked)
+            snap = new LiveModelReport.Snapshot(type, null, picked, false, DateTime.Now) { Why = run.Scope.EffortWhy };
+        if (snap == null && type is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama
+                or AiProviderType.GeminiDev or AiProviderType.BrainX)
+            snap = new LiveModelReport.Snapshot(type, null, LiveModelReport.NoEffort, false, DateTime.Now);
+        return snap;
+    }
+
+    private bool ReportMatchesPick(AiProviderType type, string? reported)
+    {
+        if (string.IsNullOrWhiteSpace(reported)) return true;
+        string? configured = _settingsService.Settings.ProviderConfigs.TryGetValue(type.ToString(), out var cfg) ? cfg.EffectiveModelId?.Trim() : null;
+        if (string.IsNullOrWhiteSpace(configured) || configured is "default" or "auto") return true;
+        return reported.StartsWith(configured, StringComparison.OrdinalIgnoreCase)
+               || LiveModelReport.FriendlyModel(reported) == LiveModelReport.FriendlyModel(configured);
+    }
+
+    /// <summary>A run's live effort in words: a level as it is; Claude Dev's "auto", which the CLI does not report as a level,
+    /// as what it is — the CLI picking per turn, or the CLI's default (ClaudeDevProvider.CliAutoEffort).</summary>
+    private string? EffortShown(string? live) => live switch
+    {
+        "per-turn" => Loc("chat.effort.cliPerTurn"),
+        "cli-default" => Loc("chat.effort.cliDefault"),
+        _ => live,
+    };
 
     /// <summary>"⚡ auto → medium" — the effort this chat's requests really use, shown in the model boxes next to the
     /// selected model (the closed box only; the drop-down lists models).</summary>
@@ -560,22 +611,27 @@ public partial class ChatViewModel : ViewModelBase
     {
         get
         {
-            string setting = EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
-            string? live = RunOf(CurrentSession)?.Scope?.LiveEffort;
-            return "⚡ " + (live != null && setting == EffortLevels.Auto ? $"auto → {live}" : setting);
+            var snap = LiveSnapshot();
+            return "⚡ " + LiveModelReport.Describe(_settingsService.Settings.ReasoningEffort, snap is null ? null : snap with { Model = null }, null, Loc);
         }
     }
 
-    /// <summary>"claude-opus-5-5 · medium" — the model answering and the effort its requests really use. While a run of
-    /// this chat works under "auto", the level the loop picked for the current step (it moves); otherwise the setting.</summary>
-    public string LiveModelEffortText
+    /// <summary>"Opus 5.5 · auto → high (bug fix)" — the model that really answers (the id the response named) and the
+    /// effort its request really carried (as rounded for that model, or as the Claude Code CLI says it ran), with why
+    /// "auto" picked it. Before any request: what is set.</summary>
+    public string LiveModelEffortText =>
+        LiveModelReport.Describe(_settingsService.Settings.ReasoningEffort, LiveSnapshot(), ActiveModelLabel, Loc);
+
+    /// <summary>The same in full words, for the chip's tooltip: which model, which effort, and whether the provider confirmed it.</summary>
+    public string LiveModelEffortTip
     {
         get
         {
-            string setting = EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
-            string? live = RunOf(CurrentSession)?.Scope?.LiveEffort;
-            string effort = live != null && setting == EffortLevels.Auto ? $"auto → {live}" : setting;
-            return string.IsNullOrWhiteSpace(ActiveModelLabel) ? effort : $"{ActiveModelLabel} · {effort}";
+            var snap = LiveSnapshot();
+            string basis = snap == null ? Loc("live.tip.notYet")
+                : snap.Effort == LiveModelReport.NoEffort ? Loc("live.tip.noEffort")
+                : snap.EffortConfirmed ? Loc("live.tip.confirmed") : Loc("live.tip.sent");
+            return Loc("chat.liveEffortTip") + "\n" + basis;
         }
     }
     /// <summary>0–1 of the rate limit still available this minute (drives the gauge's fill).</summary>
@@ -642,7 +698,10 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.Anthropic => configured ?? AnthropicProvider.DefaultModel,
             AiProviderType.OpenAI => configured ?? OpenAiProvider.DefaultModel,
             AiProviderType.Gemini => configured ?? GeminiProvider.DefaultModel,
-            AiProviderType.ClaudeDev => configured is null or "default" or "auto" ? Loc("chat.usage.cliDefault") : configured,
+            // "default" is a real model too: the one the CLI said it runs (init / each reply), once it has run.
+            AiProviderType.ClaudeDev => configured is null or "default" or "auto"
+                ? ClaudeDevProvider.ReportedModel ?? Loc("chat.usage.cliDefault") : configured,
+            AiProviderType.GeminiDev => configured is null or "default" or "auto" ? Loc("chat.usage.geminiCliDefault") : configured,
             _ => configured ?? Loc("chat.usage.noModel"),
         };
         ThinkToggleVisible = type switch
@@ -697,6 +756,7 @@ public partial class ChatViewModel : ViewModelBase
             RateLimitText = local ? Loc("chat.usage.local") : Loc("chat.usage.unknown");
             RateLimitTip = local ? Loc("chat.usage.localTip")
                 : type == AiProviderType.ClaudeDev ? Loc("chat.usage.cliTip")
+                : type == AiProviderType.GeminiDev ? Loc("chat.usage.geminiCliTip")
                 : Loc("chat.usage.unknownTip");
         }
 
@@ -896,13 +956,15 @@ public partial class ChatViewModel : ViewModelBase
         // The agent opened a project itself (open_project): show it and remember it on that chat.
         Services.Tools.ProjectToolModule.ProjectOpened += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentOpenedProject(scope, path));
-        AgentRunScope.LiveEffortChanged += _ =>
-            App.Current?.Dispatcher.BeginInvoke(() =>
-            {
-                OnPropertyChanged(nameof(LiveModelEffortText));
-                OnPropertyChanged(nameof(LiveEffortSuffix));
-                OnPropertyChanged(nameof(LiveEffortLevel));
-            });
+        void RaiseLiveModel() => App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            OnPropertyChanged(nameof(LiveModelEffortText));
+            OnPropertyChanged(nameof(LiveModelEffortTip));
+            OnPropertyChanged(nameof(LiveEffortSuffix));
+            OnPropertyChanged(nameof(LiveEffortLevel));
+        });
+        AgentRunScope.LiveEffortChanged += _ => RaiseLiveModel();
+        LiveModelReport.Changed += RaiseLiveModel;
         Services.Tools.ProjectToolModule.RelatedFolderAdded += (scope, path) =>
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
         // The agent opens a new chat itself (new_chat), and puts finished ones away (close_chat). The asking chat is read
@@ -1135,10 +1197,22 @@ public partial class ChatViewModel : ViewModelBase
             var token = askRun?.Cts?.Token ?? CancellationToken.None;
             CancellationTokenRegistration reg = default;
 
+            // In people's words first (what, where, the result, how risky); the real command folded underneath.
+            Services.Safety.PlainPermission? plain = null;
+            try
+            {
+                string? root = AgentRunScope.Current?.WorkingDirectory
+                               ?? (_fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null);
+                plain = Services.Safety.PermissionExplainer.Explain(info, root, Loc);
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[permission] explain failed: " + ex.Message); }
             var prompt = new ChatMessage
             {
                 Role = MessageRole.PermissionRequest,
-                Content = LocF("chat.perm.prompt", info.ToolName, info.Detail),
+                // Content carries the whole request in words (headline + why it asks) for anything that reads it.
+                Content = plain == null ? LocF("chat.perm.prompt", info.ToolName, info.Detail)
+                    : plain.Note.Length > 0 ? plain.Headline + "\n" + plain.Note : plain.Headline,
+                PermissionPlain = plain,
                 DiffLines = info.Diff?.Lines,
                 DiffStat = info.Diff?.Stat,
                 PermissionAlwaysAsk = info.AlwaysAsk || info.Danger != null,
@@ -1208,6 +1282,7 @@ public partial class ChatViewModel : ViewModelBase
             UpdateContextInfo();
             CostText = _costTracker.FormatCost();
             RefreshUsageStrip();
+            ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
         };
         _memoryTimer.Start();
         InitControls(activation);
@@ -2866,14 +2941,15 @@ public partial class ChatViewModel : ViewModelBase
             var m = all[i];
             switch (m.Role)
             {
-                case MessageRole.User when m.HasAttachedImages:
-                    // An earlier message's pictures are not resent (each costs tokens on every request): the model
-                    // is told they were there and where, and can open one with read_file.
+                case MessageRole.User when m.HasAttachedImages || m.HasAttachedFiles:
+                    // An earlier message's pictures and files are not resent (each costs tokens on every request): the
+                    // model is told they were there and where, and can open one again (read_file / read_document).
                     result.Add(new ChatMessage
                     {
                         Role = MessageRole.User, Timestamp = m.Timestamp,
                         Content = (m.Content.Length > 0 ? m.Content + "\n" : "")
-                                  + string.Join("\n", m.AttachedImages.Select(p => $"[the user attached an image: {p}]")),
+                                  + string.Join("\n", m.AttachedImages.Select(p => $"[the user attached an image: {p}]")
+                                      .Concat(m.AttachedFiles.Select(EarlierAttachmentLine))),
                     });
                     break;
                 case MessageRole.User:
@@ -2992,15 +3068,25 @@ public partial class ChatViewModel : ViewModelBase
     {
         bool fromBox = pipe == null;
         void ClearBox() { if (fromBox) UserInput = string.Empty; }
+        // Files dropped a moment ago may still be copying in (a big zip): the message waits for them rather than
+        // going out without them. A second Send pressed meanwhile does nothing — the first one sends.
+        if (fromBox && !IsGenerating && !_attachingFiles.IsCompleted)
+        {
+            if (_sendWaitsForAttachments) return;
+            _sendWaitsForAttachments = true;
+            try { await WaitForAttachingAsync(); }
+            finally { _sendWaitsForAttachments = false; }
+        }
         int images = fromBox ? PendingImages.Count : 0;
-        if (string.IsNullOrEmpty(input) && images == 0) return;
+        int files = fromBox ? PendingFiles.Count : 0;
+        if (string.IsNullOrEmpty(input) && images == 0 && files == 0) return;
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
-        // to do nothing at all (the box was even disabled) until the run ended. Attached images wait for the next turn.
+        // to do nothing at all (the box was even disabled) until the run ended. Attachments wait for the next turn.
         if (IsGenerating)
         {
             if (!fromBox) return;   // the pipe caller is told the chat is running (ContinueChatForPipeAsync)
             if (input.Length > 0) SendIntoRunningReply(input);
-            if (images > 0) StatusText = Loc("chat.attach.waitForReply");
+            if (images + files > 0) StatusText = Loc("chat.attach.waitForReply");
             return;
         }
 
@@ -3040,11 +3126,16 @@ public partial class ChatViewModel : ViewModelBase
         if (input.Equals("/login", StringComparison.OrdinalIgnoreCase))
         {
             ClearBox();
-            bool opened = Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
+            // The CLI of the provider answering this chat: Gemini Dev signs in with Google, everything else is Claude Code.
+            bool gemini = _providerManager.ActiveProviderType == AiProviderType.GeminiDev;
+            bool opened = gemini
+                ? _providerManager.GetProvider(AiProviderType.GeminiDev) is Services.Providers.GeminiDevProvider gd && gd.OpenLoginTerminal()
+                : Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
             Messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,
-                Content = opened ? "🔑 " + Loc("chat.login.opened") : "⚠ " + Loc("chat.login.failed"),
+                Content = opened ? "🔑 " + Loc(gemini ? "chat.login.geminiOpened" : "chat.login.opened")
+                                 : "⚠ " + Loc(gemini ? "chat.login.geminiFailed" : "chat.login.failed"),
             });
             ScrollToBottom?.Invoke();
             return;
@@ -3095,8 +3186,9 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         // Batch switch on: a plain question goes out at half price and its answer arrives later (no tools).
-        // Skills stay live — they are instructions for the agent loop.
-        if (fromBox && BatchMode && activeSkill == null && CurrentSession != null)
+        // Skills stay live — they are instructions for the agent loop. A message with attachments goes the normal way:
+        // a batch request carries text only, and the files would be dropped without a word.
+        if (fromBox && BatchMode && activeSkill == null && CurrentSession != null && images + files == 0)
         {
             await SendAsBatchAsync(input);
             return;
@@ -3104,12 +3196,19 @@ public partial class ChatViewModel : ViewModelBase
 
         _pet?.NoteMessage(input);
         _pet?.NoteTurnStarted();
-        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input, AttachedImages = fromBox ? PendingImages.ToList() : new() };
-        if (fromBox) PendingImages.Clear();
+        var userMsg = new ChatMessage
+        {
+            Role = MessageRole.User, Content = input,
+            AttachedImages = fromBox ? PendingImages.ToList() : new(),
+            AttachedFiles = fromBox ? PendingFiles.ToList() : new(),
+        };
+        if (fromBox) { PendingImages.Clear(); PendingFiles.Clear(); }
         Messages.Add(userMsg);
         ClearBox();
-        // Only pictures: the model still needs a line of text with them.
-        string modelInput = input.Length > 0 ? input : "Look at the attached image(s).";
+        // Only attachments: the model still needs a line of text with them.
+        string modelInput = input.Length > 0 ? input
+            : images > 0 && files == 0 ? "Look at the attached image(s)."
+            : "Look at the attached file(s).";
         await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe);
     }
 
@@ -3216,8 +3315,6 @@ public partial class ChatViewModel : ViewModelBase
             pipe.Run = pipeRun;
             pipe.UserMessage = userMsg;
         }
-        if (userMsg.HasAttachedImages && AgentRunScope.Current is { } imageScope)
-            imageScope.UserImages = await LoadAttachedImagesAsync(userMsg.AttachedImages);
         var session = CurrentSession;
 
         // ─── Session resume: persist transcript BEFORE API call ───
@@ -3241,14 +3338,40 @@ public partial class ChatViewModel : ViewModelBase
         // so with no project it is always false.
         bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
         // Attached images reach a model only through the native tool loop (the plain chat path is text-only); a
-        // provider without it gets their file paths in words.
+        // provider without it gets their file paths in words. Attached files go through the loop too — it has
+        // read_document / copy_file / extract_archive even with no project open.
         bool nativeProvider = _providerManager.ActiveProvider.SupportsNativeToolUse;
-        bool imagesNeedLoop = userMsg.HasAttachedImages && nativeProvider;
-        if (userMsg.HasAttachedImages && !nativeProvider)
+        bool cliProvider = _providerManager.ActiveProvider is Services.Providers.IDelegatedCliProvider;
+        bool hasAttachments = userMsg.HasAttachedImages || userMsg.HasAttachedFiles;
+        bool imagesNeedLoop = hasAttachments && nativeProvider;
+        if (userMsg.HasAttachedImages && !nativeProvider && !cliProvider)
             input += "\n\n" + CodeAgentService.AttachedImagesNote(userMsg.AttachedImages);
+        // Every attachment's path, a document's text, an archive unpacked — shaped for what this provider can do.
+        bool attachmentsCancelled = false;
+        if (hasAttachments)
+        {
+            try
+            {
+                var digest = await BuildAttachmentDigestAsync(userMsg, nativeProvider, ct);
+                input += digest.Text;
+                if (AgentRunScope.Current is { } attachScope)
+                {
+                    attachScope.AttachmentFolders = digest.Folders.ToList();
+                    if (nativeProvider)
+                    {
+                        // The pictures, plus the pages of a scanned PDF for a model that sees.
+                        var pictures = userMsg.AttachedImages.Concat(digest.ExtraImages).ToList();
+                        if (pictures.Count > 0) attachScope.UserImages = await LoadAttachedImagesAsync(pictures);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { attachmentsCancelled = true; }
+        }
         Func<List<ChatMessage>, CancellationToken, Task> run;
         bool withTools = true;
-        if (isSkill && HasProject)                                            // skills always run in agentic mode
+        if (attachmentsCancelled)                                             // Stop while the files were being read
+            run = (h, c) => Task.FromException(new OperationCanceledException(c));
+        else if (isSkill && HasProject)                                       // skills always run in agentic mode
             run = (h, c) => RunAgentic(input, h, c);
         else if (AutonomousMode && HasProject && _autonomousService != null)
             run = (h, c) => RunAutonomous(input, h, c);
@@ -4038,6 +4161,15 @@ public partial class ChatViewModel : ViewModelBase
         m.Role == MessageRole.ToolAction && m.ToolSuccess && !m.HasDiff && m.ThumbnailPath == null
         && (m.IsCollapsedGroup || m.ToolKind != null && Groupable(GetToolCategory(m.ToolKind)));
 
+    private static readonly HashSet<string> FileEditTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "multi_edit", "write_file" };
+
+    /// <summary>A successful edit row of the same file that the next edit to that file folds into.</summary>
+    internal static bool FoldsEditInto(ChatMessage row, string toolName, string? target) =>
+        row.Role == MessageRole.ToolAction && row.ToolSuccess && row.HasDiff && !row.IsCollapsedGroup
+        && row.ToolKind != null && FileEditTools.Contains(row.ToolKind) && FileEditTools.Contains(toolName)
+        && !string.IsNullOrEmpty(target)
+        && (row.EditCount > 1 ? row.ToolTarget == $"{target} ×{row.EditCount}" : row.ToolTarget == target);
+
     /// <summary>"mcp__brainx-brain__task_update" → "brainx-brain/task_update" for a group row's list.</summary>
     private static string ShortToolName(string toolName) =>
         toolName.StartsWith("mcp__", StringComparison.Ordinal) && toolName.Split("__") is { Length: >= 3 } p
@@ -4201,6 +4333,17 @@ public partial class ChatViewModel : ViewModelBase
                 lastMsg.ToolName = LocF("chat.tools.groupName", 2);
                 lastMsg.ToolOutput = CapGroupOutput((lastMsg.ToolOutput ?? "") + "\n---\n" + (toolResult.Output ?? ""));
                 lastMsg.ToolOutputLines += outputLines;
+                ScrollToBottom?.Invoke();
+                return;
+            }
+
+            // Edits to one file in a row are one row (owner 2026-10-18: "ทำไมมันเยอะจังกล่องการแก้ไข ไม่ได้รวมไว้เหรอ"):
+            // the +/− add up and its diff shows each change in turn. Another file, a failure or a line between them starts a new row.
+            string? editTarget = ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory);
+            if (lastMsg != null && toolResult.Success && toolResult.Diff is { Lines.Count: > 0 } editDiff
+                && FoldsEditInto(lastMsg, toolResult.ToolName, editTarget))
+            {
+                lastMsg.AppendEdit(editDiff, toolElapsed, toolResult.Output, outputLines, editTarget);
                 ScrollToBottom?.Invoke();
                 return;
             }

@@ -512,8 +512,9 @@ public partial class ChatView : UserControl
         {
             if (Clipboard.ContainsFileDropList())
             {
-                var files = Clipboard.GetFileDropList().Cast<string>().Where(ChatViewModel.LooksLikeImageFile).ToList();
-                if (files.Count > 0) { vm.AttachImageFiles(files); return true; }
+                // Files copied in Explorer — pictures and any other file (PDF, zip, Office, code…).
+                var files = Clipboard.GetFileDropList().Cast<string>().ToList();
+                if (files.Count > 0) { _ = vm.AttachFilesAsync(files); return true; }
             }
             if (Clipboard.ContainsData("PNG") && Clipboard.GetData("PNG") is System.IO.MemoryStream png)
             {
@@ -535,24 +536,26 @@ public partial class ChatView : UserControl
         return false;
     }
 
-    private static string[] DroppedImageFiles(DragEventArgs e) =>
+    /// <summary>Every file (and folder — refused later, with a hint) dragged in from Explorer: pictures become image
+    /// attachments, anything else a file the AI can read, unpack or copy.</summary>
+    private static string[] DroppedFiles(DragEventArgs e) =>
         e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] files
-            ? files.Where(ChatViewModel.LooksLikeImageFile).ToArray()
+            ? files
             : Array.Empty<string>();
 
-    /// <summary>Image files dragged over the composer (Preview: the text box would refuse a file drop).</summary>
+    /// <summary>Files dragged over the composer (Preview: the text box would refuse a file drop).</summary>
     private void Composer_PreviewDragOver(object sender, DragEventArgs e)
     {
-        if (DroppedImageFiles(e).Length == 0) return;
+        if (DroppedFiles(e).Length == 0) return;
         e.Effects = DragDropEffects.Copy;
         e.Handled = true;
     }
 
     private void Composer_PreviewDrop(object sender, DragEventArgs e)
     {
-        var files = DroppedImageFiles(e);
+        var files = DroppedFiles(e);
         if (files.Length == 0 || DataContext is not ChatViewModel vm) return;
-        vm.AttachImageFiles(files);
+        _ = vm.AttachFilesAsync(files);
         e.Handled = true;
         InputBox.Focus();
     }
@@ -568,6 +571,28 @@ public partial class ChatView : UserControl
         };
         if (dlg.ShowDialog(Window.GetWindow(this)) == true) vm.AttachImageFiles(dlg.FileNames);
         InputBox.Focus();
+    }
+
+    /// <summary>"+" › Attach file…: pick any files (PDF, zip, Word, Excel, code, pictures…).</summary>
+    private void AttachFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ChatViewModel vm) return;
+        var dlg = new Microsoft.Win32.OpenFileDialog { Multiselect = true, Filter = "*.*|*.*" };
+        if (dlg.ShowDialog(Window.GetWindow(this)) == true) _ = vm.AttachFilesAsync(dlg.FileNames);
+        InputBox.Focus();
+    }
+
+    /// <summary>A file chip in a sent message: shows the attached copy selected in Explorer. Never opens or runs the
+    /// file itself (an attached zip may hold anything).</summary>
+    private void AttachedFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string path }) return;
+        try
+        {
+            if (!System.IO.Path.IsPathFullyQualified(path) || !System.IO.File.Exists(path)) return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = false })?.Dispose();
+        }
+        catch { /* Explorer could not be started — nothing else to do */ }
     }
 
     // ─── Tool-row thumbnail → the full image ───
@@ -595,6 +620,37 @@ public partial class ChatView : UserControl
                 vm.SendMessageCommand.Execute(null);
         }
     }
+}
+
+/// <summary>An attachment chip's label: the file's name without its folder.</summary>
+public sealed class FileNameOfConverter : System.Windows.Data.IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => value is string p ? System.IO.Path.GetFileName(p) : "";
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>An attachment chip's icon (Segoe MDL2 Assets) from the file's extension.</summary>
+public sealed class FileGlyphConverter : System.Windows.Data.IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+    {
+        string ext = value is string p ? System.IO.Path.GetExtension(p).ToLowerInvariant() : "";
+        return ext switch
+        {
+            ".zip" or ".tar" or ".gz" or ".tgz" or ".7z" or ".rar" => "\uF012",       // ZipFolder
+            ".pdf" => "\uEA90",                                                        // PDF
+            ".xlsx" or ".xlsm" or ".xls" or ".csv" or ".tsv" => "\uE80A",              // grid
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".bmp" => "\uEB9F",     // picture
+            ".docx" or ".doc" or ".txt" or ".md" or ".rtf" => "\uE8A5",               // document
+            _ => "\uE7C3",                                                             // page
+        };
+    }
+
+    public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
 }
 
 /// <summary>

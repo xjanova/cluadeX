@@ -10,7 +10,10 @@
             </ResourceDictionary.MergedDictionaries>
             <DataTemplate x:Key="LinkTemplate">
                 <DockPanel Margin="0,0,0,4">
-                    <TextBlock DockPanel.Dock="Right" Text="{Binding Kind}" FontSize="10" Foreground="{DynamicResource Text.Faint}" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="6,0,0,0" VerticalAlignment="Center">
+                        <Rectangle Width="12" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="{Binding Color}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding Kind}" FontSize="10" Foreground="{Binding Color}" VerticalAlignment="Center"/>
+                    </StackPanel>
                     <Button Style="{StaticResource StudioLinkBtn}" Content="{Binding Label}" FontFamily="{DynamicResource Font.Mono}"
                             Command="{Binding DataContext.GoToLinkCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"/>
                 </DockPanel>
@@ -85,6 +88,15 @@
                         <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#7C5CFF" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.component}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                         <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#22D3EE" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.script}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                         <Rectangle Width="10" Height="10" RadiusX="2" RadiusY="2" Fill="#F472B6" Margin="0,0,5,0"/><TextBlock Text="{services:Loc graph.kind.style}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Border Width="1" Background="{DynamicResource Border.Subtle}" Margin="0,1,12,1"/>
+                        <!-- wire colours: the canvas draws each kind of connection in its colour (NodeGraphCanvas.EdgeColors) -->
+                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#38BDF8" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.imports}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#A78BFA" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.renders}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#FBBF24" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.loads}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#A3E635" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.links}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Visibility="{Binding IsLive, Converter={StaticResource BoolVis}}">
+                        <Rectangle Width="16" Height="3" RadiusX="1.5" RadiusY="1.5" Fill="#2DD4BF" Margin="0,0,5,0" VerticalAlignment="Center"/><TextBlock Text="{services:Loc graph.edge.contains}" FontSize="11" Foreground="{DynamicResource Text.Secondary}" Margin="0,0,12,0"/>
                     </StackPanel>
                     <TextBlock Text="{services:Loc graph.hint}" FontSize="11" Foreground="{DynamicResource Text.Faint}"/>
                 </StackPanel>

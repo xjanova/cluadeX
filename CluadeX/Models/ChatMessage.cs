@@ -186,6 +186,12 @@ public class ChatMessage : INotifyPropertyChanged
     public List<string> AttachedImages { get; set; } = new();
     public bool HasAttachedImages => AttachedImages.Count > 0;
 
+    /// <summary>Other files the user attached (PDF, zip, Office, text, code…) — copies under attachments\, each in its own
+    /// folder with its own name. Shown as chips in the bubble; their paths and content go to the model with the message
+    /// (AttachmentDigest). Stored with the chat like the images.</summary>
+    public List<string> AttachedFiles { get; set; } = new();
+    public bool HasAttachedFiles => AttachedFiles.Count > 0;
+
     /// <summary>How many images the tool returned (the row shows the first).</summary>
     public int ImageCount { get; set; }
 
@@ -297,6 +303,50 @@ public class ChatMessage : INotifyPropertyChanged
         if (GroupSteps.Count == 1) OnPropertyChanged(nameof(HasGroupSteps));
     }
 
+    /// <summary>How many edits this row holds (1 for a plain edit row; more once later edits to the same file folded in).</summary>
+    public int EditCount { get; set; } = 1;
+
+    /// <summary>The diff lines one row keeps: a long run of edits to one file stops growing the row's diff here
+    /// (the +/− counts stay exact).</summary>
+    public const int MaxFoldedDiffLines = 1500;
+
+    /// <summary>A later edit to the same file folds into this row: the +/− add up, its diff follows the earlier ones after
+    /// a separator, the times add up and its output follows. Raises change for everything the row shows.</summary>
+    public void AppendEdit(EditDiffResult diff, string? elapsed, string? output, int outputLines, string? target)
+    {
+        EditCount++;
+        DiffAdded += diff.Added;
+        DiffRemoved += diff.Removed;
+        var lines = new List<EditDiffLine>(DiffLines ?? new());
+        if (lines.Count < MaxFoldedDiffLines)
+        {
+            lines.Add(new EditDiffLine { Kind = EditDiffKind.Hunk, Text = $"── #{EditCount} ──" });
+            lines.AddRange(diff.Lines.Take(MaxFoldedDiffLines - lines.Count));
+        }
+        DiffLines = lines;
+        _diffPairs = null;
+        DiffStat = $"+{DiffAdded}  -{DiffRemoved}";
+        ToolElapsedTime = SumElapsed(ToolElapsedTime, elapsed);
+        ToolOutput = string.IsNullOrEmpty(ToolOutput) ? output : ToolOutput + "\n---\n" + output;
+        ToolOutputLines += outputLines;
+        ToolTarget = target == null ? ToolTarget : $"{target} ×{EditCount}";
+        foreach (var name in new[] { nameof(DiffAdded), nameof(DiffRemoved), nameof(DiffAddedText), nameof(DiffRemovedText),
+                     nameof(DiffLines), nameof(DiffPairs), nameof(HasDiff), nameof(DiffStat), nameof(ToolElapsedTime),
+                     nameof(ToolOutput), nameof(ToolOutputLines), nameof(EditCount) })
+            OnPropertyChanged(name);
+    }
+
+    /// <summary>"1.5s" + "1.7s" → "3.2s" (at or over 10 s without the decimal, like a single row). An unreadable one is dropped.</summary>
+    public static string? SumElapsed(string? a, string? b)
+    {
+        static double? Sec(string? s) => s != null && s.EndsWith('s')
+            && double.TryParse(s[..^1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : null;
+        double? x = Sec(a), y = Sec(b);
+        if (x == null && y == null) return a ?? b;
+        double sum = (x ?? 0) + (y ?? 0);
+        return sum < 10 ? sum.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + "s" : sum.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "s";
+    }
+
     // ─── ask_user question ───
     public List<string> QuestionOptions { get; set; } = new();
     /// <summary>Resolves the agent's waiting ask_user with the answer (null on a row read back from the database).</summary>
@@ -350,6 +400,19 @@ public class ChatMessage : INotifyPropertyChanged
 
     /// <summary>The prompt is the red dangerous-action kind.</summary>
     public bool IsPermissionDanger => !string.IsNullOrEmpty(PermissionDanger);
+
+    /// <summary>The request in people's words (what, where, the result, the risk, the dangerous parts) with the real
+    /// command for the folded technical details. Null = only <see cref="Content"/> (the old one-line prompt).</summary>
+    public Services.Safety.PlainPermission? PermissionPlain { get; set; }
+
+    public bool HasPermissionPlain => PermissionPlain != null;
+    /// <summary>The prompt's bold first line: the plain headline, or the old one-line prompt.</summary>
+    public string PermissionHeadlineText => PermissionPlain?.Headline ?? Content;
+    public bool HasPermissionNote => PermissionPlain is { Note.Length: > 0 };
+    public bool HasPermissionWarnings => PermissionPlain is { Warnings.Count: > 0 };
+
+    /// <summary>"Low" / "Medium" / "High" / "Danger" — what the risk chip's colour keys on.</summary>
+    public string PermissionRiskLevel => PermissionPlain?.Risk.ToString() ?? "";
 
     /// <summary>It was answered with "Allow in this chat" (the outcome label says so).</summary>
     public bool PermissionAllowedForChat { get; private set; }

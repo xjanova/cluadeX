@@ -138,6 +138,13 @@ def g_mcp(d, c):
     stroke(d, [(16, 22), (16, 27)], 2.6)
 
 
+def g_setup(d, c):
+    # An arrow coming down into an open tray: getting what is missing onto this PC (the setup page).
+    stroke(d, [(16, 5.5), (16, 17.5)], 3.0)
+    d.polygon([p(10, 13.2), p(22, 13.2), p(16, 20.6)], fill=WHITE)
+    stroke(d, [(6.5, 18.5), (6.5, 25), (25.5, 25), (25.5, 18.5)], 2.8)
+
+
 def g_tasks(d, c):
     # A clipboard with a big tick.
     d.rounded_rectangle(box(7.5, 7, 24.5, 27), radius=3.2 * U, fill=WHITE)
@@ -202,6 +209,7 @@ ICONS = {
     "models":      (g_models,      "#FFA3DA", "#C9449E", "#D456A9", "#6E1C55"),
     "timemachine": (g_timemachine, "#FFC896", "#E07A62", "#E78A6C", "#7A3426"),
     "mcp":         (g_mcp,         "#8EEAD9", "#24A39C", "#2FB0A8", "#0E5754"),
+    "setup":       (g_setup,       "#FFB98A", "#E8642C", "#EC7240", "#7A2A0C"),
     "tasks":       (g_tasks,       "#A9EFAE", "#38B276", "#41BA7E", "#145C38"),
     "watch":       (g_watch,       "#FFA0AE", "#DE4A6C", "#E35A78", "#78192F"),
     "uistudio":    (g_uistudio,    "#FFDF8E", "#E9A335", "#EDAA40", "#7A4E0C"),

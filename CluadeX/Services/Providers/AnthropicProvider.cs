@@ -212,6 +212,21 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         return p;
     }
 
+    /// <summary>Tell the chat what this request really carries: the model, and the effort in force — the last effort-only
+    /// system message when there is one (it applies from there on), else the top-level field (null = the model's default).</summary>
+    private static void ReportSent(Dictionary<string, object> requestObj, string model)
+    {
+        string? effort = requestObj.TryGetValue("output_config", out var oc) && oc is Dictionary<string, object> d
+                         && d.TryGetValue("effort", out var e) ? e as string : null;
+        if (requestObj.TryGetValue("messages", out var msgs) && msgs is List<Dictionary<string, object>> list)
+            for (int i = list.Count - 1; i >= 0; i--)
+                if (list[i].TryGetValue("role", out var r) && r as string == "system"
+                    && list[i].TryGetValue("output_config", out var moc) && moc is Dictionary<string, object> md
+                    && md.TryGetValue("effort", out var me) && me is string step)
+                { effort = step; break; }
+        LiveModelReport.Sent(Models.AiProviderType.Anthropic, model, effort, Traits(model).EffortSupport > 0);
+    }
+
     private static void SetEffort(Dictionary<string, object> requestObj, string? effort)
     {
         if (effort != null) requestObj["output_config"] = new Dictionary<string, object> { ["effort"] = effort };
@@ -550,6 +565,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         };
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
+        ReportSent(requestObj, model);
 
         if (!string.IsNullOrWhiteSpace(systemPrompt))
             requestObj["system"] = BuildSystem(systemPrompt, settings);
@@ -638,6 +654,8 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                     }
                     else if (type == "message_start" && root.TryGetProperty("message", out var msgStart))
                     {
+                        if (msgStart.TryGetProperty("model", out var served) && served.ValueKind == JsonValueKind.String)
+                            LiveModelReport.Served(Models.AiProviderType.Anthropic, served.GetString());
                         // Record input token usage from message_start event
                         if (msgStart.TryGetProperty("usage", out var startUsage))
                         {
@@ -849,6 +867,7 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
         };
 
         bool thinking = ApplyThinkingAndSampling(requestObj, model, settings);
+        ReportSent(requestObj, model);
 
         if (!string.IsNullOrWhiteSpace(requestSystem))
             requestObj["system"] = BuildSystem(requestSystem, settings, hour: true);
@@ -950,6 +969,9 @@ public partial class AnthropicProvider : ApiProviderBase, IModelLister
                 switch (evt)
                 {
                     case "message_start":
+                        if (root.TryGetProperty("message", out var servedMsg) && servedMsg.TryGetProperty("model", out var served)
+                            && served.ValueKind == JsonValueKind.String)
+                            LiveModelReport.Served(Models.AiProviderType.Anthropic, served.GetString());
                         if (root.TryGetProperty("message", out var msgStart)
                             && msgStart.TryGetProperty("usage", out var startUsage))
                         {

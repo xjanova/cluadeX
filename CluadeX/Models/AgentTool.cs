@@ -156,6 +156,11 @@ public enum ToolType
     // Chats (Services/Tools/ProjectToolModule) — appended last: a ToolType is stored by number
     NewChat,           // Open a new chat (optionally in another project) and start a task there
     CloseChat,         // List this chat's split chats, or put the finished ones away
+
+    // Attached files (Services/Tools/AttachmentToolModule) — appended last: a ToolType is stored by number
+    ReadDocument,      // Text of a PDF / Word / Excel / PowerPoint / text file, a slice at a time
+    ExtractArchive,    // Unpack a zip / tar / tar.gz / gz safely
+    CopyFile,          // Copy a file or folder (an attachment) into the project
 }
 
 /// <summary>
@@ -255,6 +260,9 @@ public class PermissionRequestInfo
     public string ToolName { get; set; } = string.Empty;
     /// <summary>Human-readable description of what is being requested (e.g. "write: src/foo.cs").</summary>
     public string Detail { get; set; } = string.Empty;
+    /// <summary>The call's real arguments (command, path, url…) — what the prompt's plain-language explanation is read
+    /// from (Safety.PermissionExplainer). Null = only <see cref="Detail"/> is known (the guard hook's pipe).</summary>
+    public Dictionary<string, string>? Args { get; set; }
     /// <summary>Preview of the file change to be applied, shown before the user approves. Null = no preview.</summary>
     public EditDiffResult? Diff { get; set; }
     /// <summary>Asked every time on purpose — the user's own "Ask" rule, or code run in their browser. A chat set to

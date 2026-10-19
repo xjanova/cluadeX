@@ -301,7 +301,10 @@ internal static class Program
         {
             int seen = Interceptor.Seen.Count;
             var r = await T("run_command", ("command", "rm -rf ~ ; fake-serve"));
-            Check("I3", "the dangerous-command check runs BEFORE any interceptor", !r.Success && Seen(r).Contains("blocked for safety") && Interceptor.Seen.Count == seen, Seen(r));
+            // Since 2026-10-18 a delete is judged by its target on the red prompt (not by the block list): either way it must
+            // be stopped BEFORE an interceptor could start it in the background, where no prompt would ever ask.
+            Check("I3", "a delete of the home folder is stopped (block list or red prompt) BEFORE any interceptor",
+                !r.Success && (Seen(r).Contains("blocked for safety") || Seen(r).Contains("did not approve")) && Interceptor.Seen.Count == seen, Seen(r));
         });
         await Case("I4", async () =>
         {
@@ -456,6 +459,59 @@ internal static class Program
             Check("S1", "a module's section is in the prompt when its tools are offered", prompt.Contains("FAKE-MODULE-SECTION"), Trunc(prompt, 300));
             Check("S1b", "a provider's section is in when it owns an offered tool (bridged chrome__), not when it owns none", prompt.Contains("FAKE-CHROME-SECTION") && !prompt.Contains("ABSENT-SECTION"));
             return Task.CompletedTask;
+        });
+        // AI comments (Code Editor toolbar): the system prompt both tool loops, plain chat, Studio and the editor's docked
+        // chat send — the real GetSystemPrompt / GetSystemPromptAsync. Wire-level proof per provider: apitest CommentPolicyWire.
+        await Case("C1", async () =>
+        {
+            var agent = provider.GetRequiredService<CodeAgentService>();
+            var st = settings.Settings;
+            string oldLevel = st.CodeCommentLevel, oldLang = st.CodeCommentLanguage;
+            var oldProjects = st.CodeCommentProjects;
+            try
+            {
+                st.CodeCommentLevel = "none"; st.CodeCommentLanguage = "match"; st.CodeCommentProjects = new();
+                string off = agent.GetSystemPrompt();
+                Check("C1", "level none: no '# Code comments' section (the prompt from before the option)", !off.Contains("# Code comments"));
+
+                bool all = true; string bad = "";
+                foreach (var level in new[] { "key", "detailed" })
+                    foreach (var lang in new[] { "th", "en", "match" })
+                    {
+                        st.CodeCommentLevel = level; st.CodeCommentLanguage = lang;
+                        string p = agent.GetSystemPrompt();
+                        string want = CodeCommentPolicy.Build(level, lang);
+                        int at = p.IndexOf(want, StringComparison.Ordinal);
+                        int env = p.IndexOf("# Environment", StringComparison.Ordinal);
+                        // Ahead of the environment/project tail: the local fit-guard trims the tail, never this.
+                        if (at < 0 || (env >= 0 && at > env) || p.Replace("\n\n" + want, "") != off)
+                        { all = false; bad += $" {level}/{lang}"; }
+                    }
+                Check("C1b", "every level × language: exactly its instruction, ahead of # Environment; the rest of the prompt unchanged", all, bad);
+
+                string project = fs.WorkingDirectory;
+                st.CodeCommentLevel = "key"; st.CodeCommentLanguage = "th";
+                st.CodeCommentProjects = new() { [CodeCommentPolicy.ProjectKey(project)] = new CodeCommentSetting { Level = "detailed", Language = "en" } };
+                string own = agent.GetSystemPrompt();
+                Check("C1c", "this project's own choice wins over the global one",
+                    own.Contains(CodeCommentPolicy.Build("detailed", "en")) && !own.Contains(CodeCommentPolicy.Build("key", "th")));
+
+                // The 30 s prompt cache must not hide a change the user just made.
+                st.CodeCommentProjects = new();
+                st.CodeCommentLevel = "key"; st.CodeCommentLanguage = "en";
+                string a1 = await agent.GetSystemPromptAsync();
+                st.CodeCommentLevel = "detailed";
+                string a2 = await agent.GetSystemPromptAsync();
+                string a3 = await agent.GetSystemPromptAsync();
+                Check("C1d", "GetSystemPromptAsync: a changed setting is in the very next prompt (cache keyed on it); unchanged = same prompt",
+                    a1.Contains(CodeCommentPolicy.Build("key", "en")) && a2.Contains(CodeCommentPolicy.Build("detailed", "en"))
+                    && ReferenceEquals(a2, a3));
+            }
+            finally
+            {
+                st.CodeCommentLevel = oldLevel; st.CodeCommentLanguage = oldLang; st.CodeCommentProjects = oldProjects;
+                agent.InvalidateSystemPromptCache();
+            }
         });
         await Case("S2", () =>
         {

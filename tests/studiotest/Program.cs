@@ -181,6 +181,7 @@ internal static partial class Program
             SampleDatas(temp);
             SampleOverrides(temp);
             WpfViews(temp);
+            LiveSync();
         }
         catch (Exception ex) { Fail++; Console.WriteLine("FATAL " + ex); }
         finally { try { Directory.Delete(temp, true); } catch { } }

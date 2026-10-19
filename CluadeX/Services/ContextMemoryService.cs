@@ -163,6 +163,9 @@ public class ContextMemoryService
                 return ContextWindowFor(AiProviderType.Anthropic, model, localContextSize);
             }
 
+            case AiProviderType.GeminiDev:
+                return 1_048_576;   // the Gemini CLI's models (Gemini 3.x / 4) all have a 1M window
+
             case AiProviderType.BrainX:
                 return 200_000;   // the room's agents run the Claude Code CLI's standard window
 

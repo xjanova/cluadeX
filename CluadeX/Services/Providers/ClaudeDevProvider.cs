@@ -32,7 +32,7 @@ namespace CluadeX.Services.Providers;
 ///   fresh CLI session; `--continue` was rejected because it binds to "the last session
 ///   in this cwd", which the user's own terminal sessions would silently hijack.
 /// </summary>
-public class ClaudeDevProvider : IAiProvider
+public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
 {
     private readonly SettingsService _settingsService;
     private readonly FileSystemService _fileSystemService;
@@ -110,6 +110,21 @@ public class ClaudeDevProvider : IAiProvider
     /// <summary>The extras for the turn in flight (set by the agent loop around its one delegated call).</summary>
     public static readonly AsyncLocal<TurnExtras?> Extras = new();
 
+    /// <summary>The --add-dir folders of the turn in flight: the extras', then the folders holding the files the user
+    /// attached to this message (AgentRunScope.AttachmentFolders) — so the CLI's own Read opens "hero.png" or the unpacked
+    /// zip, in a plain chat as in an agent turn.</summary>
+    public static IReadOnlyList<string> TurnAddDirs(TurnExtras? extras)
+    {
+        var dirs = (extras?.AddDirs ?? Array.Empty<string>()).ToList();
+        foreach (var d in AgentRunScope.Current?.AttachmentFolders ?? Array.Empty<string>())
+        {
+            if (dirs.Count >= MaxAddDirs + 4) break;
+            if (!string.IsNullOrWhiteSpace(d) && Directory.Exists(d) && !dirs.Any(x => x.Equals(d, StringComparison.OrdinalIgnoreCase)))
+                dirs.Add(d);
+        }
+        return dirs;
+    }
+
     /// <summary>
     /// The folders a turn gets with --add-dir: the related folders open beside the project in this chat, then the folders
     /// the user answered "Always allow" for — each once, none inside the project or inside one already added, none that
@@ -141,9 +156,12 @@ public class ClaudeDevProvider : IAiProvider
     }
 
     /// <summary>The arguments for one call: read-only advice, or a worker that edits/runs as the grant allows.
-    /// <paramref name="toolsConfig"/>: CluadeX's chat tools; <paramref name="addDirs"/>: allowed folders beside the project.</summary>
+    /// <paramref name="toolsConfig"/>: CluadeX's chat tools; <paramref name="addDirs"/>: allowed folders beside the project;
+    /// <paramref name="codeComments"/>: the user's AI-comment instruction (CodeCommentPolicy), "" / null for none.</summary>
+    /// <param name="allLevels">The CLI takes xhigh and max (2.1.200+ lists "low, medium, high, xhigh, max"); otherwise
+    /// they go out as high so an older CLI never rejects the flag.</param>
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
-        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null)
+        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -175,6 +193,9 @@ public class ClaudeDevProvider : IAiProvider
               "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
               folders + reach +
               "Reply in the language the user writes in.";
+        // One line: the CLI may be a .cmd shim, and cmd.exe ends an argument at a line break.
+        if (!string.IsNullOrWhiteSpace(codeComments))
+            wrapper += " " + string.Join(" ", codeComments.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
         string tools = AllowedTools + "," + AgentTools;
         if (chatTools) tools += "," + string.Join(",", Tools.ChatToolBridge.QualifiedToolNames);
@@ -201,6 +222,12 @@ public class ClaudeDevProvider : IAiProvider
             try { args.Append(" --settings ").Append(Quote(Safety.GuardHook.SettingsFile())); }
             catch { args.Append(" --disallowedTools ").Append(Quote("Bash,PowerShell")); }   // no guard → no shell
         }
+        else
+        {
+            // A plain chat carries only the Stop hook that reports the effort the turn really ran at (and its model).
+            try { args.Append(" --settings ").Append(Quote(Safety.GuardHook.ReportSettingsFile())); }
+            catch { /* no report: the chat shows the level that was sent */ }
+        }
         // "default"/"auto"/empty → NO --model flag. An explicit alias routed the call to
         // API-credit billing and died with "Credit balance is too low" on a machine whose
         // Claude login is subscription-based; the CLI's own default rides the subscription.
@@ -211,12 +238,56 @@ public class ClaudeDevProvider : IAiProvider
         // Claude Code takes low/medium/high (newer builds also max); xhigh/max round down to high so an
         // older CLI never rejects the flag. "auto" leaves the CLI on its own setting.
         if (effort != Models.EffortLevels.Auto)
-            args.Append(" --effort ").Append(effort is "xhigh" or "max" ? "high" : effort);
+            args.Append(" --effort ").Append(SentEffort(effort, allLevels));
         return args.ToString();
+    }
+
+    /// <summary>The --effort value a level goes out as: xhigh / max round down to high unless the CLI takes them.</summary>
+    public static string SentEffort(string effort, bool allLevels) => effort is "xhigh" or "max" && !allLevels ? "high" : effort;
+
+    /// <summary>The CLI's version as it reported it (init's claude_code_version, or `claude --version`). Null = unknown.</summary>
+    public static Version? ReportedCliVersion { get; private set; }
+
+    /// <summary>"2.1.296 (Claude Code)" / "2.1.296" → 2.1.296; anything else null.</summary>
+    public static Version? ParseCliVersion(string? text)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(text ?? "", @"(\d+)\.(\d+)\.(\d+)");
+        return m.Success ? new Version(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value)) : null;
+    }
+
+    /// <summary>xhigh and max are accepted by --effort from 2.1.200 on (2.1.296's help lists all five).</summary>
+    public static bool CliTakesAllLevels(Version? v) => v != null && v >= new Version(2, 1, 200);
+
+    /// <summary>
+    /// Effort "auto" on Claude Dev: CluadeX picks the level from the task (AutoEffortPolicy — the same reading as for the
+    /// API models) and sends it as --effort, so the level and the reason are known before the turn and the chat can show
+    /// them; the CLI's own hooks then report the level it really ran at. An explicit pick goes out as it is.
+    /// Returns (level to send, reason key or null).
+    /// </summary>
+    public static (string Effort, string? WhyKey) ResolveEffort(string setting, string userMessage, int images)
+    {
+        string s = Models.EffortLevels.Normalize(setting);
+        if (s != Models.EffortLevels.Auto) return (s, null);
+        var pick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage, images));
+        return (pick.Effort, pick.ReasonKey);
     }
 
     /// <summary>The model the CLI said it runs (its init line) — what "default" resolved to. Null before the first run.</summary>
     public static string? ReportedModel { get; private set; }
+
+    /// <summary>The CLI's init line said it picks the effort itself, turn by turn (per_turn_effort_active) — what "auto"
+    /// means on Claude Dev, which sends no --effort then. Null before the first run.</summary>
+    public static bool? ReportedPerTurnEffort { get; private set; }
+
+    /// <summary>What "auto" really runs at on Claude Dev, for the chat's effort display (owner 2026-10-18: "เมื่อเลือก claude
+    /// dev และเลือก effort auto ควรแสดงให้รู้ขณะใช้ว่า ใช้ effort ไหน"): a CLAUDE_EFFORT the CLI inherits from CluadeX
+    /// ("low" … "max"), else "per-turn" when the CLI said it picks per turn, else "cli-default". The CLI reports no level.</summary>
+    public static string CliAutoEffort()
+    {
+        string env = Environment.GetEnvironmentVariable("CLAUDE_EFFORT")?.Trim().ToLowerInvariant() ?? "";
+        if (Array.IndexOf(Models.EffortLevels.All, env) > 0) return env;
+        return ReportedPerTurnEffort == true ? "per-turn" : "cli-default";
+    }
 
     /// <summary>The context window the CLI reported for its last run (result.modelUsage.*.contextWindow). Null before one.</summary>
     public static int? ReportedContextWindow { get; private set; }
@@ -241,6 +312,18 @@ public class ClaudeDevProvider : IAiProvider
                 && root.TryGetProperty("model", out var im) && im.ValueKind == System.Text.Json.JsonValueKind.String
                 && im.GetString() is { Length: > 0 } initModel)
                 ReportedModel = initModel;
+            if (type == "system" && root.TryGetProperty("claude_code_version", out var cv) && cv.ValueKind == System.Text.Json.JsonValueKind.String
+                && ParseCliVersion(cv.GetString()) is { } cliVersion)
+                ReportedCliVersion = cliVersion;
+            // Each reply names the model that wrote it (a sub-agent's own model included — the main loop's is the last word).
+            if (type == "assistant" && root.TryGetProperty("message", out var am) && am.ValueKind == System.Text.Json.JsonValueKind.Object
+                && am.TryGetProperty("model", out var amModel) && amModel.ValueKind == System.Text.Json.JsonValueKind.String
+                && amModel.GetString() is { Length: > 0 } servedModel && servedModel.StartsWith("claude", StringComparison.OrdinalIgnoreCase)
+                && !(root.TryGetProperty("parent_tool_use_id", out var parent) && parent.ValueKind == System.Text.Json.JsonValueKind.String))
+                ReportedModel = servedModel;
+            if (type == "system" && root.TryGetProperty("subtype", out var st2) && st2.GetString() == "init"
+                && root.TryGetProperty("per_turn_effort_active", out var pt) && pt.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False)
+                ReportedPerTurnEffort = pt.ValueKind == System.Text.Json.JsonValueKind.True;
             if (type == "result" && root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == System.Text.Json.JsonValueKind.Object)
             {
                 int window = 0;
@@ -411,9 +494,39 @@ public class ClaudeDevProvider : IAiProvider
         var sink = worker ? StreamSink.Value : null;
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
-        string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
+        var effortScope = AgentRunScope.Current;
+        var (effort, whyKey) = ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, effortScope?.UserImages?.Count ?? 0);
+        if (effortScope != null) effortScope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;
         var extras = Extras.Value;
-        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, extras?.AddDirs);
+        if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
+        bool allLevels = CliTakesAllLevels(ReportedCliVersion);
+        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
+            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd));
+        // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.
+        string sentEffort = SentEffort(effort, allLevels);
+        if (effortScope != null) effortScope.LiveEffort = sentEffort;
+        string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : ReportedModel ?? "";
+        LiveModelReport.Sent(AiProviderType.ClaudeDev, shownModel, sentEffort, true);
+        // The run's hooks write the CLI's real effort (and model) here: CluadeX.exe --cx-effort / --cx-guard.
+        string effortReport = Path.Combine(Path.GetTempPath(), "cluadex-guard", "effort-" + Guid.NewGuid().ToString("N")[..12] + ".txt");
+        string lastReport = "";
+        void ReadEffortReport()
+        {
+            var (level, reportedModel) = Safety.GuardHook.ReadEffortReport(effortReport);
+            string key = level + "|" + reportedModel;
+            if (level == null || key == lastReport) return;
+            lastReport = key;
+            if (reportedModel != null) { ReportedModel = reportedModel; LiveModelReport.Served(AiProviderType.ClaudeDev, reportedModel); }
+            LiveModelReport.Reported(AiProviderType.ClaudeDev, level);
+            if (effortScope != null) effortScope.LiveEffort = level;
+        }
+        string? servedSeen = null;
+        void ReadServedModel()
+        {
+            if (ReportedModel == null || ReportedModel == servedSeen) return;
+            servedSeen = ReportedModel;
+            LiveModelReport.Served(AiProviderType.ClaudeDev, ReportedModel);
+        }
 
         var psi = new ProcessStartInfo(_cliPath, args)
         {
@@ -426,6 +539,8 @@ public class ClaudeDevProvider : IAiProvider
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
+        try { Directory.CreateDirectory(Path.GetDirectoryName(effortReport)!); psi.Environment[Safety.GuardHook.EffortReportEnv] = effortReport; }
+        catch { /* no report: the sent level stands */ }
 
         // No SetLoading here: "loading" drives the full-window "กำลังโหลดโมเดล" overlay, which then covered the chat for
         // the whole turn — a worker turn of half an hour hid every step it streamed (owner 2026-10-17). The chat's own
@@ -470,6 +585,8 @@ public class ClaudeDevProvider : IAiProvider
                 if (worker)
                 {
                     string? shown = RenderStreamLine(line, out bool failed, out string? result);
+                    ReadServedModel();
+                    ReadEffortReport();
                     // The structured events (rows, plan, steps) — the agent loop renders them. A UI handler that throws
                     // must not end a half-hour task.
                     try { sink?.Invoke(line); } catch { }
@@ -495,6 +612,8 @@ public class ClaudeDevProvider : IAiProvider
                 yield return line + "\n";
             }
             await proc.WaitForExitAsync(timeout.Token);
+            ReadServedModel();
+            ReadEffortReport();   // the Stop hook's word: the level this turn really ran at
 
             if (!any || proc.ExitCode != 0)
             {
@@ -522,12 +641,36 @@ public class ClaudeDevProvider : IAiProvider
         {
             try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
             proc?.Dispose();
+            try { File.Delete(effortReport); } catch { }
         }
+    }
+
+    private bool _versionProbed;
+
+    /// <summary>`claude --version` once, so the first --effort already knows whether xhigh / max may go out.</summary>
+    private async Task ProbeCliVersionAsync(CancellationToken ct)
+    {
+        if (_cliPath == null) return;
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo(_cliPath, "--version")
+            {
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
+            });
+            if (p == null) return;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(8));
+            string text = await p.StandardOutput.ReadToEndAsync(cts.Token);
+            await p.WaitForExitAsync(cts.Token);
+            if (ParseCliVersion(text) is { } v) ReportedCliVersion = v;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is not OperationCanceledException) { }
     }
 
     /// <summary>Newest-first token-budgeted replay, same shape as the local history
     /// fit: the CLI call is stateless, so the transcript IS its memory of the chat.</summary>
-    private static string BuildTranscript(List<ChatMessage> history)
+    internal static string BuildTranscript(List<ChatMessage> history)
     {
         const int budget = 6000; // tokens — the CLI's window is huge; this bounds latency, not fit
         var kept = new List<ChatMessage>();
@@ -584,6 +727,8 @@ public class ClaudeDevProvider : IAiProvider
 
     /// <summary>Open the login console with this provider's CLI.</summary>
     public bool OpenLoginTerminal() => OpenLoginTerminal(_cliPath);
+
+    public bool LooksLikeRefusal(string? text) => LooksLikeAuthRefusal(text);
 
     /// <summary>
     /// What to tell the user about a refusal, given `claude auth status` (null when it could not be read). Pure, so the

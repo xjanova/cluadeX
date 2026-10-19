@@ -457,6 +457,7 @@ public partial class CodeAgentService
     private string? _cachedPromptDir;
     // Her character comes from the active provider: Claude → Codex inside the 30 s window must not keep Claude's voice.
     private AiProviderType? _cachedPromptProvider;
+    private string? _cachedCommentPolicy;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -471,6 +472,7 @@ public partial class CodeAgentService
         bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
         string dirNow = _fileSystemService.WorkingDirectory ?? "";
         var providerNow = _providerManager.ActiveProviderType;
+        string commentsNow = CodeCommentPolicy.InstructionFor(_settingsService.Settings, dirNow);
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
         // thing. A reconnect or a death inside the window rebuilds the prompt now.
@@ -481,7 +483,8 @@ public partial class CodeAgentService
                 && _cachedNativeTools == nativeNow
                 && _cachedVision == visionNow
                 && _cachedPromptProvider == providerNow
-                && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_cachedCommentPolicy, commentsNow, StringComparison.Ordinal))
                 return _cachedSystemPrompt;
         }
 
@@ -495,6 +498,7 @@ public partial class CodeAgentService
             _cachedVision = visionNow;
             _cachedPromptDir = dirNow;
             _cachedPromptProvider = providerNow;
+            _cachedCommentPolicy = commentsNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
@@ -1179,14 +1183,20 @@ public partial class CodeAgentService
         return "";
     }
 
-    /// <summary>Can <paramref name="p"/>'s model see tool images right now (from what is already known)?</summary>
-    /// <summary>What a model that cannot see is told about the images the user attached.</summary>
+    /// <summary>What a model that cannot see is told about the images the user attached — with their paths, so it can
+    /// still use them (copy one into the project as the page's picture) without looking at them.</summary>
     public static string AttachedImagesNote(IEnumerable<string> paths)
     {
         var list = paths.ToList();
-        return $"[The user attached {list.Count} image(s), but this model cannot see images. Files: {string.Join(", ", list)}]";
+        return $"[The user attached {list.Count} image(s), but this model cannot see images. Files: {string.Join(", ", list)}"
+            + " — they can still be used by these paths, e.g. copied into the project.]";
     }
 
+    /// <summary>Can <paramref name="p"/>'s model see images right now (from what is already known)? The chat asks before
+    /// it decides how to hand over the user's attachments.</summary>
+    public bool SeesImages(Services.Providers.IAiProvider? p) => ProviderSeesImages(p);
+
+    /// <summary>Can <paramref name="p"/>'s model see tool images right now (from what is already known)?</summary>
     private bool ProviderSeesImages(Services.Providers.IAiProvider? p)
     {
         try { return p != null && p.SupportsToolResultImages(ModelIdFor(p)); }
@@ -1346,6 +1356,12 @@ public partial class CodeAgentService
     public string GetSystemPrompt()
     {
         var sb = new StringBuilder(BuildBaseSystemPrompt());
+
+        // ─── AI comments (Code Editor toolbar) ───
+        // Right after the base rules it overrides, and at the head so the local fit-guard (which trims the tail) keeps it.
+        // Empty unless the user picked a level; the text changes only when the setting does, so the prompt cache holds.
+        string commentPolicy = CodeCommentPolicy.InstructionFor(_settingsService.Settings, _fileSystemService.WorkingDirectory);
+        if (commentPolicy.Length > 0) sb.Append("\n\n").Append(commentPolicy);
 
         // ─── BRAIN-FIRST ───
         // Same standing rule Claude Code and Codex already run under: consult the
@@ -1968,7 +1984,7 @@ public partial class CodeAgentService
         // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
         // over one task. One call, its answer is the turn.
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX)
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.BrainX)
             return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
                 history, userMessage ?? "", ct, progress);
 
@@ -2020,7 +2036,8 @@ public partial class CodeAgentService
         List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
     {
         var result = await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
-        if (!result.AuthRefused || provider is not Providers.ClaudeDevProvider claudeDev) return result;
+        if (!result.AuthRefused || provider is not Providers.IDelegatedCliProvider claudeDev) return result;
+        string cliName = delegated == AiProviderType.GeminiDev ? "Gemini Dev" : "Claude Dev";
 
         bool th = _localizationService.CurrentLanguage == "th";
         bool loggedIn = await claudeDev.IsLoggedInAsync(ct);
@@ -2028,9 +2045,9 @@ public partial class CodeAgentService
         {
             if (!claudeDev.OpenLoginTerminal()) return result;
             OnAgentStatus?.Invoke(th
-                ? "🔑 Claude Dev หลุดล็อกอิน — เปิดหน้าล็อกอินให้แล้ว กด Authorize ในเบราว์เซอร์ แล้วฉันจะทำต่อเอง…"
-                : "🔑 Claude Dev was signed out — opened the sign-in; press Authorize in the browser and I'll carry on…");
-            _debugLog?.Info("Agent", "Claude Dev signed out · opened the sign-in, waiting for it");
+                ? $"🔑 {cliName} หลุดล็อกอิน — เปิดหน้าล็อกอินให้แล้ว ยืนยันบัญชีในเบราว์เซอร์ แล้วฉันจะทำต่อเอง…"
+                : $"🔑 {cliName} was signed out — opened the sign-in; confirm it in the browser and I'll carry on…");
+            _debugLog?.Info("Agent", $"{cliName} signed out · opened the sign-in, waiting for it");
             var until = DateTime.UtcNow + LoginWait;
             while (!loggedIn && DateTime.UtcNow < until)
             {
@@ -2039,12 +2056,12 @@ public partial class CodeAgentService
             }
             if (!loggedIn)
             {
-                _debugLog?.Info("Agent", "Claude Dev sign-in not finished in time · showing the steps");
+                _debugLog?.Info("Agent", $"{cliName} sign-in not finished in time · showing the steps");
                 return result;
             }
         }
         OnAgentStatus?.Invoke(th ? "✅ ล็อกอินแล้ว — กำลังส่งคำถามเดิมอีกครั้ง…" : "✅ Signed in — asking again…");
-        _debugLog?.Info("Agent", "Claude Dev signed in · running the turn again");
+        _debugLog?.Info("Agent", $"{cliName} signed in · running the turn again");
         return await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
     }
 
@@ -2063,30 +2080,35 @@ public partial class CodeAgentService
         }
         var sendHistory = brief != null ? new List<ChatMessage>() : history;
         string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage;
-        var grant = delegated == AiProviderType.ClaudeDev ? WorkerGrantFor(folder) : null;
+        // A CLI agent on this machine (Claude Dev, Gemini Dev): the edit/run grant, the guard, the chat tools, the rows.
+        bool cliAgent = delegated is AiProviderType.ClaudeDev or AiProviderType.GeminiDev;
+        var grant = cliAgent ? WorkerGrantFor(folder) : null;
         _debugLog?.Info("Agent", $"{delegated} passthrough · delegating the turn · folder={folder ?? "(none)"}"
             + $" · handoff={(brief != null ? brief.Length + " chars" : "no")}"
-            + (delegated == AiProviderType.ClaudeDev ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
+            + (cliAgent ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
         var cdResult = new AgentLoopResult { TurnCount = 1 };
         var cdText = new StringBuilder();
         // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
         var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
         // CluadeX's chat tools for the CLI (open_project / new_chat / close_chat, run here through the same gate inside
         // this chat's run) and the folders the user allowed beside the project.
-        using var chatTools = delegated == AiProviderType.ClaudeDev
+        using var chatTools = cliAgent
             ? Tools.ChatToolBridge.Register(AgentRunScope.Current, (call, c) => _agentToolService.ExecuteToolAsync(call, c), folder, ct)
             : null;
-        if (delegated == AiProviderType.ClaudeDev)
+        if (cliAgent)
         {
             var allowed = (AgentRunScope.Current?.ExtraFolders ?? Array.Empty<string>())
                 .Concat(_settingsService.Settings.AllowedProjectFolders ?? new List<string>());
             var dirs = folder == null ? new List<string>()
                 : Providers.ClaudeDevProvider.ExtraDirs(folder, allowed, Directory.Exists, p => PermissionService.IsUnsafeAcceptEditsRoot(p));
             Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs);
-            _debugLog?.Info("Agent", $"Claude Dev extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}");
+            _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}");
         }
         Providers.ClaudeDevProvider.Grant.Value = grant;
         Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
+        // The cowork room's agents work in the project too: the request tells them what the owner's rules allow (the same
+        // grant Claude Dev gets), instead of always "you may edit files there directly".
+        if (delegated == AiProviderType.BrainX) Providers.BrainXRoomProvider.Grant.Value = WorkerGrantFor(folder);
         try
         {
             await foreach (var chunk in provider.ChatAsync(sendHistory, sendMessage, null, ct))
@@ -2109,6 +2131,7 @@ public partial class CodeAgentService
             Providers.ClaudeDevProvider.Grant.Value = null;
             Providers.ClaudeDevProvider.StreamSink.Value = null;
             Providers.ClaudeDevProvider.Extras.Value = null;
+            Providers.BrainXRoomProvider.Grant.Value = null;
         }
         if (turn != null)
         {
@@ -2120,8 +2143,7 @@ public partial class CodeAgentService
             // /login" showed twice and the explanation never ran (it only runs when nothing was said). Say how to fix
             // it instead — owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย".
             string? authHelp = null;
-            if (turn.ResultIsError && Providers.ClaudeDevProvider.LooksLikeAuthRefusal(turn.ResultText)
-                && provider is Providers.ClaudeDevProvider claudeDev)
+            if (turn.ResultIsError && provider is Providers.IDelegatedCliProvider claudeDev && claudeDev.LooksLikeRefusal(turn.ResultText))
             {
                 try { authHelp = await claudeDev.ExplainAuthFailureAsync(turn.ResultText, ct); }
                 catch (OperationCanceledException) { throw; }
@@ -2151,7 +2173,7 @@ public partial class CodeAgentService
             return cdResult;
         }
         cdResult.FinalResponse = cdText.ToString().Trim();
-        cdResult.AuthRefused = provider is Providers.ClaudeDevProvider { LastTurnAuthRefused: true };
+        cdResult.AuthRefused = provider is Providers.IDelegatedCliProvider { LastTurnAuthRefused: true };
         cdResult.Success = cdResult.FinalResponse.Length > 0 && !cdResult.AuthRefused;
         cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
         cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
@@ -2216,7 +2238,7 @@ public partial class CodeAgentService
         if (result.StopReason != "error" || !IsQuotaExhausted(result.FinalResponse)) return result;
         NoteQuotaExhausted();   // sub-agents started from here on go to Claude Dev too
         if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX) return result;
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.BrainX) return result;
         var fallback = _providerManager.GetProvider(AiProviderType.ClaudeDev);
         try { await fallback.InitializeAsync(ct); } catch { }
         if (!fallback.IsReady)
@@ -2454,6 +2476,19 @@ public partial class CodeAgentService
     {
         var result = new AgentLoopResult();
         string systemPrompt = await GetSystemPromptAsync();
+
+        // Effort "auto" on an API model that fell back to the [ACTION:] protocol: the task's own level (no per-step climb
+        // here), so the request still carries a real pick instead of the model's default.
+        if (_providerManager.ActiveProviderType is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini
+            && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto
+            && AgentRunScope.Current is { } legacyScope)
+        {
+            var pick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage, legacyScope.UserImages?.Count ?? 0,
+                history.Sum(h => CluadeX.Helpers.TokenBudget.EstimateTokens(h.Content))));
+            legacyScope.EffortWhy = _localizationService.T("auto.why." + pick.ReasonKey);
+            legacyScope.StepEffort = pick.Effort;
+            legacyScope.LiveEffort = pick.Effort;
+        }
 
         // ─── Smart context enrichment (respects SmartEditing toggle) ───
         string enrichedMessage = userMessage;
@@ -3033,6 +3068,19 @@ public partial class CodeAgentService
         bool taskNonTrivial = LooksNonTrivialTask(userMessage ?? "");
         // A long, multi-part brief earns a careful first (planning) step.
         bool bigSpec = taskNonTrivial && (userMessage ?? "").Length >= 1500;
+        // Where "auto" starts: read from the task (a bug, a plan, several files, a long brief, a retry, a picture, a long
+        // chat), not from "is there a verb" — and the reason goes beside the level in the chat.
+        var autoPick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage,
+            AgentRunScope.Current?.UserImages?.Count ?? 0,
+            history.Sum(h => CluadeX.Helpers.TokenBudget.EstimateTokens(h.Content))));
+        int effortBase = autoPick.Level;
+        bool effortPlanFirst = autoPick.PlanFirst || bigSpec;
+        string effortWhyKey = autoPick.ReasonKey;
+        void SetEffortWhy(string key)
+        {
+            if (AgentRunScope.Current is { } s) s.EffortWhy = _localizationService.T("auto.why." + key);
+        }
+        if (smartEffortOn) SetEffortWhy(effortWhyKey);
         // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1): effort moves BOTH ways step by
         // step — effort-only system messages change it without resetting the cache, so the top-level value stays fixed for
         // the whole turn. Elsewhere the old rule stands: climb only, each climb re-writes the cache once.
@@ -3046,8 +3094,9 @@ public partial class CodeAgentService
         bool topLevelBothWays = smartEffortOn && !perMessageEffort
             && _providerManager.ActiveProviderType is AiProviderType.OpenAI or AiProviderType.Gemini;
         string? stepEffort = smartEffortOn
-            ? (perMessageEffort || topLevelBothWays ? StepEffortFor(taskNonTrivial, bigSpec, 0, false, false, 0, 0, false) : SmartEffort(taskNonTrivial, 0, 0, 0, 0, null))
+            ? (perMessageEffort || topLevelBothWays ? StepEffortFor(effortBase, effortPlanFirst, 0, false, false, 0, 0, false) : SmartEffort(effortBase, 0, 0, 0, 0, null))
             : null;
+        if (smartEffortOn) _debugLog?.Info("Agent", $"effort auto starts at {stepEffort} ({effortWhyKey})");
         string? appliedEffort = stepEffort;      // per-message mode: the level the conversation is at now
         int failedStepsInARow = 0;               // consecutive steps with a failed tool call (smart effort)
 
@@ -3336,8 +3385,11 @@ public partial class CodeAgentService
                 {
                     // Top-level effort stays at the turn's first pick (stepEffort, on the scope); this step's level goes out as
                     // an effort-only system message placed before the pending user turn (it applies from that turn on).
-                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    bool falseFinishNow = falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0;
+                    string want = StepEffortFor(effortBase, effortPlanFirst, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow);
+                    SetEffortWhy(EffortWhyFor(effortWhyKey, effortPlanFirst && iteration == 0, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0));
                     if (want != appliedEffort && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
                     {
                         nativeMessages.Insert(nativeMessages.Count - 1, new Services.Providers.NativeMessage { Role = "system", Effort = want });
@@ -3351,8 +3403,11 @@ public partial class CodeAgentService
                 }
                 else if (smartEffortOn && topLevelBothWays)
                 {
-                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    bool falseFinishNow = falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0;
+                    string want = StepEffortFor(effortBase, effortPlanFirst, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow);
+                    SetEffortWhy(EffortWhyFor(effortWhyKey, effortPlanFirst && iteration == 0, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0));
                     if (want != stepEffort)
                     {
                         _debugLog?.Info("Agent", $"step {iteration + 1}: effort {stepEffort} → {want} (per request; build red {lastBuildFailed}, "
@@ -3363,9 +3418,10 @@ public partial class CodeAgentService
                 }
                 else if (smartEffortOn)
                 {
-                    string next = SmartEffort(taskNonTrivial, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEditAttempts, stepEffort);
+                    string next = SmartEffort(effortBase, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEditAttempts, stepEffort);
                     if (next != stepEffort)
                     {
+                        SetEffortWhy(EffortWhyFor(effortWhyKey, false, false, redBuildGuards > 0, failedStepsInARow, falseFinishGuards > 0, failedEditAttempts));
                         _debugLog?.Info("Agent", $"step {iteration + 1}: effort auto {stepEffort} → {next} (red-build guards {redBuildGuards}, "
                             + $"failed steps in a row {failedStepsInARow}, failed edits {failedEditAttempts}, false finishes {falseFinishGuards})");
                         OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {next}" : $"This one is hard — raising effort to {next}");
@@ -4706,21 +4762,46 @@ public partial class CodeAgentService
     /// </summary>
     public static string StepEffortFor(bool nonTrivial, bool bigSpec, int iteration, bool wrapUp, bool buildRed,
         int redBuildGuards, int failedStepsInARow, bool falseFinish)
+        => StepEffortFor(nonTrivial ? 1 : 0, bigSpec, iteration, wrapUp, buildRed, redBuildGuards, failedStepsInARow, falseFinish);
+
+    /// <summary>Per-message smart effort from the task's own starting level (<see cref="AutoEffortPolicy.Pick"/>: 0 low …
+    /// 3 xhigh): a planning first step goes one level up (at least high), trouble climbs one or two levels above the
+    /// start, the wrap-up runs at low.</summary>
+    public static string StepEffortFor(int baseLevel, bool planFirst, int iteration, bool wrapUp, bool buildRed,
+        int redBuildGuards, int failedStepsInARow, bool falseFinish)
     {
         string[] ladder = ["low", "medium", "high", "xhigh"];
         if (wrapUp) return "low";
-        int level = nonTrivial ? 1 : 0;
-        if (iteration == 0 && bigSpec) level = 2;
-        if (buildRed && redBuildGuards >= 2 || failedStepsInARow >= 4) level = Math.Max(level, nonTrivial ? 3 : 2);
-        else if (buildRed || failedStepsInARow >= 2 || falseFinish) level = Math.Max(level, nonTrivial ? 2 : 1);
+        int start = Math.Clamp(baseLevel, 0, 3);
+        int level = start;
+        if (iteration == 0 && planFirst) level = Math.Max(level + 1, 2);
+        if (buildRed && redBuildGuards >= 2 || failedStepsInARow >= 4) level = Math.Max(level, start >= 1 ? start + 2 : 2);
+        else if (buildRed || failedStepsInARow >= 2 || falseFinish) level = Math.Max(level, start + 1);
         return ladder[Math.Min(level, ladder.Length - 1)];
+    }
+
+    /// <summary>Why "auto" is where it is now (a key under "auto.why."): trouble in the run beats the task's own reason.</summary>
+    public static string EffortWhyFor(string taskReason, bool planningStep, bool wrapUp, bool buildRed, int failedStepsInARow,
+        bool falseFinish, int failedEdits)
+    {
+        if (wrapUp) return "wrapUp";
+        if (buildRed) return "buildRed";
+        if (failedStepsInARow >= 2 || failedEdits >= 2) return "failing";
+        if (falseFinish) return "falseFinish";
+        if (planningStep) return "planning";
+        return taskReason;
     }
 
     public static string SmartEffort(bool nonTrivial, int redBuildGuards, int falseFinishGuards, int failedStepsInARow,
         int failedEdits, string? current)
+        => SmartEffort(nonTrivial ? 1 : 0, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEdits, current);
+
+    /// <summary><see cref="SmartEffort(bool,int,int,int,int,string?)"/> from the task's own starting level (0–3).</summary>
+    public static string SmartEffort(int baseLevel, int redBuildGuards, int falseFinishGuards, int failedStepsInARow,
+        int failedEdits, string? current)
     {
         string[] ladder = ["low", "medium", "high", "xhigh"];
-        int level = nonTrivial ? 1 : 0;
+        int level = Math.Clamp(baseLevel, 0, 3);
         if (redBuildGuards >= 2 || failedStepsInARow >= 4 || failedEdits >= 4) level += 2;
         else if (redBuildGuards >= 1 || falseFinishGuards >= 1 || failedStepsInARow >= 2 || failedEdits >= 2) level += 1;
         level = Math.Min(level, ladder.Length - 1);

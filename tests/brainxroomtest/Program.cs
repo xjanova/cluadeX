@@ -33,6 +33,41 @@ static class Program
         var online = BrainXRoomProvider.RoomOnline("""{"room":[{"agent":"claude","online":true},{"agent":"codex","online":false}]}""");
         Check("P5", "room[] → who is online now", online.SequenceEqual(new[] { "claude" }), string.Join(",", online));
 
+        Console.WriteLine("── offline: the board card (2026-10-19: Stop / give-up drop it; a held card keeps the wait going) ──");
+        string? card = BrainXRoomProvider.CardIdOf("""{"ok":true,"task":{"id":"t-3f9a1c","title":"x","status":"open"},"room":[]}""");
+        Check("B1", "cowork_task add → the card id", card == "t-3f9a1c", card ?? "null");
+        Check("B2", "a failed add has no id", BrainXRoomProvider.CardIdOf("""{"ok":false,"note":"title required"}""") == null);
+        const string board = """{"board":[{"id":"t-aaaaaa","status":"open"},{"id":"t-3f9a1c","status":"doing","assignee":"codex"}],"room":[]}""";
+        Check("B3", "the card on the board: status and who holds it", BrainXRoomProvider.CardStatus(board, "t-3f9a1c") == ("doing", "codex"),
+            BrainXRoomProvider.CardStatus(board, "t-3f9a1c").ToString());
+        Check("B4", "a card no longer on the (unfinished-only) board is gone = done or dropped", BrainXRoomProvider.CardStatus(board, "t-999999").Status == "gone");
+        Check("B5", "an unreadable list is unknown, not gone", BrainXRoomProvider.CardStatus("not json", "t-3f9a1c").Status == "unknown");
+        Check("B6", "the board's own ✅ line for our card closes it; another card's does not",
+            BrainXRoomProvider.ClosesCard("✅ codex เสร็จแล้ว [t-3f9a1c] fix — ok", "t-3f9a1c")
+            && !BrainXRoomProvider.ClosesCard("✅ codex เสร็จแล้ว [t-aaaaaa] other", "t-3f9a1c")
+            && !BrainXRoomProvider.ClosesCard("▶ codex กำลังทำ [t-3f9a1c] fix", "t-3f9a1c"));
+
+        Console.WriteLine("── offline: which room lines belong to this turn ──");
+        var mine = new BrainXRoomProvider.RoomLine("codex", "here it is", "you", null, false);
+        var onTopic = new BrainXRoomProvider.RoomLine("gemini", "x", "", "cx-1", false);
+        var aboutCard = new BrainXRoomProvider.RoomLine("claude", "▶ claude กำลังทำ [t-3f9a1c] fix", "", null, false);
+        var chatter = new BrainXRoomProvider.RoomLine("grok", "anyone seen my keys", "", "other", false);
+        Check("F1", "addressed to us / on our topic / about our card → shown",
+            BrainXRoomProvider.IsForThisTurn(mine, "cx-1", "t-3f9a1c", null) && BrainXRoomProvider.IsForThisTurn(onTopic, "cx-1", null, null)
+            && BrainXRoomProvider.IsForThisTurn(aboutCard, "cx-1", "t-3f9a1c", null));
+        Check("F2", "unrelated room chatter is no longer pasted into the reply (it was, with nobody named)",
+            !BrainXRoomProvider.IsForThisTurn(chatter, "cx-1", "t-3f9a1c", null));
+        Check("F3", "a named agent's lines count even off-topic", BrainXRoomProvider.IsForThisTurn(chatter, "cx-1", null, new(StringComparer.OrdinalIgnoreCase) { "Grok" }));
+
+        Console.WriteLine("── offline: the request says what the owner's rules allow ──");
+        string ro = BrainXRoomProvider.BuildRequest("fix it", "cx-1", new() { @"E:\Code\X" }, null);
+        string rw = BrainXRoomProvider.BuildRequest("fix it", "cx-1", new() { @"E:\Code\X" }, new ClaudeDevProvider.WorkerGrant(true, true));
+        Check("R1", "no edit grant → read only, propose diffs (it always said 'you may edit')", ro.Contains("do NOT allow edits") && !ro.Contains("you may edit"), ro);
+        Check("R2", "edit + run grant → may edit and run builds", rw.Contains("you may edit files there directly") && rw.Contains("run builds"), rw);
+        Check("R3", "a failed join/say is explained in words, not raw JSON",
+            BrainXRoomProvider.ReasonOf("""{"ok":false,"note":"the room is closed"}""") == "the room is closed"
+            && BrainXRoomProvider.ReasonOf("""{"ok":false}""") == null);
+
         Console.WriteLine("── offline: loop guards ──");
         static async Task<string> Ask(BrainXRoomProvider pv, string msg)
         {

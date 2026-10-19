@@ -121,6 +121,9 @@ internal static partial class Program
             Check("PB5 a permission prompt under Claude: her girl, her colour on its edge, her tag",
                 perm?.Character == ChatCharacter.Claude && permCard != null && BrushIs(permCard.BorderBrush, ChatCharacter.Claude.Accent)
                 && ById<StackPanel>(perm, "CxGuard.PermissionWho") is { IsVisible: true }, $"{perm?.Character} border={(permCard?.BorderBrush as SolidColorBrush)?.Color}");
+            Check("PB5 …and she stands beside her permission prompt, full figure, like beside a question",
+                ById<System.Windows.Controls.Image>(perm, "CxGuard.PermissionGirl") is { IsVisible: true, Source: not null, ActualHeight: > 100 },
+                "girl visible=" + ById<System.Windows.Controls.Image>(perm, "CxGuard.PermissionGirl")?.IsVisible);
             SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-persona-claude.png"));
             q?.AnswerQuestion("login.dart");
             perm?.ResolvePermission(PermissionOutcome.Denied);
@@ -138,6 +141,8 @@ internal static partial class Program
                 danger?.Character == ChatCharacter.Claude && dCard != null && BrushIs(dCard.BorderBrush, red) && BrushIs(dCard.Background, redBg)
                 && dCard.BorderThickness == new Thickness(4, 2, 2, 2) && ById<StackPanel>(danger, "CxGuard.PermissionWho") is not { IsVisible: true },
                 $"border={(dCard?.BorderBrush as SolidColorBrush)?.Color} bg={(dCard?.Background as SolidColorBrush)?.Color} t={dCard?.BorderThickness}");
+            Check("PB6 …and no girl stands beside the red prompt",
+                ById<System.Windows.Controls.Image>(danger, "CxGuard.PermissionGirl") is not { IsVisible: true });
             SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-persona-danger.png"));
             danger?.ResolvePermission(PermissionOutcome.Denied);
             await Task.WhenAny(dangerTask, Task.Delay(3000));

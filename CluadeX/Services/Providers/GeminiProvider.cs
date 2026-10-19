@@ -138,8 +138,13 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             generationConfig["temperature"] = (double)settings.Temperature;
             generationConfig["topP"] = (double)settings.TopP;
         }
-        if (ThinkingConfigFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled) is { } tc)
-            generationConfig["thinkingConfig"] = tc;
+        var tc = ThinkingConfigFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled);
+        if (tc != null) generationConfig["thinkingConfig"] = tc;
+        // What the chat shows: Gemini 3's level as sent, 2.5's token budget as sent (-1 = dynamic, the model decides).
+        string? sent = tc == null ? null
+            : tc.TryGetValue("thinkingLevel", out var lv) ? lv as string
+            : tc.TryGetValue("thinkingBudget", out var bd) && bd is int b && b >= 0 ? $"{b} tok" : null;
+        LiveModelReport.Sent(Models.AiProviderType.Gemini, model, sent, thinking != ThinkingControl.None);
         return generationConfig;
     }
 
@@ -301,6 +306,8 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             {
                 using var doc = JsonDocument.Parse(data);
                 var root = doc.RootElement;
+                if (root.TryGetProperty("modelVersion", out var mv) && mv.ValueKind == JsonValueKind.String)
+                    LiveModelReport.Served(Models.AiProviderType.Gemini, mv.GetString());
                 if (root.TryGetProperty("usageMetadata", out var um)) lastUsage = um.Clone();
                 if (root.TryGetProperty("promptFeedback", out var pf) && pf.TryGetProperty("blockReason", out var br))
                     blockReason = br.GetString();
@@ -624,6 +631,8 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             using (doc)
             {
                 var root = doc.RootElement;
+                if (root.TryGetProperty("modelVersion", out var mv) && mv.ValueKind == JsonValueKind.String)
+                    LiveModelReport.Served(Models.AiProviderType.Gemini, mv.GetString());
                 if (root.TryGetProperty("usageMetadata", out var um)) usage = um.Clone();
                 if (root.TryGetProperty("promptFeedback", out var pf) && pf.TryGetProperty("blockReason", out var br))
                     block = br.GetString();

@@ -24,6 +24,19 @@ public static class Program
             Environment.Exit(Services.Safety.GuardHook.Run());
             return;
         }
+        // A connection (GitHub, Stripe, Canva…) started by BrainX's bridge or CluadeX's MCP list: reads its key now and
+        // relays the real server's stdio — headless, so the configs naming it never hold a key.
+        if (args.Length > 0 && args[0] == Services.Connections.ConnectorLauncher.Flag)
+        {
+            Environment.Exit(Services.Connections.ConnectorLauncher.Run(args));
+            return;
+        }
+        // Claude Dev's Stop hook: the effort the turn really ran at, for the chat's model/effort label. Headless, never blocks.
+        if (args.Length > 0 && args[0] == Services.Safety.GuardHook.EffortFlag)
+        {
+            Environment.Exit(Services.Safety.GuardHook.RunEffortReport());
+            return;
+        }
         // CluadeX's chat tools (open_project / new_chat / close_chat) as an MCP server for a Claude Dev run — headless too.
         if (args.Length > 0 && args[0] == Services.Tools.ChatToolBridge.Flag)
         {

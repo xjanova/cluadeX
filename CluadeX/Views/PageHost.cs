@@ -70,6 +70,19 @@ public sealed class PageHost : Grid
         }
     }
 
+    /// <summary>Build a kept page now without showing it, so it is ready the first time it is opened (the UI Studio's
+    /// browser starts loading the project the chat just opened). It is added Hidden, not Collapsed: laid out with the
+    /// real size, so a native child window (WebView2) is created and the page renders at the size it will be seen at.</summary>
+    public void Prewarm(object page)
+    {
+        if (!IsLoaded || !Keeps(page) || _kept.ContainsKey(page.GetType())) return;
+        var view = Build(page);
+        if (view == null) return;
+        view.Visibility = Visibility.Hidden;
+        _kept[page.GetType()] = view;
+        Children.Add(view);
+    }
+
     /// <summary>Screen readers and other UI Automation clients see only the page on screen. WPF's default peer walks
     /// every child — Collapsed ones too — and rebuilds that tree after each layout pass while a client listens
     /// (M365 Copilot, the touch keyboard host, an IME…). With the kept chat and code editor (its docked chat

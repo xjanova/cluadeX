@@ -3,6 +3,7 @@
 // Claude Sonnet 5.5 still thought (disabling is a 400 there; between_tools is its off switch).
 // Now: the agent loop picks per step — low for a chat-sized ask, medium for real work, one or two levels up when the
 // run shows it is hard, never down within a turn — and the providers read that pick only when the setting is "auto".
+using System.IO;
 using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Providers;
@@ -82,6 +83,200 @@ internal static class EffortWire
         }
         finally { AgentRunScope.Enter(null); }
         check("auto", "…and outside the run \"auto\" is \"auto\" again", EffortLevels.Effective("auto") == "auto", EffortLevels.Effective("auto"));
+
+        AutoPolicy(check, section);
+        LiveLabel(check, section);
+        ClaudeDevEffort(check, section);
         return Task.CompletedTask;
+    }
+
+    // Owner 2026-10-19: "effort auto มันฉลาดปรับค่าเองหรือยังทุกค่าย". Where auto STARTS is read from the task itself.
+    static void AutoPolicy(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("offline · effort \"auto\" reads the task (AutoEffortPolicy)");
+        AutoEffortPolicy.Decision P(string m, int images = 0, int ctx = 0) => AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(m, images, ctx));
+        string D(AutoEffortPolicy.Decision d) => $"{d.Effort}/{d.ReasonKey}";
+
+        var hi = P("สวัสดีค่ะ");
+        check("auto-pick", "a greeting is low (short chat)", hi.Effort == "low" && hi.ReasonKey == "chat", D(hi));
+        var why = P("ทำไม build ช้าจัง");
+        check("auto-pick", "\"ทำไม\" (why) is a question, not \"ทำ\" (do): stays low", why.Effort == "low", D(why));
+        var q = P("What does AgentRunScope do?");
+        check("auto-pick", "a short question is low", q.Effort == "low" && q.ReasonKey == "question", D(q));
+        var task = P("เพิ่มปุ่ม Export ในหน้า Settings");
+        check("auto-pick", "a one-place change is medium (regular work)", task.Effort == "medium" && task.ReasonKey == "task", D(task));
+        var bug = P("กดปุ่ม Save แล้วแอปแครช ช่วยแก้ที");
+        check("auto-pick", "a crash to fix is high (bug)", bug.Effort == "high" && bug.ReasonKey == "bug", D(bug));
+        var trace = P("fix this:\nSystem.NullReferenceException: Object reference not set\n   at CluadeX.ViewModels.ChatViewModel.Send()");
+        check("auto-pick", "a pasted stack trace is a bug (high)", trace.Effort == "high" && trace.ReasonKey == "bug", D(trace));
+        var multi = P("rename Foo to Bar in ChatViewModel.cs, ChatView.xaml and SettingsService.cs");
+        check("auto-pick", "a change across several named files is high", multi.Effort == "high" && multi.ReasonKey == "multiFile", D(multi));
+        var plan = P("วางแผน refactor ระบบ provider ทั้งระบบให้รองรับค่ายใหม่");
+        check("auto-pick", "planning / architecture is high", plan.Effort == "high" && plan.ReasonKey == "plan", D(plan));
+        string brief = string.Join("\n", Enumerable.Range(1, 6).Select(i => $"{i}. implement part {i} of the feature with tests"));
+        var spec = P(brief);
+        check("auto-pick", "a five-plus-item brief is high and plans first", spec.Effort == "high" && spec.PlanFirst, D(spec) + " planFirst=" + spec.PlanFirst);
+        string huge = string.Join("\n", Enumerable.Range(1, 9).Select(i => $"{i}. fix the crash in module {i} — error when saving, the bug shows in the log")) + new string('x', 4000);
+        var big = P(huge);
+        check("auto-pick", "a big brief full of bugs is xhigh (never max on its own)", big.Effort == "xhigh" && big.ReasonKey == "bigTask", D(big));
+        var retry = P("ยังไม่หาย ปุ่มยังไม่ทำงานเหมือนเดิม แก้ใหม่");
+        check("auto-pick", "\"still broken\" after a try goes one level above the bug", retry.Effort == "xhigh" && retry.ReasonKey == "retry", D(retry));
+        var img = P("ดูรูปนี้", images: 1);
+        check("auto-pick", "a picture to read is at least medium", img.Effort == "medium" && img.ReasonKey == "image", D(img));
+        var ctx = P("ok", ctx: 150_000);
+        check("auto-pick", "a long conversation is at least medium", ctx.Effort == "medium" && ctx.ReasonKey == "bigContext", D(ctx));
+
+        // The loop climbs from the task's own start, and says why.
+        check("auto-climb", "from a bug's high: a red build climbs to xhigh, green drops back to high",
+            CodeAgentService.StepEffortFor(2, false, 3, false, true, 1, 0, false) == "xhigh"
+            && CodeAgentService.StepEffortFor(2, false, 3, false, false, 1, 0, false) == "high", "");
+        check("auto-climb", "a planning first step goes one up (at least high); the wrap-up is low",
+            CodeAgentService.StepEffortFor(1, true, 0, false, false, 0, 0, false) == "high"
+            && CodeAgentService.StepEffortFor(3, false, 2, true, true, 3, 5, true) == "low", "");
+        check("auto-climb", "old callers keep their meaning (bool overload = level 0 / 1)",
+            CodeAgentService.StepEffortFor(true, true, 0, false, false, 0, 0, false) == CodeAgentService.StepEffortFor(1, true, 0, false, false, 0, 0, false)
+            && CodeAgentService.SmartEffort(false, 0, 0, 0, 4, null) == CodeAgentService.SmartEffort(0, 0, 0, 0, 4, null), "");
+        check("auto-why", "trouble in the run beats the task's own reason",
+            CodeAgentService.EffortWhyFor("bug", false, false, true, 0, false, 0) == "buildRed"
+            && CodeAgentService.EffortWhyFor("bug", false, true, true, 0, false, 0) == "wrapUp"
+            && CodeAgentService.EffortWhyFor("task", false, false, false, 3, false, 0) == "failing"
+            && CodeAgentService.EffortWhyFor("plan", true, false, false, 0, false, 0) == "planning"
+            && CodeAgentService.EffortWhyFor("bug", false, false, false, 0, false, 0) == "bug", "");
+    }
+
+    // Owner 2026-10-19: "ส่วนที่ชี้ว่าใช้โมเดลอะไร effort อะไรต้องแสดงตามจริงที่กำลังใช้ เช่น opus 5.5 effort max".
+    static void LiveLabel(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("offline · the chat's model / effort label shows what really runs (LiveModelReport)");
+        string T(string k) => k switch
+        {
+            "live.effort.none" => "no effort", "live.effort.modelDefault" => "model default", "live.effort.rounded" => "{0} (picked {1})", _ => k,
+        };
+        check("friendly", "model ids as people say them",
+            LiveModelReport.FriendlyModel("claude-opus-5-5") == "Opus 5.5" && LiveModelReport.FriendlyModel("claude-sonnet-5-5-20261001") == "Sonnet 5.5"
+            && LiveModelReport.FriendlyModel("claude-fable-5-1") == "Fable 5.1" && LiveModelReport.FriendlyModel("claude-opus-5") == "Opus 5"
+            && LiveModelReport.FriendlyModel("claude-3-5-sonnet-20241022") == "Sonnet 3.5" && LiveModelReport.FriendlyModel("gpt-5.5") == "GPT-5.5"
+            && LiveModelReport.FriendlyModel("gemini-3-pro-preview") == "Gemini 3 Pro Preview" && LiveModelReport.FriendlyModel("Qwen3-8B-Q4_K_M.gguf") == "Qwen3-8B-Q4_K_M.gguf",
+            LiveModelReport.FriendlyModel("claude-sonnet-5-5-20261001") + " | " + LiveModelReport.FriendlyModel("claude-3-5-sonnet-20241022"));
+
+        LiveModelReport.Reset();
+        var scope = new AgentRunScope("live-test", null);
+        AgentRunScope.Enter(scope);
+        try
+        {
+            scope.EffortWhy = "bug fix";
+            LiveModelReport.Sent(AiProviderType.Anthropic, "claude-opus-5-5", "high", true);
+            LiveModelReport.Served(AiProviderType.Anthropic, "claude-opus-5-5-20261001");
+            var snap = LiveModelReport.For(scope, AiProviderType.Anthropic);
+            check("live", "a request's report lands on its run: served model + the effort on the wire + why",
+                snap is { Model: "claude-opus-5-5-20261001", Effort: "high", Why: "bug fix" } && ReferenceEquals(scope.LiveReport, snap), snap?.ToString() ?? "null");
+            check("live", "\"auto\" shows the level it really went out at and why: Opus 5.5 · auto → high (bug fix)",
+                LiveModelReport.Describe("auto", snap, null, T) == "Opus 5.5 · auto → high (bug fix)", LiveModelReport.Describe("auto", snap, null, T));
+            check("live", "an explicit pick that went out as is: Opus 5.5 · high", LiveModelReport.Describe("high", snap, null, T) == "Opus 5.5 · high",
+                LiveModelReport.Describe("high", snap, null, T));
+            LiveModelReport.Sent(AiProviderType.Anthropic, "claude-sonnet-4-5", null, false);
+            check("live", "a model without effort says so (not the picker's value)",
+                LiveModelReport.Describe("max", LiveModelReport.For(scope, AiProviderType.Anthropic), null, T) == "Sonnet 4.5 · no effort",
+                LiveModelReport.Describe("max", LiveModelReport.For(scope, AiProviderType.Anthropic), null, T));
+            LiveModelReport.Sent(AiProviderType.Anthropic, "claude-opus-5-5", null, true);
+            check("live", "nothing sent under auto = the model's own default, said as such",
+                LiveModelReport.Describe("auto", LiveModelReport.For(scope, AiProviderType.Anthropic), null, T).StartsWith("Opus 5.5 · auto → model default"),
+                LiveModelReport.Describe("auto", LiveModelReport.For(scope, AiProviderType.Anthropic), null, T));
+            LiveModelReport.Sent(AiProviderType.ClaudeDev, "", "high", true);
+            LiveModelReport.Served(AiProviderType.ClaudeDev, "claude-opus-5-5");
+            LiveModelReport.Reported(AiProviderType.ClaudeDev, "max");
+            var cd = LiveModelReport.For(scope, AiProviderType.ClaudeDev);
+            check("live", "Claude Dev: the CLI's own word wins over what was sent — Opus 5.5 · max (picked high), confirmed",
+                cd is { Effort: "max", EffortConfirmed: true } && LiveModelReport.Describe("high", cd, "Claude Code default", T) == "Opus 5.5 · max (picked high)",
+                LiveModelReport.Describe("high", cd, "Claude Code default", T));
+        }
+        finally { AgentRunScope.Enter(null); }
+        check("live", "outside the run the provider's latest still answers (the label between turns)",
+            LiveModelReport.For(null, AiProviderType.ClaudeDev)?.Effort == "max", LiveModelReport.For(null, AiProviderType.ClaudeDev)?.Effort ?? "null");
+        check("live", "before any request: the setting and the set model", LiveModelReport.Describe("medium", null, "gpt-5.5", T) == "GPT-5.5 · medium",
+            LiveModelReport.Describe("medium", null, "gpt-5.5", T));
+        LiveModelReport.Forget(AiProviderType.ClaudeDev);
+        check("live", "changing the effort pick forgets the old request's level", LiveModelReport.For(null, AiProviderType.ClaudeDev) == null, "");
+
+        // Anthropic: the effort in force on the wire — the last effort-only system message beats the top-level field.
+        var r = new Dictionary<string, object> { ["model"] = "claude-opus-5-5", ["max_tokens"] = 4096 };
+        AnthropicProvider.ApplyThinkingAndSampling(r, "claude-opus-5-5", new AppSettings { ExtendedThinkingEnabled = true, ReasoningEffort = "max", MaxTokens = 4096 });
+        check("live", "Anthropic Opus 5.5 takes max on the wire (what the label then shows)",
+            r.TryGetValue("output_config", out var oc) && oc is Dictionary<string, object> d && d["effort"] as string == "max", "");
+    }
+
+    // Claude Dev: auto picks and sends --effort; the CLI's hooks say what it really ran at (probe 2026-10-19: Stop and
+    // PreToolUse hooks carry "effort":{"level":"medium"}; UserPromptSubmit carries none; the init line names no level).
+    static void ClaudeDevEffort(Action<string, string, bool, string> check, Action<string> section)
+    {
+        section("offline · Claude Dev effort: picked by auto, sent as --effort, confirmed by the CLI's hook");
+        var (e1, w1) = ClaudeDevProvider.ResolveEffort("auto", "กดปุ่ม Save แล้วแอปแครช ช่วยแก้ที", 0);
+        var (e2, w2) = ClaudeDevProvider.ResolveEffort("max", "hi", 0);
+        check("cd-effort", "auto on Claude Dev picks from the task (bug → high) instead of sending nothing", e1 == "high" && w1 == "bug", $"{e1}/{w1}");
+        check("cd-effort", "an explicit pick goes out as it is, no reason", e2 == "max" && w2 == null, $"{e2}/{w2}");
+        check("cd-effort", "xhigh/max go out as they are only for a CLI that takes them (2.1.200+)",
+            ClaudeDevProvider.SentEffort("max", ClaudeDevProvider.CliTakesAllLevels(ClaudeDevProvider.ParseCliVersion("2.1.296 (Claude Code)"))) == "max"
+            && ClaudeDevProvider.SentEffort("max", ClaudeDevProvider.CliTakesAllLevels(ClaudeDevProvider.ParseCliVersion("2.0.14"))) == "high"
+            && ClaudeDevProvider.SentEffort("xhigh", ClaudeDevProvider.CliTakesAllLevels(null)) == "high", "");
+        string args = ClaudeDevProvider.BuildArgs(@"C:\work\demo", null, "", "max", allLevels: true);
+        check("cd-effort", "a plain chat's args: --effort max, and the report-only settings (the Stop hook)",
+            args.Contains("--effort max") && args.Contains("claude-dev-report-"), args.Length > 200 ? args[^200..] : args);
+
+        string json = CluadeX.Services.Safety.GuardHook.SettingsJson("C:/x/CluadeX.exe", guard: false);
+        check("cd-effort", "report-only settings: a Stop hook running --cx-effort, no PreToolUse guard",
+            json.Contains("\"Stop\"") && json.Contains("--cx-effort") && !json.Contains("PreToolUse"), json);
+        string guardJson = CluadeX.Services.Safety.GuardHook.SettingsJson("C:/x/CluadeX.exe", guard: true);
+        check("cd-effort", "worker settings keep the guard and add the Stop report",
+            guardJson.Contains("PreToolUse") && guardJson.Contains("--cx-guard") && guardJson.Contains("--cx-effort"), "");
+
+        const string stopInput = "{\"session_id\":\"s\",\"permission_mode\":\"default\",\"effort\":{\"level\":\"medium\"},\"hook_event_name\":\"Stop\",\"stop_hook_active\":false}";
+        check("cd-hook", "the hook input's effort.level is read", CluadeX.Services.Safety.GuardHook.EffortLevelOf(stopInput) == "medium", "");
+        check("cd-hook", "an input with no effort (UserPromptSubmit) reports nothing",
+            CluadeX.Services.Safety.GuardHook.EffortLevelOf("{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"hi\"}") == null, "");
+        check("cd-hook", "junk in the level is refused", CluadeX.Services.Safety.GuardHook.EffortLevelOf("{\"effort\":{\"level\":\"max; rm\"}}") == null, "");
+
+        string dir = Path.Combine(Path.GetTempPath(), "cx-effort-test-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string transcript = Path.Combine(dir, "t.jsonl");
+            File.WriteAllText(transcript,
+                "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n" +
+                "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-5-5\",\"role\":\"assistant\",\"content\":[]}}\n");
+            string input = stopInput.Replace("\"session_id\":\"s\"", "\"session_id\":\"s\",\"transcript_path\":" + System.Text.Json.JsonSerializer.Serialize(transcript));
+            check("cd-hook", "a plain (text-mode) chat learns its model from the transcript the hook names",
+                CluadeX.Services.Safety.GuardHook.EffortReportOf(input) == "medium claude-opus-5-5", CluadeX.Services.Safety.GuardHook.EffortReportOf(input) ?? "null");
+            string report = Path.Combine(dir, "effort.txt");
+            Environment.SetEnvironmentVariable(CluadeX.Services.Safety.GuardHook.EffortReportEnv, report);
+            try { CluadeX.Services.Safety.GuardHook.ReportEffort(input); }
+            finally { Environment.SetEnvironmentVariable(CluadeX.Services.Safety.GuardHook.EffortReportEnv, null); }
+            var (level, model) = CluadeX.Services.Safety.GuardHook.ReadEffortReport(report);
+            check("cd-hook", "the report file round-trips (level + model)", level == "medium" && model == "claude-opus-5-5", $"{level} {model}");
+
+            // The real exe in hook mode: stdin in, report out, exit 0 (a Stop hook must never block).
+            string exe = CluadeX.Services.Safety.GuardHook.ExePath();
+            // The harness copies only the DLL: find the built exe in the repo (CluadeX\bin\DebugBuild\net8.0-windows).
+            for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null && !exe.EndsWith("CluadeX.exe", StringComparison.OrdinalIgnoreCase); d = d.Parent)
+            {
+                string c = Path.Combine(d.FullName, "CluadeX", "bin", "DebugBuild", "net8.0-windows", "CluadeX.exe");
+                if (File.Exists(c)) exe = c;
+            }
+            if (File.Exists(exe) && exe.EndsWith("CluadeX.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(report);
+                var psi = new System.Diagnostics.ProcessStartInfo(exe, CluadeX.Services.Safety.GuardHook.EffortFlag)
+                { RedirectStandardInput = true, UseShellExecute = false, CreateNoWindow = true };
+                psi.Environment[CluadeX.Services.Safety.GuardHook.EffortReportEnv] = report;
+                using var p = System.Diagnostics.Process.Start(psi)!;
+                p.StandardInput.Write(input);
+                p.StandardInput.Close();
+                bool exited = p.WaitForExit(20000);
+                var (l2, m2) = CluadeX.Services.Safety.GuardHook.ReadEffortReport(report);
+                check("cd-hook", "CluadeX.exe --cx-effort (the real Stop hook) writes the report and exits 0",
+                    exited && p.ExitCode == 0 && l2 == "medium" && m2 == "claude-opus-5-5", $"exited={exited} code={(exited ? p.ExitCode : -1)} {l2} {m2}");
+            }
+            else check("cd-hook", "CluadeX.exe next to the DLL (skipped: not found)", true, exe);
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
     }
 }
