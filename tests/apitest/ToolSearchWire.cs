@@ -209,7 +209,9 @@ internal static class ToolSearchWire
         check("estimate", "caching off: every step pays full input for the whole prompt (dearer than with the cache)",
             off.LaterLow > e.LaterLow * 2 && off.FirstStep < e.FirstStep, $"{off.LaterLow} vs {e.LaterLow}");
         var oa = CostEstimate.Estimate("gpt-6-sol", 25_000, 2_000, 1_200, 3_000);
-        check("estimate", "OpenAI (no cache-write premium): the prefix is billed as plain input on step 1", oa.FirstStep == (27_000m * 2m + 1_200m * 10m) / 1_000_000m, oa.FirstStep.ToString());
+        check("estimate", "OpenAI GPT-6 (writes 1.25x, no hour tier): prefix + history written at $2.50 on step 1", oa.FirstStep == (27_000m * 2.5m + 1_200m * 10m) / 1_000_000m, oa.FirstStep.ToString());
+        var oa55 = CostEstimate.Estimate("gpt-5.5", 25_000, 2_000, 1_200, 3_000);
+        check("estimate", "OpenAI GPT-5.5 (no cache-write premium): the prefix is billed as plain input on step 1", oa55.FirstStep == (27_000m * 5m + 1_200m * 30m) / 1_000_000m, oa55.FirstStep.ToString());
         check("estimate", "the answer size follows effort when nothing was measured yet (low < medium < high < max)",
             CostEstimate.DefaultOutputPerStep("low", true) < CostEstimate.DefaultOutputPerStep("medium", true)
             && CostEstimate.DefaultOutputPerStep("medium", true) < CostEstimate.DefaultOutputPerStep("high", false)

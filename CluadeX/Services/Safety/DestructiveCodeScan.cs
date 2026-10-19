@@ -23,9 +23,9 @@ public static class DestructiveCodeScan
 {
     private const RegexOptions Opt = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
-    /// <summary>Shell and API deletes.</summary>
+    /// <summary>Shell and API deletes. cmd takes its switches in any order: rd /q /s is rd /s /q.</summary>
     private static readonly Regex DeleteVerb = new(
-        @"\b(rd|rmdir)\s+/s\b|\bdel\s+(/[a-z]\s*)*/s\b|\berase\s+(/[a-z]\s*)*/s\b|(?<!\bgit\s+)\brm\s+-[a-z]*(rf|fr|r)[a-z]*\b|\bRemove-Item\b[^\r\n]*-(Recurse|r)\b|\brimraf\b|\bshutil\.rmtree\b|\brmtree\(|\bfs(\.promises)?\.(rm|rmdir)(Sync)?\(|\bDirectory\.Delete\(|\bFileSystem\.DeleteDirectory\(|\bos\.RemoveAll\(|\bremove_dir_all\(|\bRemove-Item\b",
+        @"\b(rd|rmdir)\s+(/[a-z]\s*)*/s\b|\bdel\s+(/[a-z]\s*)*/s\b|\berase\s+(/[a-z]\s*)*/s\b|(?<!\bgit\s+)\brm\s+-[a-z]*(rf|fr|r)[a-z]*\b|\bRemove-Item\b[^\r\n]*-(Recurse|r)\b|\brimraf\b|\bshutil\.rmtree\b|\brmtree\(|\bfs(\.promises)?\.(rm|rmdir)(Sync)?\(|\bDirectory\.Delete\(|\bFileSystem\.DeleteDirectory\(|\bos\.RemoveAll\(|\bremove_dir_all\(|\bRemove-Item\b",
         Opt);
 
     /// <summary>A home's vital folders (the list of ProtectedPaths.ProfileChildren): deleting one is deleting part of the
@@ -97,6 +97,18 @@ public static class DestructiveCodeScan
         if (DeleteVerb.Match(code) is not { Success: true } cv) return null;   // the delete itself was commented out
         for (var t = ProtectedTarget.Match(code); t.Success; t = t.NextMatch())
             if (t.Value.Trim() is not ("/" or "/*")) return $"deletes ({cv.Value.Trim()}) aimed at {t.Value.Trim()}";
+        return null;
+    }
+
+    /// <summary>The first recursive shell delete in <paramref name="text"/> (rd /s, rmdir /s, del /s, erase /s, rm -r,
+    /// Remove-Item -Recurse, rimraf, shutil.rmtree), whatever it targets and wherever it stands — quoted, after an echo,
+    /// inside cmd /c; null when there is none. A delete API in code (Directory.Delete( …) and a plain Remove-Item do not
+    /// count. Not cut at 4000 characters like <see cref="JudgeLine"/>: a delete past the cut would go unseen.</summary>
+    public static string? RecursiveShellDelete(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        for (var m = DeleteVerb.Match(text); m.Success; m = m.NextMatch())
+            if (!m.Value.EndsWith('(') && !m.Value.Equals("Remove-Item", StringComparison.OrdinalIgnoreCase)) return m.Value.Trim();
         return null;
     }
 

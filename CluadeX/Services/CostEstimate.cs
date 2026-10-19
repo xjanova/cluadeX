@@ -49,9 +49,12 @@ public static class CostEstimate
         var p = CostTrackingService.PricingOf(model);
         const decimal M = 1_000_000m;
         decimal input = p.InputPerMToken / M, output = p.OutputPerMToken / M;
-        // Providers without a cache-write premium (OpenAI, Gemini) bill a "write" as plain input; no cache price = no discount.
+        // Providers without a cache-write premium (GPT-5.x and older, Gemini) bill a "write" as plain input; no cache price =
+        // no discount. GPT-6 bills writes at 1.25x but has no 1-hour tier (its cache TTL is 30 minutes), so its prefix is a
+        // plain write too — the 2x hour price is Claude's.
         decimal write5 = (p.CacheWritePerMToken > 0 ? p.CacheWritePerMToken : p.InputPerMToken) / M;
-        decimal write1h = p.CacheWritePerMToken > 0 ? input * 2 : input;
+        bool hourTier = p.CacheWritePerMToken > 0 && !model.Contains("gpt-", StringComparison.OrdinalIgnoreCase);
+        decimal write1h = hourTier ? input * 2 : write5;
         decimal read = (p.CacheReadPerMToken > 0 ? p.CacheReadPerMToken : p.InputPerMToken) / M;
         if (!caching) { write5 = write1h = read = input; }
 

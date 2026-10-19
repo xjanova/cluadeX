@@ -388,16 +388,23 @@ public class CostTrackingService
     /// Order matters: "opus-5-5" must be tested before "opus-5", "fable-5-1" before "fable".
     /// </remarks>
     /// <summary>List price per MTok for a model (the same table the costs are recorded with). <paramref name="promptTokens"/>
-    /// = a request's whole prompt (input + cache reads + cache writes); only Claude Haiku 5.5's price depends on it.</summary>
+    /// = a request's whole prompt (input + cache reads + cache writes); Claude Haiku 5.5's and GPT-6's prices depend on it.</summary>
     public static ModelPricing PricingOf(string model, int promptTokens = 0) => GetPricing(model, promptTokens);
 
     /// <summary>Claude Haiku 5.5 bills every token of a request whose prompt (cache reads and writes included) is over
     /// this at its higher prices.</summary>
     public const int HaikuTierPromptTokens = 100_000;
 
+    /// <summary>GPT-6 (Astra, 6.1 Sol, 6 Sol, Luna) bills a request whose prompt is over this at 2x input / cache and
+    /// 1.5x output — every token of it, not just the part past the line.</summary>
+    public const int Gpt6LongContextPromptTokens = 272_000;
+
     private static ModelPricing GetPricing(string model, int promptTokens = 0)
     {
         string m = model.ToLowerInvariant();
+        ModelPricing Gpt6(ModelPricing p) => promptTokens > Gpt6LongContextPromptTokens
+            ? new(p.InputPerMToken * 2m, p.OutputPerMToken * 1.5m, p.CacheReadPerMToken * 2m, p.CacheWritePerMToken * 2m)
+            : p;
         // Anthropic rows checked against platform.claude.com/docs/en/about-claude/pricing on 2026-10-13. Cache reads are
         // 0.1x input except Fable/Mythos 5.1 (0.025x) and Opus 5.5 / Sonnet 5.5 (0.05x); 5-minute writes 1.25x input,
         // 1-hour writes 2x input (RecordUsage prices those from the input column).
@@ -432,11 +439,13 @@ public class CostTrackingService
             // Haiku 3 (legacy): $0.25 input, $1.25 output
             _ when m.Contains("haiku") => new(0.25m, 1.25m, 0.025m, 0.3m),
 
-            // ── OpenAI Models ── (October 2026; cached input in the cacheRead column)
-            _ when m.Contains("gpt-6-astra") => new(10.0m, 50.0m, 1.0m, 0m),
-            _ when m.Contains("gpt-6.1-sol") => new(2.0m, 10.0m, 0.10m, 0m),
-            _ when m.Contains("gpt-6-sol") => new(2.0m, 10.0m, 0.20m, 0m),
-            _ when m.Contains("gpt-6-luna") => new(0.10m, 0.50m, 0.01m, 0m),
+            // ── OpenAI Models ── (October 2026, developers.openai.com/api/docs/pricing; cached input in the cacheRead
+            // column, cache writes — billed from GPT-6 on, 1.25x input — in cacheWrite). GPT-6: a prompt over 272K input
+            // tokens bills the whole request at 2x input/cache and 1.5x output.
+            _ when m.Contains("gpt-6-astra") => Gpt6(new(10.0m, 50.0m, 1.0m, 12.5m)),
+            _ when m.Contains("gpt-6.1-sol") => Gpt6(new(2.0m, 10.0m, 0.10m, 2.5m)),
+            _ when m.Contains("gpt-6-sol") => Gpt6(new(2.0m, 10.0m, 0.20m, 2.5m)),
+            _ when m.Contains("gpt-6-luna") => Gpt6(new(0.10m, 0.50m, 0.01m, 0.125m)),
             _ when m.Contains("gpt-5.6-sol") => new(4.0m, 20.0m, 0.40m, 0m),
             _ when m.Contains("gpt-5.6-terra") => new(2.0m, 12.0m, 0.20m, 0m),
             _ when m.Contains("gpt-5.6-luna") => new(0.20m, 1.20m, 0.02m, 0m),

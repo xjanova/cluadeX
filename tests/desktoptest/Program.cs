@@ -263,9 +263,11 @@ internal static class Program
     static async Task WindowsCases()
     {
         var r = await T("desktop_windows", ("filter", Fx.Title));
-        Check("W1", "desktop_windows lists the fixture: title, process, pid, handle, bounds, foreground flag",
+        // The fixture lives in the process that runs the tools, and DesktopSafety.IsCluadeXProcess counts that process as
+        // CluadeX's own (X1c's CxGuard refusal depends on it) — so its window is tagged "(CluadeX)", as CluadeX's are.
+        Check("W1", "desktop_windows lists the fixture: title, process, pid, handle, bounds, and the (CluadeX) tag of the tools' own process",
             r.Success && r.Output.Contains($"\"{Fx.Title}\"") && r.Output.Contains($"desktoptest (pid {Environment.ProcessId})")
-            && r.Output.Contains($"0x{Fx.Handle.ToInt64():X}") && Regex.IsMatch(r.Output, @"at -?\d+,-?\d+ \d+x\d+") && r.Output.Contains("(CluadeX)") == false,
+            && r.Output.Contains($"0x{Fx.Handle.ToInt64():X}") && Regex.IsMatch(r.Output, @"at -?\d+,-?\d+ \d+x\d+") && r.Output.Contains("(CluadeX)"),
             Seen(r));
         var none = await T("desktop_inspect", ("title", "no-such-window-" + Guid.NewGuid()));
         Check("W1b", "an unknown title fails with what is open instead (no exception text)", !none.Success && none.Error.Contains("No window title matches"), Seen(none));
@@ -502,6 +504,19 @@ internal static class Program
         // missed it, and it wiped the owner's home folder for 45 minutes. A guard test uses an inert sentinel.
         var blocked = await T("desktop_launch", ("path", "cmd.exe"), ("args", "/c echo CX-SENTINEL-NOT-RUN rd /s /q Z:\\cx-sentinel-nonexistent"));
         Check("L1g", "desktop_launch runs the dangerous-command check on the command line", !blocked.Success, Seen(blocked));
+        var forms = new List<ToolResult>();
+        foreach (var a in new[]
+                 {
+                     "/c echo CX-SENTINEL-NOT-RUN rmdir /s /q Z:\\cx-sentinel-nonexistent",
+                     "/c echo CX-SENTINEL-NOT-RUN rd /q /s Z:\\cx-sentinel-nonexistent",
+                     "/c echo CX-SENTINEL-NOT-RUN del /f /s /q Z:\\cx-sentinel-nonexistent\\*",
+                 })
+            forms.Add(await T("desktop_launch", ("path", "cmd.exe"), ("args", a)));
+        forms.Add(await T("desktop_launch", ("path", "powershell.exe"),
+            ("args", "-NoProfile -Command \"Write-Output CX-SENTINEL-NOT-RUN; # Remove-Item Z:\\cx-sentinel-nonexistent -Recurse\"")));
+        Check("L1h", "…and so do rmdir /s, rd /q /s (switches in any order), del /s and Remove-Item -Recurse: the red prompt, refused with nobody to answer",
+            forms.All(f => !f.Success && f.Error.Contains("recursive delete") && f.Error.Contains("did not approve")),
+            string.Join("\n", forms.Select(Seen)));
     }
 
     static async Task PermissionCases(PermissionService perms, SettingsService settings)

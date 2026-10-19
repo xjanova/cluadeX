@@ -45,25 +45,12 @@ public partial class ChatViewModel
             browser = ChromeDictationService.FindBrowser();
             if (browser == null) { StatusText = Loc("chat.mic.noBrowser"); return; }
         }
-        if (_dictation == null)
-        {
-            _dictation = ChromeDictationService.TryStart(out var error);
-            if (_dictation == null) { StatusText = LocF("chat.mic.failed", error ?? "?"); return; }
-            _dictation.TextReceived += (s, fin, interim) => OnUi(() => ApplyDictation(s, fin, interim));
-            _dictation.PageEvent += (s, type, detail) => OnUi(() => OnDictationEvent(s, type, detail));
-            _dictation.SendRequested += s => OnUi(() =>
-            {
-                if (IsDictating && s == _dictation?.Session && SendMessageCommand.CanExecute(null)) SendMessageCommand.Execute(null);
-            });
-            _dictation.Closed += (s, neverOpened) => OnUi(() =>
-            {
-                if (IsDictating && s == _dictation?.Session) StopDictation(Loc(neverOpened ? "chat.mic.noConnect" : "chat.mic.closed"));
-            });
-            try { Application.Current.Exit += (_, _) => _dictation?.Dispose(); } catch { }
-        }
+        if (!EnsureMicBridge()) return;
+        if (IsLiveVoice) StopLiveVoice();   // one mic window at a time
 
         string ui = _settingsService.Settings.Language == "th" ? "th" : "en";
-        string url = _dictation.BeginSession(ui == "th" ? "th-TH" : "en-US", ui, browser?.Engine ?? "google");
+        string url = _dictation!.BeginSession(ui == "th" ? "th-TH" : "en-US", ui, browser?.Engine ?? "google",
+            speak: _settingsService.Settings.VoiceSpeakReplies);
         _dictInterim = "";
         IsDictating = true;
         bool opened;
@@ -76,6 +63,36 @@ public partial class ChatViewModel
         }
         if (!opened) { StopDictation(LocF("chat.mic.failed", launchError ?? "?")); return; }
         StatusText = LocF("chat.mic.opening", browser?.Name ?? "Google Chrome");
+    }
+
+    /// <summary>The loopback bridge to the mic window, started once (dictation, reading aloud and Live voice share it).</summary>
+    private bool EnsureMicBridge()
+    {
+        if (_dictation != null) return true;
+        _dictation = ChromeDictationService.TryStart(out var error);
+        if (_dictation == null) { StatusText = LocF("chat.mic.failed", error ?? "?"); return false; }
+        _dictation.TextReceived += (s, fin, interim) => OnUi(() => ApplyDictation(s, fin, interim));
+        _dictation.PageEvent += (s, type, detail) => OnUi(() => OnDictationEvent(s, type, detail));
+        _dictation.SendRequested += s => OnUi(() =>
+        {
+            if (IsDictating && s == _dictation?.Session && SendMessageCommand.CanExecute(null)) SendMessageCommand.Execute(null);
+        });
+        _dictation.Closed += (s, neverOpened) =>
+        {
+            // A live call whose window is gone is hung up from here at once — on this thread, so it does not wait
+            // for the UI — then the chat hears about it through the session's Ended.
+            if (_live is { } live && s == _liveBridgeSession) _ = live.PageGoneAsync();
+            OnUi(() =>
+            {
+                if (IsDictating && s == _dictation?.Session) StopDictation(Loc(neverOpened ? "chat.mic.noConnect" : "chat.mic.closed"));
+            });
+        };
+        _dictation.LiveEvent += (s, ev) =>
+        {
+            if (_live is { } live && s == _liveBridgeSession) live.OnServerEvent(ev);
+        };
+        try { Application.Current.Exit += (_, _) => { _live?.PageGoneAsync().Wait(3000); _dictation?.Dispose(); }; } catch { }
+        return true;
     }
 
     private void StopDictation(string? status)
@@ -116,17 +133,24 @@ public partial class ChatViewModel
 
     private void OnDictationEvent(int session, string type, string detail)
     {
+        if (IsLiveVoice && session == _liveBridgeSession && type == "error")
+        {
+            OnLivePageError(detail);
+            return;
+        }
         if (!IsDictating || _dictation == null || session != _dictation.Session) return;
         StatusText = type switch
         {
             "listening" => LocF("chat.mic.listening", detail.StartsWith("th", StringComparison.OrdinalIgnoreCase) ? "ไทย" : "English"),
             "paused" => Loc("chat.mic.paused"),
+            "speaking" => Loc("chat.mic.speaking"),
             "error" => detail switch
             {
                 "not-allowed" or "service-not-allowed" => Loc("chat.mic.denied"),
                 "audio-capture" => Loc("chat.mic.noMic"),
                 "network" => Loc("chat.mic.network"),
                 "unsupported" => Loc("chat.mic.unsupported"),
+                "no-tts" => Loc("chat.mic.noTts"),
                 _ => LocF("chat.mic.error", detail),
             },
             _ => StatusText,
