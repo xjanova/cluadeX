@@ -12,6 +12,8 @@
     <UserControl.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolVis"/>
         <views:ThumbnailSourceConverter x:Key="ThumbSource"/>
+        <views:FileNameOfConverter x:Key="FileNameOf"/>
+        <views:FileGlyphConverter x:Key="FileGlyph"/>
         <conv:RoleToBrushConverter x:Key="RoleBrush"/>
         <conv:RoleToBackgroundConverter x:Key="RoleBg"/>
         <conv:RoleToLabelConverter x:Key="RoleLabel"/>
@@ -1667,6 +1669,34 @@
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
                                         </ItemsControl>
+                                        <!-- …and the other files, as chips; a click shows the copy in Explorer -->
+                                        <ItemsControl ItemsSource="{Binding AttachedFiles}" Margin="0,2,0,4"
+                                                      Visibility="{Binding HasAttachedFiles, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Tag="{Binding}" Click="AttachedFile_Click" Cursor="Hand" Margin="0,0,8,6"
+                                                            ToolTip="{services:Loc chat.attach.openFolder}">
+                                                        <Button.Template>
+                                                            <ControlTemplate TargetType="Button">
+                                                                <Border Padding="8,4" CornerRadius="8" BorderThickness="1"
+                                                                        BorderBrush="{DynamicResource Border.Default}" Background="{DynamicResource Surface.Sunken}">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <TextBlock Text="{Binding Converter={StaticResource FileGlyph}}" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                                                                   Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                                        <TextBlock Text="{Binding Converter={StaticResource FileNameOf}}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                                                                   Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center" MaxWidth="260"
+                                                                                   TextTrimming="CharacterEllipsis"/>
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </ControlTemplate>
+                                                        </Button.Template>
+                                                    </Button>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                         <StackPanel Margin="0,2,0,0"
                                                     helpers:MarkdownHelper.Markdown="{Binding Content}">
                                             <StackPanel.Style>
@@ -2416,8 +2446,9 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- Images attached to the next message (Ctrl+V, drop, "+"), each with its × -->
-                        <ItemsControl Grid.Row="0" ItemsSource="{Binding PendingImages}" Margin="0,0,0,8"
+                        <!-- Images attached to the next message (Ctrl+V, drop, "+"), each with its ×; then the other files -->
+                        <StackPanel Grid.Row="0">
+                        <ItemsControl ItemsSource="{Binding PendingImages}" Margin="0,0,0,8"
                                       Visibility="{Binding HasPendingImages, Converter={StaticResource BoolVis}}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
@@ -2448,6 +2479,42 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <ItemsControl ItemsSource="{Binding PendingFiles}" Margin="0,0,0,8"
+                                      Visibility="{Binding HasPendingFiles, Converter={StaticResource BoolVis}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,4,8,0" Padding="8,4,4,4" CornerRadius="8" BorderThickness="1"
+                                            BorderBrush="{DynamicResource Border.Default}" Background="{DynamicResource Surface.Sunken}"
+                                            ToolTip="{Binding}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Converter={StaticResource FileGlyph}}" FontFamily="Segoe MDL2 Assets" FontSize="13"
+                                                       Foreground="{DynamicResource Text.Secondary}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                            <TextBlock Text="{Binding Converter={StaticResource FileNameOf}}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                                       Foreground="{DynamicResource Text.Primary}" VerticalAlignment="Center" MaxWidth="220"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <Button Margin="6,0,0,0" Cursor="Hand" VerticalAlignment="Center"
+                                                    Command="{Binding DataContext.RemovePendingFileCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}" ToolTip="{services:Loc chat.attach.removeFile}">
+                                                <Button.Template>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource Bg.Elevated}"
+                                                                BorderBrush="{DynamicResource Border.Default}" BorderThickness="1">
+                                                            <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="8"
+                                                                       Foreground="{DynamicResource Text.Primary}"
+                                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        </Border>
+                                                    </ControlTemplate>
+                                                </Button.Template>
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        </StackPanel>
 
                         <Grid Grid.Row="1">
                             <!-- Borderless: the card is the box. -->
@@ -2502,6 +2569,12 @@
                                                       ToolTip="{services:Loc chat.attach.dropHint}">
                                                 <MenuItem.Icon>
                                                     <TextBlock Text="&#xEB9F;" FontFamily="Segoe MDL2 Assets" FontSize="13"/>
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem Header="{services:Loc chat.attach.file}" Click="AttachFile_Click"
+                                                      ToolTip="{services:Loc chat.attach.fileHint}">
+                                                <MenuItem.Icon>
+                                                    <TextBlock Text="&#xE723;" FontFamily="Segoe MDL2 Assets" FontSize="13"/>
                                                 </MenuItem.Icon>
                                             </MenuItem>
                                             <Separator/>

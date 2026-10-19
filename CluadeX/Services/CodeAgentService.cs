@@ -1179,14 +1179,20 @@ public partial class CodeAgentService
         return "";
     }
 
-    /// <summary>Can <paramref name="p"/>'s model see tool images right now (from what is already known)?</summary>
-    /// <summary>What a model that cannot see is told about the images the user attached.</summary>
+    /// <summary>What a model that cannot see is told about the images the user attached — with their paths, so it can
+    /// still use them (copy one into the project as the page's picture) without looking at them.</summary>
     public static string AttachedImagesNote(IEnumerable<string> paths)
     {
         var list = paths.ToList();
-        return $"[The user attached {list.Count} image(s), but this model cannot see images. Files: {string.Join(", ", list)}]";
+        return $"[The user attached {list.Count} image(s), but this model cannot see images. Files: {string.Join(", ", list)}"
+            + " — they can still be used by these paths, e.g. copied into the project.]";
     }
 
+    /// <summary>Can <paramref name="p"/>'s model see images right now (from what is already known)? The chat asks before
+    /// it decides how to hand over the user's attachments.</summary>
+    public bool SeesImages(Services.Providers.IAiProvider? p) => ProviderSeesImages(p);
+
+    /// <summary>Can <paramref name="p"/>'s model see tool images right now (from what is already known)?</summary>
     private bool ProviderSeesImages(Services.Providers.IAiProvider? p)
     {
         try { return p != null && p.SupportsToolResultImages(ModelIdFor(p)); }

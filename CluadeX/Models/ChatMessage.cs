@@ -186,6 +186,12 @@ public class ChatMessage : INotifyPropertyChanged
     public List<string> AttachedImages { get; set; } = new();
     public bool HasAttachedImages => AttachedImages.Count > 0;
 
+    /// <summary>Other files the user attached (PDF, zip, Office, text, code…) — copies under attachments\, each in its own
+    /// folder with its own name. Shown as chips in the bubble; their paths and content go to the model with the message
+    /// (AttachmentDigest). Stored with the chat like the images.</summary>
+    public List<string> AttachedFiles { get; set; } = new();
+    public bool HasAttachedFiles => AttachedFiles.Count > 0;
+
     /// <summary>How many images the tool returned (the row shows the first).</summary>
     public int ImageCount { get; set; }
 

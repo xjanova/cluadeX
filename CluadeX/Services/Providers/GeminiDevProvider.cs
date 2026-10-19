@@ -358,7 +358,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             StandardErrorEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add(cli.Script);
-        foreach (var a in BuildArgs(cwd, grant, model, extras?.AddDirs)) psi.ArgumentList.Add(a);
+        foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras))) psi.ArgumentList.Add(a);
         if (settingsPath != null) psi.Environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = settingsPath;
         if (grant is { Run: true, Edit: false }) psi.Environment[Safety.GuardHook.NoEditEnv] = "1";
         psi.Environment["NO_COLOR"] = "1";

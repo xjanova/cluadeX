@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.163</Version>
+    <Version>3.0.164</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -100,6 +100,8 @@
     <PackageReference Include="Serilog" Version="4.1.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="System.Management" Version="9.0.0" />
+    <!-- Text and page images of PDFs the user attaches to a chat (Services/Attachments). Pure managed, Apache-2.0. -->
+    <PackageReference Include="PdfPig" Version="0.1.10" />
     <!-- Real self-update: delta packages, atomic swap, rollback. Same version the
          BrainX client ships, so both apps behave identically under `vpk`. -->
     <PackageReference Include="Velopack" Version="1.1.1" />

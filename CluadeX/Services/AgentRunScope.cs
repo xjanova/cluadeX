@@ -235,6 +235,10 @@ public sealed class AgentRunScope
     /// (ChatViewModel → native tool loop, which puts them on the user message).</summary>
     public List<ToolImage>? UserImages { get; set; }
 
+    /// <summary>The folders that hold the files the user attached to this message (and what was unpacked from them).
+    /// A CLI agent (Claude Dev, Gemini Dev) gets each with --add-dir, so its own Read can open them.</summary>
+    public IReadOnlyList<string> AttachmentFolders { get; set; } = Array.Empty<string>();
+
     // ─── What the user typed while the run was working ───
 
     private readonly System.Collections.Concurrent.ConcurrentQueue<(string Text, object? Tag)> _userNotes = new();

@@ -110,6 +110,21 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <summary>The extras for the turn in flight (set by the agent loop around its one delegated call).</summary>
     public static readonly AsyncLocal<TurnExtras?> Extras = new();
 
+    /// <summary>The --add-dir folders of the turn in flight: the extras', then the folders holding the files the user
+    /// attached to this message (AgentRunScope.AttachmentFolders) — so the CLI's own Read opens "hero.png" or the unpacked
+    /// zip, in a plain chat as in an agent turn.</summary>
+    public static IReadOnlyList<string> TurnAddDirs(TurnExtras? extras)
+    {
+        var dirs = (extras?.AddDirs ?? Array.Empty<string>()).ToList();
+        foreach (var d in AgentRunScope.Current?.AttachmentFolders ?? Array.Empty<string>())
+        {
+            if (dirs.Count >= MaxAddDirs + 4) break;
+            if (!string.IsNullOrWhiteSpace(d) && Directory.Exists(d) && !dirs.Any(x => x.Equals(d, StringComparison.OrdinalIgnoreCase)))
+                dirs.Add(d);
+        }
+        return dirs;
+    }
+
     /// <summary>
     /// The folders a turn gets with --add-dir: the related folders open beside the project in this chat, then the folders
     /// the user answered "Always allow" for — each once, none inside the project or inside one already added, none that
@@ -430,7 +445,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
         var extras = Extras.Value;
-        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, extras?.AddDirs);
+        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras));
         // The level the chat shows next to the picker: the sent one (xhigh / max go out as high), or what "auto" is on the CLI.
         var effortScope = AgentRunScope.Current;
         if (effortScope != null) effortScope.LiveEffort = effort == Models.EffortLevels.Auto ? CliAutoEffort() : effort is "xhigh" or "max" ? "high" : effort;

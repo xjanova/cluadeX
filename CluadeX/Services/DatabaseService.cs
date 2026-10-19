@@ -201,12 +201,16 @@ public sealed class DatabaseService : IDisposable
                 cmd.Parameters.AddWithValue("$ts", msg.Timestamp.ToString("o"));
                 // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
                 // a file that has been damaged before.
-                bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0;
+                // Images only keep the old "@images" list (older builds read it); with other files too, "@attach" holds both.
+                bool userFiles = msg.Role == MessageRole.User && msg.AttachedFiles.Count > 0;
+                bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0 && !userFiles;
                 // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
                 bool agentMap = msg.AgentNodes != null;
-                cmd.Parameters.AddWithValue("$tn", userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$tn", userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$tsm", agentMap ? msg.AgentMapHeader : (object?)msg.ToolSummary ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$to", userImages
+                cmd.Parameters.AddWithValue("$to", userFiles
+                    ? System.Text.Json.JsonSerializer.Serialize(new AttachmentsRow { Images = msg.AttachedImages, Files = msg.AttachedFiles })
+                    : userImages
                     ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
                     : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
                     : (object?)msg.ToolOutput ?? DBNull.Value);
@@ -314,6 +318,18 @@ public sealed class DatabaseService : IDisposable
                     loaded.ToolName = null;
                     loaded.ToolOutput = null;
                 }
+                if (role == MessageRole.User && loaded.ToolName == AttachmentsTag)
+                {
+                    try
+                    {
+                        var row = System.Text.Json.JsonSerializer.Deserialize<AttachmentsRow>(loaded.ToolOutput ?? "{}");
+                        loaded.AttachedImages = row?.Images ?? new();
+                        loaded.AttachedFiles = row?.Files ?? new();
+                    }
+                    catch { /* unreadable: the message without its files */ }
+                    loaded.ToolName = null;
+                    loaded.ToolOutput = null;
+                }
                 if (loaded.ToolName == AgentMapTag)
                 {
                     try
@@ -336,6 +352,15 @@ public sealed class DatabaseService : IDisposable
 
     /// <summary>tool_name of a user message whose tool_output holds its attached images (a JSON list of paths).</summary>
     private const string AttachedImagesTag = "@images";
+
+    /// <summary>tool_name of a user message with files besides pictures: tool_output is an <see cref="AttachmentsRow"/>.</summary>
+    private const string AttachmentsTag = "@attach";
+
+    private sealed class AttachmentsRow
+    {
+        public List<string> Images { get; set; } = new();
+        public List<string> Files { get; set; } = new();
+    }
 
     /// <summary>tool_name of an agent map card whose tool_output holds its nodes (JSON) and tool_summary its header.</summary>
     private const string AgentMapTag = "@agentmap";

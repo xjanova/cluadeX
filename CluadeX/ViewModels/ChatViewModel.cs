@@ -2878,14 +2878,15 @@ public partial class ChatViewModel : ViewModelBase
             var m = all[i];
             switch (m.Role)
             {
-                case MessageRole.User when m.HasAttachedImages:
-                    // An earlier message's pictures are not resent (each costs tokens on every request): the model
-                    // is told they were there and where, and can open one with read_file.
+                case MessageRole.User when m.HasAttachedImages || m.HasAttachedFiles:
+                    // An earlier message's pictures and files are not resent (each costs tokens on every request): the
+                    // model is told they were there and where, and can open one again (read_file / read_document).
                     result.Add(new ChatMessage
                     {
                         Role = MessageRole.User, Timestamp = m.Timestamp,
                         Content = (m.Content.Length > 0 ? m.Content + "\n" : "")
-                                  + string.Join("\n", m.AttachedImages.Select(p => $"[the user attached an image: {p}]")),
+                                  + string.Join("\n", m.AttachedImages.Select(p => $"[the user attached an image: {p}]")
+                                      .Concat(m.AttachedFiles.Select(EarlierAttachmentLine))),
                     });
                     break;
                 case MessageRole.User:
@@ -3004,15 +3005,25 @@ public partial class ChatViewModel : ViewModelBase
     {
         bool fromBox = pipe == null;
         void ClearBox() { if (fromBox) UserInput = string.Empty; }
+        // Files dropped a moment ago may still be copying in (a big zip): the message waits for them rather than
+        // going out without them. A second Send pressed meanwhile does nothing — the first one sends.
+        if (fromBox && !IsGenerating && !_attachingFiles.IsCompleted)
+        {
+            if (_sendWaitsForAttachments) return;
+            _sendWaitsForAttachments = true;
+            try { await WaitForAttachingAsync(); }
+            finally { _sendWaitsForAttachments = false; }
+        }
         int images = fromBox ? PendingImages.Count : 0;
-        if (string.IsNullOrEmpty(input) && images == 0) return;
+        int files = fromBox ? PendingFiles.Count : 0;
+        if (string.IsNullOrEmpty(input) && images == 0 && files == 0) return;
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
-        // to do nothing at all (the box was even disabled) until the run ended. Attached images wait for the next turn.
+        // to do nothing at all (the box was even disabled) until the run ended. Attachments wait for the next turn.
         if (IsGenerating)
         {
             if (!fromBox) return;   // the pipe caller is told the chat is running (ContinueChatForPipeAsync)
             if (input.Length > 0) SendIntoRunningReply(input);
-            if (images > 0) StatusText = Loc("chat.attach.waitForReply");
+            if (images + files > 0) StatusText = Loc("chat.attach.waitForReply");
             return;
         }
 
@@ -3112,8 +3123,9 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         // Batch switch on: a plain question goes out at half price and its answer arrives later (no tools).
-        // Skills stay live — they are instructions for the agent loop.
-        if (fromBox && BatchMode && activeSkill == null && CurrentSession != null)
+        // Skills stay live — they are instructions for the agent loop. A message with attachments goes the normal way:
+        // a batch request carries text only, and the files would be dropped without a word.
+        if (fromBox && BatchMode && activeSkill == null && CurrentSession != null && images + files == 0)
         {
             await SendAsBatchAsync(input);
             return;
@@ -3121,12 +3133,19 @@ public partial class ChatViewModel : ViewModelBase
 
         _pet?.NoteMessage(input);
         _pet?.NoteTurnStarted();
-        var userMsg = new ChatMessage { Role = MessageRole.User, Content = input, AttachedImages = fromBox ? PendingImages.ToList() : new() };
-        if (fromBox) PendingImages.Clear();
+        var userMsg = new ChatMessage
+        {
+            Role = MessageRole.User, Content = input,
+            AttachedImages = fromBox ? PendingImages.ToList() : new(),
+            AttachedFiles = fromBox ? PendingFiles.ToList() : new(),
+        };
+        if (fromBox) { PendingImages.Clear(); PendingFiles.Clear(); }
         Messages.Add(userMsg);
         ClearBox();
-        // Only pictures: the model still needs a line of text with them.
-        string modelInput = input.Length > 0 ? input : "Look at the attached image(s).";
+        // Only attachments: the model still needs a line of text with them.
+        string modelInput = input.Length > 0 ? input
+            : images > 0 && files == 0 ? "Look at the attached image(s)."
+            : "Look at the attached file(s).";
         await RunTurnAsync(userMsg, modelInput, activeSkill, isSkill: !string.IsNullOrEmpty(skillPromptOverride), pipe);
     }
 
@@ -3233,8 +3252,6 @@ public partial class ChatViewModel : ViewModelBase
             pipe.Run = pipeRun;
             pipe.UserMessage = userMsg;
         }
-        if (userMsg.HasAttachedImages && AgentRunScope.Current is { } imageScope)
-            imageScope.UserImages = await LoadAttachedImagesAsync(userMsg.AttachedImages);
         var session = CurrentSession;
 
         // ─── Session resume: persist transcript BEFORE API call ───
@@ -3258,14 +3275,40 @@ public partial class ChatViewModel : ViewModelBase
         // so with no project it is always false.
         bool mcpOnlyTools = !HasProject && _agentToolService.HasProjectIndependentTools;
         // Attached images reach a model only through the native tool loop (the plain chat path is text-only); a
-        // provider without it gets their file paths in words.
+        // provider without it gets their file paths in words. Attached files go through the loop too — it has
+        // read_document / copy_file / extract_archive even with no project open.
         bool nativeProvider = _providerManager.ActiveProvider.SupportsNativeToolUse;
-        bool imagesNeedLoop = userMsg.HasAttachedImages && nativeProvider;
-        if (userMsg.HasAttachedImages && !nativeProvider)
+        bool cliProvider = _providerManager.ActiveProvider is Services.Providers.IDelegatedCliProvider;
+        bool hasAttachments = userMsg.HasAttachedImages || userMsg.HasAttachedFiles;
+        bool imagesNeedLoop = hasAttachments && nativeProvider;
+        if (userMsg.HasAttachedImages && !nativeProvider && !cliProvider)
             input += "\n\n" + CodeAgentService.AttachedImagesNote(userMsg.AttachedImages);
+        // Every attachment's path, a document's text, an archive unpacked — shaped for what this provider can do.
+        bool attachmentsCancelled = false;
+        if (hasAttachments)
+        {
+            try
+            {
+                var digest = await BuildAttachmentDigestAsync(userMsg, nativeProvider, ct);
+                input += digest.Text;
+                if (AgentRunScope.Current is { } attachScope)
+                {
+                    attachScope.AttachmentFolders = digest.Folders.ToList();
+                    if (nativeProvider)
+                    {
+                        // The pictures, plus the pages of a scanned PDF for a model that sees.
+                        var pictures = userMsg.AttachedImages.Concat(digest.ExtraImages).ToList();
+                        if (pictures.Count > 0) attachScope.UserImages = await LoadAttachedImagesAsync(pictures);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { attachmentsCancelled = true; }
+        }
         Func<List<ChatMessage>, CancellationToken, Task> run;
         bool withTools = true;
-        if (isSkill && HasProject)                                            // skills always run in agentic mode
+        if (attachmentsCancelled)                                             // Stop while the files were being read
+            run = (h, c) => Task.FromException(new OperationCanceledException(c));
+        else if (isSkill && HasProject)                                       // skills always run in agentic mode
             run = (h, c) => RunAgentic(input, h, c);
         else if (AutonomousMode && HasProject && _autonomousService != null)
             run = (h, c) => RunAutonomous(input, h, c);
