@@ -1816,6 +1816,66 @@
                                   Click="OnToggleWhitespace" ToolTip="{services:Loc edt.whitespace}"/>
                     <Button x:Name="TbZoomOut" Style="{StaticResource EdToolBtn}" Content="&#xE71F;" Click="OnZoomOut" ToolTip="{services:Loc edt.zoomOut}"/>
                     <Button x:Name="TbZoomIn" Style="{StaticResource EdToolBtn}" Content="&#xE8A3;" Click="OnZoomIn" ToolTip="{services:Loc edt.zoomIn}"/>
+                    <Rectangle Style="{StaticResource EdToolSep}"/>
+                    <!-- AI comments (owner 2026-10-19: "จะให้ ai ใส่คอมเม้นอธิบายโค๊ดด้วยไหม ระดับไหน ใส่ภาษาอะไร"): how much the
+                         AI comments the code it writes, in which language, per project if wanted. CodeCommentPolicy sends it. -->
+                    <Button x:Name="TbAiComments" Style="{StaticResource EdToolBtn}" Click="OnAiCommentsMenu"
+                            ToolTip="{services:Loc edt.aic.tip}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8F2;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding AiCommentIsOn}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{Binding AiCommentLabel}" FontFamily="{DynamicResource Font.Ui}" FontSize="12"
+                                       Margin="5,0,4,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="8" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="AiCommentsMenu">
+                                <MenuItem Header="{services:Loc edt.aic.levelHead}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <MenuItem Header="{services:Loc edt.aic.none}" InputGestureText="+0"
+                                          IsChecked="{Binding AiCommentIsNone, Mode=OneWay}"
+                                          Command="{Binding SetAiCommentLevelCommand}" CommandParameter="none"/>
+                                <MenuItem Header="{services:Loc edt.aic.key}" InputGestureText="{services:Loc edt.aic.keyCost}"
+                                          IsChecked="{Binding AiCommentIsKey, Mode=OneWay}"
+                                          Command="{Binding SetAiCommentLevelCommand}" CommandParameter="key"/>
+                                <MenuItem Header="{services:Loc edt.aic.detailed}" InputGestureText="{services:Loc edt.aic.detailedCost}"
+                                          IsChecked="{Binding AiCommentIsDetailed, Mode=OneWay}"
+                                          Command="{Binding SetAiCommentLevelCommand}" CommandParameter="detailed"/>
+                                <Separator/>
+                                <MenuItem Header="{services:Loc edt.aic.langHead}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <MenuItem Header="{services:Loc edt.aic.th}" InputGestureText="{services:Loc edt.aic.thCost}"
+                                          IsChecked="{Binding AiCommentIsThai, Mode=OneWay}"
+                                          Command="{Binding SetAiCommentLanguageCommand}" CommandParameter="th"/>
+                                <MenuItem Header="{services:Loc edt.aic.en}"
+                                          IsChecked="{Binding AiCommentIsEnglish, Mode=OneWay}"
+                                          Command="{Binding SetAiCommentLanguageCommand}" CommandParameter="en"/>
+                                <MenuItem Header="{services:Loc edt.aic.match}"
+                                          IsChecked="{Binding AiCommentIsMatch, Mode=OneWay}"
+                                          Command="{Binding SetAiCommentLanguageCommand}" CommandParameter="match"/>
+                                <Separator/>
+                                <MenuItem Header="{Binding AiCommentProjectHeader}" IsEnabled="{Binding AiCommentCanPerProject}"
+                                          IsChecked="{Binding AiCommentPerProject, Mode=OneWay}"
+                                          Command="{Binding ToggleAiCommentProjectCommand}"/>
+                                <Separator/>
+                                <MenuItem IsEnabled="False">
+                                    <MenuItem.Header>
+                                        <StackPanel MaxWidth="400">
+                                            <TextBlock Text="{Binding AiCommentCostNote}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{services:Loc edt.aic.scopeNote}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
                 </WrapPanel>
             </Border>
 

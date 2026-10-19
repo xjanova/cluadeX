@@ -457,6 +457,7 @@ public partial class CodeAgentService
     private string? _cachedPromptDir;
     // Her character comes from the active provider: Claude → Codex inside the 30 s window must not keep Claude's voice.
     private AiProviderType? _cachedPromptProvider;
+    private string? _cachedCommentPolicy;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -471,6 +472,7 @@ public partial class CodeAgentService
         bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
         string dirNow = _fileSystemService.WorkingDirectory ?? "";
         var providerNow = _providerManager.ActiveProviderType;
+        string commentsNow = CodeCommentPolicy.InstructionFor(_settingsService.Settings, dirNow);
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
         // thing. A reconnect or a death inside the window rebuilds the prompt now.
@@ -481,7 +483,8 @@ public partial class CodeAgentService
                 && _cachedNativeTools == nativeNow
                 && _cachedVision == visionNow
                 && _cachedPromptProvider == providerNow
-                && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase))
+                && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(_cachedCommentPolicy, commentsNow, StringComparison.Ordinal))
                 return _cachedSystemPrompt;
         }
 
@@ -495,6 +498,7 @@ public partial class CodeAgentService
             _cachedVision = visionNow;
             _cachedPromptDir = dirNow;
             _cachedPromptProvider = providerNow;
+            _cachedCommentPolicy = commentsNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
 
@@ -1352,6 +1356,12 @@ public partial class CodeAgentService
     public string GetSystemPrompt()
     {
         var sb = new StringBuilder(BuildBaseSystemPrompt());
+
+        // ─── AI comments (Code Editor toolbar) ───
+        // Right after the base rules it overrides, and at the head so the local fit-guard (which trims the tail) keeps it.
+        // Empty unless the user picked a level; the text changes only when the setting does, so the prompt cache holds.
+        string commentPolicy = CodeCommentPolicy.InstructionFor(_settingsService.Settings, _fileSystemService.WorkingDirectory);
+        if (commentPolicy.Length > 0) sb.Append("\n\n").Append(commentPolicy);
 
         // ─── BRAIN-FIRST ───
         // Same standing rule Claude Code and Codex already run under: consult the

@@ -146,6 +146,12 @@ public class AppSettings
     public bool EditorShowWhitespace { get; set; }
     public double EditorZoom { get; set; } = 1.0;
     public string PreferredLanguage { get; set; } = "C#";
+    /// <summary>Code Editor ▸ AI comments: how much the AI comments the code it writes ("none" | "key" | "detailed") and in
+    /// which language ("th" | "en" | "match" = the file's own). "none" sends no instruction at all — the old behaviour.
+    /// <see cref="CodeCommentProjects"/> overrides both for one project (key: Services.CodeCommentPolicy.ProjectKey).</summary>
+    public string CodeCommentLevel { get; set; } = "none";
+    public string CodeCommentLanguage { get; set; } = "match";
+    public Dictionary<string, CodeCommentSetting> CodeCommentProjects { get; set; } = new();
 
     /// <summary>
     /// Local native tool-calling. When ON, llama-server / Ollama use OpenAI-style function-calling
@@ -415,4 +421,11 @@ public class FeatureToggles
     // containment and SettingsService always encrypts with DPAPI. Fields for them used to exist,
     // were read by nothing, and only served to make settings.json look like security could be
     // switched off. The Features page shows them as always-on badges (IsToggleable = false).
+}
+
+/// <summary>One project's own AI-comment choice (AppSettings.CodeCommentProjects): same values as the global pair.</summary>
+public class CodeCommentSetting
+{
+    public string Level { get; set; } = "none";
+    public string Language { get; set; } = "match";
 }

@@ -555,6 +555,7 @@ internal static class Program
         await GeminiDevWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
+        await CommentPolicyWire.Run(Check, Section);
     }
 
     /// <summary>MD5 of a SQLite file after releasing pooled connections (they keep it open).</summary>

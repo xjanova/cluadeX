@@ -156,9 +156,10 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     }
 
     /// <summary>The arguments for one call: read-only advice, or a worker that edits/runs as the grant allows.
-    /// <paramref name="toolsConfig"/>: CluadeX's chat tools; <paramref name="addDirs"/>: allowed folders beside the project.</summary>
+    /// <paramref name="toolsConfig"/>: CluadeX's chat tools; <paramref name="addDirs"/>: allowed folders beside the project;
+    /// <paramref name="codeComments"/>: the user's AI-comment instruction (CodeCommentPolicy), "" / null for none.</summary>
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
-        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null)
+        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, string? codeComments = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -190,6 +191,9 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
               folders + reach +
               "Reply in the language the user writes in.";
+        // One line: the CLI may be a .cmd shim, and cmd.exe ends an argument at a line break.
+        if (!string.IsNullOrWhiteSpace(codeComments))
+            wrapper += " " + string.Join(" ", codeComments.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
         string tools = AllowedTools + "," + AgentTools;
         if (chatTools) tools += "," + string.Join(",", Tools.ChatToolBridge.QualifiedToolNames);
@@ -445,7 +449,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         string effort = Models.EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort);
         var extras = Extras.Value;
-        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras));
+        string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras),
+            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd));
         // The level the chat shows next to the picker: the sent one (xhigh / max go out as high), or what "auto" is on the CLI.
         var effortScope = AgentRunScope.Current;
         if (effortScope != null) effortScope.LiveEffort = effort == Models.EffortLevels.Auto ? CliAutoEffort() : effort is "xhigh" or "max" ? "high" : effort;
