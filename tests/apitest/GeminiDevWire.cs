@@ -122,6 +122,49 @@ internal static class GeminiDevWire
             ineligible != null && ineligible.Contains("GEMINI_API_KEY") && ineligible.Contains("/auth") && !ineligible.Contains("Sign in with Google") && !ineligible.Contains("โควตา"),
             ineligible ?? "");
 
+        // The real refusal of an API key whose Cloud project Google has blocked (2026-10-19, CLI 0.64, key via /auth).
+        string denied = "[API Error: {\"error\":{\"code\":403,\"message\":\"Your project has been denied access. Please contact support.\",\"status\":\"PERMISSION_DENIED\"}}]";
+        var drefused = new GeminiStreamTranslator();
+        var dturn = new ClaudeDevStreamTurn(Folder);
+        foreach (var l in drefused.Translate(J(new { type = "result", timestamp = "t", status = "error", error = new { type = "Error", message = denied }, stats = new { } })))
+            dturn.Feed(l);
+        check("gd-auth", "a 403 'project denied access' result is recognised as a refusal (not a raw error)",
+            dturn.ResultIsError && GeminiDevProvider.LooksLikeAuthRefusal(dturn.ResultText) && GeminiDevProvider.IsDeniedProject(dturn.ResultText), dturn.ResultText ?? "");
+        foreach (bool si in new[] { true, false })
+        {
+            string? dhelp = GeminiDevProvider.AuthGuidance(denied, signedIn: si);
+            check("gd-auth", $"denied project (signedIn={si}) → Thai steps: a new key in another project at aistudio, other models — not /login, not quota",
+                dhelp != null && dhelp.Contains("aistudio.google.com/apikey") && dhelp.Contains("โปรเจกต์ใหม่") && dhelp.Contains("Antigravity Dev")
+                && dhelp.Contains("Claude Dev") && !dhelp.Contains("Sign in with Google") && !dhelp.Contains("/login") && !dhelp.Contains("โควตา"), dhelp ?? "");
+        }
+        check("gd-auth", "an ineligible-account refusal is not taken for a denied project", !GeminiDevProvider.IsDeniedProject(picked), "");
+
+        // ─── signed in: a key chosen with /auth lives in the OS keychain; only settings.json shows it ───
+        string ghome = Path.Combine(Path.GetTempPath(), "cx-gemini-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(ghome);
+        try
+        {
+            Func<string, string?> noEnv = _ => null;
+            check("gd-signin", "an empty CLI home with no key in the environment → not signed in", !GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            check("gd-signin", "GEMINI_API_KEY in the environment → signed in",
+                GeminiDevProvider.SignedIn(ghome, n => n == "GEMINI_API_KEY" ? "k" : null), "");
+            string settingsPath = Path.Combine(ghome, "settings.json");
+            File.WriteAllText(settingsPath, "{\n  // chosen with /auth\n  \"security\": { \"auth\": { \"selectedType\": \"gemini-api-key\", }, },\n}");
+            check("gd-signin", "settings.json security.auth.selectedType = gemini-api-key (comments, trailing commas) → signed in",
+                GeminiDevProvider.ConfiguredAuth(ghome) == "gemini-api-key" && GeminiDevProvider.SignedIn(ghome, noEnv), GeminiDevProvider.ConfiguredAuth(ghome) ?? "null");
+            File.WriteAllText(settingsPath, "{ \"selectedAuthType\": \"gemini-api-key\" }");
+            check("gd-signin", "the older top-level selectedAuthType = gemini-api-key → signed in", GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            File.WriteAllText(settingsPath, "{ \"security\": { \"auth\": { \"selectedType\": \"oauth-personal\" } } }");
+            check("gd-signin", "oauth-personal chosen but no oauth_creds.json → not signed in", !GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            File.WriteAllText(Path.Combine(ghome, "oauth_creds.json"), "{}");
+            check("gd-signin", "oauth_creds.json present → signed in", GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            File.Delete(Path.Combine(ghome, "oauth_creds.json"));
+            File.WriteAllText(settingsPath, "{ not json");
+            check("gd-signin", "a broken settings.json is not a crash and not signed in",
+                GeminiDevProvider.ConfiguredAuth(ghome) == null && !GeminiDevProvider.SignedIn(ghome, noEnv), "");
+        }
+        finally { try { Directory.Delete(ghome, recursive: true); } catch { } }
+
         // ─── arguments ───
         var advice = GeminiDevProvider.BuildArgs(Folder, null, "default", null);
         check("gd-args", "read-only: stream-json, --skip-trust, approval default (headless refuses every tool needing approval), no -m",
@@ -183,7 +226,7 @@ internal static class GeminiDevWire
         }
         // An API key chosen with /auth can live in the OS keychain, not the environment: settings.json naming any sign-in
         // but Google's means the CLI has a key and would make a real (billed) call.
-        if (ConfiguredAuth(home) is { } auth && auth != "oauth-personal")
+        if (GeminiDevProvider.ConfiguredAuth(home) is { } auth && auth != "oauth-personal")
         {
             check("gd-real", $"the real CLI refusal (skipped: settings.json selects '{auth}' — its key may be in the keychain, a real call would be billed)", true, "skipped");
             return;
@@ -234,20 +277,5 @@ internal static class GeminiDevWire
         string? guidance = GeminiDevProvider.AuthGuidance(refusal ?? "", false);
         check("gd-real", ineligible ? "…and the explanation gives the API-key steps (the account is refused)" : "…and the explanation tells the user how to sign in",
             guidance?.Contains(ineligible ? "GEMINI_API_KEY" : "/login") == true, refusal ?? "");
-    }
-
-    /// <summary>security.auth.selectedType (or the older top-level selectedAuthType) from ~/.gemini/settings.json.</summary>
-    static string? ConfiguredAuth(string home)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(home, "settings.json")),
-                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            var root = doc.RootElement;
-            if (root.TryGetProperty("security", out var sec) && sec.TryGetProperty("auth", out var a)
-                && a.TryGetProperty("selectedType", out var t) && t.ValueKind == JsonValueKind.String) return t.GetString();
-            return root.TryGetProperty("selectedAuthType", out var old) && old.ValueKind == JsonValueKind.String ? old.GetString() : null;
-        }
-        catch { return null; }
     }
 }

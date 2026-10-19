@@ -477,7 +477,15 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         || text.Contains("RESOURCE_EXHAUSTED", StringComparison.Ordinal)
         || text.Contains("quota", StringComparison.OrdinalIgnoreCase)
         || text.Contains("429", StringComparison.Ordinal)
-        || IsIneligibleAccount(text));
+        || IsIneligibleAccount(text)
+        || IsDeniedProject(text));
+
+    /// <summary>Google refuses the API key's Cloud project: `[API Error: {"error":{"code":403,"message":"Your project has
+    /// been denied access. Please contact support.","status":"PERMISSION_DENIED"}}]` (seen 2026-10-19, CLI 0.64 with a
+    /// key chosen with /auth). Waiting or signing in again does not help — only a key from another project does.</summary>
+    public static bool IsDeniedProject(string? text) => text != null && (
+        text.Contains("PERMISSION_DENIED", StringComparison.Ordinal)
+        || text.Contains("has been denied access", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Google refuses the signed-in account itself: "IneligibleTierError: This client is no longer supported
     /// for Gemini Code Assist for individuals" (free personal accounts, seen 2026-10-19 on CLI 0.64). Signing in again
@@ -502,6 +510,16 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
                  + "3. เปิดเทอร์มินัลรัน `gemini` พิมพ์ `/auth` แล้วเลือก **Use Gemini API key**\n"
                  + "4. ปิด-เปิด CluadeX ใหม่ (ให้เห็นตัวแปรใหม่) แล้วกด **ลองใหม่**\n\n"
                  + "ระหว่างนี้เปลี่ยนไปใช้โมเดลอื่นในกล่องเลือกโมเดลได้ (เช่น Gemini API ที่มีคีย์ หรือ Claude Dev)";
+        if (IsDeniedProject(refusal))
+            return $"⛔ **Google ปฏิเสธ API key นี้ (โปรเจกต์ของคีย์ถูกระงับสิทธิ์)**\n\nข้อความจาก Gemini CLI: `{raw}`\n\n"
+                 + "Google ตอบ 403 PERMISSION_DENIED — โปรเจกต์ Google Cloud ที่คีย์นี้สังกัดอยู่ถูก Google ปิดสิทธิ์ใช้ Gemini API "
+                 + "รอหรือกดลองใหม่ก็ไม่หาย และล็อกอินใหม่ก็ไม่ช่วย\n\n"
+                 + "**วิธีแก้: สร้างคีย์ใหม่ในโปรเจกต์อื่น**\n"
+                 + "1. เปิด https://aistudio.google.com/apikey แล้วกด **Create API key** โดยเลือก (หรือสร้าง) **โปรเจกต์ใหม่** — อย่าใช้โปรเจกต์เดิม\n"
+                 + "2. เปิดเทอร์มินัลรัน `gemini` พิมพ์ `/auth` เลือก **Use Gemini API key** แล้ววางคีย์ใหม่ "
+                 + "(ถ้าตั้งตัวแปรระบบ `GEMINI_API_KEY` ไว้ ให้เปลี่ยนเป็นคีย์ใหม่แล้วปิด-เปิด CluadeX ใหม่)\n"
+                 + "3. กลับมากด **ลองใหม่**\n\n"
+                 + "ระหว่างนี้เปลี่ยนไปใช้โมเดลอื่นในกล่องเลือกโมเดลได้ (เช่น Antigravity Dev หรือ Claude Dev)";
         bool quota = refusal.Contains("quota", StringComparison.OrdinalIgnoreCase)
             || refusal.Contains("RESOURCE_EXHAUSTED", StringComparison.Ordinal) || refusal.Contains("429", StringComparison.Ordinal);
         if (quota && signedIn)
@@ -522,14 +540,39 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         return AuthGuidance(refusal, await IsLoggedInAsync(ct));
     }
 
-    /// <summary>Signed in = the CLI's Google sign-in is cached, or an API key is in its environment.</summary>
+    /// <summary>Signed in = the CLI's Google sign-in is cached, an API key is in its environment, or the CLI was set to
+    /// an API key with /auth (CLI 0.64 keeps that key in the OS keychain, so only settings.json shows it).</summary>
     public Task<bool> IsLoggedInAsync(CancellationToken ct) => Task.FromResult(SignedIn());
 
     /// <summary>The same check, for the setup page and the chat's model box.</summary>
-    public static bool SignedIn() =>
-        File.Exists(Path.Combine(GeminiHome(), "oauth_creds.json"))
-        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMINI_API_KEY"))
-        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GOOGLE_API_KEY"));
+    public static bool SignedIn() => SignedIn(GeminiHome(), Environment.GetEnvironmentVariable);
+
+    /// <summary>Pure over the CLI's home folder and the environment, so the harness checks it.</summary>
+    public static bool SignedIn(string home, Func<string, string?> env) =>
+        File.Exists(Path.Combine(home, "oauth_creds.json"))
+        || !string.IsNullOrWhiteSpace(env("GEMINI_API_KEY"))
+        || !string.IsNullOrWhiteSpace(env("GOOGLE_API_KEY"))
+        || ConfiguredAuth(home) == "gemini-api-key";
+
+    /// <summary>security.auth.selectedType (or the older top-level selectedAuthType) from settings.json in the CLI's
+    /// home folder, or null.</summary>
+    public static string? ConfiguredAuth(string home)
+    {
+        try
+        {
+            string path = Path.Combine(home, "settings.json");
+            if (!File.Exists(path)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path),
+                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+            if (root.TryGetProperty("security", out var sec) && sec.ValueKind == JsonValueKind.Object
+                && sec.TryGetProperty("auth", out var a) && a.ValueKind == JsonValueKind.Object
+                && a.TryGetProperty("selectedType", out var t) && t.ValueKind == JsonValueKind.String) return t.GetString();
+            return root.TryGetProperty("selectedAuthType", out var old) && old.ValueKind == JsonValueKind.String ? old.GetString() : null;
+        }
+        catch { return null; }
+    }
 
     /// <summary>A console window running the CLI interactively: it asks how to sign in and opens Google's page in the
     /// browser — the click there is the user's. CluadeX never types a password.</summary>
