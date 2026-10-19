@@ -157,7 +157,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     // ─── One turn ───
 
     /// <summary>The CLI's arguments for one call (after the script path). Pure, so the harness checks them.</summary>
-    public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, IReadOnlyList<string>? addDirs)
+    public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, IReadOnlyList<string>? addDirs,
+        string? codeComments = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -176,6 +177,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
               $"Project working directory: {cwd}. " +
               "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        // The user's AI-comment instruction (CodeCommentPolicy); ArgumentList carries the line breaks as they are.
+        if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
 
         var args = new List<string>
         {
@@ -358,7 +361,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             StandardErrorEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add(cli.Script);
-        foreach (var a in BuildArgs(cwd, grant, model, extras?.AddDirs)) psi.ArgumentList.Add(a);
+        foreach (var a in BuildArgs(cwd, grant, model, extras?.AddDirs,
+                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd))) psi.ArgumentList.Add(a);
         if (settingsPath != null) psi.Environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = settingsPath;
         if (grant is { Run: true, Edit: false }) psi.Environment[Safety.GuardHook.NoEditEnv] = "1";
         psi.Environment["NO_COLOR"] = "1";

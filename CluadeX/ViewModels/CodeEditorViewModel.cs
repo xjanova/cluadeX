@@ -260,6 +260,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
             OnPropertyChanged(nameof(ProjectName));
             OnPropertyChanged(nameof(ProjectFileCount));
             OnPropertyChanged(nameof(GitChangeCount));
+            RaiseAiComment();
         };
 
         RefreshTreeCommand = new AsyncRelayCommand(RefreshTreeAsync);
@@ -291,6 +292,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 ClearSearchCommand.Execute(null);
                 CancelRenameCommand.Execute(null);
                 _intel.InvalidateSymbolIndex();   // completions must not offer the old project's symbols
+                RaiseAiComment();                 // the new project may keep its own AI-comment choice
             }
         };
 

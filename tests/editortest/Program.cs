@@ -1790,6 +1790,103 @@ internal static class Program
             return Task.CompletedTask;
         });
 
+        // ═══════════════════════ AI comments (toolbar) ═══════════════════════
+        // Owner 2026-10-19: "เพิ่มออฟชั่นในหน้า editor ได้ว่าจะให้ ai ใส่คอมเม้นอธิบายโค๊ดด้วยไหม ระดับไหน … ใส่ภาษาอะไร".
+        // The toolbar menu drives the real view model; what it stores is what CodeCommentPolicy sends (apitest / seamtest).
+        Console.WriteLine("\n── AI comments (toolbar menu) ──");
+        await Case("A1", () => OnSta(() =>
+        {
+            var vm = provider.GetRequiredService<CluadeX.ViewModels.CodeEditorViewModel>();
+            var st = settings.Settings;
+            st.CodeCommentLevel = "none"; st.CodeCommentLanguage = "match"; st.CodeCommentProjects = new();
+            string projA = Dir("ai-comments", "ProjA"), projB = Dir("ai-comments", "ProjB");
+            fs.WorkingDirectory = projA;
+            loc.SetLanguage("th");
+            var raised = new HashSet<string>();
+            vm.PropertyChanged += (_, e) => { if (e.PropertyName != null) raised.Add(e.PropertyName); };
+
+            Check("A1", "default: none + file's language, nothing per project, label says off, cost note says nothing is added",
+                vm.AiCommentIsNone && vm.AiCommentIsMatch && !vm.AiCommentPerProject && !vm.AiCommentIsOn
+                && vm.AiCommentLabel == "คอมเมนต์ AI: ไม่ใส่" && vm.AiCommentCostNote.Contains("ไม่มีอะไรเพิ่ม"),
+                $"{vm.AiCommentLabel} | {vm.AiCommentCostNote}");
+
+            vm.SetAiCommentLevelCommand.Execute("key");
+            vm.SetAiCommentLanguageCommand.Execute("th");
+            Check("A1b", "key + Thai: saved globally, checks move, label and token note update (notified)",
+                st.CodeCommentLevel == "key" && st.CodeCommentLanguage == "th" && vm.AiCommentIsKey && vm.AiCommentIsThai && !vm.AiCommentIsNone
+                && vm.AiCommentLabel == "คอมเมนต์ AI: จุดสำคัญ · ไทย" && System.Text.RegularExpressions.Regex.IsMatch(vm.AiCommentCostNote, @"~\d+ โทเค็น")
+                && raised.Contains(nameof(vm.AiCommentLabel)) && raised.Contains(nameof(vm.AiCommentIsKey)),
+                $"{vm.AiCommentLabel} | {vm.AiCommentCostNote}");
+
+            vm.ToggleAiCommentProjectCommand.Execute(null);
+            string keyA = CodeCommentPolicy.ProjectKey(projA);
+            Check("A1c", "'only this project' copies the current choice to ProjA",
+                vm.AiCommentPerProject && st.CodeCommentProjects.TryGetValue(keyA, out var own) && own.Level == "key" && own.Language == "th"
+                && vm.AiCommentLabel.EndsWith("· โปรเจคนี้") && vm.AiCommentProjectHeader.Contains("ProjA"), vm.AiCommentLabel);
+
+            vm.SetAiCommentLevelCommand.Execute("detailed");
+            vm.SetAiCommentLanguageCommand.Execute("en");
+            Check("A1d", "while per project, a change goes to ProjA only — the global choice stays key + Thai",
+                st.CodeCommentProjects[keyA].Level == "detailed" && st.CodeCommentProjects[keyA].Language == "en"
+                && st.CodeCommentLevel == "key" && st.CodeCommentLanguage == "th" && vm.AiCommentIsDetailed && vm.AiCommentIsEnglish);
+
+            fs.WorkingDirectory = projB;
+            Check("A1e", "another project shows (and the agent gets) the global choice",
+                vm.AiCommentIsKey && vm.AiCommentIsThai && !vm.AiCommentPerProject
+                && CodeCommentPolicy.InstructionFor(st, projB) == CodeCommentPolicy.Build("key", "th")
+                && CodeCommentPolicy.InstructionFor(st, projA) == CodeCommentPolicy.Build("detailed", "en"));
+
+            fs.WorkingDirectory = projA;
+            vm.ToggleAiCommentProjectCommand.Execute(null);
+            Check("A1f", "turning 'only this project' off drops ProjA's own choice; it follows the global again",
+                !st.CodeCommentProjects.ContainsKey(keyA) && vm.AiCommentIsKey && vm.AiCommentIsThai && !vm.AiCommentPerProject);
+
+            vm.SetAiCommentLevelCommand.Execute("none");
+            Check("A1g", "back to none: nothing is sent again", CodeCommentPolicy.InstructionFor(st, projA) == "" && vm.AiCommentIsNone);
+
+            var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(settings.DataRoot, "settings.json"))).RootElement;
+            Check("A1h", "the choice is saved in settings.json",
+                saved.TryGetProperty("CodeCommentLevel", out var lv) && lv.GetString() == "none"
+                && saved.TryGetProperty("CodeCommentLanguage", out var lg) && lg.GetString() == "th", "");
+            loc.SetLanguage("en");
+            Check("A1i", "the label follows the UI language", vm.AiCommentLabel == "AI comments: off", vm.AiCommentLabel);
+        }));
+
+        await Case("A2", () =>
+        {
+            // What compiles but renders blank: the toolbar's keys, resources and bindings.
+            string xaml = File.ReadAllText(Path.Combine(repo, "CluadeX", "Views", "CodeEditorView.xaml"));
+            string resources = xaml + File.ReadAllText(Path.Combine(repo, "CluadeX", "Resources", "Theme.xaml"))
+                               + File.ReadAllText(Path.Combine(repo, "CluadeX", "App.xaml"));
+            string theme = File.ReadAllText(Path.Combine(repo, "CluadeX", "Resources", "Themes", "Midnight.xaml")) + resources;
+            string vmCode = File.ReadAllText(Path.Combine(repo, "CluadeX", "ViewModels", "CodeEditorViewModel.AiComments.cs"));
+            loc.SetLanguage("th");
+            var keys = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{services:Loc\s+([\w.]+)\}").Select(m => m.Groups[1].Value)
+                .Concat(System.Text.RegularExpressions.Regex.Matches(vmCode, @"\bT\(""([\w.]+)""").Select(m => m.Groups[1].Value))
+                .Concat(new[] { "none", "key", "detailed", "project" }.Select(k => "edt.aic.short." + k))
+                .Concat(new[] { "th", "en", "match" }.Select(k => "edt.aic.lang." + k))
+                .Where(k => !k.EndsWith('.')).Distinct().ToList();
+            var noThai = keys.Where(k => loc.T(k) == k || !System.Text.RegularExpressions.Regex.IsMatch(loc.T(k), "[฀-๿]")).ToList();
+            loc.SetLanguage("en");
+            var noEnglish = keys.Where(k => loc.T(k) == k).ToList();
+            Check("A2", $"every {{services:Loc}} key in CodeEditorView.xaml + the AI-comments view model has Thai and English ({keys.Count} keys)",
+                noThai.Count == 0 && noEnglish.Count == 0, "no Thai: " + string.Join(", ", noThai) + " | missing: " + string.Join(", ", noEnglish));
+            var missingRes = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{StaticResource\s+([\w.]+)\}").Select(m => m.Groups[1].Value).Distinct()
+                .Where(k => !resources.Contains($"x:Key=\"{k}\"", StringComparison.Ordinal)).ToList();
+            Check("A2b", "every {StaticResource} in CodeEditorView.xaml exists", missingRes.Count == 0, string.Join(", ", missingRes));
+            var missingDyn = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{DynamicResource\s+([\w.]+)\}").Select(m => m.Groups[1].Value).Distinct()
+                .Where(k => !theme.Contains($"x:Key=\"{k}\"", StringComparison.Ordinal)).ToList();
+            Check("A2c", "every {DynamicResource} in CodeEditorView.xaml is a theme token", missingDyn.Count == 0, string.Join(", ", missingDyn));
+            var vmType = typeof(CluadeX.ViewModels.CodeEditorViewModel);
+            var badBindings = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{Binding\s+(?:Path=)?([\w.]+)").Select(m => m.Groups[1].Value.Split('.')[0])
+                .Where(p => p.Contains("AiComment")).Distinct()
+                .Where(p => vmType.GetProperty(p) == null).ToList();
+            int aiBindings = System.Text.RegularExpressions.Regex.Matches(xaml, @"\{Binding\s+(?:Path=)?\w*AiComment").Count;
+            Check("A2d", $"every AI-comments {{Binding}} names a real CodeEditorViewModel property ({aiBindings} bindings)",
+                badBindings.Count == 0 && aiBindings >= 12, string.Join(", ", badBindings));
+            return Task.CompletedTask;
+        });
+
         Console.WriteLine($"\n═══ {Pass} pass · {Fail} FAIL ═══");
         foreach (var p in Problems) Console.WriteLine("   " + p);
         return Fail == 0 ? 0 : 1;

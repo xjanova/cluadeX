@@ -185,6 +185,10 @@ public partial class CodeAgentService
         string system = SubAgentSystemPrompt(specialist ? (canEdit ? "general" : "explore") : type, _fileSystemService.WorkingDirectory ?? "", thai);
         if (specialist)
             system += $"\n\n## Your role: {type}\n{request.Persona!.Trim()}";
+        // A sub-agent that may edit writes code too: the user's AI-comment setting (Code Editor toolbar) applies to it.
+        string comments = canEdit
+            ? CodeCommentPolicy.InstructionFor(_settingsService.Settings, _fileSystemService.WorkingDirectory) : "";
+        if (comments.Length > 0) system += "\n\n" + comments;
 
         var first = new StringBuilder(task.Trim());
         if (!string.IsNullOrWhiteSpace(context)) first.Append("\n\nContext from the main agent:\n").Append(context.Trim());
