@@ -105,7 +105,8 @@ internal static class ConnectKeys
         ["brainx.note.checking"] = E("Checking the installer…", "กำลังตรวจตัวติดตั้ง…"),
         ["brainx.note.running"] = E("The BrainX installer is open — follow its window…", "เปิดตัวติดตั้ง BrainX แล้ว — ทำตามหน้าต่างของมัน…"),
         ["brainx.note.waiting"] = E("Waiting for BrainX to start…", "รอ BrainX เปิดขึ้นมา…"),
-        ["brainx.note.done"] = E("BrainX is installed and connected.", "ติดตั้งและเชื่อมต่อ BrainX แล้ว"),
+        ["brainx.note.comingSoon"] = E("BrainX isn't open for download yet (Coming Soon).", "BrainX ยังไม่เปิดให้ดาวน์โหลด (Coming Soon)"),
+        ["brainx.note.done"] =E("BrainX is installed and connected.", "ติดตั้งและเชื่อมต่อ BrainX แล้ว"),
         ["brainx.note.notYet"] = E("The installer closed, but BrainX isn't running yet — open BrainX once, then press Check again.", "ตัวติดตั้งปิดไปแล้ว แต่ BrainX ยังไม่ทำงาน — เปิด BrainX หนึ่งครั้งแล้วกด ตรวจอีกครั้ง"),
         ["brainx.unsigned.title"] = E("The installer isn't digitally signed", "ตัวติดตั้งไม่มีลายเซ็นดิจิทัล"),
         ["brainx.unsigned.body"] = E(

@@ -33,6 +33,16 @@ public sealed class BrainXInstaller
         _handler = handler;
     }
 
+    /// <summary>BrainX is still "Coming Soon" on the store: not an error — downloads are closed on purpose (owner, 2026-10-19:
+    /// "คง Coming Soon ไว้ก่อน ให้ CluadeX แสดงว่า BrainX ยังไม่เปิดให้ดาวน์โหลด"). The store answers it with a 302 to the
+    /// product page, or a 403 {"coming_soon": true} to a JSON request.</summary>
+    public const string ComingSoon = "brainx.comingSoon";
+
+    /// <summary>A redirect to a product page on the store = the download is closed (Coming Soon). Pure.</summary>
+    public static bool IsComingSoonPage(Uri uri) =>
+        (uri.Host.Equals(Host, StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith("." + Host, StringComparison.OrdinalIgnoreCase))
+        && uri.AbsolutePath.StartsWith("/products/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Is this response the installer itself (not a page, not another host)? Pure.</summary>
     public static string? RefuseReason(Uri? finalUri, string? mediaType, long? length)
     {
@@ -62,11 +72,16 @@ public sealed class BrainXInstaller
             {
                 uri = loc.IsAbsoluteUri ? loc : new Uri(uri, loc);
                 if (RefuseReason(uri, null, null) == "brainx.err.host") throw new InvalidOperationException("brainx.err.host");
+                // The store sends a Coming Soon product to its product page instead of the file (owner's rule).
+                if (IsComingSoonPage(uri)) throw new InvalidOperationException(ComingSoon);
                 continue;
             }
             break;
         }
         using var response = resp!;
+        if (response.StatusCode == System.Net.HttpStatusCode.Forbidden
+            && System.Text.RegularExpressions.Regex.IsMatch(await response.Content.ReadAsStringAsync(ct), "\"coming_soon\"\\s*:\\s*true", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            throw new InvalidOperationException(ComingSoon);
         if (!response.IsSuccessStatusCode) throw new InvalidOperationException("brainx.err.http");
         if (RefuseReason(uri, response.Content.Headers.ContentType?.MediaType, response.Content.Headers.ContentLength) is { } why)
             throw new InvalidOperationException(why);

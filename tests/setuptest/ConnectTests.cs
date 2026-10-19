@@ -34,7 +34,7 @@ static partial class Program
                      "connect.err.noServer", "connect.err.signIn", "connect.err.noNode", "connect.err.noKey", "connect.err.unknown", "connect.err.noMcp",
                      "connect.err.mcpUnreadable", "connect.err.noAsset", "connect.err.checksum", "connect.err.download",
                      "brainx.confirm.title", "brainx.confirm.body", "brainx.confirm.go", "brainx.note.downloading", "brainx.note.checking",
-                     "brainx.note.running", "brainx.note.waiting", "brainx.note.done", "brainx.note.notYet", "brainx.unsigned.title",
+                     "brainx.note.running", "brainx.note.waiting", "brainx.note.comingSoon", "brainx.note.done", "brainx.note.notYet", "brainx.unsigned.title",
                      "brainx.unsigned.body", "brainx.unsigned.run", "brainx.err.host", "brainx.err.notFile", "brainx.err.size", "brainx.err.http",
                      "brainx.err.signature", "brainx.err.run" })
             yield return k;
@@ -189,8 +189,15 @@ static partial class Program
         var toPage = new BrainXInstaller(handler: Fake(r => r.RequestUri!.AbsolutePath == "/brainx/download"
             ? new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri("/products/brainx-cloud", UriKind.Relative) } }
             : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<!DOCTYPE html><html></html>", Encoding.UTF8, "text/html") }));
-        Check("C32", "today's answer (302 to the product page, HTML) → 'the free download may be closed', the page opens instead",
-            await Throws(() => toPage.DownloadAsync()) == "brainx.err.notFile");
+        Check("C32", "today's answer (302 to the product page) = Coming Soon: said as such, not an error, no page opened",
+            await Throws(() => toPage.DownloadAsync()) == BrainXInstaller.ComingSoon);
+        var forbidden = new BrainXInstaller(handler: Fake(r => new HttpResponseMessage(HttpStatusCode.Forbidden)
+            { Content = new StringContent("{\"message\":\"Coming soon\", \"coming_soon\": true}", Encoding.UTF8, "application/json") }));
+        Check("C37", "the store's JSON answer (403 {\"coming_soon\": true}) is Coming Soon too; another 403 is a server error",
+            await Throws(() => forbidden.DownloadAsync()) == BrainXInstaller.ComingSoon
+            && await Throws(() => new BrainXInstaller(handler: Fake(r => new HttpResponseMessage(HttpStatusCode.Forbidden))).DownloadAsync()) == "brainx.err.http");
+        var otherHtml = new BrainXInstaller(handler: Fake(r => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<html></html>", Encoding.UTF8, "text/html") }));
+        Check("C38", "an HTML page that isn't a product page is still 'not the installer' (the page opens)", await Throws(() => otherHtml.DownloadAsync()) == "brainx.err.notFile");
         byte[] notExe = new byte[6 * 1024 * 1024];
         var fakeZip = new BrainXInstaller(handler: Fake(r => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(notExe) }));
         Check("C33", "a file of the right size that isn't an exe (no MZ) is deleted, not run", await Throws(() => fakeZip.DownloadAsync()) == "brainx.err.notFile");

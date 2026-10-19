@@ -418,6 +418,11 @@ public sealed class SetupViewModel : ViewModelBase
             var progress = new Progress<(long Done, long? Total)>(p =>
                 row.Note = LF("brainx.note.downloading", p.Total is { } t && t > 0 ? $"{p.Done * 100 / t}%" : $"{p.Done / 1048576} MB"));
             try { file = await _brainInstaller.DownloadAsync(progress); }
+            catch (InvalidOperationException ex) when (ex.Message == BrainXInstaller.ComingSoon)
+            {
+                row.Note = L("brainx.note.comingSoon");   // closed on purpose: say so — no page, no error
+                return;
+            }
             catch (InvalidOperationException ex) when (ex.Message is "brainx.err.host" or "brainx.err.notFile")
             {
                 row.Note = L(ex.Message);

@@ -120,7 +120,9 @@ public class BrainXInviteViewModel : ViewModelBase
         {
             // One click: download from xman4289.com, check it, run its installer — the browser page only when the site
             // does not hand over the installer (or CluadeX runs inside another app's package).
-            if (!await InstallInOneClickAsync()) Open(DownloadUrl);
+            bool? done = await InstallInOneClickAsync();
+            if (done == null) return;   // Coming Soon: the message is on screen, nothing to wait for
+            if (done == false) Open(DownloadUrl);
             Say(T("brainx.waitingInstall"), error: false);
             WatchForInstall();
             return;
@@ -128,8 +130,9 @@ public class BrainXInviteViewModel : ViewModelBase
         await ConnectAsync();
     }
 
-    /// <summary>Download, verify and run the BrainX installer. False when the page should be opened instead.</summary>
-    private async Task<bool> InstallInOneClickAsync()
+    /// <summary>Download, verify and run the BrainX installer. False when the page should be opened instead; null when
+    /// BrainX is still Coming Soon (said in the window, not as an error).</summary>
+    private async Task<bool?> InstallInOneClickAsync()
     {
         if (Services.Setup.SystemSetupService.InsidePackage()) return false;
         var installer = new Services.Connections.BrainXInstaller();
@@ -152,6 +155,11 @@ public class BrainXInviteViewModel : ViewModelBase
             Say(T("brainx.note.running"), error: false);
             await installer.RunAsync(file);
             return true;
+        }
+        catch (InvalidOperationException ex) when (ex.Message == Services.Connections.BrainXInstaller.ComingSoon)
+        {
+            Say(T("brainx.note.comingSoon"), error: false);
+            return null;
         }
         catch (InvalidOperationException ex) when (ex.Message.StartsWith("brainx.err.", StringComparison.Ordinal))
         {
