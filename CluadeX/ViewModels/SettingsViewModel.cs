@@ -829,6 +829,9 @@ public partial class SettingsViewModel : ViewModelBase
                 ProviderWorkspaceId = "";
                 UseCustomModel = false;
             }
+            // No key saved → open the editable box. The masked box is read-only, so a provider without a key
+            // (OpenAI, Gemini) could not be typed into until "Show" was pressed (owner 2026-10-19: "ใส่ได้แค่ antropic").
+            ShowApiKey = string.IsNullOrEmpty(ProviderApiKey);
 
             // Populate model dropdown (Ollama: the cached tags now, fresh ones from the auto-detect below)
             var ollamaProvider = type == AiProviderType.Ollama
