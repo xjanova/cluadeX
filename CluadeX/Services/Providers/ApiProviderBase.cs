@@ -105,7 +105,7 @@ public abstract class ApiProviderBase : IAiProvider
     /// loop reads those in a 400 as prompt overflow and compacts.</summary>
     /// <param name="keysUrl">Where to get a new key.</param>
     /// <param name="billingUrl">Where to add credit / quota.</param>
-    protected static string DescribeHttpError(string provider, int status, string body, string? apiKey,
+    protected internal static string DescribeHttpError(string provider, int status, string body, string? apiKey,
         string model, string keysUrl, string billingUrl)
     {
         if (!string.IsNullOrEmpty(apiKey)) body = body.Replace(apiKey, "[REDACTED]");

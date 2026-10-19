@@ -2915,6 +2915,21 @@
                                         </Style>
                                     </Button.Style>
                                 </Button>
+                                <!-- Live voice (Settings › Voice, off by default): a GPT-Live call; the meter shows its cost by the second -->
+                                <TextBlock x:Name="LiveMeter" Text="{Binding LiveVoiceMeter}" VerticalAlignment="Center" Margin="0,0,6,0"
+                                           FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                                           Visibility="{Binding IsLiveVoice, Converter={StaticResource BoolVis}}"/>
+                                <Button x:Name="LiveButton" Content="&#xE717;" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding ToggleLiveVoiceCommand}" Margin="0,0,6,0"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="12,8"
+                                        ToolTip="{services:Loc chat.live.tip}"
+                                        Visibility="{Binding ShowLiveButton, Converter={StaticResource BoolVis}}"/>
+                                <Button x:Name="LiveOnButton" Content="&#xE778;" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding ToggleLiveVoiceCommand}" Margin="0,0,6,0"
+                                        Background="{DynamicResource Status.Danger}" Foreground="White"
+                                        FontFamily="Segoe MDL2 Assets" FontSize="14" Padding="12,8"
+                                        ToolTip="{services:Loc chat.live.stopTip}"
+                                        Visibility="{Binding IsLiveVoice, Converter={StaticResource BoolVis}}"/>
                                 <!-- Plan window: this chat's plan, add items, go back to / branch from a step -->
                                 <Button Content="&#xE9D5;" Style="{StaticResource SecondaryButton}" Margin="0,0,6,0"
                                         Command="{Binding OpenPlanWindowCommand}"

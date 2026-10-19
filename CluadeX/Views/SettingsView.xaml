@@ -759,6 +759,48 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- Voice (2026-10-19): read replies aloud (free) and the GPT-Live call (paid) — both off by default -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{services:Loc settings.card.voice}" Style="{StaticResource CardTitle}"/>
+                                <TextBlock Text="{services:Loc settings.voiceDesc}" Style="{StaticResource SettingDesc}" Margin="0,0,0,10"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.voiceSpeak}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.voiceSpeakDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding VoiceSpeakReplies}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.voiceLive}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.voiceLiveDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding VoiceLiveEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" IsEnabled="{Binding VoiceLiveEnabled}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="18,0,0,0">
+                                        <TextBlock Text="{services:Loc settings.voiceLiveMinutes}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.voiceLiveMinutesDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding VoiceLiveMaxMinutes, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}" Margin="0" IsEnabled="{Binding VoiceLiveEnabled}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="18,0,0,0">
+                                        <TextBlock Text="{services:Loc settings.voiceLiveVoice}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.voiceLiveVoiceDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" ItemsSource="{Binding VoiceLiveVoiceOptions}" SelectedItem="{Binding VoiceLiveVoice}"
+                                              Width="140" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.memories}" Style="{StaticResource CardTitle}"/>

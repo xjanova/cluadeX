@@ -288,6 +288,18 @@ public class AppSettings
     // default to avoid surprising the user with LLM calls they didn't ask for.
     public bool SessionMemoryEnabled { get; set; } = false;
 
+    // Voice mode (2026-10-19) — both off by default.
+    /// <summary>While the mic window is open, it reads each finished reply aloud with the browser's own free speech
+    /// synthesis (a Thai voice when there is one). Costs nothing.</summary>
+    public bool VoiceSpeakReplies { get; set; } = false;
+    /// <summary>The Live voice button: a GPT-Live call (OpenAI Live API, $0.05/min + the model doing the work) where
+    /// each spoken request runs through this chat's agent on the active provider. Needs an OpenAI API key.</summary>
+    public bool VoiceLiveEnabled { get; set; } = false;
+    /// <summary>A Live voice session is closed after this many minutes (the cost cap). 1-60.</summary>
+    public int VoiceLiveMaxMinutes { get; set; } = 10;
+    /// <summary>GPT-Live's voice (fixed for a session). marin is the API's default.</summary>
+    public string VoiceLiveVoice { get; set; } = "marin";
+
     /// <summary>Background work nobody waits for (session-memory and instinct extraction) goes through the
     /// provider's batch API when it has one — Anthropic and OpenAI: half the price, the result lands within
     /// minutes to hours instead of seconds. Off → those calls run live, as before.</summary>
