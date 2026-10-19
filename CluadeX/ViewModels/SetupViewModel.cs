@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Windows.Input;
 using CluadeX.Services;
+using CluadeX.Services.Connections;
 using CluadeX.Services.Setup;
 
 namespace CluadeX.ViewModels;
@@ -29,7 +30,9 @@ public sealed class SetupRowViewModel : ViewModelBase
 
     public string Title => L(_item.TitleKey);
     public string Why => L(_item.WhyKey);
-    public string StateText => L("setup.state." + _item.State) + (_item.Optional || _item.IsReady ? "" : " · " + L("setup.required"));
+    public bool IsConnection => _item.Group == SystemSetupService.GroupConnect;
+    public string StateText => (IsConnection && _item.IsReady ? L("connect.state.connected") : L("setup.state." + _item.State))
+                               + (_item.Optional || _item.IsReady ? "" : " · " + L("setup.required"));
     /// <summary>ok / warn / info — the row's colour (DataTriggers in the view).</summary>
     public string StateKind => _item.State switch
     {
@@ -53,6 +56,9 @@ public sealed class SetupRowViewModel : ViewModelBase
     {
         "" => "",
         "needs-node" => L("setup.detail.needsNode"),
+        // a connection: where it lives, in words ("place:brainx|notLive")
+        var d when d.StartsWith("place:", StringComparison.Ordinal) =>
+            L("connect.place." + d[6..].Split('|')[0]) + (d.EndsWith("|notLive", StringComparison.Ordinal) ? L("connect.place.notLive") : ""),
         var d when d.EndsWith(" · no-debugpy", StringComparison.Ordinal) => d.Replace(" · no-debugpy", "") + " · " + L("setup.detail.noDebugpy"),
         var d when _item.Id == "ollama" && _item.IsReady => string.Format(L("setup.detail.ollamaModels"), d),
         var d => d,
@@ -123,9 +129,17 @@ public sealed class SetupViewModel : ViewModelBase
 
     public ObservableCollection<SetupGroupViewModel> Groups { get; } = new();
 
-    public SetupViewModel(SystemSetupService setup)
+    private readonly ConnectionService? _connections;
+    private readonly BrainXInstaller _brainInstaller;
+    private readonly Services.Mcp.McpServerManager? _mcp;
+
+    public SetupViewModel(SystemSetupService setup, ConnectionService? connections = null, Services.Mcp.McpServerManager? mcp = null,
+        DebugLogService? log = null)
     {
         _setup = setup;
+        _connections = connections;
+        _mcp = mcp;
+        _brainInstaller = new BrainXInstaller(log);
         RecheckCommand = new AsyncRelayCommand(RecheckAsync);
         LocalizedResources.Instance.PropertyChanged += (_, _) => App.Current?.Dispatcher.BeginInvoke(Relabel);
     }
@@ -227,13 +241,225 @@ public sealed class SetupViewModel : ViewModelBase
                 case SetupActionKind.OpenPage:
                     NavigateRequested?.Invoke(action.Target ?? "Chat", null);
                     break;
+                case SetupActionKind.Guide:
+                    if (ConnectorCatalog.Find(action.Target) is { } g) ShowGuide(g);
+                    break;
+                case SetupActionKind.Connect:
+                    if (ConnectorCatalog.Find(action.Target) is { } c) await ConnectAsync(row, c);
+                    break;
+                case SetupActionKind.Disconnect:
+                    if (ConnectorCatalog.Find(action.Target) is { } d) await DisconnectAsync(row, d);
+                    break;
+                case SetupActionKind.InstallBrainX:
+                    await InstallBrainXAsync(row);
+                    break;
             }
         }
         catch (Exception ex)
         {
             row.IsBusy = false;
-            row.Note = ex is InvalidOperationException { Message: "inside-package" } ? L("setup.banner.insidePackage") : L("setup.note.failed");
+            row.Note = ex switch
+            {
+                InvalidOperationException { Message: "inside-package" } => L("setup.banner.insidePackage"),
+                // an error key from the connection / installer services: their own words
+                InvalidOperationException { Message: var key } when key.StartsWith("connect.", StringComparison.Ordinal)
+                                                                  || key.StartsWith("brainx.", StringComparison.Ordinal) => L(key),
+                System.Net.Http.HttpRequestException or TaskCanceledException => L("connect.err.download"),
+                _ => L("setup.note.failed"),
+            };
             System.Diagnostics.Debug.WriteLine(ex);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Connections
+    // ═══════════════════════════════════════════════════════════════════
+
+    private static string Title(ConnectorDef c) => L(c.TitleKey);
+
+    /// <summary>"How it works": the plain steps, and a button to the service's page (its keys / sign-in).</summary>
+    private static void ShowGuide(ConnectorDef c)
+    {
+        int choice = Views.Editor.ChoiceDialog.Show(LF("connect.guide.title", Title(c)), L(c.GuideKey),
+            new[] { L("connect.guide.ok"), L("connect.guide.open") });
+        if (choice == 1) OpenHttps(c.Auth == ConnectorAuth.ApiKey ? c.KeyPage : c.Docs);
+    }
+
+    private static void OpenHttps(string url)
+    {
+        if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
+    private ConnectorFacts? FactsFor(ConnectorDef c) => _facts?.Connections.FirstOrDefault(x => x.Def.Id == c.Id);
+
+    /// <summary>Everything a connection needs, in order — install a missing tool, sign in / take the key, download the
+    /// server — then place it (BrainX first). Each step that runs something shows it first and waits for a yes.</summary>
+    private async Task ConnectAsync(SetupRowViewModel row, ConnectorDef c)
+    {
+        if (_connections == null) { row.Note = L("connect.err.noMcp"); return; }
+        var f = FactsFor(c);
+        if (f == null) return;
+
+        // the steps in plain words, and where it will go — one yes before anything happens
+        string where = L(f.BrainAvailable ? "connect.place.willBrainx" : "connect.place.willCluadex");
+        if (Views.Editor.ChoiceDialog.Show(LF("connect.guide.title", Title(c)), L(c.GuideKey) + "\n\n" + where,
+                new[] { L("connect.confirm.go"), L("connect.confirm.cancel") }) != 0) return;
+
+        switch (c.Auth)
+        {
+            case ConnectorAuth.GhCli:
+                if (!f.GhInstalled)
+                {
+                    if (!await RunStepAsync(row, "GitHub CLI", new[] { SystemSetupService.WingetInstall("GitHub.cli") }, "connect.note.ghInstall")) return;
+                    if (ConnectorLauncher.FindGh() == null) { row.Note = L("connect.note.stillNoGh"); return; }
+                }
+                if (!f.GhSignedIn)
+                {
+                    string gh = ConnectorLauncher.FindGh()!;
+                    if (!await RunStepAsync(row, "GitHub sign-in", new[] { $"\"{gh}\" auth login --web --hostname github.com --git-protocol https" }, "connect.note.ghSignIn"))
+                        return;
+                    if (await Task.Run(() => ConnectorLauncher.GhToken(gh)) == null) { row.Note = L("connect.note.stillNoSignIn"); return; }
+                }
+                if (!f.ServerReady)
+                {
+                    row.IsBusy = true;
+                    row.Note = L("connect.note.download");
+                    await _connections.DownloadGitHubServerAsync();
+                }
+                break;
+
+            case ConnectorAuth.ApiKey:
+                if (f.Node == null)
+                {
+                    if (!await RunStepAsync(row, "Node.js", new[] { SystemSetupService.WingetInstall("OpenJS.NodeJS.LTS") }, "connect.note.nodeInstall")) return;
+                    if (ConnectorLauncher.FindNpx() == null) { row.Note = L("connect.note.stillNoNode"); return; }
+                }
+                string? key = Services.Helpers.InputDialog.Show(LF("connect.key.title", Title(c)), L("connect.key.prompt"),
+                    placeholder: string.Join(" / ", c.KeyPrefixes.Take(2)) + "…", secret: true,
+                    okLabel: L("connect.key.save"), cancelLabel: L("connect.confirm.cancel"));
+                if (key == null) return;
+                if (!ConnectorCatalog.LooksLikeKey(c, key))
+                {
+                    row.Note = LF("connect.key.bad", Title(c), string.Join(", ", c.KeyPrefixes));
+                    return;
+                }
+                if (ConnectorCatalog.IsLiveSecretKey(key.Trim())
+                    && Views.Editor.ChoiceDialog.Show(L("connect.key.liveTitle"), L("connect.key.liveBody"),
+                        new[] { L("connect.confirm.cancel"), L("connect.key.useAnyway") }) != 1) return;
+                _connections.Secrets.Set(c.Id, key.Trim());
+                break;
+
+            case ConnectorAuth.Browser:
+                if (f.Node == null || f.Node < ConnectorCatalog.CanvaMinNode)
+                {
+                    string cmd = f.Node == null ? SystemSetupService.WingetInstall("OpenJS.NodeJS.LTS")
+                        : "winget upgrade --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements";
+                    if (!await RunStepAsync(row, "Node.js", new[] { cmd }, "connect.note.nodeInstall")) return;
+                    var npx = ConnectorLauncher.FindNpx();
+                    if (npx == null) { row.Note = L("connect.note.stillNoNode"); return; }
+                }
+                break;
+        }
+
+        row.IsBusy = true;
+        row.Note = L("connect.note.registering");
+        var place = await _connections.RegisterAsync(c);
+        row.IsBusy = false;
+        await RecheckAsync();
+        SystemSetupService.RaiseToolsChanged();
+        row.Note = L(place == ConnectorPlace.BrainX ? "connect.note.brainx" : "connect.note.cluadex")
+                   + (c.Auth == ConnectorAuth.Browser ? L("connect.note.canvaFirst") : "");
+    }
+
+    /// <summary>One install / sign-in step in the console window (shown first, then confirmed). False when it did not finish.</summary>
+    private async Task<bool> RunStepAsync(SetupRowViewModel row, string title, IReadOnlyList<string> commands, string noteKey)
+    {
+        if (_facts!.InsidePackage) { row.Note = L("setup.banner.insidePackage"); return false; }
+        string message = LF("setup.confirm.body", title, "?") + "\n\n" + string.Join("\n", commands.Select(x => "  " + x))
+                         + "\n\n" + L(commands.Any(x => x.StartsWith("winget", StringComparison.Ordinal)) ? "setup.confirm.winget" : "setup.confirm.console");
+        if (Views.Editor.ChoiceDialog.Show(LF("setup.confirm.title", title), message, new[] { L("setup.confirm.run"), L("setup.confirm.cancel") }) != 0)
+            return false;
+        row.IsBusy = true;
+        row.Note = L(noteKey);
+        int code = await _setup.RunInConsoleAsync(title, commands);
+        row.IsBusy = false;
+        if (code != 0) { row.Note = LF("setup.note.installFailed", code); return false; }
+        return true;
+    }
+
+    private async Task DisconnectAsync(SetupRowViewModel row, ConnectorDef c)
+    {
+        if (_connections == null) return;
+        if (Views.Editor.ChoiceDialog.Show(LF("connect.disconnect.title", Title(c)), LF("connect.disconnect.body", Title(c)),
+                new[] { L("connect.confirm.cancel"), L("setup.act.disconnect") }) != 1) return;
+        row.IsBusy = true;
+        await _connections.DisconnectAsync(c);
+        row.IsBusy = false;
+        await RecheckAsync();
+        SystemSetupService.RaiseToolsChanged();
+        row.Note = L("connect.note.disconnected");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  BrainX in one click
+    // ═══════════════════════════════════════════════════════════════════
+
+    private async Task InstallBrainXAsync(SetupRowViewModel row)
+    {
+        if (_facts!.InsidePackage) { row.Note = L("setup.banner.insidePackage"); return; }
+        if (Views.Editor.ChoiceDialog.Show(L("brainx.confirm.title"), L("brainx.confirm.body"),
+                new[] { L("brainx.confirm.go"), L("setup.confirm.cancel") }) != 0) return;
+
+        row.IsBusy = true;
+        string? file = null;
+        try
+        {
+            var progress = new Progress<(long Done, long? Total)>(p =>
+                row.Note = LF("brainx.note.downloading", p.Total is { } t && t > 0 ? $"{p.Done * 100 / t}%" : $"{p.Done / 1048576} MB"));
+            try { file = await _brainInstaller.DownloadAsync(progress); }
+            catch (InvalidOperationException ex) when (ex.Message == BrainXInstaller.ComingSoon)
+            {
+                row.Note = L("brainx.note.comingSoon");   // closed on purpose: say so — no page, no error
+                return;
+            }
+            catch (InvalidOperationException ex) when (ex.Message is "brainx.err.host" or "brainx.err.notFile")
+            {
+                row.Note = L(ex.Message);
+                OpenHttps(BrainXInstaller.DownloadUrl);   // the page, for the user to take it from there
+                return;
+            }
+
+            row.Note = L("brainx.note.checking");
+            var sig = await Task.Run(() => BrainXInstaller.VerifySignature(file));
+            if (sig == SignatureCheck.Invalid) { row.Note = L("brainx.err.signature"); return; }
+            if (sig == SignatureCheck.Unsigned)
+            {
+                string sha = await Task.Run(() => BrainXInstaller.Sha256(file));
+                if (Views.Editor.ChoiceDialog.Show(L("brainx.unsigned.title"), LF("brainx.unsigned.body", sha),
+                        new[] { L("setup.confirm.cancel"), L("brainx.unsigned.run") }) != 1) return;
+            }
+
+            row.Note = L("brainx.note.running");
+            await _brainInstaller.RunAsync(file);
+
+            // BrainX starts after its installer; it puts brainx-mcp.exe in place on its first run. Then connect, and move
+            // the connections CluadeX kept in its own list into BrainX (BrainX first).
+            row.Note = L("brainx.note.waiting");
+            using var limit = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            while (!limit.IsCancellationRequested && Services.Mcp.McpServerManager.FindInstalledBrainExe() == null)
+                await Task.Delay(3000, limit.Token).ContinueWith(_ => { });
+            if (Services.Mcp.McpServerManager.FindInstalledBrainExe() == null) { row.Note = L("brainx.note.notYet"); return; }
+            if (_mcp != null && !_mcp.IsBrainConnected) await _mcp.ConnectInstalledBrainAsync();
+            if (_connections != null) await _connections.ReconcileAsync();
+            await RecheckAsync();
+            SystemSetupService.RaiseToolsChanged();
+            row.Note = L("brainx.note.done");
+        }
+        finally
+        {
+            row.IsBusy = false;
+            if (file != null) BrainXInstaller.TryDelete(file);
         }
     }
 

@@ -1097,6 +1097,11 @@ public class AgentToolService : IDisposable
         if (githubEnabled)
         {
             schemas.Add(new() { Name = "git_push", Description = "Push commits to a remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
+        }
+        // The gh-based tools step aside while the GitHub connection (its official MCP server, via BrainX or CluadeX)
+        // is live: one set of GitHub tools for the model — the connection's, which does more.
+        if (githubEnabled && !Connections.ConnectionService.GitHubMcpLive(_mcpManager))
+        {
             schemas.Add(new() { Name = "gh_pr_create", Description = "Create a GitHub pull request", InputSchema = MakeSchema(("title", "string", "PR title", true), ("body", "string", "PR body", false), ("base", "string", "Base branch", false)) });
             schemas.Add(new() { Name = "gh_pr_list", Description = "List pull requests", InputSchema = MakeSchema() });
             schemas.Add(new() { Name = "gh_issue_create", Description = "Create a GitHub issue", InputSchema = MakeSchema(("title", "string", "Issue title", true), ("body", "string", "Issue body", false)) });
@@ -1454,6 +1459,8 @@ public class AgentToolService : IDisposable
                 [ACTION: gh_repo_view]
                 [/ACTION]
             """);
+            if (Connections.ConnectionService.GitHubMcpLive(_mcpManager))
+                sb.AppendLine("    (The GitHub connection is live: tools 21-25 are replaced by its github__* MCP tools — use those for pull requests, issues and repositories.)");
         }
 
         // Web tools (always available if feature unlocked)
@@ -1813,10 +1820,11 @@ public class AgentToolService : IDisposable
             ToolType.GitPush
                 => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
 
-            // GitHub tools — require GitHub feature enabled + activation
+            // GitHub tools — require GitHub feature enabled + activation, and step aside for a live GitHub connection
             ToolType.GhPrCreate or ToolType.GhPrList or
             ToolType.GhIssueCreate or ToolType.GhIssueList or ToolType.GhRepoView
-                => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github"),
+                => features.GitHubIntegration && _activationService.IsFeatureUnlocked("feature.github")
+                   && !Connections.ConnectionService.GitHubMcpLive(_mcpManager),
 
             // Web tools — require activation
             ToolType.WebFetch or ToolType.WebSearch
