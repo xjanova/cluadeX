@@ -350,7 +350,7 @@ public class LocalizationService
 
         // Advanced (requires API key)
         ["feature.openai"] = new() { ["en"] = "OpenAI (GPT-4, o1, o3)", ["th"] = "OpenAI (GPT-4, o1, o3)" },
-        ["feature.openai.desc"] = new() { ["en"] = "Use OpenAI's GPT-4o, o1, o3 models for coding. Requires OpenAI API key.", ["th"] = "ใช้โมเดล GPT-4o, o1, o3 ของ OpenAI สำหรับเขียนโค้ด ต้องมี API Key ของ OpenAI" },
+        ["feature.openai.desc"] = new() { ["en"] = "Use OpenAI's GPT-6 Astra, GPT-6.1 Sol and GPT-6 Luna for coding. Requires an OpenAI API key.", ["th"] = "ใช้โมเดล GPT-6 Astra, GPT-6.1 Sol และ GPT-6 Luna ของ OpenAI สำหรับเขียนโค้ด ต้องมี API Key ของ OpenAI" },
         ["feature.anthropic"] = new() { ["en"] = "Anthropic (Claude 4)", ["th"] = "Anthropic (Claude 4)" },
         ["feature.anthropic.desc"] = new() { ["en"] = "Use Anthropic's Claude Sonnet/Opus for advanced coding assistance. Requires Anthropic API key.", ["th"] = "ใช้ Claude Sonnet/Opus ของ Anthropic สำหรับช่วยเขียนโค้ดขั้นสูง ต้องมี API Key ของ Anthropic" },
         ["feature.gemini"] = new() { ["en"] = "Google Gemini", ["th"] = "Google Gemini" },

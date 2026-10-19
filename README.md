@@ -118,7 +118,7 @@ Things a CLI tool fundamentally cannot do:
 | Provider | Models | Requirements |
 |----------|--------|-------------|
 | **Local GGUF** | Any GGUF model via transparent dual backend (LLamaSharp in-proc for classic archs, bundled `llama-server.exe` for Gemma 3/3N/4, Llama 4, Qwen 3, DeepSeek V3/R1, Phi 4). Multi-GPU tensor-split supported. | GPU with VRAM (CUDA 12) or CPU |
-| **OpenAI** | GPT-4o, GPT-4o-mini, o1, o1-pro, o3, o3-mini, o4-mini | OpenAI API Key |
+| **OpenAI** | GPT-6 Astra, GPT-6.1 Sol (default), GPT-6 Sol, GPT-6 Luna, GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-4.1, GPT-4o | OpenAI API Key |
 | **Anthropic** | Claude Opus 4, Claude Sonnet 4, Claude 3.5 Sonnet, Claude Haiku 3.5 | Anthropic API Key |
 | **Google Gemini** | Gemini 2.5 Pro/Flash, Gemini 2.0 Flash, Gemma 4 (31B, 26B MoE, E4B, E2B), Gemma 3 | Google AI API Key |
 | **Ollama** | Any model supported by Ollama | Ollama installed locally |

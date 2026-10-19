@@ -15,18 +15,22 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
     public override string ProviderId => "OpenAI";
     public override string DisplayName => "OpenAI";
 
-    /// <summary>Used when no model is picked — OpenAI's "start here" flagship (October 2026).</summary>
-    public const string DefaultModel = "gpt-6-astra";
+    /// <summary>Used when no model is picked: GPT-6.1 Sol, "for complex tasks where time and cost matter". Same 1.05M
+    /// window and 128K output as Astra at a fifth of the price ($2 / $10 vs $10 / $50) — an agent loop sends the whole
+    /// conversation every step, so that ratio is the bill. Astra stays one pick away, and the dispatcher already
+    /// escalates a fix two workers could not make to it (DispatchPolicy.StrongerModel).</summary>
+    public const string DefaultModel = "gpt-6.1-sol";
 
-    // Newest first (October 2026). Only the offline starting list: Test Connection replaces it with the
-    // models this key can actually call (GET /models). Retiring 2026-10-23 and later: o-series, gpt-4,
-    // gpt-4-turbo, gpt-3.5-turbo, the dated gpt-5 snapshots — deliberately not listed.
+    // Newest first (October 2026, developers.openai.com/api/docs/models). Only the offline starting list: Test
+    // Connection replaces it with the models this key can actually call (GET /models). Shut down or retiring:
+    // o-series, gpt-4, gpt-4-turbo, gpt-3.5-turbo, the dated gpt-5 snapshots (2026-12-11) — deliberately not listed;
+    // gpt-4.1 / gpt-4o stay until their 2027-01-14 shutdown (replacement: gpt-6-luna).
     public static readonly string[] KnownModels =
     [
-        "gpt-6-astra",     // flagship
-        "gpt-6.1-sol",     // balanced
-        "gpt-6-sol",       // complex coding / agentic work
-        "gpt-6-luna",      // cheapest
+        "gpt-6-astra",     // most capable, hardest end-to-end work
+        "gpt-6.1-sol",     // high performance where time and cost matter (the default)
+        "gpt-6-sol",       // the previous Sol
+        "gpt-6-luna",      // most efficient, high-volume
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
         "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
         "gpt-4.1", "gpt-4o", "gpt-4o-mini",
@@ -48,6 +52,25 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         if (Regex.IsMatch(m, @"^gpt-5\.[2-5]")) return "xhigh";
         if (m.StartsWith("gpt-5") || Regex.IsMatch(m, @"^o[134](-|$)")) return "high";
         return null;
+    }
+
+    /// <summary>The model's published output ceiling (reasoning tokens included), or null when this build doesn't know
+    /// it and the setting goes out as it is. GPT-6 Astra / 6.1 Sol / 6 Sol / Luna: 128K — a larger max_output_tokens
+    /// is refused rather than trimmed.</summary>
+    public static int? MaxOutputTokens(string? model)
+    {
+        string m = model?.Trim().ToLowerInvariant() ?? "";
+        int slash = m.LastIndexOf('/');
+        if (slash >= 0) m = m[(slash + 1)..];
+        return m.StartsWith("gpt-6") ? 128_000 : null;
+    }
+
+    /// <summary>The output budget a request asks for: the setting, raised to the reasoning floor for a reasoning
+    /// model, then held at the model's ceiling.</summary>
+    public static int OutputBudget(string model, int setting)
+    {
+        int want = MaxEffort(model) != null ? Math.Max(setting, ReasoningMaxTokensFloor) : setting;
+        return MaxOutputTokens(model) is int cap ? Math.Min(want, cap) : want;
     }
 
     /// <summary>The user's effort pick as this model accepts it (rounded down), or null to omit the field.</summary>
@@ -122,7 +145,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         if (MaxEffort(model) != null)
         {
             // Reasoning model: no temperature/top_p, max_completion_tokens (includes reasoning tokens).
-            requestObj["max_completion_tokens"] = Math.Max(settings.MaxTokens, ReasoningMaxTokensFloor);
+            requestObj["max_completion_tokens"] = OutputBudget(model, settings.MaxTokens);
             if (EffortFor(model, Models.EffortLevels.Effective(settings.ReasoningEffort), settings.ExtendedThinkingEnabled) is { } effort)
                 requestObj["reasoning_effort"] = effort;
         }
@@ -371,7 +394,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
             ["input"] = BuildResponsesInput(messages, imageForm),
             ["stream"] = true,
             ["store"] = false,
-            ["max_output_tokens"] = reasoning ? Math.Max(settings.MaxTokens, ReasoningMaxTokensFloor) : settings.MaxTokens,
+            ["max_output_tokens"] = OutputBudget(model, settings.MaxTokens),
         };
         if (!string.IsNullOrWhiteSpace(systemPrompt)) req["instructions"] = systemPrompt;
         if (tools.Count > 0)
@@ -476,8 +499,10 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
 
         using var ownedResponse = response;
         var result = await ParseResponsesStreamAsync(response.Content, onTextDelta, ct);
-        if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0))
-            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, 0, 0);
+        // Cached input is billed at the cached rate (and counts toward GPT-6's 272K long-context line) — it was dropped
+        // here, so a cache-heavy agent step read as nearly free.
+        if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0))
+            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0);
         ConfirmNativeTools();
         if (refusedWhy != null)
         {
@@ -541,6 +566,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                                 int cached = u.TryGetProperty("input_tokens_details", out var itd)
                                              && itd.TryGetProperty("cached_tokens", out var ctk) && ctk.TryGetInt32(out var cv) ? cv : 0;
                                 result.InputTokens = (u.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var iv) ? iv : 0) - cached;
+                                result.CacheReadTokens = cached;
                                 result.OutputTokens = u.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var ov) ? ov : 0;
                             }
                             if (type == "response.incomplete")
@@ -632,10 +658,11 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         catch { return null; }
     }
 
-    // GET /models has no capability field — keep text-chat families, drop audio/image/embedding/etc.
+    // GET /models has no capability field — keep text-chat families, drop audio/image/embedding/etc. gpt-live-1 is a
+    // voice model on its own Live API (/v1/live/sessions); gpt-image-2.5-sunburst / -flare are images-only.
     private static readonly Regex ChatModelId = new(@"^(gpt-|o[134](-|$)|chatgpt-)", RegexOptions.IgnoreCase);
     private static readonly Regex NonChatModelId = new(
-        @"(tts|transcribe|realtime|audio|image|embedding|moderation|search|instruct|dall-e|whisper|davinci|babbage|codex)",
+        @"(tts|transcribe|realtime|audio|image|embedding|moderation|search|instruct|dall-e|whisper|davinci|babbage|codex|^gpt-live)",
         RegexOptions.IgnoreCase);
 
     /// <summary>True for a text-chat model ID from OpenAI's own /models list.</summary>

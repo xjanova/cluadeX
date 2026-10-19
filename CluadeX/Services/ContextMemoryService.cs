@@ -141,6 +141,8 @@ public class ContextMemoryService
             }
 
             case AiProviderType.OpenAI:
+                if (id.StartsWith("openai/")) id = id["openai/".Length..];
+                if (id.StartsWith("gpt-6")) return 1_050_000;   // Astra, 6.1 Sol, 6 Sol, Luna (922K in + 128K out)
                 if (id.StartsWith("gpt-4.1")) return 1_047_576;
                 if (id.StartsWith("gpt-5")) return 400_000;
                 if (id.StartsWith("o1") || id.StartsWith("o3") || id.StartsWith("o4")) return 200_000;
