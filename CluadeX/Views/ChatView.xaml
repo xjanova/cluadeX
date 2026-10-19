@@ -270,9 +270,13 @@
                                      zero height — a hidden bubble inside a live ListBoxItem still leaves
                                      its margin behind and the chat reads as full of blank gaps.
 
-                                     Four deliberate exemptions, checked as extra Conditions below: a
+                                     Five deliberate exemptions, checked as extra Conditions below: a
                                      FAILED tool, a tool carrying a file DIFF, a tool that returned an IMAGE
-                                     (what the agent looked at), and permission requests.
+                                     (what the agent looked at), permission requests, and the LIVE balloon
+                                     (IsLive: the work row the running call folds into — once background calls
+                                     fold into one row, no "⏵ Running…" line of its own is added, so hiding
+                                     this row left the chat silent for minutes; owner 2026-10-20: "ไม่แสดง
+                                     อะไรให้รู้ว่ากำลังทำอะไรอยู่"). It folds away again when the run moves on.
                                      Those are things the user has to decide or verify; hiding them would
                                      be the UI concealing its own state, which is the bug this whole
                                      session has been about. -->
@@ -283,6 +287,7 @@
                                         <Condition Binding="{Binding HasError}" Value="False"/>
                                         <Condition Binding="{Binding HasDiff}" Value="False"/>
                                         <Condition Binding="{Binding ThumbnailPath, Converter={StaticResource BoolVis}}" Value="Collapsed"/>
+                                        <Condition Binding="{Binding IsLive}" Value="False"/>
                                     </MultiDataTrigger.Conditions>
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </MultiDataTrigger>

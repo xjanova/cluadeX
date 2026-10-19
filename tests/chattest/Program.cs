@@ -423,6 +423,16 @@ internal static partial class Program
         Check("L4 Steps off: a finished status line is hidden", Container(done)?.Visibility == Visibility.Collapsed);
         Check("L4 Steps off: the live status line stays visible", Container(live)?.Visibility == Visibility.Visible);
         Check("L4 Steps off: the answer is visible", Container(answer)?.Visibility == Visibility.Visible);
+        // The running balloon: once background calls fold into one work row, the call that runs adds no status line of
+        // its own — it says what runs ON that row (IsLive). Hidden with Steps off, the chat showed nothing for minutes
+        // while Claude Dev worked (owner 2026-10-20). Live = visible; done = folded away again.
+        var balloon = new ChatMessage { Role = MessageRole.ToolAction, ToolKind = "run_command", Content = "3 การทำงาน", IsLive = true, LiveText = "Running ls" };
+        Vm.Messages.Add(balloon);
+        await Render();
+        Check("L4 Steps off: the live balloon (the row the running call folds into) stays visible", Container(balloon)?.Visibility == Visibility.Visible);
+        balloon.IsLive = false;
+        await Render();
+        Check("L4 Steps off: the balloon folds away once its run moves on", Container(balloon)?.Visibility == Visibility.Collapsed);
         Vm.ShowAgentInternals = true;
         await Render();
         Check("L4 Steps on: the finished status line shows", Container(done)?.Visibility == Visibility.Visible);

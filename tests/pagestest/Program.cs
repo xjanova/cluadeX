@@ -43,6 +43,7 @@ internal static partial class Program
 
     static string? LookAt;
     static bool LookRender;
+    static bool WebOnly;
 
     [STAThread]
     static int Main(string[] args)
@@ -51,6 +52,8 @@ internal static partial class Program
         // app). Nothing is shot (no page is visited): only what needs no network is drawn.
         // pagestest --look <folder> --render: the same, with the screens of a Flutter app drawn for real (flutter test).
         if (args.Length is 2 or 3 && args[0] == "--look") { LookAt = args[1]; LookRender = args.Length == 3 && args[2] == "--render"; }
+        // pagestest --web: the web-site parts only (minutes, not the ~25 of the real Flutter renders).
+        WebOnly = args.Contains("--web");
         var app = new CluadeX.App();
         app.InitializeComponent();
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -242,6 +245,8 @@ internal static partial class Program
 
         await StaticSite(vm, view, fx);
         await AddedWebPage(vm, fx);
+        await EmptyFolderBecomesSite(vm, fx);
+        if (WebOnly) return Finish();
         await LaravelSite(vm, view, fx);
         await FlutterApp(vm, view, fx);
         await FlutterReal(vm, view, fx);
@@ -455,6 +460,23 @@ internal static partial class Program
         vm.RemoveWebPageCommand.Execute(Cards(vm).First(c => c.IsExternal));
         Check("web page: it can be removed again", !Cards(vm).Any(c => c.IsExternal));
         vm.ShowPages = false;
+    }
+
+    // ═══════════════════════════════════════════ a folder opened empty ═══════════════════════════════════════════
+
+    /// <summary>The chat opens a new, empty folder and the AI writes the site after (owner 2026-10-20): the Studio said
+    /// "Unsupported" for good and never showed the page. It must look again when the files appear.</summary>
+    static async Task EmptyFolderBecomesSite(UiStudioViewModel vm, string fx)
+    {
+        Log("\n## A folder opened empty, then the AI writes the site");
+        string dir = Path.Combine(fx, "empty-then-site");
+        Directory.CreateDirectory(dir);
+        vm.OpenProject(dir, autoStart: true);
+        Check("empty: an empty folder is not a site yet", vm.IsUnsupported);
+        W(dir, "index.html", Page("Made by the AI", "#5E35B1"));
+        Check("empty: once index.html appears it is a static site and its preview runs by itself",
+            await WaitUntil(() => !vm.IsUnsupported && vm.IsServing && Studio(vm).CurrentBaseUrl != null, 15000),
+            $"unsupported={vm.IsUnsupported} serving={vm.IsServing}");
     }
 
     // ═══════════════════════════════════════════ a Laravel site ═══════════════════════════════════════════
