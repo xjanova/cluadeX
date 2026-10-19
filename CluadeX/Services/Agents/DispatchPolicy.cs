@@ -218,7 +218,7 @@ public static class DispatchPolicy
 
     /// <summary>Sub-agents go to Claude Dev (the user's own login) instead of the API: its quota ran out and failover is on.</summary>
     public static bool UseClaudeDev(bool quotaExhausted, bool autoFailover, AiProviderType active) =>
-        quotaExhausted && autoFailover && active is not (AiProviderType.ClaudeDev or AiProviderType.BrainX);
+        quotaExhausted && autoFailover && active is not (AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.BrainX);
 
     // ── workers ──
 

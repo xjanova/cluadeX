@@ -49,6 +49,7 @@ internal static class Program
             Hook(work);
             HookProcess();
             ClaudeDevArgs();
+            GeminiDevGuard();
             ChatTools(work);
             RunGates(work);
             DangerGate();
@@ -251,6 +252,61 @@ internal static class Program
         Check("fails closed on a broken payload (exit 2)", broken.Code == 2, $"{broken.Code}");
         var yes = Ask(HookJson("Bash", new { command = "echo APPROVE && " + RdSQ + Root }, Path.GetTempPath()));
         Check("the same delete runs once the user says yes on the red prompt (exit 0, via the app's pipe)", yes.Code == 0, $"{yes.Code} {yes.Err}");
+    }
+
+    /// <summary>Gemini Dev (the Gemini CLI) carries the same guard as a BeforeTool hook: its tool names reach the same
+    /// decisions, what Claude Dev is never let run is refused outright (Gemini CLI has no --disallowedTools), and a run
+    /// granted commands only cannot write files.</summary>
+    static void GeminiDevGuard()
+    {
+        Console.WriteLine("Gemini Dev carries the guard (BeforeTool hook, Gemini's tool names)");
+        string cwd = Path.GetTempPath();
+        Check("run_shell_command: a plain command is allowed", GuardHook.Decide(HookJson("run_shell_command", new { command = "git status" }, cwd)) == null);
+        Check("run_shell_command: rd on a drive root is refused", GuardHook.Decide(HookJson("run_shell_command", new { command = RdSQ + Root }, cwd)) != null);
+        string bad = "var r = Launch(\"cmd.exe\", \"/c " + RdSQ + Root.Replace("\\", "\\\\") + "\");";
+        Check("write_file: putting the incident line in a file is refused",
+            GuardHook.Decide(HookJson("write_file", new { file_path = Path.Combine(cwd, "t.cs"), content = bad }, cwd)) is { } w && w.Contains("refused to write"));
+        Check("replace: same through an edit", GuardHook.Decide(HookJson("replace", new { file_path = Path.Combine(cwd, "a.cs"), old_string = "x", new_string = bad }, cwd)) != null);
+        Check("write_file: an ordinary file is allowed", GuardHook.Decide(HookJson("write_file", new { file_path = Path.Combine(cwd, "b.cs"), content = "class B { }" }, cwd)) == null);
+
+        string push = "git push" + " --force origin main", reset = "npm test && git reset" + " --hard";
+        Check("never run headless: git push --force", GuardHook.NeverRun(push) != null);
+        Check("never run headless: chained git reset --hard", GuardHook.NeverRun(reset) != null);
+        Check("an ordinary push is not on that list", GuardHook.NeverRun("git push origin main") == null);
+
+        var settings = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: true).ToJsonString();
+        Check("the turn's settings hold the BeforeTool hook on Gemini's shell/write/replace with --cx-guard, timeout in ms",
+            settings.Contains("BeforeTool") && settings.Contains("run_shell_command|write_file|replace") && settings.Contains("--cx-guard")
+            && settings.Contains("300000") && settings.Contains("\"enabled\":true"), settings);
+        var advice = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: false).ToJsonString();
+        Check("a read-only advice run carries no hook", !advice.Contains("BeforeTool"), advice);
+
+        string? exe = MatchingExe();
+        if (exe == null) return;
+        (int Code, string Err) Ask(string json, bool noEdit)
+        {
+            var psi = new ProcessStartInfo(exe, GuardHook.Flag) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
+            if (noEdit) psi.Environment[GuardHook.NoEditEnv] = "1";
+            using var p = Process.Start(psi)!;
+            p.StandardInput.Write(json);
+            p.StandardInput.Close();
+            string err = p.StandardError.ReadToEnd();
+            if (!p.WaitForExit(30000)) { p.Kill(true); return (-1, "timeout"); }
+            return (p.ExitCode, err);
+        }
+        static string GeminiJson(string tool, object input, string dir) => JsonSerializer.Serialize(new
+        {
+            session_id = "s", transcript_path = "", cwd = dir, hook_event_name = "BeforeTool", timestamp = "2026-10-19T00:00:00Z",
+            tool_name = tool, tool_input = input,
+        });
+        var ok = Ask(GeminiJson("run_shell_command", new { command = "echo hi" }, cwd), false);
+        Check("the real hook allows a harmless Gemini command (exit 0)", ok.Code == 0, $"{ok.Code} {ok.Err}");
+        var never = Ask(GeminiJson("run_shell_command", new { command = push }, cwd), false);
+        Check("…refuses git push --force outright, no prompt (exit 2)", never.Code == 2 && never.Err.Contains("never run"), $"{never.Code} {never.Err}");
+        var noEdit = Ask(GeminiJson("write_file", new { file_path = Path.Combine(cwd, "b.cs"), content = "class B { }" }, cwd), true);
+        Check("…refuses a file write in a run granted commands only (exit 2)", noEdit.Code == 2 && noEdit.Err.Contains("not edit"), $"{noEdit.Code} {noEdit.Err}");
+        var edit = Ask(GeminiJson("write_file", new { file_path = Path.Combine(cwd, "b.cs"), content = "class B { }" }, cwd), false);
+        Check("…allows the same write in a run that may edit (exit 0)", edit.Code == 0, $"{edit.Code} {edit.Err}");
     }
 
     static void ClaudeDevArgs()

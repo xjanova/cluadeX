@@ -22,6 +22,24 @@ public static class GuardHook
 {
     public const string Flag = "--cx-guard";
 
+    /// <summary>Set in a Gemini Dev run that may run commands but not edit (the CLI's yolo mode allows both): the guard
+    /// then refuses Gemini's file-writing tools outright.</summary>
+    public const string NoEditEnv = "CLUADEX_GUARD_NO_EDIT";
+
+    /// <summary>Gemini CLI's tool names (Gemini Dev runs carry this hook as a BeforeTool hook, same exe).</summary>
+    private static bool IsGeminiTool(string tool) => tool is "run_shell_command" or "write_file" or "replace";
+
+    /// <summary>What Claude Dev is never let run headless (ClaudeDevProvider.NeverTools, passed to the CLI as
+    /// --disallowedTools). Gemini CLI has no such flag, so a Gemini Dev command is checked here: refused outright.</summary>
+    public static string? NeverRun(string command)
+    {
+        string c = System.Text.RegularExpressions.Regex.Replace(command ?? "", @"\s+", " ").Trim().ToLowerInvariant();
+        foreach (var bad in new[] { "git push --force", "git push -f", "git reset --hard", "git clean", "shutdown" })
+            if (c.StartsWith(bad, StringComparison.Ordinal) || c.Contains("&& " + bad) || c.Contains("; " + bad) || c.Contains("| " + bad))
+                return $"CluadeX safety: `{bad}` is never run by a headless agent — ask the user to run it themselves.";
+        return null;
+    }
+
     /// <summary>The hook's entry point. Exit 0 = allow, 2 = block.</summary>
     public static int Run()
     {
@@ -32,6 +50,21 @@ public static class GuardHook
             input = stdin.ReadToEnd();
         }
         catch { return Block("CluadeX safety: the guard could not read the tool call — refused."); }
+
+        // Refused outright, no prompt: what a headless agent never does (Gemini Dev has no --disallowedTools), and file
+        // writes in a Gemini Dev run that was granted commands only.
+        try
+        {
+            using var doc = JsonDocument.Parse(input);
+            var root = doc.RootElement;
+            string called = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
+            if (called is "write_file" or "replace" && Environment.GetEnvironmentVariable(NoEditEnv) == "1")
+                return Block("CluadeX safety: this run may run commands but not edit files — propose the change as a diff instead.");
+            if (called == "run_shell_command" && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
+                && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String && NeverRun(cmd.GetString() ?? "") is { } never)
+                return Block(never);
+        }
+        catch (JsonException) { return Block("CluadeX safety: the guard could not read the tool call — refused."); }
 
         string? reason;
         try { reason = Decide(input); }
@@ -53,12 +86,13 @@ public static class GuardHook
             using var doc = JsonDocument.Parse(hookJson);
             var root = doc.RootElement;
             string tool = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
-            if (!root.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return ("Claude Dev " + tool, "");
+            string who = IsGeminiTool(tool) ? "Gemini Dev " : "Claude Dev ";
+            if (!root.TryGetProperty("tool_input", out var ti) || ti.ValueKind != JsonValueKind.Object) return (who + tool, "");
             string Str(string name) => ti.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
             string action = Str("command") is { Length: > 0 } c ? c
                 : Str("file_path") is { Length: > 0 } f ? "write " + f
                 : Str("notebook_path");
-            return ("Claude Dev " + tool, action.Length > 4000 ? action[..4000] + "…" : action);
+            return (who + tool, action.Length > 4000 ? action[..4000] + "…" : action);
         }
         catch { return ("Claude Dev", ""); }
     }
@@ -89,6 +123,7 @@ public static class GuardHook
         {
             case "Bash":
             case "PowerShell":
+            case "run_shell_command":   // Gemini Dev
             {
                 string command = Str("command");
                 var dialect = tool == "PowerShell" ? DangerousCommandCheck.Dialect.PowerShell : DangerousCommandCheck.Dialect.Unknown;
@@ -104,8 +139,10 @@ public static class GuardHook
                 return null;
             }
             case "Write":
+            case "write_file":   // Gemini Dev
                 return CheckWritten(Str("file_path"), Str("content"));
             case "Edit":
+            case "replace":      // Gemini Dev
                 return CheckWritten(Str("file_path"), Str("new_string"));
             case "MultiEdit":
                 if (ti.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)

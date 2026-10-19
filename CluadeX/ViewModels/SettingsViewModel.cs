@@ -839,6 +839,7 @@ public partial class SettingsViewModel : ViewModelBase
                 AiProviderType.OpenAI => OpenAiProvider.KnownModels,
                 AiProviderType.Anthropic => AnthropicProvider.KnownModels,
                 AiProviderType.Gemini => GeminiProvider.KnownModels,
+                AiProviderType.GeminiDev => GeminiDevProvider.KnownModels,
                 AiProviderType.Ollama => ollamaProvider?.AvailableModels ?? new List<string>(),
                 _ => Array.Empty<string>(),
             };

@@ -73,7 +73,7 @@ public class LocalizationService
         ["settings.featureTogglesDesc"] = new() { ["en"] = "Enable or disable optional features", ["th"] = "เปิดหรือปิดฟีเจอร์เสริม" },
 
         // Settings page — added for XAML localization via {services:Loc ...}
-        ["settings.providerChoose"] = new() { ["en"] = "Pick a provider to set up and press Test connection. Which model answers is picked in the chat's model box: it lists every provider that is ready (a key entered, Ollama running, Claude Code installed). Local GGUF models are loaded from the Models page.", ["th"] = "เลือกผู้ให้บริการที่จะตั้งค่า แล้วกด ทดสอบการเชื่อมต่อ ส่วนโมเดลที่จะใช้ตอบเลือกได้ที่ช่องโมเดลในหน้าแชท ซึ่งแสดงทุกผู้ให้บริการที่พร้อมใช้ (ใส่คีย์แล้ว, Ollama เปิดอยู่, ติดตั้ง Claude Code แล้ว) โมเดล GGUF ในเครื่องโหลดได้จากหน้า Models" },
+        ["settings.providerChoose"] = new() { ["en"] = "Pick a provider to set up and press Test connection. Which model answers is picked in the chat's model box: it lists every provider that is ready (a key entered, Ollama running, Claude Code or the Gemini CLI installed). Local GGUF models are loaded from the Models page.", ["th"] = "เลือกผู้ให้บริการที่จะตั้งค่า แล้วกด ทดสอบการเชื่อมต่อ ส่วนโมเดลที่จะใช้ตอบเลือกได้ที่ช่องโมเดลในหน้าแชท ซึ่งแสดงทุกผู้ให้บริการที่พร้อมใช้ (ใส่คีย์แล้ว, Ollama เปิดอยู่, ติดตั้ง Claude Code หรือ Gemini CLI แล้ว) โมเดล GGUF ในเครื่องโหลดได้จากหน้า Models" },
         ["settings.localGgufNotice"] = new() { ["en"] = "Using local GGUF models via LLamaSharp. Load models from the Models tab.", ["th"] = "ใช้โมเดล GGUF บนเครื่องผ่าน LLamaSharp โหลดโมเดลจากแท็บ Models" },
         ["settings.apiKey"] = new() { ["en"] = "API Key", ["th"] = "API Key" },
         ["settings.apiKeyDesc"] = new() { ["en"] = "Your API key for this provider. Stored locally in settings.json. Click 'Show' to reveal while editing.", ["th"] = "API Key สำหรับผู้ให้บริการนี้ เก็บไว้ในเครื่องที่ settings.json คลิก 'แสดง' เพื่อดูขณะแก้ไข" },
@@ -967,6 +967,7 @@ public class LocalizationService
         ["chat.model.needsKey"] = new() { ["en"] = "Add a {0} API key in Settings ▸ AI Provider first", ["th"] = "ใส่ API key ของ {0} ที่ ตั้งค่า ▸ ผู้ให้บริการ AI ก่อนนะ" },
         ["chat.model.noKeyLabel"] = new() { ["en"] = "needs a key", ["th"] = "ยังไม่มีคีย์" },
         ["chat.model.claudeCodePlan"] = new() { ["en"] = "your Claude plan", ["th"] = "แพ็กเกจ Claude ของคุณ" },
+        ["chat.model.geminiCliPlan"] = new() { ["en"] = "your Google sign-in", ["th"] = "บัญชี Google ของคุณ" },
         ["chat.model.thisPc"] = new() { ["en"] = "on this PC", ["th"] = "ในเครื่องนี้" },
         ["chat.model.switchFailed"] = new() { ["en"] = "Couldn't switch the model — details in the Debug Log", ["th"] = "เปลี่ยนโมเดลไม่สำเร็จ — ดูรายละเอียดใน Debug Log" },
         ["chat.model.notOffered"] = new() { ["en"] = "{0} is not one of CluadeX's models (an API model with a key)", ["th"] = "{0} ไม่ได้อยู่ในรายการโมเดลของ CluadeX (โมเดล API ที่ใส่คีย์แล้ว)" },
@@ -1072,6 +1073,8 @@ public class LocalizationService
         ["chat.usage.creditTip"] = new() { ["en"] = "Open the provider's billing page — the only place the remaining credit is shown", ["th"] = "เปิดหน้า billing ของผู้ให้บริการ — ที่เดียวที่ดูเครดิตคงเหลือได้" },
         ["chat.usage.modelTip"] = new() { ["en"] = "The provider and model answering this chat. Change them in Settings → AI Provider.", ["th"] = "ผู้ให้บริการและโมเดลที่ตอบแชทนี้อยู่ · เปลี่ยนได้ที่ ตั้งค่า → ผู้ให้บริการ AI" },
         ["chat.usage.noModel"] = new() { ["en"] = "no model loaded", ["th"] = "ยังไม่ได้โหลดโมเดล" },
+        ["chat.usage.geminiCliDefault"] = new() { ["en"] = "Gemini CLI default", ["th"] = "โมเดลเริ่มต้นของ Gemini CLI" },
+        ["chat.usage.geminiCliTip"] = new() { ["en"] = "Gemini Dev runs the Gemini CLI on your Google sign-in — no API key and no per-token price; its free daily quota belongs to that account.", ["th"] = "Gemini Dev ใช้ Gemini CLI กับบัญชี Google ที่ล็อกอินไว้ ไม่ใช้ API key และไม่คิดราคาต่อโทเค็น โควตาฟรีรายวันเป็นของบัญชีนั้น" },
         ["chat.usage.cliDefault"] = new() { ["en"] = "Claude Code default", ["th"] = "โมเดลเริ่มต้นของ Claude Code" },
         ["chat.usage.tokens"] = new() { ["en"] = "Tokens / min", ["th"] = "Token ต่อนาที" },
         ["chat.usage.inputTokens"] = new() { ["en"] = "Input tokens / min", ["th"] = "Token ขาเข้าต่อนาที" },

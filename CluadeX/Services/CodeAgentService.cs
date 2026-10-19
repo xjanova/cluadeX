@@ -1968,7 +1968,7 @@ public partial class CodeAgentService
         // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
         // over one task. One call, its answer is the turn.
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX)
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.BrainX)
             return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
                 history, userMessage ?? "", ct, progress);
 
@@ -2020,7 +2020,8 @@ public partial class CodeAgentService
         List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
     {
         var result = await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
-        if (!result.AuthRefused || provider is not Providers.ClaudeDevProvider claudeDev) return result;
+        if (!result.AuthRefused || provider is not Providers.IDelegatedCliProvider claudeDev) return result;
+        string cliName = delegated == AiProviderType.GeminiDev ? "Gemini Dev" : "Claude Dev";
 
         bool th = _localizationService.CurrentLanguage == "th";
         bool loggedIn = await claudeDev.IsLoggedInAsync(ct);
@@ -2028,9 +2029,9 @@ public partial class CodeAgentService
         {
             if (!claudeDev.OpenLoginTerminal()) return result;
             OnAgentStatus?.Invoke(th
-                ? "🔑 Claude Dev หลุดล็อกอิน — เปิดหน้าล็อกอินให้แล้ว กด Authorize ในเบราว์เซอร์ แล้วฉันจะทำต่อเอง…"
-                : "🔑 Claude Dev was signed out — opened the sign-in; press Authorize in the browser and I'll carry on…");
-            _debugLog?.Info("Agent", "Claude Dev signed out · opened the sign-in, waiting for it");
+                ? $"🔑 {cliName} หลุดล็อกอิน — เปิดหน้าล็อกอินให้แล้ว ยืนยันบัญชีในเบราว์เซอร์ แล้วฉันจะทำต่อเอง…"
+                : $"🔑 {cliName} was signed out — opened the sign-in; confirm it in the browser and I'll carry on…");
+            _debugLog?.Info("Agent", $"{cliName} signed out · opened the sign-in, waiting for it");
             var until = DateTime.UtcNow + LoginWait;
             while (!loggedIn && DateTime.UtcNow < until)
             {
@@ -2039,12 +2040,12 @@ public partial class CodeAgentService
             }
             if (!loggedIn)
             {
-                _debugLog?.Info("Agent", "Claude Dev sign-in not finished in time · showing the steps");
+                _debugLog?.Info("Agent", $"{cliName} sign-in not finished in time · showing the steps");
                 return result;
             }
         }
         OnAgentStatus?.Invoke(th ? "✅ ล็อกอินแล้ว — กำลังส่งคำถามเดิมอีกครั้ง…" : "✅ Signed in — asking again…");
-        _debugLog?.Info("Agent", "Claude Dev signed in · running the turn again");
+        _debugLog?.Info("Agent", $"{cliName} signed in · running the turn again");
         return await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
     }
 
@@ -2063,30 +2064,35 @@ public partial class CodeAgentService
         }
         var sendHistory = brief != null ? new List<ChatMessage>() : history;
         string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage;
-        var grant = delegated == AiProviderType.ClaudeDev ? WorkerGrantFor(folder) : null;
+        // A CLI agent on this machine (Claude Dev, Gemini Dev): the edit/run grant, the guard, the chat tools, the rows.
+        bool cliAgent = delegated is AiProviderType.ClaudeDev or AiProviderType.GeminiDev;
+        var grant = cliAgent ? WorkerGrantFor(folder) : null;
         _debugLog?.Info("Agent", $"{delegated} passthrough · delegating the turn · folder={folder ?? "(none)"}"
             + $" · handoff={(brief != null ? brief.Length + " chars" : "no")}"
-            + (delegated == AiProviderType.ClaudeDev ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
+            + (cliAgent ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
         var cdResult = new AgentLoopResult { TurnCount = 1 };
         var cdText = new StringBuilder();
         // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
         var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
         // CluadeX's chat tools for the CLI (open_project / new_chat / close_chat, run here through the same gate inside
         // this chat's run) and the folders the user allowed beside the project.
-        using var chatTools = delegated == AiProviderType.ClaudeDev
+        using var chatTools = cliAgent
             ? Tools.ChatToolBridge.Register(AgentRunScope.Current, (call, c) => _agentToolService.ExecuteToolAsync(call, c), folder, ct)
             : null;
-        if (delegated == AiProviderType.ClaudeDev)
+        if (cliAgent)
         {
             var allowed = (AgentRunScope.Current?.ExtraFolders ?? Array.Empty<string>())
                 .Concat(_settingsService.Settings.AllowedProjectFolders ?? new List<string>());
             var dirs = folder == null ? new List<string>()
                 : Providers.ClaudeDevProvider.ExtraDirs(folder, allowed, Directory.Exists, p => PermissionService.IsUnsafeAcceptEditsRoot(p));
             Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs);
-            _debugLog?.Info("Agent", $"Claude Dev extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}");
+            _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}");
         }
         Providers.ClaudeDevProvider.Grant.Value = grant;
         Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
+        // The cowork room's agents work in the project too: the request tells them what the owner's rules allow (the same
+        // grant Claude Dev gets), instead of always "you may edit files there directly".
+        if (delegated == AiProviderType.BrainX) Providers.BrainXRoomProvider.Grant.Value = WorkerGrantFor(folder);
         try
         {
             await foreach (var chunk in provider.ChatAsync(sendHistory, sendMessage, null, ct))
@@ -2109,6 +2115,7 @@ public partial class CodeAgentService
             Providers.ClaudeDevProvider.Grant.Value = null;
             Providers.ClaudeDevProvider.StreamSink.Value = null;
             Providers.ClaudeDevProvider.Extras.Value = null;
+            Providers.BrainXRoomProvider.Grant.Value = null;
         }
         if (turn != null)
         {
@@ -2120,8 +2127,7 @@ public partial class CodeAgentService
             // /login" showed twice and the explanation never ran (it only runs when nothing was said). Say how to fix
             // it instead — owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย".
             string? authHelp = null;
-            if (turn.ResultIsError && Providers.ClaudeDevProvider.LooksLikeAuthRefusal(turn.ResultText)
-                && provider is Providers.ClaudeDevProvider claudeDev)
+            if (turn.ResultIsError && provider is Providers.IDelegatedCliProvider claudeDev && claudeDev.LooksLikeRefusal(turn.ResultText))
             {
                 try { authHelp = await claudeDev.ExplainAuthFailureAsync(turn.ResultText, ct); }
                 catch (OperationCanceledException) { throw; }
@@ -2151,7 +2157,7 @@ public partial class CodeAgentService
             return cdResult;
         }
         cdResult.FinalResponse = cdText.ToString().Trim();
-        cdResult.AuthRefused = provider is Providers.ClaudeDevProvider { LastTurnAuthRefused: true };
+        cdResult.AuthRefused = provider is Providers.IDelegatedCliProvider { LastTurnAuthRefused: true };
         cdResult.Success = cdResult.FinalResponse.Length > 0 && !cdResult.AuthRefused;
         cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
         cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
@@ -2216,7 +2222,7 @@ public partial class CodeAgentService
         if (result.StopReason != "error" || !IsQuotaExhausted(result.FinalResponse)) return result;
         NoteQuotaExhausted();   // sub-agents started from here on go to Claude Dev too
         if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.BrainX) return result;
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.BrainX) return result;
         var fallback = _providerManager.GetProvider(AiProviderType.ClaudeDev);
         try { await fallback.InitializeAsync(ct); } catch { }
         if (!fallback.IsReady)

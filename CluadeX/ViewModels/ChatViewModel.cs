@@ -652,6 +652,7 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.OpenAI => configured ?? OpenAiProvider.DefaultModel,
             AiProviderType.Gemini => configured ?? GeminiProvider.DefaultModel,
             AiProviderType.ClaudeDev => configured is null or "default" or "auto" ? Loc("chat.usage.cliDefault") : configured,
+            AiProviderType.GeminiDev => configured is null or "default" or "auto" ? Loc("chat.usage.geminiCliDefault") : configured,
             _ => configured ?? Loc("chat.usage.noModel"),
         };
         ThinkToggleVisible = type switch
@@ -706,6 +707,7 @@ public partial class ChatViewModel : ViewModelBase
             RateLimitText = local ? Loc("chat.usage.local") : Loc("chat.usage.unknown");
             RateLimitTip = local ? Loc("chat.usage.localTip")
                 : type == AiProviderType.ClaudeDev ? Loc("chat.usage.cliTip")
+                : type == AiProviderType.GeminiDev ? Loc("chat.usage.geminiCliTip")
                 : Loc("chat.usage.unknownTip");
         }
 
@@ -3050,11 +3052,16 @@ public partial class ChatViewModel : ViewModelBase
         if (input.Equals("/login", StringComparison.OrdinalIgnoreCase))
         {
             ClearBox();
-            bool opened = Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
+            // The CLI of the provider answering this chat: Gemini Dev signs in with Google, everything else is Claude Code.
+            bool gemini = _providerManager.ActiveProviderType == AiProviderType.GeminiDev;
+            bool opened = gemini
+                ? _providerManager.GetProvider(AiProviderType.GeminiDev) is Services.Providers.GeminiDevProvider gd && gd.OpenLoginTerminal()
+                : Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
             Messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,
-                Content = opened ? "🔑 " + Loc("chat.login.opened") : "⚠ " + Loc("chat.login.failed"),
+                Content = opened ? "🔑 " + Loc(gemini ? "chat.login.geminiOpened" : "chat.login.opened")
+                                 : "⚠ " + Loc(gemini ? "chat.login.geminiFailed" : "chat.login.failed"),
             });
             ScrollToBottom?.Invoke();
             return;

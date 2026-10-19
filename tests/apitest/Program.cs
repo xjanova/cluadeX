@@ -552,6 +552,7 @@ internal static class Program
         await EffortWire.Run(Check, Section);
         await HandoffWire.Run(Check, Section);
         await ClaudeDevStreamWire.Run(Check, Section);
+        await GeminiDevWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
     }

@@ -32,7 +32,7 @@ namespace CluadeX.Services.Providers;
 ///   fresh CLI session; `--continue` was rejected because it binds to "the last session
 ///   in this cwd", which the user's own terminal sessions would silently hijack.
 /// </summary>
-public class ClaudeDevProvider : IAiProvider
+public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
 {
     private readonly SettingsService _settingsService;
     private readonly FileSystemService _fileSystemService;
@@ -548,7 +548,7 @@ public class ClaudeDevProvider : IAiProvider
 
     /// <summary>Newest-first token-budgeted replay, same shape as the local history
     /// fit: the CLI call is stateless, so the transcript IS its memory of the chat.</summary>
-    private static string BuildTranscript(List<ChatMessage> history)
+    internal static string BuildTranscript(List<ChatMessage> history)
     {
         const int budget = 6000; // tokens — the CLI's window is huge; this bounds latency, not fit
         var kept = new List<ChatMessage>();
@@ -605,6 +605,8 @@ public class ClaudeDevProvider : IAiProvider
 
     /// <summary>Open the login console with this provider's CLI.</summary>
     public bool OpenLoginTerminal() => OpenLoginTerminal(_cliPath);
+
+    public bool LooksLikeRefusal(string? text) => LooksLikeAuthRefusal(text);
 
     /// <summary>
     /// What to tell the user about a refusal, given `claude auth status` (null when it could not be read). Pure, so the
