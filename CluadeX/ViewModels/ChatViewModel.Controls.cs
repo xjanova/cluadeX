@@ -600,6 +600,14 @@ public partial class ChatViewModel
         RefreshChatModelChoices();
         ProbeOllamaForChatBox(force: true);
         ProbeGeminiCliForChatBox();
+        // The setup page installed or signed something in: look again (the box lists what is ready).
+        Services.Setup.SystemSetupService.ToolsChanged += () => App.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            _geminiCliProbed = false;
+            ProbeGeminiCliForChatBox();
+            ProbeOllamaForChatBox(force: true);
+            RefreshChatModelChoices();
+        });
         RefreshSpend();
         RefreshEstimate();
     }

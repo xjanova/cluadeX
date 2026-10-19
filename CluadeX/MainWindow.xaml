@@ -87,6 +87,9 @@
         <DataTemplate DataType="{x:Type vm:McpServersViewModel}">
             <views:McpServersView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SetupViewModel}">
+            <views:SetupView/>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:TimeMachineViewModel}">
             <views:TimeMachineView/>
         </DataTemplate>
@@ -600,6 +603,11 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="McpServers"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.mcpTip}" AutomationProperties.Name="MCP Servers"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="setup" Content="&#xE90F;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Setup, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Setup"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.setupTip}" AutomationProperties.Name="Setup"/>
                                 <RadioButton Style="{StaticResource ActivityBarButton}" Tag="tasks" Content="&#xE9D5;"
                                              IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Tasks, Mode=OneWay}"
                                              Command="{Binding NavigateToCommand}" CommandParameter="Tasks"

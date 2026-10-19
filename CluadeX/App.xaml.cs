@@ -1032,6 +1032,8 @@ public partial class App : Application
         services.AddSingleton<WatchViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
+        services.AddSingleton<Services.Setup.SystemSetupService>();
+        services.AddSingleton<SetupViewModel>();
         services.AddSingleton<TimeMachineViewModel>();
         services.AddSingleton<HexEditorViewModel>();
         services.AddSingleton<CodeEditorViewModel>();

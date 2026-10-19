@@ -491,10 +491,13 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     }
 
     /// <summary>Signed in = the CLI's Google sign-in is cached, or an API key is in its environment.</summary>
-    public Task<bool> IsLoggedInAsync(CancellationToken ct) => Task.FromResult(
+    public Task<bool> IsLoggedInAsync(CancellationToken ct) => Task.FromResult(SignedIn());
+
+    /// <summary>The same check, for the setup page and the chat's model box.</summary>
+    public static bool SignedIn() =>
         File.Exists(Path.Combine(GeminiHome(), "oauth_creds.json"))
         || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GEMINI_API_KEY"))
-        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GOOGLE_API_KEY")));
+        || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GOOGLE_API_KEY"));
 
     /// <summary>A console window running the CLI interactively: it asks how to sign in and opens Google's page in the
     /// browser — the click there is the user's. CluadeX never types a password.</summary>
