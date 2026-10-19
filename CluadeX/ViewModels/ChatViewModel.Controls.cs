@@ -72,6 +72,29 @@ public partial class ChatViewModel
         _ => "",
     };
 
+    /// <summary>Ollama's models from the last quiet probe; null while Ollama does not answer.</summary>
+    private List<string>? _ollamaModels;
+    private DateTime _ollamaProbedAt = DateTime.MinValue;
+    private bool _ollamaProbing;
+
+    /// <summary>Ask Ollama (quietly, at most every 30 s) whether it is there, and list its models in the box if so.</summary>
+    private async void ProbeOllamaForChatBox(bool force = false)
+    {
+        if (_ollamaProbing || !force && DateTime.UtcNow - _ollamaProbedAt < TimeSpan.FromSeconds(30)) return;
+        if (_providerManager.GetProvider(AiProviderType.Ollama) is not OllamaProvider ollama) return;
+        _ollamaProbing = true;
+        try
+        {
+            var models = await ollama.ProbeModelsAsync();
+            var now = models is { Count: > 0 } ? models.Distinct().ToList() : null;
+            bool changed = now == null ? _ollamaModels != null : _ollamaModels == null || !now.SequenceEqual(_ollamaModels);
+            _ollamaModels = now;
+            if (changed) RefreshChatModelChoices();
+        }
+        catch (Exception ex) { _debugLog?.Warn("Chat", "probing Ollama for the model box failed", ex); }
+        finally { _ollamaProbing = false; _ollamaProbedAt = DateTime.UtcNow; }
+    }
+
     /// <summary>Rebuild the model box from the providers that have a key, and select what answers now. Only touches the
     /// list when it changed, so an open drop-down isn't reset every refresh.</summary>
     private void RefreshChatModelChoices()
@@ -98,8 +121,17 @@ public partial class ChatViewModel
                 ? ccCfg.EffectiveModelId!.Trim() : "default";
             list.Add(new ChatModelChoice(AiProviderType.ClaudeDev, cc, _providerManager.GetProvider(AiProviderType.ClaudeDev).DisplayName, Loc("chat.model.claudeCodePlan")));
         }
-        // The model on this PC — listed while it answers (picking one is the local picker's job: it loads weights into VRAM).
-        if (_providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama)
+        // Ollama: every model it has, whenever it answers (the quiet probe below) — Ollama loads the picked one itself.
+        // (owner 2026-10-19: "ต้องมีให้เลือกทุกอย่างที่ใช้งานได้แล้ว ... ติดต่อ local ai ได้ ต้องโชว์ให้หมด")
+        if (_ollamaModels is { Count: > 0 } ollamaModels)
+        {
+            string ollamaLabel = _providerManager.GetProvider(AiProviderType.Ollama).DisplayName;
+            list.AddRange(ollamaModels.Select(m => new ChatModelChoice(AiProviderType.Ollama, m, ollamaLabel, Loc("chat.model.thisPc"))));
+        }
+        // A GGUF on this PC (in-process or llama-server) — listed while it answers. Picking another one is the local picker's
+        // and the Models page's job: it loads weights into VRAM.
+        if (_providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer
+            || _providerManager.ActiveProviderType == AiProviderType.Ollama && _ollamaModels is not { Count: > 0 })
         {
             var at = _providerManager.ActiveProviderType;
             string name = at == AiProviderType.Ollama
@@ -111,6 +143,9 @@ public partial class ChatViewModel
         // The BrainX cowork room: offered whenever the brain is connected — the agents in the room answer.
         if (BrainSyncService.Current?.IsBrainAvailable == true)
             list.Add(new ChatModelChoice(AiProviderType.BrainX, BrainXRoomModel, "BrainX", Loc("chat.model.brainxRoom")));
+
+        // What can answer now first; the vendors still waiting for a key go last (stable: each keeps its own order).
+        list = list.OrderBy(c => c.NeedsKey).ToList();
 
         _syncingModelChoice = true;
         try
@@ -140,15 +175,15 @@ public partial class ChatViewModel
         try
         {
             if (c.NeedsKey) { StatusText = LocF("chat.model.needsKey", c.ProviderLabel); return; }
-            // The model on this PC is only listed while it answers: nothing to switch.
-            if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama) return;
+            // A GGUF on this PC is only listed while it answers: nothing to switch. (An Ollama model is: Ollama loads it.)
+            if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer) return;
             bool otherProvider = _providerManager.ActiveProviderType != c.Provider;
             if (otherProvider)
             {
                 // A run holds its provider for the whole loop; the model of the same provider can change mid-run.
                 if (_runs.Count > 0) { StatusText = Loc("chat.model.providerBusy"); return; }
                 // Cloud providers are the paid tier — the same gate as Settings ▸ AI Provider. (The BrainX room is not.)
-                if (c.Provider != AiProviderType.BrainX && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
+                if (c.Provider is not (AiProviderType.BrainX or AiProviderType.Ollama) && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
             }
             string key = c.Provider.ToString();
             _settingsService.UpdateSettings(s =>
@@ -534,6 +569,7 @@ public partial class ChatViewModel
         });
         _fileSystemService.OnWorkingDirectoryChanged += () => App.Current?.Dispatcher.BeginInvoke(RefreshEstimate);
         RefreshChatModelChoices();
+        ProbeOllamaForChatBox(force: true);
         RefreshSpend();
         RefreshEstimate();
     }

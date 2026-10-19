@@ -400,7 +400,6 @@ public partial class SettingsViewModel : ViewModelBase
     public ICommand RefreshGpuCommand { get; }
     public ICommand OpenDirectoryCommand { get; }
     public ICommand TestConnectionCommand { get; }
-    public ICommand ApplyProviderCommand { get; }
     public ICommand RefreshModelsCommand { get; }
     public ICommand RefreshMemoriesCommand { get; }
     public ICommand DeleteMemoryCommand { get; }
@@ -433,7 +432,6 @@ public partial class SettingsViewModel : ViewModelBase
         RefreshGpuCommand = new RelayCommand(RefreshGpu);
         OpenDirectoryCommand = new RelayCommand<string>(OpenDirectory);
         TestConnectionCommand = new AsyncRelayCommand(TestConnection);
-        ApplyProviderCommand = new AsyncRelayCommand(ApplyProvider);
         RefreshModelsCommand = new AsyncRelayCommand(RefreshModels);
         RefreshMemoriesCommand = new RelayCommand(RefreshMemories);
         DeleteMemoryCommand = new RelayCommand(DeleteSelectedMemory);
@@ -898,6 +896,10 @@ public partial class SettingsViewModel : ViewModelBase
             var (success, message) = await provider.TestConnectionAsync();
             if (SelectedProvider != testedType) return;   // user switched provider while we waited
             ConnectionTestResult = $"{T(success ? "settings.connectedPrefix" : "settings.failedPrefix")}: {message}";
+            // The provider answering the chat: re-initialise it so a fixed key / workspace is used from the next message.
+            // (Which provider answers is picked in the chat's model box — there is no "Use this provider" here any more.)
+            if (success && _providerManager.ActiveProviderType == testedType)
+                await _providerManager.ReinitializeActiveAsync();
 
             // Same key + workspace → also load the models this key can actually call. Done even when the
             // test failed: a "model not available" failure is exactly when the user needs the real list.
@@ -928,41 +930,6 @@ public partial class SettingsViewModel : ViewModelBase
         System.IO.IOException => T("settingsm.errIo"),
         _ => T("settingsm.errGeneric"),
     };
-
-    private async Task ApplyProvider()
-    {
-        // Cloud providers are part of the paid tier
-        bool requiresActivation = SelectedProvider is AiProviderType.OpenAI
-            or AiProviderType.Anthropic or AiProviderType.Gemini;
-        if (requiresActivation && !_activationService.IsActivated)
-        {
-            ConnectionTestResult = T("settings.activationRequired");
-            return;
-        }
-
-        SaveProviderConfig();
-        ConnectionTestResult = T("settings.switching");
-        try
-        {
-            // Already the active provider (e.g. after fixing its key): switching is a no-op, so
-            // re-initialise instead — otherwise the new key/workspace is never tested.
-            if (_providerManager.ActiveProviderType == SelectedProvider
-                && ReferenceEquals(_providerManager.ActiveProvider, _providerManager.GetProvider(SelectedProvider)))
-                await _providerManager.ReinitializeActiveAsync();
-            else
-                await _providerManager.SwitchProviderAsync(SelectedProvider);
-
-            var active = _providerManager.ActiveProvider;
-            ConnectionTestResult = string.Format(T("settings.nowUsing"), active.DisplayName)
-                + (active.IsReady ? T("settings.readySuffix") : $"\n{active.StatusMessage}");
-            OnPropertyChanged(nameof(ActiveProviderName));
-        }
-        catch (Exception ex)
-        {
-            _log?.Error("Settings", $"Switching to {SelectedProvider} threw", ex);
-            ConnectionTestResult = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
-        }
-    }
 
     /// <summary>Replace the dropdown with the models this key can call, keeping the current pick.
     /// Returns how many were found; 0 = the listing failed and the built-in list stays.</summary>

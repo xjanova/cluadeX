@@ -73,7 +73,7 @@ public class LocalizationService
         ["settings.featureTogglesDesc"] = new() { ["en"] = "Enable or disable optional features", ["th"] = "เปิดหรือปิดฟีเจอร์เสริม" },
 
         // Settings page — added for XAML localization via {services:Loc ...}
-        ["settings.providerChoose"] = new() { ["en"] = "Pick the provider to set up, then press \"Use this provider\". Local models, Ollama, llama-server, Claude Code (ClaudeDev), Anthropic, OpenAI and Gemini are supported.", ["th"] = "เลือกผู้ให้บริการที่จะตั้งค่า แล้วกด \"ใช้ผู้ให้บริการนี้\" รองรับโมเดลในเครื่อง, Ollama, llama-server, Claude Code (ClaudeDev), Anthropic, OpenAI และ Gemini" },
+        ["settings.providerChoose"] = new() { ["en"] = "Pick a provider to set up and press Test connection. Which model answers is picked in the chat's model box: it lists every provider that is ready (a key entered, Ollama running, Claude Code installed). Local GGUF models are loaded from the Models page.", ["th"] = "เลือกผู้ให้บริการที่จะตั้งค่า แล้วกด ทดสอบการเชื่อมต่อ ส่วนโมเดลที่จะใช้ตอบเลือกได้ที่ช่องโมเดลในหน้าแชท ซึ่งแสดงทุกผู้ให้บริการที่พร้อมใช้ (ใส่คีย์แล้ว, Ollama เปิดอยู่, ติดตั้ง Claude Code แล้ว) โมเดล GGUF ในเครื่องโหลดได้จากหน้า Models" },
         ["settings.localGgufNotice"] = new() { ["en"] = "Using local GGUF models via LLamaSharp. Load models from the Models tab.", ["th"] = "ใช้โมเดล GGUF บนเครื่องผ่าน LLamaSharp โหลดโมเดลจากแท็บ Models" },
         ["settings.apiKey"] = new() { ["en"] = "API Key", ["th"] = "API Key" },
         ["settings.apiKeyDesc"] = new() { ["en"] = "Your API key for this provider. Stored locally in settings.json. Click 'Show' to reveal while editing.", ["th"] = "API Key สำหรับผู้ให้บริการนี้ เก็บไว้ในเครื่องที่ settings.json คลิก 'แสดง' เพื่อดูขณะแก้ไข" },
@@ -86,7 +86,6 @@ public class LocalizationService
         ["settings.useCustomModel"] = new() { ["en"] = "Use custom model ID", ["th"] = "ใช้ Model ID กำหนดเอง" },
         ["settings.refreshModels"] = new() { ["en"] = "Refresh the model list", ["th"] = "รีเฟรชรายชื่อโมเดล" },
         ["settings.testConnection"] = new() { ["en"] = "Test Connection", ["th"] = "ทดสอบการเชื่อมต่อ" },
-        ["settings.applyProvider"] = new() { ["en"] = "Use this provider", ["th"] = "ใช้ผู้ให้บริการนี้" },
         ["settings.workspaceId"] = new() { ["en"] = "Workspace ID", ["th"] = "Workspace ID" },
         ["settings.workspaceIdDesc"] = new() { ["en"] = "Needed only when your API key isn't scoped to one workspace. Find it in Claude Console → Settings → Workspaces (it starts with wrkspc_). Leave blank for a workspace-scoped key.", ["th"] = "จำเป็นเฉพาะเมื่อ API key ไม่ได้ผูกกับ workspace ใด — ดูได้ที่ Claude Console → Settings → Workspaces (ขึ้นต้นด้วย wrkspc_) ถ้าคีย์ผูกกับ workspace อยู่แล้วให้เว้นว่าง" },
         ["settings.workspaceIdLink"] = new() { ["en"] = "Open Workspaces in Claude Console", ["th"] = "เปิดหน้า Workspaces ใน Claude Console" },
@@ -227,9 +226,6 @@ public class LocalizationService
         ["settings.testing"] = new() { ["en"] = "Testing…", ["th"] = "กำลังทดสอบ…" },
         ["settings.connectedPrefix"] = new() { ["en"] = "Connected", ["th"] = "เชื่อมต่อแล้ว" },
         ["settings.failedPrefix"] = new() { ["en"] = "Failed", ["th"] = "ไม่สำเร็จ" },
-        ["settings.switching"] = new() { ["en"] = "Switching provider…", ["th"] = "กำลังเปลี่ยนผู้ให้บริการ…" },
-        ["settings.nowUsing"] = new() { ["en"] = "Now using: {0}", ["th"] = "ใช้งานอยู่: {0}" },
-        ["settings.readySuffix"] = new() { ["en"] = " (ready)", ["th"] = " (พร้อม)" },
         ["settings.fetchingModels"] = new() { ["en"] = "Fetching models…", ["th"] = "กำลังโหลดรายชื่อโมเดล…" },
         ["settings.detecting"] = new() { ["en"] = "Detecting…", ["th"] = "กำลังตรวจสอบ…" },
         ["settings.gpuNone"] = new() { ["en"] = "No dedicated GPU detected — local models will run on the CPU (slower, but it works).", ["th"] = "ไม่พบ GPU แยก — โมเดลในเครื่องจะรันบน CPU (ช้ากว่า แต่ใช้ได้)" },

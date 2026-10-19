@@ -1217,6 +1217,7 @@ public partial class ChatViewModel : ViewModelBase
             UpdateContextInfo();
             CostText = _costTracker.FormatCost();
             RefreshUsageStrip();
+            ProbeOllamaForChatBox();   // throttled to 30 s: lists Ollama's models in the model box while it answers
         };
         _memoryTimer.Start();
         InitControls(activation);
