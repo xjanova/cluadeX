@@ -366,6 +366,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         if (settingsPath != null) psi.Environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = settingsPath;
         if (grant is { Run: true, Edit: false }) psi.Environment[Safety.GuardHook.NoEditEnv] = "1";
         psi.Environment["NO_COLOR"] = "1";
+        // Without a TTY the CLI warns "256-color support not detected" on stderr every turn; TERM quiets it.
+        psi.Environment["TERM"] = "xterm-256color";
 
         var translator = new GeminiStreamTranslator(ServerNamesOf(systemSettings, userServers));
         SetStatus("Gemini Dev thinking…");
@@ -447,9 +449,16 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
 
     private static string Cap(string s, int n) => s.Length > n ? s[..n] + "…" : s;
 
-    /// <summary>The CLI's last line on stderr that says something (it prints a stack under the message).</summary>
-    private static string? LastMeaningfulLine(string stderr) =>
-        stderr.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0 && !l.StartsWith("at ", StringComparison.Ordinal));
+    /// <summary>The line on stderr that says what went wrong. The CLI prints a stack under the message, and terminal
+    /// warnings ("Warning: 256-color support not detected…") above it — taking the first line showed the warning as
+    /// the error and hid the real one (2026-10-19). An "Error" line wins; a lone warning is still better than nothing.</summary>
+    public static string? LastMeaningfulLine(string stderr)
+    {
+        var lines = stderr.Split('\n').Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !l.StartsWith("at ", StringComparison.Ordinal)).ToList();
+        var said = lines.Where(l => !l.StartsWith("Warning:", StringComparison.OrdinalIgnoreCase)).ToList();
+        return said.FirstOrDefault(l => l.Contains("Error", StringComparison.Ordinal)) ?? said.FirstOrDefault() ?? lines.FirstOrDefault();
+    }
 
     // ─── Sign-in ───
 
@@ -467,13 +476,32 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         || text.Contains("credentials", StringComparison.OrdinalIgnoreCase)
         || text.Contains("RESOURCE_EXHAUSTED", StringComparison.Ordinal)
         || text.Contains("quota", StringComparison.OrdinalIgnoreCase)
-        || text.Contains("429", StringComparison.Ordinal));
+        || text.Contains("429", StringComparison.Ordinal)
+        || IsIneligibleAccount(text));
+
+    /// <summary>Google refuses the signed-in account itself: "IneligibleTierError: This client is no longer supported
+    /// for Gemini Code Assist for individuals" (free personal accounts, seen 2026-10-19 on CLI 0.64). Signing in again
+    /// or updating the CLI does not help — only an API key (or a paid Code Assist account) does.</summary>
+    public static bool IsIneligibleAccount(string? text) => text != null && (
+        text.Contains("IneligibleTier", StringComparison.Ordinal)
+        || text.Contains("UNSUPPORTED_CLIENT", StringComparison.Ordinal)
+        || text.Contains("no longer supported for Gemini Code Assist", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>What to tell the user about a refusal. Pure, so the harness checks the wording. Null = not a refusal.</summary>
     public static string? AuthGuidance(string refusal, bool signedIn)
     {
         if (!LooksLikeAuthRefusal(refusal)) return null;
         string raw = Cap(refusal.Trim().Replace('\n', ' '), 300);
+        if (IsIneligibleAccount(refusal))
+            return $"⛔ **Google ไม่ให้บัญชีนี้ใช้ Gemini CLI แล้ว**\n\nข้อความจาก Gemini CLI: `{raw}`\n\n"
+                 + "บัญชี Google ส่วนตัวแบบฟรี (Gemini Code Assist for individuals) ถูก Google ปิดสิทธิ์ใช้ผ่าน Gemini CLI — "
+                 + "ล็อกอินใหม่หรืออัปเดต CLI ก็ไม่หาย\n\n"
+                 + "**วิธีแก้: ใช้ Gemini API key แทน**\n"
+                 + "1. สร้างคีย์ที่ https://aistudio.google.com/apikey\n"
+                 + "2. ตั้งตัวแปรระบบ `GEMINI_API_KEY` เป็นคีย์นั้น (Windows: Edit environment variables for your account)\n"
+                 + "3. เปิดเทอร์มินัลรัน `gemini` พิมพ์ `/auth` แล้วเลือก **Use Gemini API key**\n"
+                 + "4. ปิด-เปิด CluadeX ใหม่ (ให้เห็นตัวแปรใหม่) แล้วกด **ลองใหม่**\n\n"
+                 + "ระหว่างนี้เปลี่ยนไปใช้โมเดลอื่นในกล่องเลือกโมเดลได้ (เช่น Gemini API ที่มีคีย์ หรือ Claude Dev)";
         bool quota = refusal.Contains("quota", StringComparison.OrdinalIgnoreCase)
             || refusal.Contains("RESOURCE_EXHAUSTED", StringComparison.Ordinal) || refusal.Contains("429", StringComparison.Ordinal);
         if (quota && signedIn)

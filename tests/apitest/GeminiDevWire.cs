@@ -108,6 +108,20 @@ internal static class GeminiDevWire
         check("gd-auth", "signed in but out of quota → says it is the quota, not the sign-in", quota != null && quota.Contains("โควตา") && !quota.Contains("Sign in with Google"), quota ?? "");
         check("gd-auth", "an ordinary error is not mistaken for a sign-in problem", GeminiDevProvider.AuthGuidance("SyntaxError in the user's script", true) == null, "");
 
+        // The real stderr of a free personal account (2026-10-19): a terminal warning first, the refusal under it.
+        string ineligibleErr = "Warning: 256-color support not detected. Using a terminal with at least 256-color support is recommended for a better visual experience.\n"
+            + "Error authenticating: IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google\n"
+            + "    at throwIneligibleOrProjectIdError (file:///C:/x/chunk.js:311997:11)\n  ineligibleTiers: [\n";
+        string? picked = GeminiDevProvider.LastMeaningfulLine(ineligibleErr);
+        check("gd-stderr", "the error line is picked, not the 256-color warning above it",
+            picked != null && picked.StartsWith("Error authenticating") && picked.Contains("IneligibleTierError"), picked ?? "");
+        check("gd-stderr", "a stderr holding only a warning still says something",
+            GeminiDevProvider.LastMeaningfulLine("Warning: 256-color support not detected.\n") == "Warning: 256-color support not detected.", "");
+        string? ineligible = GeminiDevProvider.AuthGuidance(picked ?? "", signedIn: true);
+        check("gd-auth", "a refused (ineligible) account → API-key steps, not 'sign in again'",
+            ineligible != null && ineligible.Contains("GEMINI_API_KEY") && ineligible.Contains("/auth") && !ineligible.Contains("Sign in with Google") && !ineligible.Contains("โควตา"),
+            ineligible ?? "");
+
         // ─── arguments ───
         var advice = GeminiDevProvider.BuildArgs(Folder, null, "default", null);
         check("gd-args", "read-only: stream-json, --skip-trust, approval default (headless refuses every tool needing approval), no -m",
