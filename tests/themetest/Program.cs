@@ -108,6 +108,7 @@ internal static partial class Program
                 case "--max-pct" when i + 1 < args.Length: MaxChangedPct = double.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture); break;
                 case "--themes" when i + 1 < args.Length: OnlyThemes = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
                 case "--all-pages": AllPages = true; break;
+                case "--model-shots": ModelShots = true; break;
                 case "--only" when i + 1 < args.Length: OnlyPages = args[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); break;
             }
         }
@@ -990,6 +991,7 @@ internal static partial class Program
             SavePng(bmp, path);
             saved[key] = path;
             ClickableButtons(set, key);
+            if (key == "model-manager" && ModelShots) await ModelManagerShots(set, dir);
             if (key == "code-editor")
             {
                 // The empty state too: with no folder open, the explorer offers "Open Folder" — and must take the click.

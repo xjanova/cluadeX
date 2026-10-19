@@ -107,13 +107,18 @@ public class LocalGgufProvider : IAiProvider
         //     llama-server ships the full CUDA runtime (cudart/cublas) and offloads to the GPU reliably,
         //     so it is the correct GPU path. Verified: llama-server puts all 29/29 layers of a 7B on a
         //     GTX 1070 Ti; in-process LLamaSharp leaves the GPU idle on the same machine.
-        bool preferServer = needsFallback || (wantGpu && _serverProvider.IsServerBackendAvailable);
+        //   • A vision projector next to the model → llama-server too: only it reads images (--mmproj); the
+        //     in-process backend would load the same model blind.
+        bool hasProjector = _serverProvider.IsServerBackendAvailable && VisionProjector.FindFor(modelPath) != null;
+        bool preferServer = needsFallback || hasProjector || (wantGpu && _serverProvider.IsServerBackendAvailable);
 
         if (preferServer)
         {
             progress?.Report(needsFallback
                 ? $"Detected '{arch}' architecture — using llama-server backend."
-                : "GPU requested — using llama-server backend for reliable CUDA offload.");
+                : hasProjector && !wantGpu
+                    ? "Vision projector found — using llama-server backend so the model can see images."
+                    : "GPU requested — using llama-server backend for reliable CUDA offload.");
             try
             {
                 await SwitchToServerBackendAsync(modelPath, progress, ct);
@@ -240,6 +245,11 @@ public class LocalGgufProvider : IAiProvider
 
     /// <summary>Tool images: only through the llama-server backend, and only when it has a vision projector —
     /// false today (LLamaSharp in-process never sees images).</summary>
+    /// <summary>The vision projector the loaded model runs with (null = blind, or not on llama-server).</summary>
+    public string? LoadedProjectorPath => _activeBackend == Backend.LlamaServer ? _serverProvider.LoadedProjectorPath : null;
+    /// <summary>Why a projector next to the model was left out on the last load ("" = it was used or there was none).</summary>
+    public string VisionFallbackReason => _activeBackend == Backend.LlamaServer ? _serverProvider.VisionFallbackReason : "";
+
     public bool SupportsToolResultImages(string modelId)
         => _activeBackend == Backend.LlamaServer && _serverProvider.SupportsToolResultImages(modelId);
 
