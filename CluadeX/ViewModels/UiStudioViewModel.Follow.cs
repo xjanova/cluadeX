@@ -42,8 +42,22 @@ public sealed partial class UiStudioViewModel
     private void HookAppProject()
     {
         _fs.OnWorkingDirectoryChanged += () => Application.Current?.Dispatcher.BeginInvoke(QueueFollow);
+        // A folder the chat opened while still empty (the AI makes the site after opening it) stayed "Unsupported" for
+        // good, so the Studio never showed the page it then wrote (owner 2026-10-20). Look again when files appear.
+        _studio.FilesChanged += _ => RedetectAfterFilesAppeared();
         // the project open at start-up (the last chat's): followed once the window is up, after the start-up work
         Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, QueueFollow);
+    }
+
+    /// <summary>An "Unsupported" project that files were just written into: detect it again, and start it the way a
+    /// followed project starts (a static site at once). Runs on the dispatcher (FilesChanged is raised by its timer).</summary>
+    internal void RedetectAfterFilesAppeared()
+    {
+        if (!_studio.HasProject || !IsUnsupported || _session != null || IsChecking) return;
+        if (StudioProject.Detect(_studio.Root).Kind == StudioProjectKind.Unsupported) return;
+        _studio.OpenProject(_studio.Root);   // the same root: detected again
+        StartFollowed();
+        _log?.Info("UiStudio", $"files appeared in {_studio.Root}: now {_studio.Project.Kind}");
     }
 
     /// <summary>Chats switch projects in bursts (the session list, a restore): follow the folder it settles on.</summary>
@@ -73,6 +87,13 @@ public sealed partial class UiStudioViewModel
         if (_session != null || IsChecking) return;
 
         _studio.OpenProject(p);
+        StartFollowed();
+        _log?.Info("UiStudio", $"followed the chat's project {p} ({_studio.Project.Kind})");
+    }
+
+    /// <summary>Start what a followed project shows, by its kind: only the cheap and safe things run unasked.</summary>
+    private void StartFollowed()
+    {
         ShowGallery = false;
         _startOnShow = _pagesOnShow = false;
         switch (_studio.Project.Kind)
@@ -100,7 +121,6 @@ public sealed partial class UiStudioViewModel
         }
         if (_onScreen == true) CatchUpOnShow();
         else if (WantsPrewarm) PrewarmRequested?.Invoke();
-        _log?.Info("UiStudio", $"followed the chat's project {p} ({_studio.Project.Kind})");
     }
 
     /// <summary>localhost, a loopback address, or a local dev domain (.test / .local / .lan / .localhost).</summary>
