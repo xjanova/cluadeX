@@ -81,6 +81,11 @@ public partial class SettingsViewModel : ViewModelBase
         [nameof(MicrocompactKeepRecentTurns)] = (vm, s) => s.MicrocompactKeepRecentTurns = Math.Clamp(vm.MicrocompactKeepRecentTurns, 1, 100),
         [nameof(MicrocompactMaxOldResultChars)] = (vm, s) => s.MicrocompactMaxOldResultChars = Math.Clamp(vm.MicrocompactMaxOldResultChars, 50, 20000),
         [nameof(SessionMemoryEnabled)] = (vm, s) => s.SessionMemoryEnabled = vm.SessionMemoryEnabled,
+        // Voice
+        [nameof(VoiceSpeakReplies)] = (vm, s) => s.VoiceSpeakReplies = vm.VoiceSpeakReplies,
+        [nameof(VoiceLiveEnabled)] = (vm, s) => s.VoiceLiveEnabled = vm.VoiceLiveEnabled,
+        [nameof(VoiceLiveMaxMinutes)] = (vm, s) => s.VoiceLiveMaxMinutes = Math.Clamp(vm.VoiceLiveMaxMinutes, 1, 60),
+        [nameof(VoiceLiveVoice)] = (vm, s) => s.VoiceLiveVoice = Array.IndexOf(VoiceLiveVoices!, vm.VoiceLiveVoice) >= 0 ? vm.VoiceLiveVoice : "marin",
         [nameof(BatchBackgroundWork)] = (vm, s) => s.BatchBackgroundWork = vm.BatchBackgroundWork,
         [nameof(EnableStrategicCompactionToast)] = (vm, s) => s.EnableStrategicCompactionToast = vm.EnableStrategicCompactionToast,
         [nameof(AutoCompactWhenSuggested)] = (vm, s) => s.AutoCompactWhenSuggested = vm.AutoCompactWhenSuggested,
@@ -192,6 +197,21 @@ public partial class SettingsViewModel : ViewModelBase
     public int MicrocompactKeepRecentTurns { get => _microcompactKeepRecentTurns; set => SetProperty(ref _microcompactKeepRecentTurns, value); }
     public int MicrocompactMaxOldResultChars { get => _microcompactMaxOldResultChars; set => SetProperty(ref _microcompactMaxOldResultChars, value); }
     public bool SessionMemoryEnabled { get => _sessionMemoryEnabled; set => SetProperty(ref _sessionMemoryEnabled, value); }
+    // ── Voice ──
+    private bool _voiceSpeakReplies, _voiceLiveEnabled;
+    private int _voiceLiveMaxMinutes = 10;
+    private string _voiceLiveVoice = "marin";
+    public bool VoiceSpeakReplies { get => _voiceSpeakReplies; set => SetProperty(ref _voiceSpeakReplies, value); }
+    public bool VoiceLiveEnabled { get => _voiceLiveEnabled; set => SetProperty(ref _voiceLiveEnabled, value); }
+    public int VoiceLiveMaxMinutes { get => _voiceLiveMaxMinutes; set => SetProperty(ref _voiceLiveMaxMinutes, value); }
+    public string VoiceLiveVoice { get => _voiceLiveVoice; set => SetProperty(ref _voiceLiveVoice, value ?? "marin"); }
+    /// <summary>GPT-Live's voices (developers.openai.com/api/docs/guides/live-conversations, 2026-10-19); marin is the default.</summary>
+    public static string[] VoiceLiveVoices { get; } =
+    [
+        "marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam", "meridian", "bossa", "tempo", "beacon",
+        "delta", "cinder", "nuri", "juni", "flitz", "brise", "sillage", "nira", "harema", "shida", "noeul",
+    ];
+    public string[] VoiceLiveVoiceOptions => VoiceLiveVoices;
     private bool _batchBackgroundWork = true;
     public bool BatchBackgroundWork { get => _batchBackgroundWork; set => SetProperty(ref _batchBackgroundWork, value); }
     public bool EnableStrategicCompactionToast { get => _compactionToast; set => SetProperty(ref _compactionToast, value); }
@@ -648,6 +668,10 @@ public partial class SettingsViewModel : ViewModelBase
         MicrocompactKeepRecentTurns = src.MicrocompactKeepRecentTurns;
         MicrocompactMaxOldResultChars = src.MicrocompactMaxOldResultChars;
         SessionMemoryEnabled = src.SessionMemoryEnabled;
+        VoiceSpeakReplies = src.VoiceSpeakReplies;
+        VoiceLiveEnabled = src.VoiceLiveEnabled;
+        VoiceLiveMaxMinutes = src.VoiceLiveMaxMinutes;
+        VoiceLiveVoice = src.VoiceLiveVoice;
         BatchBackgroundWork = src.BatchBackgroundWork;
         EnableStrategicCompactionToast = src.EnableStrategicCompactionToast;
         AutoCompactWhenSuggested = src.AutoCompactWhenSuggested;

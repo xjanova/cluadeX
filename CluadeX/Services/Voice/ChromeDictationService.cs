@@ -24,6 +24,11 @@ namespace CluadeX.Services.Voice;
 /// chat (/text, /send) must also come from the page's own origin, so another web page open in the user's browser
 /// can neither type into the box nor press Send. One request per connection; /state is a long poll (network
 /// callbacks are not throttled like timers in a window the chat covers).
+///
+/// Voice mode (Settings › Voice, off by default) rides the same bridge: /state also carries the reply to read aloud
+/// (<see cref="Speak"/>) and, for a GPT-Live session, the messages for the page's data channel; /live/offer and
+/// /live/event carry the WebRTC offer and the data channel's events back. Both need the token and the page's origin,
+/// and /live/offer works once, only in a session opened for live voice — it is the one call that costs money.
 /// </summary>
 public sealed class ChromeDictationService : IDisposable
 {
@@ -56,6 +61,17 @@ public sealed class ChromeDictationService : IDisposable
     private DateTime _startedUtc;
     private DateTime _lastSeenUtc;
     private int _disposed;
+    // Speaking replies aloud: the latest reply to read (by id), and how many times the page was told to stop talking.
+    private long _sayId;
+    private string _sayText = "";
+    private string _sayLang = "";
+    private int _hush;
+    // Live voice: this session runs the WebRTC page; its one offer; messages waiting for the page's data channel.
+    private bool _live;
+    private bool _offered;
+    private long _outSeq;
+    private readonly List<(long N, string Msg)> _out = new();
+    private const int MaxOut = 64;
 
     public int Port { get; }
     /// <summary>Random per instance; the page carries it on every request.</summary>
@@ -73,6 +89,19 @@ public sealed class ChromeDictationService : IDisposable
     public event Action<int>? SendRequested;
     /// <summary>The window went away (closed by the user, or silent too long), or never opened: (session, neverOpened).</summary>
     public event Action<int, bool>? Closed;
+    /// <summary>Live voice: the page's WebRTC offer (session, SDP). CluadeX makes the paid call with its own key and
+    /// returns the answer; the key never goes to the page. Called at most once per live session.</summary>
+    public Func<int, string, CancellationToken, Task<LiveOfferResult>>? LiveOfferHandler { get; set; }
+    /// <summary>Live voice: a server event the page read off its data channel (session, event), in order.</summary>
+    public event Action<int, JsonElement>? LiveEvent;
+
+    /// <summary>The Live API server events the page may pass on — nothing else is accepted.</summary>
+    public static readonly HashSet<string> LiveEventTypes = new(StringComparer.Ordinal)
+    {
+        "session.started", "session.input_transcript.delta", "session.output_transcript.delta", "session.delegation.created",
+        "session.usage.updated", "session.closed", "session.commentary.appended", "session.thinking.appended",
+        "session.instructions.appended", "session.input_audio.muted", "session.input_audio.unmuted", "error",
+    };
 
     private ChromeDictationService(TcpListener listener, int port)
     {
@@ -106,8 +135,10 @@ public sealed class ChromeDictationService : IDisposable
         return null;
     }
 
-    /// <summary>A new listening session: the URL to open. A window of an earlier session closes itself.</summary>
-    public string BeginSession(string speechLang, string uiLang, string engine)
+    /// <summary>A new listening session: the URL to open. A window of an earlier session closes itself.
+    /// <paramref name="speak"/>: the page reads replies aloud (<see cref="Speak"/>). <paramref name="live"/>: the page
+    /// runs a GPT-Live voice session over WebRTC instead of the browser's speech-to-text.</summary>
+    public string BeginSession(string speechLang, string uiLang, string engine, bool speak = false, bool live = false)
     {
         int s;
         lock (_gate)
@@ -116,10 +147,57 @@ public sealed class ChromeDictationService : IDisposable
             _active = true;
             _heard = false;
             _startedUtc = DateTime.UtcNow;
+            _live = live;
+            _offered = false;
+            _sayText = "";
+            _sayLang = "";
+            _out.Clear();
             BumpLocked();
         }
-        return $"{Origin}/mic?t={Token}&s={s}&lang={Uri.EscapeDataString(speechLang)}&ui={Uri.EscapeDataString(uiLang)}&eng={Uri.EscapeDataString(engine)}";
+        return $"{Origin}/mic?t={Token}&s={s}&lang={Uri.EscapeDataString(speechLang)}&ui={Uri.EscapeDataString(uiLang)}&eng={Uri.EscapeDataString(engine)}"
+            + (speak ? "&speak=1" : "") + (live ? "&mode=live" : "");
     }
+
+    /// <summary>Read <paramref name="text"/> aloud in the page (the browser's own free speech synthesis). A newer
+    /// reply replaces one not yet finished.</summary>
+    public void Speak(string text, string lang)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        lock (_gate)
+        {
+            if (!_active) return;
+            _sayId++;
+            _sayText = text.Length > MaxTextChars ? text[..MaxTextChars] : text;
+            _sayLang = lang;
+            BumpLocked();
+        }
+    }
+
+    /// <summary>Stop reading aloud (the user sent something new, or pressed Stop).</summary>
+    public void Hush()
+    {
+        lock (_gate)
+        {
+            if (!_active) return;
+            _hush++;
+            _sayText = "";
+            BumpLocked();
+        }
+    }
+
+    /// <summary>Live voice: a JSON message for the page to send on its data channel, in order.</summary>
+    public void SendToPage(string json)
+    {
+        lock (_gate)
+        {
+            if (!_active || !_live) return;
+            _out.Add((++_outSeq, json));
+            if (_out.Count > MaxOut) _out.RemoveAt(0);
+            BumpLocked();
+        }
+    }
+
+    public bool IsLive { get { lock (_gate) return _active && _live; } }
 
     /// <summary>Stop listening: the page sees it on its open poll and closes its window.</summary>
     public void EndSession()
@@ -253,12 +331,15 @@ public sealed class ChromeDictationService : IDisposable
             if (!TokenOk(query.GetValueOrDefault("t"))) return (403, "text/plain", "forbidden");
             int.TryParse(query.GetValueOrDefault("s"), out int s);
             long.TryParse(query.GetValueOrDefault("since"), out long since);
+            // Live: the data-channel messages the page has sent so far — those are dropped from the queue.
+            long acked = long.TryParse(query.GetValueOrDefault("out"), out long a) ? a : -1;
             Task wait;
             lock (_gate)
             {
                 if (s != _session || !_active) return (200, "application/json", StateJsonLocked(false));
                 _heard = true;
                 _lastSeenUtc = DateTime.UtcNow;
+                if (acked >= 0) _out.RemoveAll(m => m.N <= acked);
                 if (since != _version) return (200, "application/json", StateJsonLocked(true));
                 wait = _changed.Task;
                 _holding++;
@@ -321,13 +402,48 @@ public sealed class ChromeDictationService : IDisposable
             case "/send":
                 Raise(() => SendRequested?.Invoke(session));
                 return (204, "text/plain", "");
+            case "/live/offer":
+            {
+                // The one paid call of a live session. Only a session opened for live voice may make it, and only
+                // once — a page (or anything posing as it) cannot start a second billed session.
+                lock (_gate)
+                {
+                    if (!_live) return (403, "text/plain", "not a live voice session");
+                    if (_offered) return (409, "text/plain", "this live session was already started");
+                    _offered = true;
+                }
+                var handler = LiveOfferHandler;
+                if (handler == null) return (503, "application/json", JsonSerializer.Serialize(new { error = "live voice is not available" }));
+                LiveOfferResult result;
+                try { result = await handler(session, Str(json, "sdp"), stop).ConfigureAwait(false); }
+                catch (Exception ex) { result = new LiveOfferResult(null, null, ex.Message); }
+                return result.AnswerSdp != null
+                    ? (200, "application/json", JsonSerializer.Serialize(new { sdp = result.AnswerSdp }))
+                    : (502, "application/json", JsonSerializer.Serialize(new { error = result.Error ?? "the live session could not start" }));
+            }
+            case "/live/event":
+            {
+                lock (_gate) { if (!_live) return (403, "text/plain", "not a live voice session"); }
+                if (!json.TryGetProperty("ev", out var ev) || ev.ValueKind != JsonValueKind.Object
+                    || !LiveEventTypes.Contains(Str(ev, "type")))
+                    return (400, "text/plain", "unknown event");
+                Raise(() => LiveEvent?.Invoke(session, ev));
+                return (204, "text/plain", "");
+            }
             default:
                 return (404, "text/plain", "not found");
         }
     }
 
-    private string StateJsonLocked(bool active) =>
-        JsonSerializer.Serialize(new { active, sent = _sent, v = _version });
+    private string StateJsonLocked(bool active) => active
+        ? JsonSerializer.Serialize(new
+        {
+            active, sent = _sent, v = _version,
+            say = new { id = _sayId, text = _sayText, lang = _sayLang },
+            hush = _hush,
+            @out = _out.Select(m => new { n = m.N, m = m.Msg }).ToArray(),
+        })
+        : JsonSerializer.Serialize(new { active, sent = _sent, v = _version });
 
     private bool TokenOk(string? candidate) =>
         candidate != null && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(candidate), Encoding.UTF8.GetBytes(Token));
@@ -378,7 +494,8 @@ public sealed class ChromeDictationService : IDisposable
         string reason = code switch
         {
             200 => "OK", 204 => "No Content", 400 => "Bad Request", 403 => "Forbidden", 404 => "Not Found",
-            405 => "Method Not Allowed", 410 => "Gone", 411 => "Length Required", 413 => "Payload Too Large", _ => "Error",
+            405 => "Method Not Allowed", 409 => "Conflict", 410 => "Gone", 411 => "Length Required", 413 => "Payload Too Large",
+            502 => "Bad Gateway", 503 => "Service Unavailable", _ => "Error",
         };
         string head =
             $"HTTP/1.1 {code} {reason}\r\n" +
@@ -461,6 +578,9 @@ public sealed class ChromeDictationService : IDisposable
             psi.ArgumentList.Add("--user-data-dir=" + profileDir);
             psi.ArgumentList.Add("--no-first-run");
             psi.ArgumentList.Add("--no-default-browser-check");
+            // Reading replies aloud starts from CluadeX, not from a click in this window: Chrome would refuse
+            // speechSynthesis.speak() without one. Only this window's own profile runs with the flag.
+            psi.ArgumentList.Add("--autoplay-policy=no-user-gesture-required");
             psi.ArgumentList.Add("--window-size=440,400");
             if (left is int x && top is int y) psi.ArgumentList.Add($"--window-position={x},{y}");
             using var p = Process.Start(psi);

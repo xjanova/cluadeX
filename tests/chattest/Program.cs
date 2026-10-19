@@ -281,6 +281,7 @@ internal static partial class Program
         await TestAttachedImages();           // X: images pasted / dropped / picked into a message
         await TestAttachedFiles();            // XF: any file dropped into a message — read, unpacked, by path
         await TestDictation();                // V: speaking instead of typing (the Chrome speech bridge)
+        await TestVoiceMode();                // VM: replies read aloud + a GPT-Live call through the chat (mock API)
         await TestContextWindow();            // L6 + L7 label
         await TestAutoRunToggle();            // U5
         await TestScrollFollow();             // U6

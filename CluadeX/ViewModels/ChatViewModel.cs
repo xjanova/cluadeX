@@ -1076,7 +1076,7 @@ public partial class ChatViewModel : ViewModelBase
         UsageMeter.Updated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
         // A provider/model change changes the context window: re-measure now, not on the next 5-s tick.
         _providerManager.OnProviderChanged += _ => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); });
-        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); });
+        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); RefreshVoiceButtons(); });
         RefreshUsageStrip();
         InitBatch(batchService);
 
@@ -3080,6 +3080,7 @@ public partial class ChatViewModel : ViewModelBase
         int images = fromBox ? PendingImages.Count : 0;
         int files = fromBox ? PendingFiles.Count : 0;
         if (string.IsNullOrEmpty(input) && images == 0 && files == 0) return;
+        if (fromBox) _dictation?.Hush();   // a reply still being read aloud stops: the user has moved on
         // A reply is running in this chat: what was typed goes to it at its next step, as in Claude Code. Enter used
         // to do nothing at all (the box was even disabled) until the run ended. Attachments wait for the next turn.
         if (IsGenerating)
@@ -3493,6 +3494,7 @@ public partial class ChatViewModel : ViewModelBase
             // Save immediately after each completed interaction
             SaveNow();
             bool turnOk = TurnMessages.LastOrDefault(m => m.Role == MessageRole.Assistant)?.HasError != true;
+            if (pipe == null) SpeakReplyIfWanted(userMsg);
             EndTurn(turn);
             _pet?.NoteTurnDone(_providerManager.ActiveProviderType.ToString(),
                 _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer, turnOk);
