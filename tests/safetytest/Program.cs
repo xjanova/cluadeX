@@ -456,6 +456,22 @@ internal static class Program
         Check("desktop_launch: a script that wipes a drive is refused", CodeRunGuard.CheckScriptFile(bad) != null);
         Check("desktop_launch: a clean script is allowed", CodeRunGuard.CheckScriptFile(clean) == null);
         Check("desktop_launch: an app is not read as a script", CodeRunGuard.CheckScriptFile(Environment.ProcessPath) == null);
+        // desktop_launch starts programs: any recursive delete in its command line asks, whatever the target (3.0.166 let
+        // `cmd.exe /c … rd /s /q <folder>` through — FindSerious sets deletes aside and the folder was not a drive).
+        foreach (var (label, line) in new[]
+        {
+            ("rd /s /q after an echo", "cmd.exe /c echo CX-SENTINEL " + RdSQ + "Z:\\cx-sentinel-nonexistent"),
+            ("rmdir /s", "cmd.exe /c rmdir /s Z:\\cx-sentinel-nonexistent"),
+            ("rd /q /s (switches in any order)", "cmd.exe /c rd /q /s Z:\\cx-sentinel-nonexistent"),
+            ("del /f /s /q", "cmd.exe /c del /f /s /q Z:\\cx-sentinel-nonexistent\\*"),
+            ("erase /s", "cmd /c erase /s Z:\\cx-sentinel-nonexistent\\*.*"),
+            ("Remove-Item -Recurse", "powershell -c Remove-Item Z:\\cx-sentinel-nonexistent -Recurse -Force"),
+            ("rm -rf in bash -c", "bash.exe -c \"" + RmRf + "/z/cx-sentinel-nonexistent\""),
+        })
+            Check($"desktop_launch asks: {label}", CodeRunGuard.CheckLaunchCommandLine(line) is { } why && why.Contains("recursive delete"), line);
+        foreach (var line in new[] { "notepad.exe C:\\notes\\rd.txt", "code.exe --folder-uri /c/proj", "cmd.exe /c del notes.tmp", "explorer.exe /select,C:\\x\\rmdir.log", Environment.ProcessPath! })
+            Check($"desktop_launch does not ask: {line}", CodeRunGuard.CheckLaunchCommandLine(line) == null, line + " → " + CodeRunGuard.CheckLaunchCommandLine(line));
+        Check("JudgeLine reads rd /q /s like rd /s /q (a drive root asks either way)", DestructiveCodeScan.JudgeLine("rd /q /s " + Root) != null);
         Check("repl: code that wipes home is refused", CodeRunGuard.CheckCode("import shutil\nshutil.rmtree(\"" + Root.Replace("\\", "/") + "\")") != null);
 
         Check("dry-run is on by default in a harness", ProcessLaunchPolicy.DryRun);

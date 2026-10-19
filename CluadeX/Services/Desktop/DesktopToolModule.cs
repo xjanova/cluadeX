@@ -673,9 +673,11 @@ public sealed class DesktopToolModule : IAgentToolModule
         string file = path;
         if (!Path.IsPathRooted(file) && cwd != null && File.Exists(Path.Combine(cwd, file))) file = Path.Combine(cwd, file);
         // Always on, as for run_command: the command line, the code changed in the project when it runs code, and a
-        // script handed straight to the shell (a .bat / .ps1 / .py … is code, not an app).
+        // script handed straight to the shell (a .bat / .ps1 / .py … is code, not an app). FindSerious above lets a delete
+        // through by design (clean-up runs); here any recursive delete in the line asks, whatever it targets.
         if (await Safety.DangerApproval.GateAsync("desktop_launch", commandLine,
-                await Safety.CodeRunGuard.CheckAsync(commandLine, cwd) ?? Safety.CodeRunGuard.CheckScriptFile(file)) is { } unsafeRun)
+                await Safety.CodeRunGuard.CheckAsync(commandLine, cwd) ?? Safety.CodeRunGuard.CheckScriptFile(file)
+                ?? Safety.CodeRunGuard.CheckLaunchCommandLine(commandLine)) is { } unsafeRun)
             return Fail(call, unsafeRun);
         if (Safety.ProcessLaunchPolicy.Blocks(file))
             return Ok(call, Safety.ProcessLaunchPolicy.Report(commandLine));

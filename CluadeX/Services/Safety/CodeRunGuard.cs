@@ -25,6 +25,18 @@ public static class CodeRunGuard
     /// <summary><see cref="Check"/> off the UI thread (it may read git status and changed files).</summary>
     public static Task<string?> CheckAsync(string? command, string? projectRoot) => Task.Run(() => Check(command, projectRoot));
 
+    /// <summary>
+    /// For the command line desktop_launch is about to start. That tool starts programs; a recursive delete handed to it
+    /// (<c>cmd.exe /c rd /s /q …</c>, <c>powershell Remove-Item -Recurse …</c>) is not the clean-up the owner's 2026-10-18
+    /// rule lets run_command just run, so it goes to the user on the red prompt whatever it targets. The 2026-10-17
+    /// incident was exactly <c>cmd.exe /c rd /s /q C:\</c> through desktop_launch. Null = no recursive delete in it.
+    /// </summary>
+    public static string? CheckLaunchCommandLine(string? commandLine) =>
+        DestructiveCodeScan.RecursiveShellDelete(commandLine) is { } verb
+            ? "CluadeX safety: this launch starts a recursive delete (" + verb + "). desktop_launch is for starting programs — "
+              + "delete files with run_command or the file tools instead."
+            : null;
+
     /// <summary>For code that is about to run as it is (a code block, a REPL snippet): judge the code itself.</summary>
     public static string? CheckCode(string? code)
     {
