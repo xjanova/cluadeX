@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using CluadeX.Services;
 using CluadeX.Services.UiStudio;
+using CluadeX.Services.UiStudio.Pages;
 
 namespace CluadeX.ViewModels;
 
@@ -221,6 +222,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         ExportCssCommand = new AsyncRelayCommand(ExportCssAsync);
         InstallLocatorCommand = new RelayCommand(InstallLocator);
         OpenGraphCommand = new RelayCommand(() => OpenPageRequested?.Invoke("NodeGraph"));
+        HookAppProject();
     }
 
     private string T(string key) => _loc.T(key);
@@ -275,6 +277,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasAppProject));
         if (!_studio.HasProject && _fs.AppWorkingDirectory is { Length: > 0 } p && Directory.Exists(p))
             OpenProject(p, autoStart: StudioProject.Detect(p).Kind == StudioProjectKind.Static);
+        CatchUpOnShow();   // what following the chat's project left for the first look (a dev server, the screens)
     }
 
     private void OpenFolder()
@@ -306,6 +309,12 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         string? err = await _studio.StartAsync();
         if (err != null) Status(T(err), error: true);
         else if (_studio.Project.Kind == StudioProjectKind.Static) Status(T("studio.started"));
+        if (err == null && _studio.IsServing && _studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther && _studio.HasProject)
+        {
+            // remembered: next time the chat opens this project its preview is started in the background, ready
+            _store ??= new PageShotStore(_studio.DataRoot, _studio.Root);
+            if (!_store.State.DevServerApproved) { _store.State.DevServerApproved = true; _store.SaveState(); }
+        }
     }
 
     private void OnProjectChanged()

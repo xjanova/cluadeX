@@ -10,8 +10,8 @@ using CluadeX.Services.UiStudio;
 
 namespace CluadeX.ViewModels;
 
-/// <summary>A node listed in the details panel (imports / imported by / children).</summary>
-public sealed record GraphLink(string Id, string Label, string Kind);
+/// <summary>A node listed in the details panel (imports / imported by / children), with its wire's colour.</summary>
+public sealed record GraphLink(string Id, string Label, string Kind, System.Windows.Media.Brush? Color = null);
 
 /// <summary>
 /// The Node Graph page: the project drawn as nodes you can drag — files and components wired by what they really
@@ -57,7 +57,20 @@ public sealed class NodeGraphViewModel : ViewModelBase
             OnPropertyChanged(nameof(LiveSelectionLabel));
             OnPropertyChanged(nameof(CanEditLive));
         };
-        studio.ProjectChanged += () => { Graph = null; SelectedNode = null; if (IsVisible) _ = RefreshAsync(); };
+        studio.ProjectChanged += () =>
+        {
+            if (string.Equals(_builtFor, RootPath, StringComparison.OrdinalIgnoreCase) && Graph != null) return;   // same folder re-detected
+            Graph = null;
+            SelectedNode = null;
+            _builtFor = null;
+            if (IsVisible) _ = RefreshAsync();
+            else QueuePrebuild();
+        };
+        studio.FilesChanged += OnFilesChanged;
+        _liveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _liveTimer.Tick += (_, _) => { _liveTimer.Stop(); _ = RefreshAsync(keepView: true); };
+        _prebuildTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+        _prebuildTimer.Tick += (_, _) => { _prebuildTimer.Stop(); if (!IsVisible && Graph == null && IsProject) _ = RefreshAsync(); };
 
         RefreshCommand = new AsyncRelayCommand(RefreshAsync);
         AutoLayoutCommand = new RelayCommand(() => { if (Graph != null) { ForgetLayout(); Layout(Graph, useSaved: false); GraphChanged?.Invoke(); FitRequested?.Invoke(); } });
@@ -80,8 +93,55 @@ public sealed class NodeGraphViewModel : ViewModelBase
     public event Action<GraphNode>? FocusRequested;
     public event Action<string>? OpenPageRequested;
 
-    /// <summary>Set by the view while the page is on screen.</summary>
-    public bool IsVisible { get; set; }
+    /// <summary>Set by the view while the page is on screen. Hidden, the graph only notes that files changed; shown,
+    /// it is drawn at once as it was and brought up to date right after (positions and the view kept).</summary>
+    public bool IsVisible
+    {
+        get => _isVisible;
+        set
+        {
+            if (_isVisible == value) return;
+            _isVisible = value;
+            _studio.KeepPageAwake = value && IsLive;
+            if (value && _dirty && IsProject && Graph != null) { _liveTimer.Stop(); _ = RefreshAsync(keepView: true); }
+        }
+    }
+    private bool _isVisible;
+
+    // ───────────────────────────── following the files ─────────────────────────────
+
+    private readonly DispatcherTimer _liveTimer, _prebuildTimer;
+    private bool _dirty;
+    private string? _builtFor;
+
+    /// <summary>Nodes whose file changed lately (id → when): the canvas makes them glow for a few seconds, so an edit
+    /// by the AI in the chat shows where it landed.</summary>
+    public Dictionary<string, DateTime> RecentlyChanged { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public static readonly TimeSpan ChangeGlow = TimeSpan.FromSeconds(4);
+
+    private void OnFilesChanged(IReadOnlyCollection<string> paths)
+    {
+        string? root = RootPath;
+        if (root == null) return;
+        string prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var now = DateTime.UtcNow;
+        foreach (var p in paths)
+            if (p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) RecentlyChanged[p[prefix.Length..].Replace('\\', '/')] = now;
+        foreach (var old in RecentlyChanged.Where(x => now - x.Value > ChangeGlow).Select(x => x.Key).ToList()) RecentlyChanged.Remove(old);
+        if (Graph == null && !IsVisible) return;   // nothing built yet: the first build reads it all anyway
+        _dirty = true;
+        if (!IsVisible || IsLive) return;   // (the live tree follows the page, which reloads by itself)
+        _liveTimer.Stop();
+        _liveTimer.Start();
+    }
+
+    /// <summary>Build the graph once in the background after a project is opened, so the first visit shows it at once.
+    /// One read of the project's files; nothing more happens while the page stays hidden.</summary>
+    private void QueuePrebuild()
+    {
+        _prebuildTimer.Stop();
+        if (RootPath != null) _prebuildTimer.Start();
+    }
 
     // ───────────────────────────── mode ─────────────────────────────
 
@@ -94,6 +154,8 @@ public sealed class NodeGraphViewModel : ViewModelBase
             if (!SetProperty(ref _mode, value)) return;
             OnPropertyChanged(nameof(IsLive));
             OnPropertyChanged(nameof(IsProject));
+            _studio.KeepPageAwake = IsVisible && IsLive;
+            _builtFor = null;
             SelectedNode = null;
             _ = RefreshAsync();
         }
@@ -164,7 +226,11 @@ public sealed class NodeGraphViewModel : ViewModelBase
 
     private string? RootPath => _studio.HasProject ? _studio.Root : _fs.AppWorkingDirectory is { Length: > 0 } p && Directory.Exists(p) ? p : null;
 
-    public async Task RefreshAsync()
+    public Task RefreshAsync() => RefreshAsync(keepView: false);
+
+    /// <summary>Read the project again. <paramref name="keepView"/>: a live update (files changed) — nodes stay where
+    /// they are on screen, the selection stays, the view is not refitted and no busy text covers the graph.</summary>
+    private async Task RefreshAsync(bool keepView)
     {
         OnPropertyChanged(nameof(RootName));
         if (IsLive) { BuildLive(); return; }
@@ -173,17 +239,31 @@ public sealed class NodeGraphViewModel : ViewModelBase
 
         _buildCts?.Cancel();
         var cts = _buildCts = new CancellationTokenSource();
-        IsBusy = true;
+        var old = Graph;
+        keepView &= old != null && string.Equals(_builtFor, root, StringComparison.OrdinalIgnoreCase);
+        _dirty = false;
+        if (!keepView) IsBusy = true;
         try
         {
             bool packages = ShowPackages;
             var graph = await Task.Run(() => ProjectGraphBuilder.Build(root, packages, cts.Token), cts.Token);
-            if (cts.IsCancellationRequested) return;
+            if (cts.IsCancellationRequested || IsLive || !string.Equals(root, RootPath, StringComparison.OrdinalIgnoreCase)) return;
             LoadLayout(root);
             Layout(graph, useSaved: true);
+            if (keepView)
+            {
+                // where the user sees each node now wins over a fresh layout; new files appear near what imports them
+                foreach (var n in graph.Nodes)
+                    if (old!.ById.TryGetValue(n.Id, out var was)) { n.X = was.X; n.Y = was.Y; }
+                    else if (graph.Edges.FirstOrDefault(e => e.To == n.Id && old.ById.ContainsKey(e.From)) is { } e && old.ById[e.From] is { } parent)
+                    { n.X = parent.X + parent.Width + ColGap; n.Y = parent.Y + parent.Height + RowGap; }
+            }
+            string? keep = SelectedNode?.Id;
+            _builtFor = root;
             Graph = graph;
             EmptyText = graph.Nodes.Count == 0 ? T("graph.empty") : "";
-            FitRequested?.Invoke();
+            if (keep != null) SelectedNode = graph.ById.TryGetValue(keep, out var again) ? again : null;
+            if (!keepView) FitRequested?.Invoke();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -443,9 +523,9 @@ public sealed class NodeGraphViewModel : ViewModelBase
             if (value != null && Graph != null)
             {
                 foreach (var e in Graph.Edges.Where(e => e.From == value.Id))
-                    if (Graph.ById.TryGetValue(e.To, out var to)) Outgoing.Add(new GraphLink(to.Id, to.Label, KindText(e.Kind)));
+                    if (Graph.ById.TryGetValue(e.To, out var to)) Outgoing.Add(new GraphLink(to.Id, to.Label, KindText(e.Kind), EdgeBrush(e.Kind)));
                 foreach (var e in Graph.Edges.Where(e => e.To == value.Id))
-                    if (Graph.ById.TryGetValue(e.From, out var from)) Incoming.Add(new GraphLink(from.Id, from.Label, KindText(e.Kind)));
+                    if (Graph.ById.TryGetValue(e.From, out var from)) Incoming.Add(new GraphLink(from.Id, from.Label, KindText(e.Kind), EdgeBrush(e.Kind)));
                 if (IsLive && value.DomId is int dom) _studio.SelectNode(dom);
             }
             GraphChanged?.Invoke();
@@ -464,6 +544,18 @@ public sealed class NodeGraphViewModel : ViewModelBase
     public bool CanEditLive => IsLive && _ui.CanEditSource;
 
     private string KindText(GraphEdgeKind k) => T("graph.edge." + k.ToString().ToLowerInvariant());
+
+    private static readonly Dictionary<GraphEdgeKind, System.Windows.Media.SolidColorBrush> EdgeBrushes = new();
+    private static System.Windows.Media.Brush EdgeBrush(GraphEdgeKind k)
+    {
+        if (!EdgeBrushes.TryGetValue(k, out var b))
+        {
+            b = new System.Windows.Media.SolidColorBrush(Views.UiStudio.NodeGraphCanvas.EdgeColor(k));
+            b.Freeze();
+            EdgeBrushes[k] = b;
+        }
+        return b;
+    }
 
     private void OpenSelected()
     {

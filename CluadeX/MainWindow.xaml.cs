@@ -17,6 +17,14 @@ public partial class MainWindow : Window
         Loaded += (_, _) => ApplyTitleBarRoom();
         _viewModel = viewModel;
         DataContext = viewModel;
+        // The chat opened a project: the UI Studio builds its page (hidden) and starts showing it, so it is ready the
+        // moment it is opened — no Open / Start to press first.
+        if (viewModel.UiStudioVM is { } studio)
+        {
+            void Prewarm() => Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => PageArea.Prewarm(studio));
+            studio.PrewarmRequested += Prewarm;
+            Loaded += (_, _) => { if (studio.HasProject && studio.WantsPrewarm) Prewarm(); };
+        }
         // Activity bar uses RadioButtons bound via SelectedNavItem converter —
         // initial selection comes from MainViewModel.SelectedNavItem ("Chat" default).
         StateChanged += OnStateChanged;

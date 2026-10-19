@@ -432,6 +432,9 @@ public sealed partial class UiStudioViewModel
         {
             t.Stop();
             if (!_sourcesChanged || _catalog?.Flutter == null) return;
+            // nobody looks at the screens: drawing them (a flutter test run) waits for the page to be shown —
+            // except inside a review round or a save check, which wait for the drawing themselves
+            if (!IsOnScreen && _session == null && !IsChecking) return;
             _sourcesChanged = false;
             // the code changed: read the app again (new screens, new titles), then draw what is on screen again
             await RefreshFlutterAfterEditAsync();

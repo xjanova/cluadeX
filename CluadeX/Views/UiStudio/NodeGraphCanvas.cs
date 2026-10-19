@@ -17,6 +17,10 @@ public sealed class NodeGraphCanvas : FrameworkElement
     public ProjectGraph? Graph { get; private set; }
     public GraphNode? Selected { get; private set; }
     public ISet<string> Highlights { get; set; } = new HashSet<string>();
+    /// <summary>Nodes whose file changed lately (id → when, UTC): drawn with a fading glow.</summary>
+    public IReadOnlyDictionary<string, DateTime>? Changed { get; set; }
+    public TimeSpan ChangeGlow { get; set; } = TimeSpan.FromSeconds(4);
+    private System.Windows.Threading.DispatcherTimer? _glowTimer;
 
     public event Action<GraphNode?>? NodeSelected;
     public event Action<GraphNode>? NodeActivated;
@@ -43,10 +47,43 @@ public sealed class NodeGraphCanvas : FrameworkElement
 
     public void SetGraph(ProjectGraph? graph, GraphNode? selected)
     {
-        if (!ReferenceEquals(Graph, graph)) { _labels.Clear(); _details.Clear(); }
+        if (!ReferenceEquals(Graph, graph))
+        {
+            _labels.Clear();
+            _details.Clear();
+            _hover = null;
+            // the graph was read again (files changed) while a node is being dragged: carry on with its new copy, where
+            // the pointer has it now, instead of letting it jump back
+            if (_dragNode != null)
+                if (graph != null && graph.ById.TryGetValue(_dragNode.Id, out var again)) { again.X = _dragNode.X; again.Y = _dragNode.Y; _dragNode = again; }
+                else _dragNode = null;
+        }
         Graph = graph;
         Selected = selected;
         InvalidateVisual();
+        if (AnyGlow()) StartGlow();
+    }
+
+    private bool AnyGlow()
+    {
+        if (Changed is not { Count: > 0 } changed || Graph == null) return false;
+        var now = DateTime.UtcNow;
+        return changed.Any(x => now - x.Value < ChangeGlow && Graph.ById.ContainsKey(x.Key));
+    }
+
+    /// <summary>Redraw at ~30 fps only while a glow is fading; the timer stops by itself after that.</summary>
+    private void StartGlow()
+    {
+        if (_glowTimer == null)
+        {
+            _glowTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+            _glowTimer.Tick += (_, _) =>
+            {
+                if (!IsVisible || !AnyGlow()) _glowTimer!.Stop();
+                InvalidateVisual();
+            };
+        }
+        if (!_glowTimer.IsEnabled) _glowTimer.Start();
     }
 
     // ───────────────────────────── view transforms ─────────────────────────────
@@ -230,6 +267,19 @@ public sealed class NodeGraphCanvas : FrameworkElement
         [GraphNodeKind.Element] = Color.FromRgb(0x34, 0xD3, 0x99),
     };
 
+    /// <summary>One colour per kind of connection — the wire keeps it whatever happens (selected, dragged, dimmed),
+    /// so what links two nodes reads at a glance. The legend and the details panel use the same colours.</summary>
+    public static readonly IReadOnlyDictionary<GraphEdgeKind, Color> EdgeColors = new Dictionary<GraphEdgeKind, Color>
+    {
+        [GraphEdgeKind.Imports] = Color.FromRgb(0x38, 0xBD, 0xF8),    // sky
+        [GraphEdgeKind.Renders] = Color.FromRgb(0xA7, 0x8B, 0xFA),    // violet
+        [GraphEdgeKind.Loads] = Color.FromRgb(0xFB, 0xBF, 0x24),      // amber
+        [GraphEdgeKind.Links] = Color.FromRgb(0xA3, 0xE6, 0x35),      // lime
+        [GraphEdgeKind.Contains] = Color.FromRgb(0x2D, 0xD4, 0xBF),   // teal
+    };
+
+    public static Color EdgeColor(GraphEdgeKind kind) => EdgeColors.TryGetValue(kind, out var c) ? c : Colors.Gray;
+
     private static readonly Dictionary<Color, SolidColorBrush> BrushCache = new();
     private static SolidColorBrush Solid(Color c, byte alpha = 255)
     {
@@ -250,8 +300,6 @@ public sealed class NodeGraphCanvas : FrameworkElement
         var card = Res("Surface.Raised", Brushes.DimGray);
         var border = Res("Border.Default", Brushes.Gray);
         var accent = Res("Accent.1", Brushes.DeepSkyBlue);
-        var accentColor = (accent as SolidColorBrush)?.Color ?? Colors.DeepSkyBlue;
-        var edgeColor = (border as SolidColorBrush)?.Color ?? Colors.Gray;
         double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
         var view = new Rect(ToWorld(new Point(0, 0)), ToWorld(new Point(ActualWidth, ActualHeight)));
@@ -259,18 +307,35 @@ public sealed class NodeGraphCanvas : FrameworkElement
         bool showText = _zoom >= 0.32;
         string? sel = Selected?.Id;
 
-        // ── wires ──
-        var normal = new Pen(Solid(edgeColor, 150), Math.Max(1, 1.2 * _zoom)); normal.Freeze();
-        var dim = new Pen(Solid(edgeColor, 55), Math.Max(1, 1 * _zoom)); dim.Freeze();
-        var hot = new Pen(Solid(accentColor), Math.Max(1.5, 2.2 * _zoom)); hot.Freeze();
-        var renders = new Pen(Solid(Color.FromRgb(0x7C, 0x5C, 0xFF), 170), Math.Max(1, 1.4 * _zoom)); renders.Freeze();
-        foreach (var e in Graph.Edges)
+        // ── wires: coloured by the kind of connection ──
+        // Wires of the selected (or dragged) node come forward — brighter, thicker, with a soft glow under them — in
+        // their own colour; the rest fade back but keep theirs.
+        var pens = new Dictionary<(GraphEdgeKind, int), Pen>();
+        Pen PenFor(GraphEdgeKind kind, int state)   // 0 normal · 1 faded · 2 hot · 3 glow under hot
+        {
+            if (pens.TryGetValue((kind, state), out var p)) return p;
+            var c = EdgeColor(kind);
+            p = state switch
+            {
+                1 => new Pen(Solid(c, 50), Math.Max(1, 1 * _zoom)),
+                2 => new Pen(Solid(c), Math.Max(1.6, (_dragNode != null ? 2.8 : 2.3) * _zoom)),
+                3 => new Pen(Solid(c, 70), Math.Max(4, 7 * _zoom)),
+                _ => new Pen(Solid(c, 165), Math.Max(1, 1.3 * _zoom)),
+            };
+            p.StartLineCap = p.EndLineCap = PenLineCap.Round;
+            p.Freeze();
+            pens[(kind, state)] = p;
+            return p;
+        }
+        // the hot wires last, so they are drawn on top of the faded ones
+        IEnumerable<GraphEdge> ordered = sel == null ? Graph.Edges : Graph.Edges.OrderBy(e => e.From == sel || e.To == sel);
+        foreach (var e in ordered)
         {
             if (!Graph.ById.TryGetValue(e.From, out var a) || !Graph.ById.TryGetValue(e.To, out var b) || a.Hidden || b.Hidden) continue;
             var box = Rect.Union(new Rect(a.X, a.Y, a.Width, a.Height), new Rect(b.X, b.Y, b.Width, b.Height));
             if (!box.IntersectsWith(view)) continue;
             bool touches = sel != null && (e.From == sel || e.To == sel);
-            var pen = touches ? hot : sel != null ? dim : e.Kind == GraphEdgeKind.Renders ? renders : normal;
+            var pen = PenFor(e.Kind, touches ? 2 : sel != null ? 1 : 0);
 
             var p0 = ToScreen(a.X + a.Width, a.Y + a.Height / 2);
             var p3 = ToScreen(b.X, b.Y + b.Height / 2);
@@ -287,6 +352,7 @@ public sealed class NodeGraphCanvas : FrameworkElement
                     ctx.BezierTo(new Point(p0.X + dx, p0.Y), new Point(p3.X - dx, p3.Y), p3, true, false);
             }
             geo.Freeze();
+            if (touches) dc.DrawGeometry(null, PenFor(e.Kind, 3), geo);
             dc.DrawGeometry(null, pen, geo);
             // arrow head
             if (_zoom > 0.25)
@@ -318,6 +384,8 @@ public sealed class NodeGraphCanvas : FrameworkElement
         var selPen = new Pen(accent, 2); selPen.Freeze();
         var hlPen = new Pen(Solid(Color.FromRgb(0xFA, 0xCC, 0x15)), 2); hlPen.Freeze();
         var borderPen = new Pen(border, 1); borderPen.Freeze();
+        var changeColor = Color.FromRgb(0x4A, 0xDE, 0x80);
+        var now = DateTime.UtcNow;
         foreach (var n in Graph.Nodes)
         {
             if (n.Hidden) continue;
@@ -327,6 +395,16 @@ public sealed class NodeGraphCanvas : FrameworkElement
             double radius = 8 * _zoom;
             var kindColor = KindColors.TryGetValue(n.Kind, out var kc) ? kc : Colors.Gray;
             bool isSel = n.Id == sel, isHl = Highlights.Contains(n.Id), isHover = ReferenceEquals(n, _hover);
+            // just changed on disk (the AI, the editor): a green halo that fades out
+            if (Changed != null && Changed.TryGetValue(n.Id, out var at) && now - at < ChangeGlow)
+            {
+                double t = 1 - (now - at).TotalMilliseconds / ChangeGlow.TotalMilliseconds;   // 1 → 0
+                double pulse = 0.65 + 0.35 * Math.Sin((now - at).TotalMilliseconds / 140.0);
+                var halo = r;
+                halo.Inflate(5 * _zoom, 5 * _zoom);
+                var haloPen = new Pen(Solid(changeColor, (byte)Math.Clamp(255 * t * pulse, 0, 255)), Math.Max(2, 3 * _zoom));
+                dc.DrawRoundedRectangle(Solid(changeColor, (byte)Math.Clamp(40 * t, 0, 255)), haloPen, halo, radius + 5 * _zoom, radius + 5 * _zoom);
+            }
             var fill = isHover ? Solid(kindColor, 38) : card;
             dc.DrawRoundedRectangle(fill, isSel ? selPen : isHl ? hlPen : borderPen, r, radius, radius);
             // kind stripe

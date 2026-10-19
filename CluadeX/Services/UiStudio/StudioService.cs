@@ -74,6 +74,60 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     public event Action<string>? ScriptRequested;
     /// <summary>A source file was written by the Studio (path).</summary>
     public event Action<string>? SourceWritten;
+    /// <summary>Files of the open project changed on disk — by the AI in the chat, the code editor, the Studio or any
+    /// other program (full paths, gathered over a short pause). Raised whatever page is on screen: listeners that
+    /// draw something only note the change while they are hidden and catch up when shown.</summary>
+    public event Action<IReadOnlyCollection<string>>? FilesChanged;
+    /// <summary>Something needs the running page awake now (the Node Graph's live view came on screen).</summary>
+    public event Action? WakeRequested;
+
+    /// <summary>The UI Studio's page is on screen (set by its view). A reload asked while it is hidden waits and is
+    /// done the moment it is shown — a hidden page does no work for changes nobody is watching.</summary>
+    public bool PageVisible
+    {
+        get => _pageVisible;
+        set
+        {
+            if (_pageVisible == value) return;
+            _pageVisible = value;
+            FlushPendingReload();
+        }
+    }
+    private bool _pageVisible;
+    private bool? _pendingReload;
+
+    /// <summary>The Node Graph's live view (the page's element tree) is on screen: the page must keep running even
+    /// though the Studio itself is hidden.</summary>
+    public bool KeepPageAwake
+    {
+        get => _keepAwake;
+        set
+        {
+            if (_keepAwake == value) return;
+            _keepAwake = value;
+            if (!value) return;
+            WakeRequested?.Invoke();
+            FlushPendingReload();
+        }
+    }
+    private bool _keepAwake;
+
+    private void FlushPendingReload()
+    {
+        if (!(_pageVisible || _keepAwake) || _pendingReload is not { } cssOnly) return;
+        _pendingReload = null;
+        if (IsServing) ReloadRequested?.Invoke(cssOnly);
+    }
+
+    /// <summary>The last page the Studio asked its browser to show — for a browser that is created after the ask
+    /// (the project was opened from the chat before the Studio page was ever built).</summary>
+    public string? LastRequestedUrl { get; private set; }
+
+    private void RequestNavigate(string url)
+    {
+        LastRequestedUrl = url;
+        NavigateRequested?.Invoke(url);
+    }
 
     public int UndoCount => _undo.Count;
 
@@ -93,6 +147,9 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         ServerBaseUrl = null;
         Selection = null;
         Tree = null;
+        LastRequestedUrl = null;
+        _pendingReload = null;
+        StartWatching();
         _log?.Info("UiStudio", $"project {root} → {Project.Kind} ({Project.Framework})");
         ProjectChanged?.Invoke();
         SelectionChanged?.Invoke();
@@ -102,7 +159,9 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     public void CloseProject()
     {
         StopServing();
+        StopWatching();
         _undo.Clear();
+        LastRequestedUrl = null;
         Project = new StudioProjectInfo();
         Selection = null;
         Tree = null;
@@ -116,7 +175,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     public async Task<string?> StartAsync()
     {
         if (!HasProject) return "studio.err.noProject";
-        if (IsServing || IsStarting) { if (PageUrl != null) NavigateRequested?.Invoke(PageUrl); return null; }
+        if (IsServing || IsStarting) { if (PageUrl != null) RequestNavigate(PageUrl); return null; }
         IsStarting = true;
         ServingChanged?.Invoke();
         try
@@ -134,9 +193,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                         return "studio.err.server";
                     }
                     _static = server;
-                    StartWatching();
                     string url = server.BaseUrl + (Project.EntryHtml ?? "").Replace('\\', '/');
-                    NavigateRequested?.Invoke(url);
+                    RequestNavigate(url);
                     return null;
                 }
                 case StudioProjectKind.Vite:
@@ -148,7 +206,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                     dev.UrlFound += url => dispatcher?.BeginInvoke(() =>
                     {
                         if (!ReferenceEquals(_dev, dev)) return;
-                        NavigateRequested?.Invoke(url);
+                        RequestNavigate(url);
                         ServingChanged?.Invoke();   // the base URL is known now: the page gallery can shoot
                     });
                     dev.Exited += code => dispatcher?.BeginInvoke(() =>
@@ -180,7 +238,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                     if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var b) || b.Scheme is not ("http" or "https")) return "studio.err.badUrl";
                     ServerBaseUrl = baseUrl;
                     _external = true;
-                    NavigateRequested?.Invoke(baseUrl);
+                    RequestNavigate(baseUrl);
                     return null;
                 }
                 case StudioProjectKind.Simulated:
@@ -203,7 +261,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         try { _startCts?.Cancel(); } catch { }
         _startCts?.Dispose();
         _startCts = null;
-        StopWatching();
+        _pendingReload = null;   // (the project's watcher stays: it belongs to the project, not to the preview)
         _static?.Dispose();
         _static = null;
         _dev?.Dispose();
@@ -250,36 +308,59 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     /// <summary>Run JS and get its JSON result (set by the view while it has a page; null otherwise).</summary>
     public Func<string, Task<string?>>? Evaluate { get; set; }
 
-    // ───────────────────────────── static-site reload ─────────────────────────────
+    // ───────────────────────────── project files on disk ─────────────────────────────
 
     private FileSystemWatcher? _watcher;
     private System.Windows.Threading.DispatcherTimer? _reloadTimer;
     private readonly HashSet<string> _changed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _changedPaths = new(StringComparer.OrdinalIgnoreCase);
+    private bool _reloadWanted;
 
-    /// <summary>A file of the static site changed on disk (by the Studio, the AI or another editor): the view reloads
-    /// the page — or only swaps the stylesheets when nothing but CSS changed (no flash, scroll and state kept).</summary>
+    /// <summary>A file the page shows changed on disk (by the Studio, the AI or another editor): the view reloads the
+    /// page — or only swaps the stylesheets when nothing but CSS changed (no flash, scroll and state kept). A static
+    /// site and a server-rendered one (Laravel views) are reloaded from here; a dev server (Vite…) reloads its own page.</summary>
     public event Action<bool>? ReloadRequested;   // true = CSS only
 
+    /// <summary>Folders whose files are never the project's own source (installed packages, build output, logs).</summary>
+    private static readonly HashSet<string> IgnoredDirs = new(StringComparer.OrdinalIgnoreCase)
+        { "node_modules", "bin", "obj", "vendor", "storage", "build", "dist", "coverage", "target", "__pycache__" };
+
+    /// <summary>One watcher for the open project, from the moment it is opened (not only while a preview runs): the
+    /// Node Graph and the preview follow the files through it. An OS watcher costs nothing while nothing changes.</summary>
     private void StartWatching()
     {
         StopWatching();
-        if (Project.Kind != StudioProjectKind.Static) return;
+        if (!HasProject || !Directory.Exists(Root)) return;
         try
         {
             var w = new FileSystemWatcher(Root)
             {
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                InternalBufferSize = 64 * 1024,   // an AI or a git checkout writing many files at once
             };
             FileSystemEventHandler onChange = (_, e) => Changed(e.FullPath);
             w.Changed += onChange;
             w.Created += onChange;
             w.Deleted += onChange;
-            w.Renamed += (_, e) => Changed(e.FullPath);
+            w.Renamed += (_, e) => { Changed(e.OldFullPath); Changed(e.FullPath); };
+            w.Error += (_, e) => _log?.Warn("UiStudio", "file watcher overflow", e.GetException());
             w.EnableRaisingEvents = true;
             _watcher = w;
         }
         catch (Exception ex) { _log?.Warn("UiStudio", "file watcher failed", ex); }
+    }
+
+    /// <summary>Whether a changed file is the project's own source, worth reacting to. Called on the watcher's thread:
+    /// it touches no state.</summary>
+    public static bool IsSourceChange(string root, string path)
+    {
+        if (root.Length == 0 || !path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+        string rel = path[root.Length..];
+        foreach (var seg in rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries))
+            if (seg.StartsWith('.') || IgnoredDirs.Contains(seg)) return false;
+        string ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is not ("" or ".tmp" or ".swp" or ".bak" or ".log" or ".lock") && !path.EndsWith('~');
     }
 
     /// <summary>Files the Studio itself just wrote without moving any line: the page already shows that change (the
@@ -296,21 +377,34 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     private void Changed(string path)
     {
-        string rel = path.Length > Root.Length ? path[Root.Length..] : path;
-        if (rel.Contains("node_modules", StringComparison.OrdinalIgnoreCase)) return;
-        foreach (var seg in rel.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-            if (seg.StartsWith('.')) return;
+        string root = Root;
+        if (!IsSourceChange(root, path)) return;
         string ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext is "" or ".tmp" or ".swp" or ".bak") return;
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            if (_quietWrites.TryGetValue(path, out var at) && DateTime.UtcNow - at < TimeSpan.FromSeconds(2)) return;
-            _changed.Add(ext);
+            if (!string.Equals(root, Root, StringComparison.OrdinalIgnoreCase) || _watcher == null) return;   // another project since
+            _changedPaths.Add(path);
+            bool quiet = _quietWrites.TryGetValue(path, out var at) && DateTime.UtcNow - at < TimeSpan.FromSeconds(2);
+            if (!quiet && ReloadsPage(path, ext))
+            {
+                _changed.Add(ext);
+                _reloadWanted = true;
+            }
             _reloadTimer ??= NewReloadTimer();
             _reloadTimer.Stop();
             _reloadTimer.Start();
         });
     }
+
+    /// <summary>Does this file change what the preview shows, where the Studio (not a dev server) has to reload?</summary>
+    private bool ReloadsPage(string path, string ext) => Project.Kind switch
+    {
+        StudioProjectKind.Static => true,
+        // Blade views, routes and controllers render the page; CSS/JS count only where the site serves them as they are.
+        StudioProjectKind.Server => ext == ".php"
+            || ext is ".css" or ".js" && path.Contains(Path.DirectorySeparatorChar + "public" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
+        _ => false,
+    };
 
     private System.Windows.Threading.DispatcherTimer NewReloadTimer()
     {
@@ -318,9 +412,20 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         t.Tick += (_, _) =>
         {
             t.Stop();
+            var paths = _changedPaths.ToList();
+            _changedPaths.Clear();
+            bool reload = _reloadWanted;
             bool cssOnly = _changed.Count > 0 && _changed.All(e => e == ".css");
             _changed.Clear();
-            if (IsServing) ReloadRequested?.Invoke(cssOnly);
+            _reloadWanted = false;
+            if (paths.Count > 0)
+            {
+                try { FilesChanged?.Invoke(paths); }
+                catch (Exception ex) { _log?.Warn("UiStudio", "a files-changed listener failed", ex); }
+            }
+            if (!reload || !IsServing || Project.Kind == StudioProjectKind.Server && !PageIsLocal) return;
+            if (PageVisible || KeepPageAwake) ReloadRequested?.Invoke(cssOnly);
+            else _pendingReload = (_pendingReload ?? true) && cssOnly;   // waits for the page to be shown; a full reload wins
         };
         return t;
     }
@@ -330,6 +435,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         if (_watcher != null) { _watcher.EnableRaisingEvents = false; _watcher.Dispose(); _watcher = null; }
         _reloadTimer?.Stop();
         _changed.Clear();
+        _changedPaths.Clear();
+        _reloadWanted = false;
     }
 
     public void SelectNode(int nodeId) => RunScript($"window.__cx && __cx.selectById({nodeId})");
