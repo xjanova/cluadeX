@@ -47,6 +47,8 @@ public partial class NodeGraphView : UserControl
     {
         if (_vm == null) return;
         Canvas.Highlights = _vm.Matches;
+        Canvas.Changed = _vm.RecentlyChanged;
+        Canvas.ChangeGlow = NodeGraphViewModel.ChangeGlow;
         Canvas.SetGraph(_vm.Graph, _vm.SelectedNode);
     }
 
