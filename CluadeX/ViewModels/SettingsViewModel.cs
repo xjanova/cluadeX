@@ -864,6 +864,7 @@ public partial class SettingsViewModel : ViewModelBase
                 AiProviderType.Anthropic => AnthropicProvider.KnownModels,
                 AiProviderType.Gemini => GeminiProvider.KnownModels,
                 AiProviderType.GeminiDev => GeminiDevProvider.KnownModels,
+                AiProviderType.AntigravityDev => AntigravityDevProvider.KnownModels.Concat(AntigravityDevProvider.DiscoveredModels).Distinct(),
                 AiProviderType.Ollama => ollamaProvider?.AvailableModels ?? new List<string>(),
                 _ => Array.Empty<string>(),
             };

@@ -50,6 +50,7 @@ internal static class Program
             HookProcess();
             ClaudeDevArgs();
             GeminiDevGuard();
+            AntigravityGuardChecks(work);
             ChatTools(work);
             RunGates(work);
             DangerGate();
@@ -308,6 +309,107 @@ internal static class Program
         Check("…refuses a file write in a run granted commands only (exit 2)", noEdit.Code == 2 && noEdit.Err.Contains("not edit"), $"{noEdit.Code} {noEdit.Err}");
         var edit = Ask(GeminiJson("write_file", new { file_path = Path.Combine(cwd, "b.cs"), content = "class B { }" }, cwd), false);
         Check("…allows the same write in a run that may edit (exit 0)", edit.Code == 0, $"{edit.Code} {edit.Err}");
+    }
+
+    /// <summary>Antigravity Dev (Google's agy) runs with --dangerously-skip-permissions — its headless mode refuses even
+    /// reads otherwise — so this hook IS the turn's permission system: reads pass, writes need the edit grant, commands the
+    /// run grant, the same checks as Claude Dev on top, and nothing may write into the hook's own folder. agy's protocol:
+    /// {"toolCall":{"name","args"}} in, {"decision":"allow"|"deny","reason"} out.</summary>
+    static void AntigravityGuardChecks(string work)
+    {
+        Console.WriteLine("Antigravity Dev carries the guard (agy PreToolUse hook, agy's tool names)");
+        string cwd = Path.Combine(work, "agyproj");
+        Directory.CreateDirectory(cwd);
+        string plugin = Path.Combine(work, "agy-turn", ".agents", "plugins", "cluadex");
+        Directory.CreateDirectory(plugin);
+        static string Agy(string tool, object args) => JsonSerializer.Serialize(new
+        {
+            conversationId = "c", workspacePaths = new[] { "x" }, modelName = "m", stepIdx = 3, toolCall = new { name = tool, args },
+        });
+        var read = new AntigravityGuard.Config(false, false, cwd, plugin);
+        var editOnly = new AntigravityGuard.Config(true, false, cwd, plugin);
+        var runOnly = new AntigravityGuard.Config(false, true, cwd, plugin);
+        var full = new AntigravityGuard.Config(true, true, cwd, plugin);
+        AntigravityGuard.Verdict V(string json, AntigravityGuard.Config c) => AntigravityGuard.Decide(json, c).Verdict;
+        const AntigravityGuard.Verdict Allow = AntigravityGuard.Verdict.Allow, Deny = AntigravityGuard.Verdict.Deny, AskUser = AntigravityGuard.Verdict.AskUser;
+
+        Check("read-only: view_file / grep_search / list_dir pass",
+            V(Agy("view_file", new { AbsolutePath = Path.Combine(cwd, "a.cs") }), read) == Allow && V(Agy("grep_search", new { Query = "x" }), read) == Allow
+            && V(Agy("list_dir", new { DirectoryPath = cwd }), read) == Allow);
+        Check("read-only: write_to_file, run_command, an MCP call, the browser are refused",
+            V(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "b.cs"), CodeContent = "x" }), read) == Deny
+            && V(Agy("run_command", new { CommandLine = "git status" }), read) == Deny
+            && V(Agy("call_mcp_tool", new { ServerName = "cluadex_brainx-brain", ToolName = "brain_search" }), read) == Deny
+            && V(Agy("browser_click_element", new { }), read) == Deny);
+        Check("edit grant: writes pass, commands are still refused",
+            V(Agy("replace_file_content", new { TargetFile = Path.Combine(cwd, "b.cs"), ReplacementContent = "class B { }" }), editOnly) == Allow
+            && V(Agy("run_command", new { CommandLine = "dotnet build" }), editOnly) == Deny);
+        Check("run grant without edit: commands pass, writes are refused",
+            V(Agy("run_command", new { CommandLine = "dotnet build" }), runOnly) == Allow
+            && AntigravityGuard.Decide(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "b.cs"), CodeContent = "x" }), runOnly) is { Verdict: Deny } d && d.Reason!.Contains("not edit"));
+        Check("a tool agy adds later (unknown) needs the run grant", V(Agy("frobnicate", new { }), editOnly) == Deny && V(Agy("frobnicate", new { }), full) == Allow);
+        string push = "git push" + " --force origin main";
+        Check("never run headless: git push --force refused outright (no prompt), even with the full grant",
+            AntigravityGuard.Decide(Agy("run_command", new { CommandLine = push }), full) is { Verdict: Deny } n && n.Reason!.Contains("never run"));
+        Check("rd on a drive root → the red prompt (AskUser), not a silent pass",
+            V(Agy("run_command", new { CommandLine = RdSQ + Root }), full) == AskUser);
+        string bad = "var r = Launch(\"cmd.exe\", \"/c " + RdSQ + Root.Replace("\\", "\\\\") + "\");";
+        Check("write_to_file putting the incident line in a file → the red prompt, whatever the content argument is called",
+            V(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "t.cs"), SomeFutureContentArg = bad }), full) == AskUser);
+        Check("nothing may write into the guard's own folder (or its turn folder), even with the full grant",
+            V(Agy("write_to_file", new { TargetFile = Path.Combine(plugin, "guard.json"), CodeContent = "{}" }), full) == Deny
+            && V(Agy("write_to_file", new { TargetFile = Path.Combine(work, "agy-turn", "x.txt"), CodeContent = "{}" }), full) == Deny
+            && V(Agy("run_command", new { CommandLine = "del " + Path.Combine(plugin, "guard.cmd") }), full) == Deny);
+        Check("a broken payload or one with no tool → refused", V("{not json", full) == Deny && V(Agy("", new { }), full) == Deny);
+        Check("an MCP call passes in a worker run", V(Agy("call_mcp_tool", new { ServerName = "cluadex_cluadex", ToolName = "open_project" }), editOnly) == Allow);
+
+        string? exe = MatchingExe();
+        if (exe == null) return;
+        string cfgPath = Path.Combine(plugin, "guard.json");
+        File.WriteAllText(cfgPath, JsonSerializer.Serialize(editOnly));
+        (int Code, string Out) Ask(string json, params string[] args)
+        {
+            var psi = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true };
+            psi.ArgumentList.Add(AntigravityGuard.Flag);
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi)!;
+            p.StandardInput.Write(json);
+            p.StandardInput.Close();
+            string o = p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(30000)) { p.Kill(true); return (-1, "timeout"); }
+            return (p.ExitCode, o);
+        }
+        string? Decision(string o) { try { return System.Text.Json.Nodes.JsonNode.Parse(o)?["decision"]?.GetValue<string>(); } catch { return null; } }
+        var ok = Ask(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "b.cs"), CodeContent = "class B { }" }), "--config", cfgPath);
+        Check("the real exe answers agy's protocol: allow on stdout, exit 0", ok.Code == 0 && Decision(ok.Out) == "allow", $"{ok.Code} {ok.Out}");
+        var no = Ask(Agy("run_command", new { CommandLine = "echo hi" }), "--config", cfgPath);
+        Check("…deny with the reason the model sees (edit-only run, a command)", no.Code == 0 && Decision(no.Out) == "deny" && no.Out.Contains("may not run commands"), $"{no.Code} {no.Out}");
+        var noCfg = Ask(Agy("view_file", new { AbsolutePath = "x" }), "--config", Path.Combine(plugin, "missing.json"));
+        Check("…no settings for the run → deny (fails closed)", Decision(noCfg.Out) == "deny", noCfg.Out);
+        File.WriteAllText(cfgPath, JsonSerializer.Serialize(full));
+        var dangerNo = Ask(Agy("run_command", new { CommandLine = RdSQ + Root }), "--config", cfgPath);
+        Check("…a dangerous command the user does not approve on the red prompt → deny", Decision(dangerNo.Out) == "deny" && dangerNo.Out.Contains("Not approved"), dangerNo.Out);
+        var dangerYes = Ask(Agy("run_command", new { CommandLine = "echo APPROVE && " + RdSQ + Root }), "--config", cfgPath);
+        Check("…the same one after the user's yes → allow", Decision(dangerYes.Out) == "allow", dangerYes.Out);
+        string marker = Path.Combine(plugin, "hooks.loaded");
+        var loaded = Ask("{\"invocationNum\":1}", "--loaded", marker);
+        Check("PreInvocation (--loaded) writes the marker the provider checks and answers {}", loaded.Code == 0 && File.Exists(marker) && loaded.Out.Trim() == "{}", $"{loaded.Code} {loaded.Out}");
+
+        // The .cmd agy really runs (cmd /c <abs>\guard.cmd), written by the provider's own builder: the decision arrives.
+        var files = CluadeX.Services.Providers.AntigravityDevProvider.BuildPlugin(plugin, CluadeX.Services.Providers.AntigravityDevProvider.ShortPath(exe),
+            new CluadeX.Services.Providers.ClaudeDevProvider.WorkerGrant(true, false), cwd, null, null);
+        foreach (var (name, text) in files) File.WriteAllText(Path.Combine(plugin, name), text, new UTF8Encoding(false));
+        var cmd = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        cmd.ArgumentList.Add("/c");
+        cmd.ArgumentList.Add(Path.Combine(plugin, "guard.cmd"));
+        using (var p = Process.Start(cmd)!)
+        {
+            p.StandardInput.Write(Agy("run_command", new { CommandLine = "echo hi" }));
+            p.StandardInput.Close();
+            string o = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(30000);
+            Check("cmd /c guard.cmd (as agy runs it) → the guard's JSON decision", Decision(o) == "deny" && o.Contains("may not run commands"), o + p.StandardError.ReadToEnd());
+        }
     }
 
     static void ClaudeDevArgs()

@@ -60,6 +60,8 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.BrainX] = new BrainXRoomProvider(fileSystemService);
         // The installed Gemini CLI as a model, the way Claude Dev is Claude Code (GeminiDevProvider).
         _providers[AiProviderType.GeminiDev] = new GeminiDevProvider(settingsService, fileSystemService);
+        // Google's Antigravity CLI (agy): where personal Google accounts went when the Gemini CLI stopped serving them.
+        _providers[AiProviderType.AntigravityDev] = new AntigravityDevProvider(settingsService, fileSystemService);
 
         // Set initial active provider
         var activeType = settingsService.Settings.ActiveProvider;
