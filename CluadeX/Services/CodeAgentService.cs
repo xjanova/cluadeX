@@ -2477,6 +2477,19 @@ public partial class CodeAgentService
         var result = new AgentLoopResult();
         string systemPrompt = await GetSystemPromptAsync();
 
+        // Effort "auto" on an API model that fell back to the [ACTION:] protocol: the task's own level (no per-step climb
+        // here), so the request still carries a real pick instead of the model's default.
+        if (_providerManager.ActiveProviderType is AiProviderType.Anthropic or AiProviderType.OpenAI or AiProviderType.Gemini
+            && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto
+            && AgentRunScope.Current is { } legacyScope)
+        {
+            var pick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage, legacyScope.UserImages?.Count ?? 0,
+                history.Sum(h => CluadeX.Helpers.TokenBudget.EstimateTokens(h.Content))));
+            legacyScope.EffortWhy = _localizationService.T("auto.why." + pick.ReasonKey);
+            legacyScope.StepEffort = pick.Effort;
+            legacyScope.LiveEffort = pick.Effort;
+        }
+
         // ─── Smart context enrichment (respects SmartEditing toggle) ───
         string enrichedMessage = userMessage;
         if (_fileSystemService.HasWorkingDirectory && _settingsService.Settings.Features.SmartEditing)
@@ -3055,6 +3068,19 @@ public partial class CodeAgentService
         bool taskNonTrivial = LooksNonTrivialTask(userMessage ?? "");
         // A long, multi-part brief earns a careful first (planning) step.
         bool bigSpec = taskNonTrivial && (userMessage ?? "").Length >= 1500;
+        // Where "auto" starts: read from the task (a bug, a plan, several files, a long brief, a retry, a picture, a long
+        // chat), not from "is there a verb" — and the reason goes beside the level in the chat.
+        var autoPick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage,
+            AgentRunScope.Current?.UserImages?.Count ?? 0,
+            history.Sum(h => CluadeX.Helpers.TokenBudget.EstimateTokens(h.Content))));
+        int effortBase = autoPick.Level;
+        bool effortPlanFirst = autoPick.PlanFirst || bigSpec;
+        string effortWhyKey = autoPick.ReasonKey;
+        void SetEffortWhy(string key)
+        {
+            if (AgentRunScope.Current is { } s) s.EffortWhy = _localizationService.T("auto.why." + key);
+        }
+        if (smartEffortOn) SetEffortWhy(effortWhyKey);
         // Per-message effort (Anthropic, Opus 5+ / Sonnet 5.5+ / Haiku 5.5+ / Fable 5.1): effort moves BOTH ways step by
         // step — effort-only system messages change it without resetting the cache, so the top-level value stays fixed for
         // the whole turn. Elsewhere the old rule stands: climb only, each climb re-writes the cache once.
@@ -3068,8 +3094,9 @@ public partial class CodeAgentService
         bool topLevelBothWays = smartEffortOn && !perMessageEffort
             && _providerManager.ActiveProviderType is AiProviderType.OpenAI or AiProviderType.Gemini;
         string? stepEffort = smartEffortOn
-            ? (perMessageEffort || topLevelBothWays ? StepEffortFor(taskNonTrivial, bigSpec, 0, false, false, 0, 0, false) : SmartEffort(taskNonTrivial, 0, 0, 0, 0, null))
+            ? (perMessageEffort || topLevelBothWays ? StepEffortFor(effortBase, effortPlanFirst, 0, false, false, 0, 0, false) : SmartEffort(effortBase, 0, 0, 0, 0, null))
             : null;
+        if (smartEffortOn) _debugLog?.Info("Agent", $"effort auto starts at {stepEffort} ({effortWhyKey})");
         string? appliedEffort = stepEffort;      // per-message mode: the level the conversation is at now
         int failedStepsInARow = 0;               // consecutive steps with a failed tool call (smart effort)
 
@@ -3358,8 +3385,11 @@ public partial class CodeAgentService
                 {
                     // Top-level effort stays at the turn's first pick (stepEffort, on the scope); this step's level goes out as
                     // an effort-only system message placed before the pending user turn (it applies from that turn on).
-                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    bool falseFinishNow = falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0;
+                    string want = StepEffortFor(effortBase, effortPlanFirst, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow);
+                    SetEffortWhy(EffortWhyFor(effortWhyKey, effortPlanFirst && iteration == 0, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0));
                     if (want != appliedEffort && nativeMessages.Count > 0 && nativeMessages[^1].Role == "user")
                     {
                         nativeMessages.Insert(nativeMessages.Count - 1, new Services.Providers.NativeMessage { Role = "system", Effort = want });
@@ -3373,8 +3403,11 @@ public partial class CodeAgentService
                 }
                 else if (smartEffortOn && topLevelBothWays)
                 {
-                    string want = StepEffortFor(taskNonTrivial, bigSpec, iteration, budgetLastStep || wrapUpForced,
-                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0);
+                    bool falseFinishNow = falseFinishGuards > 0 && iteration > 0 && failedStepsInARow > 0;
+                    string want = StepEffortFor(effortBase, effortPlanFirst, iteration, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, redBuildGuards, failedStepsInARow, falseFinishNow);
+                    SetEffortWhy(EffortWhyFor(effortWhyKey, effortPlanFirst && iteration == 0, budgetLastStep || wrapUpForced,
+                        lastBuildFailed, failedStepsInARow, falseFinishNow, 0));
                     if (want != stepEffort)
                     {
                         _debugLog?.Info("Agent", $"step {iteration + 1}: effort {stepEffort} → {want} (per request; build red {lastBuildFailed}, "
@@ -3385,9 +3418,10 @@ public partial class CodeAgentService
                 }
                 else if (smartEffortOn)
                 {
-                    string next = SmartEffort(taskNonTrivial, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEditAttempts, stepEffort);
+                    string next = SmartEffort(effortBase, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEditAttempts, stepEffort);
                     if (next != stepEffort)
                     {
+                        SetEffortWhy(EffortWhyFor(effortWhyKey, false, false, redBuildGuards > 0, failedStepsInARow, falseFinishGuards > 0, failedEditAttempts));
                         _debugLog?.Info("Agent", $"step {iteration + 1}: effort auto {stepEffort} → {next} (red-build guards {redBuildGuards}, "
                             + $"failed steps in a row {failedStepsInARow}, failed edits {failedEditAttempts}, false finishes {falseFinishGuards})");
                         OnAgentStatus?.Invoke(isThai ? $"งานนี้ยาก — เพิ่มความพยายามเป็น {next}" : $"This one is hard — raising effort to {next}");
@@ -4728,21 +4762,46 @@ public partial class CodeAgentService
     /// </summary>
     public static string StepEffortFor(bool nonTrivial, bool bigSpec, int iteration, bool wrapUp, bool buildRed,
         int redBuildGuards, int failedStepsInARow, bool falseFinish)
+        => StepEffortFor(nonTrivial ? 1 : 0, bigSpec, iteration, wrapUp, buildRed, redBuildGuards, failedStepsInARow, falseFinish);
+
+    /// <summary>Per-message smart effort from the task's own starting level (<see cref="AutoEffortPolicy.Pick"/>: 0 low …
+    /// 3 xhigh): a planning first step goes one level up (at least high), trouble climbs one or two levels above the
+    /// start, the wrap-up runs at low.</summary>
+    public static string StepEffortFor(int baseLevel, bool planFirst, int iteration, bool wrapUp, bool buildRed,
+        int redBuildGuards, int failedStepsInARow, bool falseFinish)
     {
         string[] ladder = ["low", "medium", "high", "xhigh"];
         if (wrapUp) return "low";
-        int level = nonTrivial ? 1 : 0;
-        if (iteration == 0 && bigSpec) level = 2;
-        if (buildRed && redBuildGuards >= 2 || failedStepsInARow >= 4) level = Math.Max(level, nonTrivial ? 3 : 2);
-        else if (buildRed || failedStepsInARow >= 2 || falseFinish) level = Math.Max(level, nonTrivial ? 2 : 1);
+        int start = Math.Clamp(baseLevel, 0, 3);
+        int level = start;
+        if (iteration == 0 && planFirst) level = Math.Max(level + 1, 2);
+        if (buildRed && redBuildGuards >= 2 || failedStepsInARow >= 4) level = Math.Max(level, start >= 1 ? start + 2 : 2);
+        else if (buildRed || failedStepsInARow >= 2 || falseFinish) level = Math.Max(level, start + 1);
         return ladder[Math.Min(level, ladder.Length - 1)];
+    }
+
+    /// <summary>Why "auto" is where it is now (a key under "auto.why."): trouble in the run beats the task's own reason.</summary>
+    public static string EffortWhyFor(string taskReason, bool planningStep, bool wrapUp, bool buildRed, int failedStepsInARow,
+        bool falseFinish, int failedEdits)
+    {
+        if (wrapUp) return "wrapUp";
+        if (buildRed) return "buildRed";
+        if (failedStepsInARow >= 2 || failedEdits >= 2) return "failing";
+        if (falseFinish) return "falseFinish";
+        if (planningStep) return "planning";
+        return taskReason;
     }
 
     public static string SmartEffort(bool nonTrivial, int redBuildGuards, int falseFinishGuards, int failedStepsInARow,
         int failedEdits, string? current)
+        => SmartEffort(nonTrivial ? 1 : 0, redBuildGuards, falseFinishGuards, failedStepsInARow, failedEdits, current);
+
+    /// <summary><see cref="SmartEffort(bool,int,int,int,int,string?)"/> from the task's own starting level (0–3).</summary>
+    public static string SmartEffort(int baseLevel, int redBuildGuards, int falseFinishGuards, int failedStepsInARow,
+        int failedEdits, string? current)
     {
         string[] ladder = ["low", "medium", "high", "xhigh"];
-        int level = nonTrivial ? 1 : 0;
+        int level = Math.Clamp(baseLevel, 0, 3);
         if (redBuildGuards >= 2 || failedStepsInARow >= 4 || failedEdits >= 4) level += 2;
         else if (redBuildGuards >= 1 || falseFinishGuards >= 1 || failedStepsInARow >= 2 || failedEdits >= 2) level += 1;
         level = Math.Min(level, ladder.Length - 1);

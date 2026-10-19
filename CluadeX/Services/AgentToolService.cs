@@ -394,7 +394,7 @@ public class AgentToolService : IDisposable
         bool askRule = FindModuleRule(scope, resource, call.ToolName) == PermAction.Ask;
         var info = new PermissionRequestInfo
         {
-            ToolName = call.ToolName, Detail = detail,
+            ToolName = call.ToolName, Detail = detail, Args = call.Arguments,
             AlwaysAsk = perm.AlwaysAsk || askRule,
             ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
             AlwaysKey = perm.OnAllowedAlways != null ? resource : null,
@@ -474,6 +474,7 @@ public class AgentToolService : IDisposable
         {
             ToolName = call.ToolName,
             Detail = McpToolClassifier.DescribeCall(call, leaf),
+            Args = call.Arguments,
             AlwaysAsk = named == PermAction.Ask,
             ChatScopeKey = chatKey,
         };
@@ -536,7 +537,7 @@ public class AgentToolService : IDisposable
         bool allowed = OnPermissionRequired != null
             && await OnPermissionRequired.Invoke(new PermissionRequestInfo
             {
-                ToolName = call.ToolName, Detail = detail,
+                ToolName = call.ToolName, Detail = detail, Args = call.Arguments,
                 AlwaysAsk = askRule || decision.Risk == McpCallRisk.AlwaysAsk,
             });
         if (!allowed) return Fail(call, $"User denied permission for {call.ToolName}");
@@ -798,6 +799,7 @@ public class AgentToolService : IDisposable
                         {
                             ToolName = call.ToolName,
                             Detail = $"access a file OUTSIDE the project: {hexPath}",
+                            Args = call.Arguments,
                         });
                     if (!allowed)
                         return Fail(call, $"User denied hex access to a path outside the project: {hexPath}");
@@ -816,6 +818,7 @@ public class AgentToolService : IDisposable
                             {
                                 ToolName = call.ToolName,
                                 Detail = DescribePermissionRequest(call, scope, resource),
+                                Args = call.Arguments,
                                 Diff = TryComputePreviewDiff(call),
                                 AlwaysAsk = _permissionService.FindRule(resource, scope, call.ToolName) == PermAction.Ask,
                             });

@@ -131,6 +131,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
             requestObj["temperature"] = (double)settings.Temperature;
             requestObj["max_tokens"] = settings.MaxTokens;
         }
+        LiveModelReport.Sent(Models.AiProviderType.OpenAI, model,
+            requestObj.TryGetValue("reasoning_effort", out var sentEffort) ? sentEffort as string : null, MaxEffort(model) != null);
 
         var body = JsonSerializer.Serialize(requestObj);
 
@@ -165,6 +167,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
             {
                 using var doc = JsonDocument.Parse(data);
                 var root = doc.RootElement;
+                if (root.TryGetProperty("model", out var servedModel) && servedModel.ValueKind == JsonValueKind.String)
+                    LiveModelReport.Served(Models.AiProviderType.OpenAI, servedModel.GetString());
                 if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0
                     && choices[0].TryGetProperty("delta", out var delta)
                     && delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
@@ -402,6 +406,9 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         {
             req["temperature"] = (double)settings.Temperature;
         }
+        LiveModelReport.Sent(Models.AiProviderType.OpenAI, model,
+            req.TryGetValue("reasoning", out var ro) && ro is Dictionary<string, object> rd && rd.TryGetValue("effort", out var re) ? re as string : null,
+            reasoning);
         return req;
     }
 
@@ -527,6 +534,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                     case "response.incomplete":
                         if (root.TryGetProperty("response", out var resp))
                         {
+                            if (resp.TryGetProperty("model", out var servedModel) && servedModel.ValueKind == JsonValueKind.String)
+                                LiveModelReport.Served(Models.AiProviderType.OpenAI, servedModel.GetString());
                             if (resp.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
                             {
                                 int cached = u.TryGetProperty("input_tokens_details", out var itd)
