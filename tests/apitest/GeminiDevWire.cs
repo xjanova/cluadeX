@@ -168,14 +168,24 @@ internal static class GeminiDevWire
     }
 
     /// <summary>The installed CLI, headless, stream-json: on a machine where it is not signed in it refuses before any
-    /// model call (free) — and that refusal must be a result event the translator reads as an auth error.</summary>
+    /// model call (free) — and that refusal must be a result event the translator reads as an auth error.
+    /// The CLI does not always exit after its result (2026-10-19, CLI 0.64: the result arrived in under a second, the
+    /// process stayed up — its MCP children keep it alive), so the read stops at the result and the tree is killed.
+    /// No result within the limit is inconclusive, not a crash: the rest of the offline run must still happen.</summary>
     static async Task RealCliRefusal(Action<string, string, bool, string> check)
     {
         if (!GeminiDevProvider.IsInstalled()) { check("gd-real", "the Gemini CLI is installed (skipped: not on this machine)", true, "skipped"); return; }
         string home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini");
-        if (File.Exists(Path.Combine(home, "oauth_creds.json")) || Environment.GetEnvironmentVariable("GEMINI_API_KEY") != null)
+        if (GeminiDevProvider.SignedIn())
         {
             check("gd-real", "the real CLI refusal (skipped: the CLI is signed in here — a real call would use the quota)", true, "skipped");
+            return;
+        }
+        // An API key chosen with /auth can live in the OS keychain, not the environment: settings.json naming any sign-in
+        // but Google's means the CLI has a key and would make a real (billed) call.
+        if (ConfiguredAuth(home) is { } auth && auth != "oauth-personal")
+        {
+            check("gd-real", $"the real CLI refusal (skipped: settings.json selects '{auth}' — its key may be in the keychain, a real call would be billed)", true, "skipped");
             return;
         }
         var provider = new GeminiDevProvider(null!, null!);
@@ -186,19 +196,58 @@ internal static class GeminiDevWire
         psi.ArgumentList.Add(script);
         foreach (var a in GeminiDevProvider.BuildArgs(Path.GetTempPath(), null, "default", null)) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
-        await p.StandardInput.WriteLineAsync("say hi");
-        p.StandardInput.Close();
+        var errTask = p.StandardError.ReadToEndAsync();
         var tr = new GeminiStreamTranslator();
-        string? line;
         var lines = new List<string>();
+        bool gotResult = false, timedOut = false;
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        while ((line = await p.StandardOutput.ReadLineAsync(cts.Token)) != null) { lines.Add(line); tr.Translate(line); }
-        string err = await p.StandardError.ReadToEndAsync();
-        await p.WaitForExitAsync(cts.Token);
-        string? refusal = tr.ResultText ?? err.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+        try
+        {
+            await p.StandardInput.WriteLineAsync("say hi");
+            p.StandardInput.Close();
+            string? line;
+            while ((line = await p.StandardOutput.ReadLineAsync(cts.Token)) != null)
+            {
+                lines.Add(line);
+                tr.Translate(line);
+                if (line.Contains("\"type\":\"result\"", StringComparison.Ordinal)) { gotResult = true; break; }
+            }
+        }
+        catch (OperationCanceledException) { timedOut = true; }
+        catch (IOException) { } // the CLI quit before reading stdin — its stderr says why
+        finally { try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { } }
+        await p.WaitForExitAsync();
+        string err = await Task.WhenAny(errTask, Task.Delay(TimeSpan.FromSeconds(10))) == errTask ? errTask.Result : "(stderr still open)";
+        string Tail(string s) => s.Replace('\n', ' ')[..Math.Min(300, s.Length)];
+        string detail = $"result={tr.ResultText} · stdout={Tail(string.Join(" ", lines))} · stderr={Tail(err)}";
+        if (timedOut)
+        {
+            check("gd-real", "the real CLI refusal (inconclusive: no result within 90 s — the CLI was killed)", true, detail);
+            return;
+        }
+        // A result event is the turn's end; without one the CLI died early and its refusal is on stderr.
+        string? refusal = tr.ResultText ?? GeminiDevProvider.LastMeaningfulLine(err);
         check("gd-real", "the real, signed-out CLI refuses with a sign-in message the provider recognises",
-            p.ExitCode != 0 && GeminiDevProvider.LooksLikeAuthRefusal(refusal),
-            $"exit {p.ExitCode} · result={tr.ResultText} · stdout={string.Join(" ", lines).Replace('\n', ' ')[..Math.Min(300, string.Join(" ", lines).Length)]} · stderr={err.Replace('\n', ' ')[..Math.Min(300, err.Length)]}");
-        check("gd-real", "…and the explanation tells the user how to sign in", GeminiDevProvider.AuthGuidance(refusal ?? "", false)?.Contains("/login") == true, refusal ?? "");
+            (gotResult ? tr.ResultIsError : p.ExitCode != 0) && GeminiDevProvider.LooksLikeAuthRefusal(refusal), $"exit {p.ExitCode} · {detail}");
+        // A free personal account is refused outright (IneligibleTierError): the way out is an API key, not /login.
+        bool ineligible = GeminiDevProvider.IsIneligibleAccount(refusal);
+        string? guidance = GeminiDevProvider.AuthGuidance(refusal ?? "", false);
+        check("gd-real", ineligible ? "…and the explanation gives the API-key steps (the account is refused)" : "…and the explanation tells the user how to sign in",
+            guidance?.Contains(ineligible ? "GEMINI_API_KEY" : "/login") == true, refusal ?? "");
+    }
+
+    /// <summary>security.auth.selectedType (or the older top-level selectedAuthType) from ~/.gemini/settings.json.</summary>
+    static string? ConfiguredAuth(string home)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(home, "settings.json")),
+                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            var root = doc.RootElement;
+            if (root.TryGetProperty("security", out var sec) && sec.TryGetProperty("auth", out var a)
+                && a.TryGetProperty("selectedType", out var t) && t.ValueKind == JsonValueKind.String) return t.GetString();
+            return root.TryGetProperty("selectedAuthType", out var old) && old.ValueKind == JsonValueKind.String ? old.GetString() : null;
+        }
+        catch { return null; }
     }
 }
