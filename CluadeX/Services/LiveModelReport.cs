@@ -136,7 +136,12 @@ public static class LiveModelReport
         if (old.Success)
             return char.ToUpperInvariant(old.Groups[3].Value[0]) + old.Groups[3].Value[1..] + " " + old.Groups[1].Value
                    + (old.Groups[2].Success ? "." + old.Groups[2].Value : "");
-        if (bare.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase)) return "GPT-" + Regex.Replace(bare[4..], @"-\d{4}-\d{2}-\d{2}$", "");
+        if (bare.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase))
+        {
+            // gpt-6.1-sol → "GPT-6.1 Sol", gpt-5.4-mini → "GPT-5.4 Mini" (OpenAI's own names); a dated snapshot loses the date.
+            string[] parts = Regex.Replace(bare[4..], @"-\d{4}-\d{2}-\d{2}$", "").Split('-');
+            return "GPT-" + parts[0] + string.Concat(parts.Skip(1).Select(w => w.Length == 0 ? "" : " " + char.ToUpperInvariant(w[0]) + w[1..]));
+        }
         if (bare.StartsWith("gemini-", StringComparison.OrdinalIgnoreCase))
             return string.Join(' ', bare.Split('-').Select(w => w.Length == 0 ? w : char.ToUpperInvariant(w[0]) + w[1..]));
         return bare;

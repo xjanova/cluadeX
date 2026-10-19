@@ -122,6 +122,17 @@ internal static class MockProviders
         check("openai", "gpt-4o: temperature + max_tokens, no reasoning_effort",
             Has(body, "temperature") && Has(body, "max_tokens") && !Has(body, "reasoning_effort"), Raw(body));
 
+        // ── OpenAI: no model picked → GPT-6.1 Sol, output held at its 128K ceiling ──
+        s.ProviderConfigs["OpenAI"] = new ProviderConfig { ApiKey = "sk-test", BaseUrl = root + "/v1", SelectedModel = "" };
+        s.MaxTokens = 200_000;
+        s.ReasoningEffort = "max";
+        await Collect(new OpenAiProvider(svc).ChatAsync([], "ping", "sys"));
+        body = LastBody("/v1/chat/completions");
+        check("openai", "no model picked: gpt-6.1-sol, max_completion_tokens 200K → 128000, effort max, no temperature",
+            Str(body, "model") == "gpt-6.1-sol" && Int(body, "max_completion_tokens") == 128_000 && Str(body, "reasoning_effort") == "max"
+            && !Has(body, "temperature") && !Has(body, "max_tokens"), Raw(body));
+        s.MaxTokens = 4096;
+
         // ── OpenAI: model listing + Test Connection ──
         s.ProviderConfigs["OpenAI"] = new ProviderConfig { ApiKey = "sk-test", BaseUrl = root + "/v1", SelectedModel = "gpt-6-sol" };
         var listed = await new OpenAiProvider(svc).ListModelsAsync();
