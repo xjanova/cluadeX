@@ -144,9 +144,13 @@ public partial class ChatViewModel
         // Claude Code: the installed CLI on the owner's own Claude plan (no API key, no per-token price).
         if (Services.Chrome.ClaudeInChromeLauncher.FindClaudeExe(s.ClaudeCodePathOverride) != null)
         {
+            // "default" plus every family alias, so the model is picked here (owner 2026-10-20: "Claude DEV ต้องเลือก โมเดลได้เอง").
             string cc = s.ProviderConfigs.TryGetValue(nameof(AiProviderType.ClaudeDev), out var ccCfg) && !string.IsNullOrWhiteSpace(ccCfg.EffectiveModelId)
                 ? ccCfg.EffectiveModelId!.Trim() : "default";
-            list.Add(new ChatModelChoice(AiProviderType.ClaudeDev, cc, _providerManager.GetProvider(AiProviderType.ClaudeDev).DisplayName, Loc("chat.model.claudeCodePlan")));
+            string ccLabel = _providerManager.GetProvider(AiProviderType.ClaudeDev).DisplayName;
+            var ccModels = Services.Providers.ClaudeDevProvider.KnownModels.ToList();
+            if (!ccModels.Contains(cc)) ccModels.Insert(0, cc);
+            list.AddRange(ccModels.Select(m => new ChatModelChoice(AiProviderType.ClaudeDev, m, ccLabel, Loc("chat.model.claudeCodePlan"))));
         }
         // Gemini Dev: the installed Gemini CLI on the owner's own Google sign-in (no API key, no per-token price).
         if (_geminiCliInstalled)

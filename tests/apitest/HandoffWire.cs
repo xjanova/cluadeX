@@ -115,6 +115,11 @@ internal static class HandoffWire
             && rw.Contains("--disallowedTools") && rw.Contains("git push --force"), rw);
         string runOnly = ClaudeDevProvider.BuildArgs(@"D:\Game", new ClaudeDevProvider.WorkerGrant(false, true), "", "auto");
         check("args", "run without edit: no edit tools, no acceptEdits", !runOnly.Contains("Edit,Write") && !runOnly.Contains("acceptEdits"), runOnly);
+        check("args", "the model box offers the CLI default first, then every family alias",
+            ClaudeDevProvider.KnownModels.SequenceEqual(new[] { "default", "fable", "opus", "sonnet", "haiku" }), string.Join(",", ClaudeDevProvider.KnownModels));
+        string picked = ClaudeDevProvider.BuildArgs(@"D:\Game", null, "sonnet", "auto");
+        check("args", "a picked alias goes out as --model; \"default\" sends no --model (the CLI's own pick)",
+            picked.Contains("--model \"sonnet\"") &&!ro.Contains("--model") && !ClaudeDevProvider.BuildArgs(@"D:\Game", null, "default", "auto").Contains("--model"), picked);
 
         // ─── stream-json events ───
         string tool = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Running the tests.\"},{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"godot --headless tests\"}}]}}";
