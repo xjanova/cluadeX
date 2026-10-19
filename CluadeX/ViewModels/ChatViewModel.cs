@@ -582,7 +582,7 @@ public partial class ChatViewModel : ViewModelBase
         if (snap == null && run?.Scope?.LiveEffort is { Length: > 0 } picked)
             snap = new LiveModelReport.Snapshot(type, null, picked, false, DateTime.Now) { Why = run.Scope.EffortWhy };
         if (snap == null && type is AiProviderType.Local or AiProviderType.LlamaServer or AiProviderType.Ollama
-                or AiProviderType.GeminiDev or AiProviderType.BrainX)
+                or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.BrainX)
             snap = new LiveModelReport.Snapshot(type, null, LiveModelReport.NoEffort, false, DateTime.Now);
         return snap;
     }
@@ -702,6 +702,7 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.ClaudeDev => configured is null or "default" or "auto"
                 ? ClaudeDevProvider.ReportedModel ?? Loc("chat.usage.cliDefault") : configured,
             AiProviderType.GeminiDev => configured is null or "default" or "auto" ? Loc("chat.usage.geminiCliDefault") : configured,
+            AiProviderType.AntigravityDev => configured is null or "default" or "auto" ? Loc("chat.usage.agyDefault") : configured,
             _ => configured ?? Loc("chat.usage.noModel"),
         };
         ThinkToggleVisible = type switch
@@ -757,6 +758,7 @@ public partial class ChatViewModel : ViewModelBase
             RateLimitTip = local ? Loc("chat.usage.localTip")
                 : type == AiProviderType.ClaudeDev ? Loc("chat.usage.cliTip")
                 : type == AiProviderType.GeminiDev ? Loc("chat.usage.geminiCliTip")
+                : type == AiProviderType.AntigravityDev ? Loc("chat.usage.agyTip")
                 : Loc("chat.usage.unknownTip");
         }
 
@@ -3128,15 +3130,20 @@ public partial class ChatViewModel : ViewModelBase
         {
             ClearBox();
             // The CLI of the provider answering this chat: Gemini Dev signs in with Google, everything else is Claude Code.
-            bool gemini = _providerManager.ActiveProviderType == AiProviderType.GeminiDev;
-            bool opened = gemini
-                ? _providerManager.GetProvider(AiProviderType.GeminiDev) is Services.Providers.GeminiDevProvider gd && gd.OpenLoginTerminal()
-                : Services.Providers.ClaudeDevProvider.OpenLoginTerminal();
+            // Antigravity Dev signs in with Google through agy.
+            var active = _providerManager.ActiveProviderType;
+            bool opened = active switch
+            {
+                AiProviderType.GeminiDev => _providerManager.GetProvider(AiProviderType.GeminiDev) is Services.Providers.GeminiDevProvider gd && gd.OpenLoginTerminal(),
+                AiProviderType.AntigravityDev => _providerManager.GetProvider(AiProviderType.AntigravityDev) is Services.Providers.AntigravityDevProvider agy && agy.OpenLoginTerminal(),
+                _ => Services.Providers.ClaudeDevProvider.OpenLoginTerminal(),
+            };
+            string key = active switch { AiProviderType.GeminiDev => "gemini", AiProviderType.AntigravityDev => "agy", _ => "" };
             Messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,
-                Content = opened ? "🔑 " + Loc(gemini ? "chat.login.geminiOpened" : "chat.login.opened")
-                                 : "⚠ " + Loc(gemini ? "chat.login.geminiFailed" : "chat.login.failed"),
+                Content = opened ? "🔑 " + Loc(key.Length > 0 ? $"chat.login.{key}Opened" : "chat.login.opened")
+                                 : "⚠ " + Loc(key.Length > 0 ? $"chat.login.{key}Failed" : "chat.login.failed"),
             });
             ScrollToBottom?.Invoke();
             return;

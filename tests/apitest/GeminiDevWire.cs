@@ -108,6 +108,63 @@ internal static class GeminiDevWire
         check("gd-auth", "signed in but out of quota → says it is the quota, not the sign-in", quota != null && quota.Contains("โควตา") && !quota.Contains("Sign in with Google"), quota ?? "");
         check("gd-auth", "an ordinary error is not mistaken for a sign-in problem", GeminiDevProvider.AuthGuidance("SyntaxError in the user's script", true) == null, "");
 
+        // The real stderr of a free personal account (2026-10-19): a terminal warning first, the refusal under it.
+        string ineligibleErr = "Warning: 256-color support not detected. Using a terminal with at least 256-color support is recommended for a better visual experience.\n"
+            + "Error authenticating: IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products: https://antigravity.google\n"
+            + "    at throwIneligibleOrProjectIdError (file:///C:/x/chunk.js:311997:11)\n  ineligibleTiers: [\n";
+        string? picked = GeminiDevProvider.LastMeaningfulLine(ineligibleErr);
+        check("gd-stderr", "the error line is picked, not the 256-color warning above it",
+            picked != null && picked.StartsWith("Error authenticating") && picked.Contains("IneligibleTierError"), picked ?? "");
+        check("gd-stderr", "a stderr holding only a warning still says something",
+            GeminiDevProvider.LastMeaningfulLine("Warning: 256-color support not detected.\n") == "Warning: 256-color support not detected.", "");
+        string? ineligible = GeminiDevProvider.AuthGuidance(picked ?? "", signedIn: true);
+        check("gd-auth", "a refused (ineligible) account → API-key steps, not 'sign in again'",
+            ineligible != null && ineligible.Contains("GEMINI_API_KEY") && ineligible.Contains("/auth") && !ineligible.Contains("Sign in with Google") && !ineligible.Contains("โควตา"),
+            ineligible ?? "");
+
+        // The real refusal of an API key whose Cloud project Google has blocked (2026-10-19, CLI 0.64, key via /auth).
+        string denied = "[API Error: {\"error\":{\"code\":403,\"message\":\"Your project has been denied access. Please contact support.\",\"status\":\"PERMISSION_DENIED\"}}]";
+        var drefused = new GeminiStreamTranslator();
+        var dturn = new ClaudeDevStreamTurn(Folder);
+        foreach (var l in drefused.Translate(J(new { type = "result", timestamp = "t", status = "error", error = new { type = "Error", message = denied }, stats = new { } })))
+            dturn.Feed(l);
+        check("gd-auth", "a 403 'project denied access' result is recognised as a refusal (not a raw error)",
+            dturn.ResultIsError && GeminiDevProvider.LooksLikeAuthRefusal(dturn.ResultText) && GeminiDevProvider.IsDeniedProject(dturn.ResultText), dturn.ResultText ?? "");
+        foreach (bool si in new[] { true, false })
+        {
+            string? dhelp = GeminiDevProvider.AuthGuidance(denied, signedIn: si);
+            check("gd-auth", $"denied project (signedIn={si}) → Thai steps: a new key in another project at aistudio, other models — not /login, not quota",
+                dhelp != null && dhelp.Contains("aistudio.google.com/apikey") && dhelp.Contains("โปรเจกต์ใหม่") && dhelp.Contains("Antigravity Dev")
+                && dhelp.Contains("Claude Dev") && !dhelp.Contains("Sign in with Google") && !dhelp.Contains("/login") && !dhelp.Contains("โควตา"), dhelp ?? "");
+        }
+        check("gd-auth", "an ineligible-account refusal is not taken for a denied project", !GeminiDevProvider.IsDeniedProject(picked), "");
+
+        // ─── signed in: a key chosen with /auth lives in the OS keychain; only settings.json shows it ───
+        string ghome = Path.Combine(Path.GetTempPath(), "cx-gemini-home-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(ghome);
+        try
+        {
+            Func<string, string?> noEnv = _ => null;
+            check("gd-signin", "an empty CLI home with no key in the environment → not signed in", !GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            check("gd-signin", "GEMINI_API_KEY in the environment → signed in",
+                GeminiDevProvider.SignedIn(ghome, n => n == "GEMINI_API_KEY" ? "k" : null), "");
+            string settingsPath = Path.Combine(ghome, "settings.json");
+            File.WriteAllText(settingsPath, "{\n  // chosen with /auth\n  \"security\": { \"auth\": { \"selectedType\": \"gemini-api-key\", }, },\n}");
+            check("gd-signin", "settings.json security.auth.selectedType = gemini-api-key (comments, trailing commas) → signed in",
+                GeminiDevProvider.ConfiguredAuth(ghome) == "gemini-api-key" && GeminiDevProvider.SignedIn(ghome, noEnv), GeminiDevProvider.ConfiguredAuth(ghome) ?? "null");
+            File.WriteAllText(settingsPath, "{ \"selectedAuthType\": \"gemini-api-key\" }");
+            check("gd-signin", "the older top-level selectedAuthType = gemini-api-key → signed in", GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            File.WriteAllText(settingsPath, "{ \"security\": { \"auth\": { \"selectedType\": \"oauth-personal\" } } }");
+            check("gd-signin", "oauth-personal chosen but no oauth_creds.json → not signed in", !GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            File.WriteAllText(Path.Combine(ghome, "oauth_creds.json"), "{}");
+            check("gd-signin", "oauth_creds.json present → signed in", GeminiDevProvider.SignedIn(ghome, noEnv), "");
+            File.Delete(Path.Combine(ghome, "oauth_creds.json"));
+            File.WriteAllText(settingsPath, "{ not json");
+            check("gd-signin", "a broken settings.json is not a crash and not signed in",
+                GeminiDevProvider.ConfiguredAuth(ghome) == null && !GeminiDevProvider.SignedIn(ghome, noEnv), "");
+        }
+        finally { try { Directory.Delete(ghome, recursive: true); } catch { } }
+
         // ─── arguments ───
         var advice = GeminiDevProvider.BuildArgs(Folder, null, "default", null);
         check("gd-args", "read-only: stream-json, --skip-trust, approval default (headless refuses every tool needing approval), no -m",
@@ -154,14 +211,24 @@ internal static class GeminiDevWire
     }
 
     /// <summary>The installed CLI, headless, stream-json: on a machine where it is not signed in it refuses before any
-    /// model call (free) — and that refusal must be a result event the translator reads as an auth error.</summary>
+    /// model call (free) — and that refusal must be a result event the translator reads as an auth error.
+    /// The CLI does not always exit after its result (2026-10-19, CLI 0.64: the result arrived in under a second, the
+    /// process stayed up — its MCP children keep it alive), so the read stops at the result and the tree is killed.
+    /// No result within the limit is inconclusive, not a crash: the rest of the offline run must still happen.</summary>
     static async Task RealCliRefusal(Action<string, string, bool, string> check)
     {
         if (!GeminiDevProvider.IsInstalled()) { check("gd-real", "the Gemini CLI is installed (skipped: not on this machine)", true, "skipped"); return; }
         string home = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini");
-        if (File.Exists(Path.Combine(home, "oauth_creds.json")) || Environment.GetEnvironmentVariable("GEMINI_API_KEY") != null)
+        if (GeminiDevProvider.SignedIn())
         {
             check("gd-real", "the real CLI refusal (skipped: the CLI is signed in here — a real call would use the quota)", true, "skipped");
+            return;
+        }
+        // An API key chosen with /auth can live in the OS keychain, not the environment: settings.json naming any sign-in
+        // but Google's means the CLI has a key and would make a real (billed) call.
+        if (GeminiDevProvider.ConfiguredAuth(home) is { } auth && auth != "oauth-personal")
+        {
+            check("gd-real", $"the real CLI refusal (skipped: settings.json selects '{auth}' — its key may be in the keychain, a real call would be billed)", true, "skipped");
             return;
         }
         var provider = new GeminiDevProvider(null!, null!);
@@ -172,19 +239,43 @@ internal static class GeminiDevWire
         psi.ArgumentList.Add(script);
         foreach (var a in GeminiDevProvider.BuildArgs(Path.GetTempPath(), null, "default", null)) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
-        await p.StandardInput.WriteLineAsync("say hi");
-        p.StandardInput.Close();
+        var errTask = p.StandardError.ReadToEndAsync();
         var tr = new GeminiStreamTranslator();
-        string? line;
         var lines = new List<string>();
+        bool gotResult = false, timedOut = false;
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        while ((line = await p.StandardOutput.ReadLineAsync(cts.Token)) != null) { lines.Add(line); tr.Translate(line); }
-        string err = await p.StandardError.ReadToEndAsync();
-        await p.WaitForExitAsync(cts.Token);
-        string? refusal = tr.ResultText ?? err.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+        try
+        {
+            await p.StandardInput.WriteLineAsync("say hi");
+            p.StandardInput.Close();
+            string? line;
+            while ((line = await p.StandardOutput.ReadLineAsync(cts.Token)) != null)
+            {
+                lines.Add(line);
+                tr.Translate(line);
+                if (line.Contains("\"type\":\"result\"", StringComparison.Ordinal)) { gotResult = true; break; }
+            }
+        }
+        catch (OperationCanceledException) { timedOut = true; }
+        catch (IOException) { } // the CLI quit before reading stdin — its stderr says why
+        finally { try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { } }
+        await p.WaitForExitAsync();
+        string err = await Task.WhenAny(errTask, Task.Delay(TimeSpan.FromSeconds(10))) == errTask ? errTask.Result : "(stderr still open)";
+        string Tail(string s) => s.Replace('\n', ' ')[..Math.Min(300, s.Length)];
+        string detail = $"result={tr.ResultText} · stdout={Tail(string.Join(" ", lines))} · stderr={Tail(err)}";
+        if (timedOut)
+        {
+            check("gd-real", "the real CLI refusal (inconclusive: no result within 90 s — the CLI was killed)", true, detail);
+            return;
+        }
+        // A result event is the turn's end; without one the CLI died early and its refusal is on stderr.
+        string? refusal = tr.ResultText ?? GeminiDevProvider.LastMeaningfulLine(err);
         check("gd-real", "the real, signed-out CLI refuses with a sign-in message the provider recognises",
-            p.ExitCode != 0 && GeminiDevProvider.LooksLikeAuthRefusal(refusal),
-            $"exit {p.ExitCode} · result={tr.ResultText} · stdout={string.Join(" ", lines).Replace('\n', ' ')[..Math.Min(300, string.Join(" ", lines).Length)]} · stderr={err.Replace('\n', ' ')[..Math.Min(300, err.Length)]}");
-        check("gd-real", "…and the explanation tells the user how to sign in", GeminiDevProvider.AuthGuidance(refusal ?? "", false)?.Contains("/login") == true, refusal ?? "");
+            (gotResult ? tr.ResultIsError : p.ExitCode != 0) && GeminiDevProvider.LooksLikeAuthRefusal(refusal), $"exit {p.ExitCode} · {detail}");
+        // A free personal account is refused outright (IneligibleTierError): the way out is an API key, not /login.
+        bool ineligible = GeminiDevProvider.IsIneligibleAccount(refusal);
+        string? guidance = GeminiDevProvider.AuthGuidance(refusal ?? "", false);
+        check("gd-real", ineligible ? "…and the explanation gives the API-key steps (the account is refused)" : "…and the explanation tells the user how to sign in",
+            guidance?.Contains(ineligible ? "GEMINI_API_KEY" : "/login") == true, refusal ?? "");
     }
 }

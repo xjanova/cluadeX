@@ -24,6 +24,12 @@ public static class Program
             Environment.Exit(Services.Safety.GuardHook.Run());
             return;
         }
+        // Antigravity Dev's hooks (agy's PreToolUse / PreInvocation): the same guard in agy's protocol — headless too.
+        if (args.Length > 0 && args[0] == Services.Safety.AntigravityGuard.Flag)
+        {
+            Environment.Exit(Services.Safety.AntigravityGuard.Run(args));
+            return;
+        }
         // A connection (GitHub, Stripe, Canva…) started by BrainX's bridge or CluadeX's MCP list: reads its key now and
         // relays the real server's stdio — headless, so the configs naming it never hold a key.
         if (args.Length > 0 && args[0] == Services.Connections.ConnectorLauncher.Flag)

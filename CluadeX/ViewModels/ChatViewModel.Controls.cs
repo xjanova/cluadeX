@@ -69,12 +69,14 @@ public partial class ChatViewModel
         AiProviderType.OpenAI => OpenAiProvider.DefaultModel,
         AiProviderType.Gemini => GeminiProvider.DefaultModel,
         AiProviderType.BrainX => BrainXRoomModel,
-        AiProviderType.ClaudeDev or AiProviderType.GeminiDev => "default",
+        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev => "default",
         _ => "",
     };
 
     /// <summary>Is the Gemini CLI installed (looked up once, off the UI thread; the box lists Gemini Dev then).</summary>
     private bool _geminiCliInstalled;
+    /// <summary>Is Google's Antigravity CLI (agy) installed (looked up with the Gemini CLI; the box lists Antigravity Dev then).</summary>
+    private bool _agyInstalled;
     private bool _geminiCliProbed;
 
     private async void ProbeGeminiCliForChatBox()
@@ -84,9 +86,15 @@ public partial class ChatViewModel
         try
         {
             bool found = await Task.Run(Services.Providers.GeminiDevProvider.IsInstalled);
-            if (found == _geminiCliInstalled) return;
-            _geminiCliInstalled = found;
-            RefreshChatModelChoices();
+            bool agy = await Task.Run(Services.Providers.AntigravityDevProvider.IsInstalled);
+            if (found != _geminiCliInstalled || agy != _agyInstalled)
+            {
+                _geminiCliInstalled = found;
+                _agyInstalled = agy;
+                RefreshChatModelChoices();
+            }
+            // The slugs the signed-in Google plan may use (agy models — a network call, so after the box is up).
+            if (agy && (await Services.Providers.AntigravityDevProvider.ListModelsAsync()).Count > 0) RefreshChatModelChoices();
         }
         catch (Exception ex) { _debugLog?.Warn("Chat", "looking for the Gemini CLI failed", ex); }
     }
@@ -136,9 +144,13 @@ public partial class ChatViewModel
         // Claude Code: the installed CLI on the owner's own Claude plan (no API key, no per-token price).
         if (Services.Chrome.ClaudeInChromeLauncher.FindClaudeExe(s.ClaudeCodePathOverride) != null)
         {
+            // "default" plus every family alias, so the model is picked here (owner 2026-10-20: "Claude DEV ต้องเลือก โมเดลได้เอง").
             string cc = s.ProviderConfigs.TryGetValue(nameof(AiProviderType.ClaudeDev), out var ccCfg) && !string.IsNullOrWhiteSpace(ccCfg.EffectiveModelId)
                 ? ccCfg.EffectiveModelId!.Trim() : "default";
-            list.Add(new ChatModelChoice(AiProviderType.ClaudeDev, cc, _providerManager.GetProvider(AiProviderType.ClaudeDev).DisplayName, Loc("chat.model.claudeCodePlan")));
+            string ccLabel = _providerManager.GetProvider(AiProviderType.ClaudeDev).DisplayName;
+            var ccModels = Services.Providers.ClaudeDevProvider.KnownModels.ToList();
+            if (!ccModels.Contains(cc)) ccModels.Insert(0, cc);
+            list.AddRange(ccModels.Select(m => new ChatModelChoice(AiProviderType.ClaudeDev, m, ccLabel, Loc("chat.model.claudeCodePlan"))));
         }
         // Gemini Dev: the installed Gemini CLI on the owner's own Google sign-in (no API key, no per-token price).
         if (_geminiCliInstalled)
@@ -149,6 +161,17 @@ public partial class ChatViewModel
             var gdModels = Services.Providers.GeminiDevProvider.KnownModels.ToList();
             if (!gdModels.Contains(gd)) gdModels.Insert(0, gd);
             list.AddRange(gdModels.Select(m => new ChatModelChoice(AiProviderType.GeminiDev, m, gdLabel, Loc("chat.model.geminiCliPlan"))));
+        }
+        // Antigravity Dev: Google's agy on the owner's Google sign-in — where personal Google AI Pro accounts went when the
+        // Gemini CLI stopped serving them (2026-06-18). "default" plus the slugs `agy models` listed.
+        if (_agyInstalled)
+        {
+            string ag = s.ProviderConfigs.TryGetValue(nameof(AiProviderType.AntigravityDev), out var agCfg) && !string.IsNullOrWhiteSpace(agCfg.EffectiveModelId)
+                ? agCfg.EffectiveModelId!.Trim() : "default";
+            string agLabel = _providerManager.GetProvider(AiProviderType.AntigravityDev).DisplayName;
+            var agModels = Services.Providers.AntigravityDevProvider.KnownModels.Concat(Services.Providers.AntigravityDevProvider.DiscoveredModels).Distinct().ToList();
+            if (!agModels.Contains(ag)) agModels.Insert(0, ag);
+            list.AddRange(agModels.Select(m => new ChatModelChoice(AiProviderType.AntigravityDev, m, agLabel, Loc("chat.model.agyPlan"))));
         }
         // Ollama: every model it has, whenever it answers (the quiet probe below) — Ollama loads the picked one itself.
         // (owner 2026-10-19: "ต้องมีให้เลือกทุกอย่างที่ใช้งานได้แล้ว ... ติดต่อ local ai ได้ ต้องโชว์ให้หมด")

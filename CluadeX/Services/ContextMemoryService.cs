@@ -168,6 +168,9 @@ public class ContextMemoryService
             case AiProviderType.GeminiDev:
                 return 1_048_576;   // the Gemini CLI's models (Gemini 3.x / 4) all have a 1M window
 
+            case AiProviderType.AntigravityDev:
+                return 1_048_576;   // agy's default is a Gemini 3.x model (1M); its Claude / GPT-OSS slugs are smaller
+
             case AiProviderType.BrainX:
                 return 200_000;   // the room's agents run the Claude Code CLI's standard window
 

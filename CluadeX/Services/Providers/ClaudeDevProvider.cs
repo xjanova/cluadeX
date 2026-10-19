@@ -41,6 +41,12 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     private string _statusMessage = "Not initialised";
     private bool _isLoading;
 
+    /// <summary>What the chat's model box offers for Claude Dev: the CLI's own default (no --model flag) and the CLI's
+    /// aliases for the latest of each family. All four ran on the owner's subscription login with no credit error
+    /// (CLI 2.1.296, 2026-10-20: haiku→claude-haiku-5-5, sonnet→claude-sonnet-5-5, opus→claude-opus-5-5,
+    /// fable→claude-fable-5-1). Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
+    public static readonly string[] KnownModels = ["default", "fable", "opus", "sonnet", "haiku"];
+
     public string ProviderId => "ClaudeDev";
     public string DisplayName => "Claude Dev (Claude Code CLI)";
     public bool IsReady => _cliPath != null;
