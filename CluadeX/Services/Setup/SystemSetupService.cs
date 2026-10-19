@@ -12,7 +12,7 @@ namespace CluadeX.Services.Setup;
 public enum SetupState { Ready, Missing, NeedsKey, NeedsSignIn, NotRunning, NoModel }
 
 /// <summary>What a row's button does.</summary>
-public enum SetupActionKind { Install, SignIn, OpenUrl, OpenSettings, OpenPage, StartOllama, Run }
+public enum SetupActionKind { Install, SignIn, OpenUrl, OpenSettings, OpenPage, StartOllama, Run, Connect, Guide, Disconnect, InstallBrainX }
 
 /// <summary>One button on a row. <paramref name="Commands"/>: the lines an Install/Run runs, shown to the user before
 /// they agree; <paramref name="Target"/>: a URL, a page, or the provider for OpenSettings.</summary>
@@ -61,6 +61,8 @@ public sealed record SetupFacts
     /// started from here would land in that app's private AppData and the real install would vanish (brain note
     /// 2026-10-18 "Installing CluadeX from a Claude session lands in Claude's MSIX private AppData").</summary>
     public bool InsidePackage { get; init; }
+    /// <summary>The outside services (GitHub, Stripe, Canva) and where each is connected.</summary>
+    public IReadOnlyList<CluadeX.Services.Connections.ConnectorFacts> Connections { get; init; } = Array.Empty<CluadeX.Services.Connections.ConnectorFacts>();
 }
 
 /// <summary>
@@ -80,17 +82,19 @@ public sealed class SystemSetupService
     private readonly AiProviderManager? _providers;
     private readonly ActivationService? _activation;
     private readonly DebugLogService? _log;
+    private readonly Connections.ConnectionService? _connections;
 
     /// <summary>A tool was installed or signed in: the chat's model box and the providers look again.</summary>
     public static event Action? ToolsChanged;
 
     public SystemSetupService(SettingsService settings, AiProviderManager? providers = null, ActivationService? activation = null,
-        DebugLogService? log = null)
+        DebugLogService? log = null, Connections.ConnectionService? connections = null)
     {
         _settings = settings;
         _providers = providers;
         _activation = activation;
         _log = log;
+        _connections = connections;
     }
 
     public const string Winget = "winget install --id {0} -e --source winget --accept-package-agreements --accept-source-agreements";
@@ -190,7 +194,11 @@ public sealed class SystemSetupService
                 new SetupAction(SetupActionKind.OpenPage, "setup.act.mcpPage", Target: "McpServers")));
         else
             items.Add(new SetupItem("brainx", GroupBrain, SetupState.Missing, "", true,
-                new SetupAction(SetupActionKind.OpenUrl, "setup.act.download", Target: "https://xman4289.com/brainx/download")));
+                new SetupAction(SetupActionKind.InstallBrainX, "setup.act.installBrainX", SizeHint: "~260 MB"),
+                new SetupAction(SetupActionKind.OpenUrl, "setup.act.downloadPage", Target: Connections.BrainXInstaller.DownloadUrl)));
+
+        // ── Connections (BrainX first: placed there whenever BrainX is installed) ──
+        foreach (var c in f.Connections) items.Add(ConnectionRow(c));
 
         return items;
 
@@ -204,6 +212,30 @@ public sealed class SystemSetupService
             ? new SetupItem(id, group, SetupState.Ready, version ?? path, optional)
             : new SetupItem(id, group, SetupState.Missing, "", optional,
                 new SetupAction(SetupActionKind.Install, "setup.act.install", new[] { WingetInstall(wingetId) }, SizeHint: size));
+    }
+
+    public const string GroupConnect = "connect";
+
+    /// <summary>One connection's row. Detail codes ("place:…") are turned into words by the row's view model. Pure.</summary>
+    public static SetupItem ConnectionRow(Connections.ConnectorFacts c)
+    {
+        string id = "conn-" + c.Def.Id;
+        var guide = new SetupAction(SetupActionKind.Guide, "setup.act.guide", Target: c.Def.Id);
+        if (c.ManualPlace != Connections.ConnectorPlace.None && c.Place == Connections.ConnectorPlace.None)
+            return new SetupItem(id, GroupConnect, SetupState.Ready,
+                c.ManualPlace == Connections.ConnectorPlace.BrainX ? "place:manualBrainx" : "place:manualCluadex", true, guide);
+        if (c.Place != Connections.ConnectorPlace.None)
+            return new SetupItem(id, GroupConnect, SetupState.Ready,
+                (c.Place == Connections.ConnectorPlace.BrainX ? "place:brainx" : "place:cluadex") + (c.Live ? "" : "|notLive"), true,
+                guide, new SetupAction(SetupActionKind.Disconnect, "setup.act.disconnect", Target: c.Def.Id));
+        var state = c.Def.Auth switch
+        {
+            Connections.ConnectorAuth.GhCli => SetupState.NeedsSignIn,
+            Connections.ConnectorAuth.ApiKey => SetupState.NeedsKey,
+            _ => SetupState.Missing,
+        };
+        return new SetupItem(id, GroupConnect, state, c.BrainAvailable ? "place:willBrainx" : "place:willCluadex", true,
+            new SetupAction(SetupActionKind.Connect, "setup.act.connect", Target: c.Def.Id), guide);
     }
 
     /// <summary>The small model offered when Ollama has none (~2 GB, runs on most GPUs and on the CPU).</summary>
@@ -318,6 +350,9 @@ public sealed class SystemSetupService
         // The row asks "is the runtime installed": the registry says so even where the loader DLL is not beside the exe.
         string? webVersion = web.WebView2Version ?? Browser.BrowserEngineProbe.RegistryRuntimeVersion();
         string brainExe = Mcp.McpServerManager.BrainMirrorExe(home);
+        List<Connections.ConnectorFacts> connections;
+        try { connections = _connections?.Gather() ?? new(); }
+        catch (Exception ex) { _log?.Warn("Setup", "reading the connections failed", ex); connections = new(); }
 
         return new SetupFacts
         {
@@ -335,6 +370,7 @@ public sealed class SystemSetupService
             BrainExe = File.Exists(brainExe) ? brainExe : null,
             Licensed = _activation?.IsActivated == true,
             InsidePackage = InsidePackage(),
+            Connections = connections,
         };
     }
 

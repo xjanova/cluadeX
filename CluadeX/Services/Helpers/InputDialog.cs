@@ -29,7 +29,10 @@ public static class InputDialog
         return e;
     }
 
-    public static string? Show(string title, string prompt, string? placeholder = null, string? initialText = null)
+    /// <param name="secret">Typed into a PasswordBox: dots on screen, never in the text box's undo buffer or a
+    /// screenshot (an API key for a connection).</param>
+    public static string? Show(string title, string prompt, string? placeholder = null, string? initialText = null,
+        bool secret = false, string okLabel = "Connect", string cancelLabel = "Cancel")
     {
 
         var win = new Window
@@ -92,10 +95,26 @@ public static class InputDialog
         box.TextChanged += (_, _) =>
             placeholderText.Visibility = string.IsNullOrEmpty(box.Text) ? Visibility.Visible : Visibility.Collapsed;
 
+        PasswordBox? pwd = null;
+        if (secret)
+        {
+            pwd = new PasswordBox
+            {
+                BorderThickness = new Thickness(1), Padding = new Thickness(10, 8, 10, 8), FontSize = 13,
+                FontFamily = new FontFamily("Consolas, Cascadia Code, Segoe UI"),
+            };
+            Tok(pwd, Control.BackgroundProperty, Field);
+            Tok(pwd, Control.ForegroundProperty, Text);
+            Tok(pwd, PasswordBox.CaretBrushProperty, Accent);
+            Tok(pwd, Control.BorderBrushProperty, Stroke);
+            pwd.PasswordChanged += (_, _) =>
+                placeholderText.Visibility = pwd.Password.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         // Build the overlaid grid FIRST, then add it once — never parent `box` to
         // two containers (that throws "already the logical child of another element").
         var boxGrid = new Grid();
-        boxGrid.Children.Add(box);
+        boxGrid.Children.Add(pwd != null ? pwd : box);
         boxGrid.Children.Add(placeholderText);
         stack.Children.Add(boxGrid);
 
@@ -126,13 +145,13 @@ public static class InputDialog
             return b;
         }
 
-        var cancel = MakeButton("Cancel", false);
+        var cancel = MakeButton(cancelLabel, false);
         cancel.Click += (_, _) => { result = null; win.Close(); };
 
-        var ok = MakeButton("Connect", true);
+        var ok = MakeButton(okLabel, true);
         void Confirm()
         {
-            var v = box.Text?.Trim();
+            var v = (pwd != null ? pwd.Password : box.Text)?.Trim();
             if (string.IsNullOrEmpty(v)) { result = null; win.Close(); return; }
             result = v; win.Close();
         }
@@ -152,7 +171,7 @@ public static class InputDialog
         };
         // Let the user drag the borderless dialog by its body.
         win.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed) win.DragMove(); };
-        win.Loaded += (_, _) => { box.Focus(); box.SelectAll(); };
+        win.Loaded += (_, _) => { if (pwd != null) pwd.Focus(); else { box.Focus(); box.SelectAll(); } };
 
         win.ShowDialog();
         return result;

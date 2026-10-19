@@ -7,7 +7,7 @@ using CluadeX.Services.Setup;
 // The setup page ("ตัวช่วยติดตั้ง", owner 2026-10-19). Installs NOTHING: the rows are built for made-up machines, the
 // console script is run hidden with harmless commands only, and the real check of this PC is read-only (file checks,
 // `--version`, `claude auth status`). portable.txt keeps settings next to this exe, never the user's ~/.cluadex.
-static class Program
+static partial class Program
 {
     static int pass, fail;
     static void Check(string id, string name, bool ok, string detail = "")
@@ -39,7 +39,8 @@ static class Program
         Check("B6", "every winget line names one exact package from the winget source and accepts its agreements (the confirm says so)",
             bare.SelectMany(i => new[] { i.Primary, i.Secondary }).Where(a => a?.Commands != null).SelectMany(a => a!.Commands!)
                 .Where(l => l.StartsWith("winget")).All(l => l.Contains(" -e --source winget --accept-package-agreements --accept-source-agreements")));
-        Check("B7", "BrainX missing → its download page", Row(bare, "brainx").Primary is { Kind: SetupActionKind.OpenUrl, Target: "https://xman4289.com/brainx/download" });
+        Check("B7", "BrainX missing → one-click install, the download page beside it", Row(bare, "brainx") is
+            { Primary.Kind: SetupActionKind.InstallBrainX, Secondary: { Kind: SetupActionKind.OpenUrl, Target: "https://xman4289.com/brainx/download" } });
         Check("B8", "every install says roughly how much it downloads",
             bare.Select(i => i.Primary).Where(a => a?.Kind == SetupActionKind.Install).All(a => a!.SizeHint is { Length: > 0 }));
         Check("B9", "nothing can answer the chat on a bare PC", !SystemSetupService.AnyChatModelReady(new SetupFacts()));
@@ -138,7 +139,8 @@ static class Program
             "setup.confirm.title", "setup.confirm.body", "setup.confirm.winget", "setup.confirm.console", "setup.confirm.install", "setup.confirm.run", "setup.confirm.cancel",
             "setup.note.installing", "setup.note.installed", "setup.note.installedNotFound", "setup.note.installFailed", "setup.note.signingIn",
             "setup.note.signInFailed", "setup.note.starting", "setup.note.startFailed", "setup.note.readyNow", "setup.note.notYet", "setup.note.failed" };
-        foreach (var set in new[] { bare, items, all, SystemSetupService.BuildItems(running) })
+        keys.AddRange(ConnectionTextKeys());
+        foreach (var set in new[] { bare, items, all, SystemSetupService.BuildItems(running), SystemSetupService.BuildItems(new SetupFacts { Connections = FakeConnections() }) })
             foreach (var i in set)
             {
                 keys.Add(i.TitleKey); keys.Add(i.WhyKey); keys.Add("setup.state." + i.State); keys.Add("setup.group." + i.Group);
@@ -148,7 +150,8 @@ static class Program
         static bool Thai(string s) => s.Any(ch => ch >= '\u0E00' && ch <= '\u0E7F');
         var missing = keys.Distinct().Where(k => LocalizedResources.Instance[k] == k || !Thai(LocalizedResources.Instance[k]) && !k.EndsWith(".git") && !k.EndsWith(".ollama")
             && !k.EndsWith(".node") && !k.EndsWith(".dotnet") && !k.EndsWith(".webview2") && !k.EndsWith(".brainx") && !k.EndsWith(".llamaserver")
-            && !k.EndsWith(".claudecode") && !k.EndsWith(".geminicli") && !k.EndsWith(".python")).ToList();
+            && !k.EndsWith(".claudecode") && !k.EndsWith(".geminicli") && !k.EndsWith(".python")
+            && !k.StartsWith("setup.item.conn-")).ToList();
         Check("L1", $"{keys.Distinct().Count()} keys resolve, in Thai (product names may stay as they are)", missing.Count == 0, string.Join(", ", missing));
         loc.SetLanguage("en");
         var noEn = keys.Distinct().Where(k => LocalizedResources.Instance[k] == k).ToList();
@@ -165,7 +168,8 @@ static class Program
             {
                 var app = new CluadeX.App();
                 app.InitializeComponent();
-                foreach (var (name, f) in new[] { ("this-pc", facts), ("bare-pc", new SetupFacts()) })
+                foreach (var (name, f) in new[] { ("this-pc", facts), ("bare-pc", new SetupFacts()),
+                             ("connections", new SetupFacts { BrainExe = "x", BrainConnected = true, Connections = FakeConnections() }) })
                 {
                     var vm = new CluadeX.ViewModels.SetupViewModel(svc);
                     vm.Apply(f);
@@ -189,9 +193,11 @@ static class Program
         ui.SetApartmentState(ApartmentState.STA);
         ui.Start();
         ui.Join();
-        Check("V1", "SetupView loads and renders for this PC and a bare PC (no XAML / resource / binding crash)", renderError == null && shots.Count == 2,
+        Check("V1", "SetupView loads and renders for this PC and a bare PC (no XAML / resource / binding crash)", renderError == null && shots.Count == 3,
             renderError?.ToString() ?? "");
         foreach (var s in shots) Console.WriteLine("        " + s);
+
+        await ConnectionTests();
 
         Console.WriteLine($"\n═══ {pass} pass · {fail} FAIL ═══");
         Environment.Exit(fail == 0 ? 0 : 1);   // the app's background work must not keep the harness alive
