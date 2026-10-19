@@ -20,8 +20,8 @@ internal static class MockProviders
     static readonly List<(string Method, string Path, string Body)> Captured = new();
 
     const string OpenAiChatSse =
-        "data: {\"choices\":[{\"delta\":{\"content\":\"pon\"}}]}\n\n" +
-        "data: {\"choices\":[{\"delta\":{\"content\":\"g\"}}]}\n\n" +
+        "data: {\"model\":\"gpt-5.5-2026-09-01\",\"choices\":[{\"delta\":{\"content\":\"pon\"}}]}\n\n" +
+        "data: {\"model\":\"gpt-5.5-2026-09-01\",\"choices\":[{\"delta\":{\"content\":\"g\"}}]}\n\n" +
         "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":4}}}\n\n" +
         "data: [DONE]\n\n";
 
@@ -29,7 +29,7 @@ internal static class MockProviders
         "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-6-sol\",\"created\":3},{\"id\":\"gpt-6-astra\",\"created\":5},{\"id\":\"gpt-5.5\",\"created\":1}]}";
 
     const string GeminiSse =
-        "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"plan\",\"thought\":true},{\"text\":\"po\"}]}}]}\n\n" +
+        "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"plan\",\"thought\":true},{\"text\":\"po\"}]}}],\"modelVersion\":\"gemini-3.8-flash-001\"}\n\n" +
         "data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ng\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":12,\"candidatesTokenCount\":2,\"thoughtsTokenCount\":5}}\n\n";
 
     const string GeminiBlockedSse =
@@ -108,6 +108,12 @@ internal static class MockProviders
         check("openai", "streamed text assembled", text == "pong" && err == null, $"text='{text}' err={err}");
         check("openai", "usage recorded (cached tokens split out)", cost.TotalInputTokens == 6 && cost.TotalOutputTokens == 2,
             $"in={cost.TotalInputTokens} out={cost.TotalOutputTokens}");
+        // What the chat shows is what went out and what came back — not the setting (owner 2026-10-19).
+        var oaLive = LiveModelReport.For(null, AiProviderType.OpenAI);
+        check("live", "OpenAI: the label shows the served model and the effort as sent (max rounded to xhigh)",
+            oaLive is { Model: "gpt-5.5-2026-09-01", Effort: "xhigh" }
+            && LiveModelReport.Describe("max", oaLive, "gpt-5.5", k => k == "live.effort.rounded" ? "{0} (picked {1})" : k) == "GPT-5.5 · xhigh (picked max)",
+            oaLive == null ? "null" : $"{oaLive.Model} / {oaLive.Effort}");
 
         // ── OpenAI: classic model ──
         s.ProviderConfigs["OpenAI"] = new ProviderConfig { ApiKey = "sk-test", BaseUrl = root + "/v1", SelectedModel = "gpt-4o" };
@@ -149,6 +155,9 @@ internal static class MockProviders
             visible == "pong" && chunks.Contains("<thinking>plan</thinking>") && err == null, string.Join(" | ", chunks));
         check("gemini", "usage recorded (thinking counted as output)", gcost.TotalInputTokens == 12 && gcost.TotalOutputTokens == 7,
             $"in={gcost.TotalInputTokens} out={gcost.TotalOutputTokens}");
+        var gLive = LiveModelReport.For(null, AiProviderType.Gemini);
+        check("live", "Gemini 3: the label shows modelVersion and the thinking level as sent (max → high)",
+            gLive is { Model: "gemini-3.8-flash-001", Effort: "high" }, gLive == null ? "null" : $"{gLive.Model} / {gLive.Effort}");
 
         // ── Gemini 2.5: thinkingBudget + sampling ──
         s.ReasoningEffort = "medium";
@@ -159,6 +168,8 @@ internal static class MockProviders
         tc = gen.TryGetProperty("thinkingConfig", out tce) ? tce : default;
         check("gemini", "Gemini 2.5: thinkingBudget 8192 for medium, no thinkingLevel, temperature kept",
             tc.ValueKind == JsonValueKind.Object && Int(tc, "thinkingBudget") == 8192 && !Has(tc, "thinkingLevel") && Has(gen, "temperature"), Raw(gen));
+        check("live", "Gemini 2.5: the label says the token budget it really got",
+            LiveModelReport.For(null, AiProviderType.Gemini)?.Effort == "8192 tok", LiveModelReport.For(null, AiProviderType.Gemini)?.Effort ?? "null");
 
         // ── Gemini: auto + Think off sends no thinkingConfig at all ──
         s.ReasoningEffort = "auto";

@@ -258,6 +258,16 @@ internal static partial class Program
         Fake = new FakeProvider();
         SetField(Providers, "_activeProvider", Fake);
 
+        // CHATTEST_ONLY=PP: just the plain-language permission prompt and the live model chip (quick renders to look at).
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") is "PP" or "PB")
+        {
+            if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "PB") await TestPersonaBoxes();
+            await TestPlainPermission();
+            Log($"\n## Result (CHATTEST_ONLY=PP): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            return Fail == 0 ? 0 : 1;
+        }
+
         await TestPermissionPrompt();         // C1
         await TestStatusRows();               // L4 (screen)
         await TestThinkingBlock();            // L8 (screen)
@@ -292,6 +302,7 @@ internal static partial class Program
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
+        await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();

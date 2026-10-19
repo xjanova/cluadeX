@@ -685,10 +685,106 @@
                                                     </Style>
                                                 </TextBlock.Style>
                                             </TextBlock>
-                                            <TextBlock Text="{Binding Content}"
+                                            <TextBlock Text="{Binding PermissionHeadlineText}"
                                                        Foreground="{DynamicResource Text.Primary}"
                                                        FontSize="13" FontFamily="{DynamicResource Font.Ui.Display}"
-                                                       TextWrapping="Wrap"/>
+                                                       FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="640"
+                                                       AutomationProperties.AutomationId="CxGuard.PermissionHeadline"/>
+                                        </StackPanel>
+                                        <!-- In people's words (Safety.PermissionExplainer): where, the result, how risky, the dangerous
+                                             parts said plainly — then the real command, folded, for whoever wants to read it -->
+                                        <StackPanel Margin="22,0,0,8" MaxWidth="640" HorizontalAlignment="Left"
+                                                    Visibility="{Binding HasPermissionPlain, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionPlain">
+                                            <Grid Margin="0,0,0,6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+                                                <!-- why it asks, in the asking tool's own words -->
+                                                <TextBlock Grid.Row="2" Grid.Column="0" Text="{services:Loc perm.label.note}" FontSize="12"
+                                                           Foreground="{DynamicResource Text.Muted}" Margin="0,3,10,0"
+                                                           Visibility="{Binding HasPermissionNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding PermissionPlain.Note}" FontSize="12" Margin="0,3,0,0"
+                                                           Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap"
+                                                           Visibility="{Binding HasPermissionNote, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Text="{services:Loc perm.label.where}" FontSize="12"
+                                                           Foreground="{DynamicResource Text.Muted}" Margin="0,0,10,3"/>
+                                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding PermissionPlain.Where}" FontSize="12"
+                                                           Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap" Margin="0,0,0,3"/>
+                                                <TextBlock Grid.Row="1" Grid.Column="0" Text="{services:Loc perm.label.effect}" FontSize="12"
+                                                           Foreground="{DynamicResource Text.Muted}" Margin="0,0,10,0"/>
+                                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding PermissionPlain.Effect}" FontSize="12"
+                                                           Foreground="{DynamicResource Text.Primary}" TextWrapping="Wrap"/>
+                                            </Grid>
+                                            <!-- the risk, coloured by level -->
+                                            <Border CornerRadius="10" Padding="9,2" HorizontalAlignment="Left" Margin="0,0,0,6"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionRisk">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource State.Fill.Faint}"/>
+                                                        <Setter Property="BorderThickness" Value="1"/>
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource Status.Warning}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PermissionRiskLevel}" Value="Low">
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Success}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding PermissionRiskLevel}" Value="High">
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding PermissionRiskLevel}" Value="Danger">
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource Status.Danger}"/>
+                                                                <Setter Property="Background" Value="{DynamicResource Chat.Diff.Removed.Background}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding PermissionPlain.RiskText}" FontSize="11.5" FontWeight="SemiBold" TextWrapping="Wrap">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource Status.Warning}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding PermissionRiskLevel}" Value="Low">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Success}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding PermissionRiskLevel}" Value="High">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding PermissionRiskLevel}" Value="Danger">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Status.Danger}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                            <!-- what is dangerous here, never folded away -->
+                                            <ItemsControl ItemsSource="{Binding PermissionPlain.Warnings}" Margin="0,0,0,6"
+                                                          Visibility="{Binding HasPermissionWarnings, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"
+                                                          AutomationProperties.AutomationId="CxGuard.PermissionWarnings">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding StringFormat='⚠ {0}'}" FontSize="12" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource Status.Danger}" TextWrapping="Wrap" Margin="0,1"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <!-- the real command / tool, folded -->
+                                            <Expander Style="{StaticResource ToolExpander}" IsExpanded="False"
+                                                      AutomationProperties.AutomationId="CxGuard.PermissionTechnical">
+                                                <Expander.Header>
+                                                    <TextBlock Text="{services:Loc perm.tech}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                                                </Expander.Header>
+                                                <TextBox Text="{Binding PermissionPlain.Technical, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                                                         Background="{DynamicResource Surface.Sunken}" FontFamily="{DynamicResource Font.Mono}" FontSize="11"
+                                                         Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" MaxHeight="200" Padding="8,6"
+                                                         VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"/>
+                                            </Expander>
                                         </StackPanel>
                                         <!-- Preview diff of the change being requested (file edits/writes) -->
                                         <Border Background="{DynamicResource Surface.Sunken}"
@@ -2655,13 +2751,15 @@
                                             </DataTemplate>
                                         </ComboBox.ItemTemplate>
                                     </ComboBox>
-                                    <!-- What really answers: the model and the effort its requests use now ("auto → medium" mid-run) -->
-                                    <Border x:Name="LiveEffortChip" CornerRadius="6" Padding="8,3" Margin="6,0,0,0" VerticalAlignment="Center"
-                                            Background="{DynamicResource State.Fill.Faint}" ToolTip="{services:Loc chat.liveEffortTip}">
-                                        <TextBlock Text="{Binding LiveModelEffortText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
-                                                   FontFamily="{DynamicResource Font.Mono}"/>
-                                    </Border>
                                 </StackPanel>
+                                <!-- What really answers: the model the response named and the effort the request really carried
+                                     ("Opus 5.5 · auto → high (bug fix)"); for every provider, also those without an effort -->
+                                <Border x:Name="LiveEffortChip" CornerRadius="6" Padding="8,3" Margin="0,2,8,2" VerticalAlignment="Center"
+                                        Background="{DynamicResource State.Fill.Faint}" ToolTip="{Binding LiveModelEffortTip}"
+                                        AutomationProperties.AutomationId="CxChat.LiveModelEffort">
+                                    <TextBlock Text="{Binding LiveModelEffortText}" FontSize="12" Foreground="{DynamicResource Text.Secondary}"
+                                               FontFamily="{DynamicResource Font.Mono}" TextTrimming="CharacterEllipsis" MaxWidth="420"/>
+                                </Border>
 
                                 <!-- Approvals: ask first / accept edits in the project / allow everything in this chat
                                      (confirmed; the user's Deny and Ask rules and code run in their browser still apply). -->

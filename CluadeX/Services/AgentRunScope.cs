@@ -158,6 +158,19 @@ public sealed class AgentRunScope
     }
     public static event Action<AgentRunScope>? LiveEffortChanged;
 
+    /// <summary>Why effort "auto" is at its current level, in a few words of the UI language ("bug fix", "build is red"):
+    /// shown beside the level. Null = not "auto", or nothing to say.</summary>
+    public string? EffortWhy { get; set; }
+
+    private LiveModelReport.Snapshot? _liveReport;
+    /// <summary>What this run's last request really used: the served model and the effort on the wire
+    /// (<see cref="LiveModelReport"/>). Raises <see cref="LiveEffortChanged"/>.</summary>
+    public LiveModelReport.Snapshot? LiveReport
+    {
+        get => _liveReport;
+        set { if (Equals(_liveReport, value)) return; _liveReport = value; LiveEffortChanged?.Invoke(this); }
+    }
+
     private decimal _baselineUsd;
     /// <summary>What this run would have cost with no saving: no prompt cache, no tool search, no microcompact, no batch.</summary>
     public decimal BaselineUsd { get { lock (_costLock) return _baselineUsd; } }
@@ -193,6 +206,7 @@ public sealed class AgentRunScope
             TaskRequest = TaskRequest,
             ActiveSkillAllowedTools = ActiveSkillAllowedTools,
             StepEffort = StepEffort,
+            EffortWhy = EffortWhy,
         };
         foreach (var f in ExtraFolders) child.AddExtraFolder(f);
         return child;

@@ -610,6 +610,8 @@ public sealed class GeminiStreamTranslator
         {
             case "init":
                 Model = Str(ev, "model");
+                // The model the CLI said it runs; the Gemini CLI has no effort / thinking flag to send — the chat says so.
+                LiveModelReport.Sent(Models.AiProviderType.GeminiDev, Model, null, false);
                 output.Add(Json(new JsonObject { ["type"] = "system", ["subtype"] = "init", ["model"] = Model ?? "" }));
                 break;
             case "message":

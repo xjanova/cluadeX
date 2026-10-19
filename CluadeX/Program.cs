@@ -24,6 +24,12 @@ public static class Program
             Environment.Exit(Services.Safety.GuardHook.Run());
             return;
         }
+        // Claude Dev's Stop hook: the effort the turn really ran at, for the chat's model/effort label. Headless, never blocks.
+        if (args.Length > 0 && args[0] == Services.Safety.GuardHook.EffortFlag)
+        {
+            Environment.Exit(Services.Safety.GuardHook.RunEffortReport());
+            return;
+        }
         // CluadeX's chat tools (open_project / new_chat / close_chat) as an MCP server for a Claude Dev run — headless too.
         if (args.Length > 0 && args[0] == Services.Tools.ChatToolBridge.Flag)
         {

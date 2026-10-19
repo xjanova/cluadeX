@@ -395,6 +395,19 @@ public class ChatMessage : INotifyPropertyChanged
     /// <summary>The prompt is the red dangerous-action kind.</summary>
     public bool IsPermissionDanger => !string.IsNullOrEmpty(PermissionDanger);
 
+    /// <summary>The request in people's words (what, where, the result, the risk, the dangerous parts) with the real
+    /// command for the folded technical details. Null = only <see cref="Content"/> (the old one-line prompt).</summary>
+    public Services.Safety.PlainPermission? PermissionPlain { get; set; }
+
+    public bool HasPermissionPlain => PermissionPlain != null;
+    /// <summary>The prompt's bold first line: the plain headline, or the old one-line prompt.</summary>
+    public string PermissionHeadlineText => PermissionPlain?.Headline ?? Content;
+    public bool HasPermissionNote => PermissionPlain is { Note.Length: > 0 };
+    public bool HasPermissionWarnings => PermissionPlain is { Warnings.Count: > 0 };
+
+    /// <summary>"Low" / "Medium" / "High" / "Danger" — what the risk chip's colour keys on.</summary>
+    public string PermissionRiskLevel => PermissionPlain?.Risk.ToString() ?? "";
+
     /// <summary>It was answered with "Allow in this chat" (the outcome label says so).</summary>
     public bool PermissionAllowedForChat { get; private set; }
 
