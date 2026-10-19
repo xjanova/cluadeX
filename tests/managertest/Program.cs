@@ -22,7 +22,7 @@ namespace ManagerTest;
 ///   dotnet run -p:CluadeXBin=&lt;OutDir&gt;\                — offline checks
 ///   dotnet run -p:CluadeXBin=&lt;OutDir&gt;\ -- --network   — also checks every catalog model against huggingface.co
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly List<string> Problems = new();
@@ -32,6 +32,10 @@ internal static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // Child mode for the vision tests: this apphost copied as "llama-server.exe" plays the server (VisionTests.cs).
+        if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "llama-server", StringComparison.OrdinalIgnoreCase))
+            return FakeLlamaServer(args);
+
         // Child mode for the MCP launch test: print argv exactly as this process received it.
         if (args.Length > 0 && args[0] == "--echo-args")
         {
@@ -108,6 +112,10 @@ internal static class Program
         PluginTests();
         Console.WriteLine("\n── Models: Hugging Face file ranking / shards ──");
         HfTests();
+        Console.WriteLine("\n── Models: advisor (fit, quant pick, speed, picks, catalog) ──");
+        AdvisorTests();
+        Console.WriteLine("\n── Models: local vision (mmproj pairing, launch line, fallback through a real child process) ──");
+        await VisionTests();
         if (network)
         {
             Console.WriteLine("\n── Models: catalog vs huggingface.co (--network) ──");
@@ -524,10 +532,22 @@ internal static class Program
                 {
                     using var doc = JsonDocument.Parse(await api.Content.ReadAsStringAsync());
                     bool gated = doc.RootElement.TryGetProperty("gated", out var g) && g.ValueKind == JsonValueKind.String;
-                    var sib = doc.RootElement.GetProperty("siblings").EnumerateArray()
-                        .FirstOrDefault(s => s.GetProperty("rfilename").GetString() == m.FileName);
-                    if (sib.ValueKind == JsonValueKind.Undefined) problem = "file not in repo";
-                    else if (sib.TryGetProperty("size", out var sz) && sz.GetInt64() != m.ApproxSizeBytes) problem = $"size {sz.GetInt64()} ≠ catalog {m.ApproxSizeBytes}";
+                    // Every quant the card offers, not only the default file: a wrong name is a Download that 404s.
+                    var sizes = doc.RootElement.GetProperty("siblings").EnumerateArray()
+                        .ToDictionary(s => s.GetProperty("rfilename").GetString() ?? "",
+                                      s => s.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number ? sz.GetInt64() : -1L);
+                    foreach (var q in m.AllQuants)
+                    {
+                        if (!sizes.TryGetValue(q.FileName, out long size)) problem += $" {q.Name}: file not in repo;";
+                        else if (size != q.SizeBytes) problem += $" {q.Name}: size {size} ≠ catalog {q.SizeBytes};";
+                    }
+                    if (m.Projector is { } pj)
+                    {
+                        if (!sizes.TryGetValue(pj.FileName, out long ps)) problem += $" projector {pj.FileName}: not in repo;";
+                        else if (ps != pj.SizeBytes) problem += $" projector size {ps} ≠ catalog {pj.SizeBytes};";
+                    }
+                    string arch = doc.RootElement.TryGetProperty("gguf", out var gg) && gg.TryGetProperty("architecture", out var ar) ? ar.GetString() ?? "" : "";
+                    if (arch.Length > 0 && arch != m.Architecture) problem += $" architecture {arch} ≠ catalog {m.Architecture};";
                     if (gated != HuggingFaceService.IsGatedRepo(m.RepoId)) problem += $" gated={gated} but IsGatedRepo={HuggingFaceService.IsGatedRepo(m.RepoId)}";
                 }
                 using var head = new HttpRequestMessage(HttpMethod.Head, $"https://huggingface.co/{m.RepoId}/resolve/main/{m.FileName}");
@@ -536,7 +556,7 @@ internal static class Program
                 bool reachable = HuggingFaceService.IsGatedRepo(m.RepoId) ? code is 401 or 403 : resp.IsSuccessStatusCode;
                 if (!reachable) problem += $" HEAD {code}";
                 if (problem.Length > 0) bad++;
-                Check("N", $"{m.DisplayName}: {m.RepoId}/{m.FileName}", problem.Length == 0, problem.Trim());
+                Check("N", $"{m.DisplayName}: {m.RepoId} ({m.AllQuants.Count} quants)", problem.Length == 0, problem.Trim());
             });
         }
         Console.WriteLine($"  catalog: {HuggingFaceService.Catalog.Count} models, {bad} with problems");

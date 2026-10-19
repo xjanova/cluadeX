@@ -37,7 +37,9 @@ public class GpuDetectionService
             if (string.IsNullOrWhiteSpace(output))
                 return null;
 
-            string[] parts = output.Trim().Split(',');
+            // One line per GPU: the first is the main one. Splitting the whole output on ',' (as before) glued
+            // GPU 0's driver version to GPU 1's name on a multi-GPU PC.
+            string[] parts = output.Trim().Split('\n')[0].Trim().Split(',');
             if (parts.Length >= 4)
             {
                 return new GpuInfo
@@ -248,7 +250,119 @@ public class GpuDetectionService
         return wmiReported > 0 ? wmiReported : 4L * 1024 * 1024 * 1024;
     }
 
-    public void ClearCache() => _cachedInfo = null;
+    public void ClearCache() { _cachedInfo = null; _cachedRam = null; }
+
+    // ─── Whole-PC profile for the model advisor ───────────────────────
+
+    private (int TotalMB, double BandwidthGBs)? _cachedRam;
+
+    /// <summary>
+    /// GPU(s), system RAM and memory bandwidth for <see cref="ModelAdvisor"/>. Several NVIDIA cards count together
+    /// (llama-server splits a model across them with --tensor-split). The bundled llama.cpp is a CUDA build, so only
+    /// NVIDIA cards take layers; with "CPU" chosen in Settings nothing does.
+    /// </summary>
+    public HardwareProfile DetectHardware(string gpuBackendSetting = "Auto", bool localModelLoaded = false)
+    {
+        var main = DetectGpu();
+        var nvidia = DetectAllNvidiaGpus();
+        bool cuda = main.IsCudaAvailable || nvidia.Count > 0;
+        bool canOffload = cuda && !string.Equals(gpuBackendSetting, "CPU", StringComparison.OrdinalIgnoreCase);
+        int count = nvidia.Count > 0 ? nvidia.Count : (main.VramTotalBytes > 0 ? 1 : 0);
+        int total = nvidia.Count > 0 ? nvidia.Sum(g => g.VramTotalMB) : main.VramTotalMB;
+        int free = nvidia.Count > 0 ? nvidia.Sum(g => g.VramFreeMB) : 0;   // WMI has no real free figure
+        var (ramMB, ramBw) = _cachedRam ??= ReadSystemRam();
+        return new HardwareProfile
+        {
+            GpuName = main.VramTotalBytes > 0 ? main.Name : "",
+            GpuBrand = main.GpuBrand,
+            GpuCount = count,
+            VramTotalMB = total,
+            VramFreeMB = free,
+            CanOffload = canOffload && total > 0,
+            GpuBandwidthGBs = EstimateGpuBandwidthGBs(main.Name, main.VramTotalMB),
+            SystemRamMB = ramMB,
+            RamBandwidthGBs = ramBw,
+            CpuThreads = Environment.ProcessorCount,
+            LocalModelLoaded = localModelLoaded,
+        };
+    }
+
+    /// <summary>
+    /// Memory bandwidth (GB/s) by GPU name — token generation speed is bound by it. Unknown cards are guessed from
+    /// their VRAM size (bigger cards have wider buses).
+    /// </summary>
+    public static double EstimateGpuBandwidthGBs(string name, int vramMB)
+    {
+        (string Key, double GBs)[] known =
+        {
+            ("5090", 1792), ("5080", 960), ("5070 Ti", 896), ("5070", 672), ("5060 Ti", 448), ("5060", 448),
+            ("4090", 1008), ("4080 SUPER", 736), ("4080", 717), ("4070 Ti SUPER", 672), ("4070 Ti", 504), ("4070 SUPER", 504),
+            ("4070", 504), ("4060 Ti", 288), ("4060", 272),
+            ("3090 Ti", 1008), ("3090", 936), ("3080 Ti", 912), ("3080", 760), ("3070 Ti", 608), ("3070", 448),
+            ("3060 Ti", 448), ("3060", 360), ("3050", 224),
+            ("2080 Ti", 616), ("2080 SUPER", 496), ("2080", 448), ("2070 SUPER", 448), ("2070", 448), ("2060 SUPER", 448),
+            ("2060", 336), ("1660 Ti", 288), ("1660 SUPER", 336), ("1660", 192), ("1650", 128),
+            ("1080 Ti", 484), ("1080", 320), ("1070 Ti", 256), ("1070", 256), ("1060", 192), ("1050 Ti", 112),
+            ("RTX PRO 6000", 1792), ("A6000", 768), ("A5000", 768), ("A4000", 448), ("A100", 1935), ("H100", 3350),
+            ("L40", 864), ("TITAN RTX", 672), ("TITAN V", 653), ("GB10", 273),
+        };
+        foreach (var (key, gbs) in known)
+            if (!string.IsNullOrEmpty(name) && name.Contains(key, StringComparison.OrdinalIgnoreCase)) return gbs;
+        return vramMB switch
+        {
+            <= 0 => 0,
+            <= 4096 => 128,
+            <= 6144 => 192,
+            <= 8192 => 256,
+            <= 12288 => 360,
+            <= 16384 => 448,
+            <= 24576 => 900,
+            _ => 1000,
+        };
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MemoryStatusEx
+    {
+        public uint Length, MemoryLoad;
+        public ulong TotalPhys, AvailPhys, TotalPageFile, AvailPageFile, TotalVirtual, AvailVirtual, AvailExtendedVirtual;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx status);
+
+    /// <summary>Total RAM (MB) and its bandwidth: DIMM speed (MT/s) × 8 bytes × channels (2 when two or more sticks).</summary>
+    private static (int TotalMB, double BandwidthGBs) ReadSystemRam()
+    {
+        int totalMB = 0;
+        try
+        {
+            var st = new MemoryStatusEx { Length = (uint)System.Runtime.InteropServices.Marshal.SizeOf<MemoryStatusEx>() };
+            if (GlobalMemoryStatusEx(ref st)) totalMB = (int)(st.TotalPhys / (1024 * 1024));
+        }
+        catch { /* not Windows */ }
+        if (totalMB <= 0)
+            try { totalMB = (int)(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024 * 1024)); } catch { }
+
+        double bandwidth = 38;   // dual-channel DDR4 at a realistic rate
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT ConfiguredClockSpeed, Speed FROM Win32_PhysicalMemory");
+            int sticks = 0, speed = 0;
+            foreach (ManagementObject o in searcher.Get())
+            {
+                sticks++;
+                int s = Convert.ToInt32(o["ConfiguredClockSpeed"] ?? 0);
+                if (s <= 0) s = Convert.ToInt32(o["Speed"] ?? 0);
+                if (s > speed) speed = s;
+            }
+            if (speed > 0 && sticks > 0)
+                bandwidth = speed * 8.0 * Math.Min(sticks, 2) / 1000.0;
+        }
+        catch { /* WMI unavailable: keep the default */ }
+        return (totalMB, bandwidth);
+    }
 
     /// <summary>
     /// Detect ALL NVIDIA GPUs so llama.cpp can split a large model across multiple cards.

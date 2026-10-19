@@ -55,11 +55,63 @@ public class LlamaServerProvider : ApiProviderBase
         SetStatus("llama-server not running. Load a model to start.");
     }
 
-    /// <summary>Start llama-server with a GGUF model.</summary>
+    /// <summary>The vision projector the running server was started with (null = the model cannot see images).</summary>
+    public string? LoadedProjectorPath { get; private set; }
+
+    /// <summary>Why a projector next to the model was not used on the last load (empty when it was, or there was none).</summary>
+    public string VisionFallbackReason { get; private set; } = "";
+
+    /// <summary>
+    /// Start llama-server with a GGUF model — and its vision projector when one sits next to it
+    /// (<see cref="VisionProjector.FindFor"/>). A projector the backend cannot read (too new a type, a wrong file)
+    /// makes llama-server exit at startup; the model is then started again WITHOUT it, so a broken projector costs
+    /// vision, never the model. That projector is not tried again until the backend changes.
+    /// </summary>
     public async Task LoadModelAsync(string modelPath, IProgress<string>? progress = null, CancellationToken ct = default)
     {
         if (!File.Exists(modelPath))
             throw new FileNotFoundException("Model file not found", modelPath);
+
+        VisionFallbackReason = "";
+        string? projector = VisionProjector.FindFor(modelPath);
+        string? exe = FindServerExe();
+        if (projector != null && VisionProjector.HasFailed(projector, exe))
+        {
+            VisionFallbackReason = $"{Path.GetFileName(projector)} failed to load with this llama.cpp earlier — started without vision.";
+            projector = null;
+        }
+        if (projector == null)
+        {
+            await LaunchAsync(modelPath, null, progress, ct);
+            return;
+        }
+
+        try
+        {
+            await LaunchAsync(modelPath, projector, progress, ct);
+        }
+        catch (InvalidOperationException ex) when (!ct.IsCancellationRequested)
+        {
+            VisionProjector.MarkFailed(projector, exe);
+            // The server's own words ("unknown projector type: …", "Failed to load CLIP model …"), else the exit message.
+            var hits = _lastStderr.Where(l => l.Contains("mmproj", StringComparison.OrdinalIgnoreCase)
+                                              || l.Contains("clip", StringComparison.OrdinalIgnoreCase)
+                                              || l.Contains("projector", StringComparison.OrdinalIgnoreCase))
+                                  .Select(l => l.Trim()).TakeLast(2).ToList();
+            string why = hits.Count > 0 ? string.Join(" / ", hits) : ex.Message;
+            VisionFallbackReason = $"{Path.GetFileName(projector)} could not be loaded ({why.Trim()}) — started without vision.";
+            progress?.Report("The vision part could not be loaded with this llama.cpp — starting the model without it...");
+            await LaunchAsync(modelPath, null, progress, ct);
+        }
+    }
+
+    /// <summary>Last stderr lines of the current/last server process (the projector error is usually among them).</summary>
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _lastStderr = new();
+
+    private async Task LaunchAsync(string modelPath, string? projector, IProgress<string>? progress, CancellationToken ct)
+    {
+        while (_lastStderr.TryDequeue(out _)) { }
+        LoadedProjectorPath = null;
 
         // Stop existing server
         await StopServerAsync();
@@ -90,11 +142,13 @@ public class LlamaServerProvider : ApiProviderBase
         // Without this flag llama.cpp puts everything on the main GPU, wasting the rest.
         string? tensorSplit = null;
         int gpuCount = 1;
+        int freeVramMB = 0;
         if (settings.GpuBackend != "CPU" && _gpuDetection != null)
         {
             try
             {
                 var gpus = _gpuDetection.DetectAllNvidiaGpus();
+                freeVramMB = gpus.Sum(g => g.VramFreeMB);
                 if (gpus.Count > 1)
                 {
                     gpuCount = gpus.Count;
@@ -163,6 +217,7 @@ public class LlamaServerProvider : ApiProviderBase
             args.AddRange(new[] { "--tensor-split", tensorSplit });
         }
         // Vision needs a multimodal projector; without one, tool images are omitted (and the model is told).
+        args.AddRange(VisionArgs(modelPath, projector, freeVramMB, (int)settings.ContextSize, gpuLayers >= 999));
         _launchedWithMmproj = args.Any(a => a.StartsWith("--mmproj", StringComparison.OrdinalIgnoreCase));
 
         string fileName = Path.GetFileName(modelPath);
@@ -215,6 +270,8 @@ public class LlamaServerProvider : ApiProviderBase
                     while ((line = await stderr.ReadLineAsync(ct)) != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[llama-server] {line}");
+                        _lastStderr.Enqueue(line);
+                        while (_lastStderr.Count > 40) _lastStderr.TryDequeue(out _);
                         ReportLoadProgress(line, progress, fileName2);
                     }
                 }
@@ -235,7 +292,8 @@ public class LlamaServerProvider : ApiProviderBase
             if (ready)
             {
                 IsReady = true;
-                string backendInfo = gpuLayers > 0 ? $"GPU ({gpuLayers} layers)" : "CPU";
+                LoadedProjectorPath = projector;
+                string backendInfo = (gpuLayers > 0 ? $"GPU ({gpuLayers} layers)" : "CPU") + (projector != null ? " + vision" : "");
                 SetStatus($"Ready: {Path.GetFileNameWithoutExtension(modelPath)} [{backendInfo}]");
                 progress?.Report($"llama-server ready! [{backendInfo}]");
 
@@ -260,8 +318,27 @@ public class LlamaServerProvider : ApiProviderBase
         }
         finally
         {
+            if (!IsReady) _launchedWithMmproj = false;
             SetLoading(false);
         }
+    }
+
+    /// <summary>
+    /// "--mmproj &lt;file&gt;" (+ "--no-mmproj-offload" when it should stay on the CPU), or nothing without a projector.
+    /// Public for the harness: the launch line is the contract with llama-server.
+    /// </summary>
+    public static List<string> VisionArgs(string modelPath, string? projector, int freeVramMB, int contextTokens, bool allLayersOnGpu)
+    {
+        var a = new List<string>();
+        if (string.IsNullOrEmpty(projector)) return a;
+        a.Add("--mmproj");
+        a.Add($"\"{projector}\"");
+        long modelBytes = 0, projectorBytes = 0;
+        try { modelBytes = new FileInfo(modelPath).Length; } catch { }
+        try { projectorBytes = new FileInfo(projector).Length; } catch { }
+        if (!VisionProjector.ShouldOffload(modelBytes, projectorBytes, freeVramMB, contextTokens, allLayersOnGpu))
+            a.Add("--no-mmproj-offload");
+        return a;
     }
 
     // Precompiled once — regex hit on every stderr line, keep it cheap.
@@ -367,6 +444,8 @@ public class LlamaServerProvider : ApiProviderBase
 
         _stoppingIntentionally = false;
         _loadedModelPath = null;
+        LoadedProjectorPath = null;
+        _launchedWithMmproj = false;
         SetStatus("llama-server stopped");
     }
 
@@ -528,7 +607,7 @@ public class LlamaServerProvider : ApiProviderBase
     // Gated on a setting so users with non-tool GGUFs can fall back to the [ACTION:] text loop.
     public override bool SupportsNativeToolUse => _settingsService.Settings.LocalNativeToolUseEnabled;
 
-    // ─── Tool images: only with a multimodal projector (--mmproj), which CluadeX does not pass today ───
+    // ─── Images (user attachments and tool screenshots): only with a multimodal projector (--mmproj) ───
     private bool _launchedWithMmproj;
 
     public override bool SupportsToolResultImages(string modelId) => _launchedWithMmproj && IsServerRunning;
