@@ -156,6 +156,11 @@ public enum ToolType
     // Chats (Services/Tools/ProjectToolModule) — appended last: a ToolType is stored by number
     NewChat,           // Open a new chat (optionally in another project) and start a task there
     CloseChat,         // List this chat's split chats, or put the finished ones away
+
+    // Attached files (Services/Tools/AttachmentToolModule) — appended last: a ToolType is stored by number
+    ReadDocument,      // Text of a PDF / Word / Excel / PowerPoint / text file, a slice at a time
+    ExtractArchive,    // Unpack a zip / tar / tar.gz / gz safely
+    CopyFile,          // Copy a file or folder (an attachment) into the project
 }
 
 /// <summary>
