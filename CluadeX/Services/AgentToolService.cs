@@ -2891,15 +2891,27 @@ public class AgentToolService : IDisposable
 
         int timeoutMs = ParseTimeout(call, defaultMs: 120_000);
 
+        // The red prompt BEFORE an interceptor: a long-running command is started in the background through the
+        // background service directly, which has no gate of its own — so `rm -rf ~ && npm run dev` would have deleted
+        // the home folder unasked (the delete words left the block list on 2026-10-18; the red prompt is their gate).
+        bool gated = false;
+        if (_shellInterceptors.Length > 0 && _fileSystem.HasWorkingDirectory)
+        {
+            if (await Safety.DangerApproval.GateAsync("run_command", command,
+                    await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.WorkingDirectory)) is { } unsafeEarly)
+                return Fail(call, unsafeEarly);
+            gated = true;
+        }
+
         // A server or watcher would block here until the timeout: an interceptor may start it in the background
-        // (or refuse it with the one-shot form) instead. Runs after the prompt, the hooks and the danger check.
+        // (or refuse it with the one-shot form) instead. Runs after the prompt, the hooks, the danger check and the red prompt.
         if (_shellInterceptors.Length > 0
             && await InterceptShellCommandAsync(CreateShellContext(call, command, ShellRunner.DefaultShell, timeoutMs), ct) is { } intercepted)
             return intercepted;
 
         string? ranIn = _shellCwd is { } before && _fileSystem.HasWorkingDirectory
             ? Path.GetRelativePath(_fileSystem.WorkingDirectory, before).Replace('\\', '/') : null;
-        var run = await RunShellAsync(command, timeoutMs, useSessionCwd: true, ct);
+        var run = await RunShellAsync(command, timeoutMs, useSessionCwd: true, ct, alreadyGated: gated);
         if (run.Error != null) return Fail(call, run.Error);
 
         var result = FormatShellResult(call, command, run.Result!, run.CwdNote, timeoutMs);
@@ -2923,8 +2935,10 @@ public class AgentToolService : IDisposable
     /// run_command's `cd` left off, and remember where this one ends — like a terminal. The directory
     /// never leaves the project; if a command cd's out, it is reset to the root and the model is told.
     /// </summary>
+    /// <param name="alreadyGated">The caller already put this command to the red prompt (run_command does, before its
+    /// interceptors): not asked twice.</param>
     private async Task<(ShellRunner.Result? Result, string? CwdNote, string? Error)> RunShellAsync(
-        string command, int timeoutMs, bool useSessionCwd, CancellationToken ct)
+        string command, int timeoutMs, bool useSessionCwd, CancellationToken ct, bool alreadyGated = false)
     {
         if (!_fileSystem.HasWorkingDirectory)
             return (null, null, "No project folder is open — open one first so commands have a working directory.");
@@ -2936,7 +2950,8 @@ public class AgentToolService : IDisposable
         // Always on (run_command, run_build, run_tests, the verify build): a delete aimed at a drive / home / system
         // folder, or running code that was just changed to hold one, runs only after the user's yes on the red prompt
         // (Safety.CodeRunGuard finds it, Safety.DangerApproval asks; 2026-10-17 incident, owner's rule 2026-10-18).
-        if (await Safety.DangerApproval.GateAsync("run_command", command, await Safety.CodeRunGuard.CheckAsync(command, root)) is { } unsafeRun)
+        if (!alreadyGated
+            && await Safety.DangerApproval.GateAsync("run_command", command, await Safety.CodeRunGuard.CheckAsync(command, root)) is { } unsafeRun)
             return (null, null, unsafeRun);
 
         ShellRunner.Result r;
@@ -5253,15 +5268,17 @@ public class AgentToolService : IDisposable
 
         int timeoutMs = ParseTimeout(call, defaultMs: 120_000);
 
+        // The red prompt before the interceptors (as in run_command): a command they move to the background
+        // must not skip it.
+        if (await Safety.DangerApproval.GateAsync("powershell", command,
+                await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)) is { } unsafeRun)
+            return Fail(call, unsafeRun);
+
         if (_shellInterceptors.Length > 0
             && await InterceptShellCommandAsync(CreateShellContext(call, command, ShellRunner.Shell.PowerShell, timeoutMs), ct) is { } intercepted)
             return intercepted;
 
         string cwd = _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : Environment.CurrentDirectory;
-
-        if (await Safety.DangerApproval.GateAsync("powershell", command,
-                await Safety.CodeRunGuard.CheckAsync(command, _fileSystem.HasWorkingDirectory ? _fileSystem.WorkingDirectory : null)) is { } unsafeRun)
-            return Fail(call, unsafeRun);
 
         // The script travels as -EncodedCommand (Base64 UTF-16LE) inside ShellRunner — injection-proof,
         // unlike inlining into -Command "..." — with output forced to UTF-8 and progress records off,

@@ -301,7 +301,10 @@ internal static class Program
         {
             int seen = Interceptor.Seen.Count;
             var r = await T("run_command", ("command", "rm -rf ~ ; fake-serve"));
-            Check("I3", "the dangerous-command check runs BEFORE any interceptor", !r.Success && Seen(r).Contains("blocked for safety") && Interceptor.Seen.Count == seen, Seen(r));
+            // Since 2026-10-18 a delete is judged by its target on the red prompt (not by the block list): either way it must
+            // be stopped BEFORE an interceptor could start it in the background, where no prompt would ever ask.
+            Check("I3", "a delete of the home folder is stopped (block list or red prompt) BEFORE any interceptor",
+                !r.Success && (Seen(r).Contains("blocked for safety") || Seen(r).Contains("did not approve")) && Interceptor.Seen.Count == seen, Seen(r));
         });
         await Case("I4", async () =>
         {
