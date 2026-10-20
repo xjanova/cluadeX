@@ -703,6 +703,7 @@ public partial class ChatViewModel : ViewModelBase
                 ? ClaudeDevProvider.ReportedModel ?? Loc("chat.usage.cliDefault") : configured,
             AiProviderType.GeminiDev => configured is null or "default" or "auto" ? Loc("chat.usage.geminiCliDefault") : configured,
             AiProviderType.AntigravityDev => configured is null or "default" or "auto" ? Loc("chat.usage.agyDefault") : configured,
+            AiProviderType.OpenAIDev => configured is null or "default" or "auto" ? Loc("chat.usage.codexDefault") : configured,
             _ => configured ?? Loc("chat.usage.noModel"),
         };
         ThinkToggleVisible = type switch
@@ -718,6 +719,7 @@ public partial class ChatViewModel : ViewModelBase
             AiProviderType.OpenAI => OpenAiProvider.MaxEffort(configured ?? OpenAiProvider.DefaultModel) != null,
             AiProviderType.Gemini => GeminiProvider.ThinkingOf(configured ?? GeminiProvider.DefaultModel) != GeminiProvider.ThinkingControl.None,
             AiProviderType.ClaudeDev => true,
+            AiProviderType.OpenAIDev => true,   // -c model_reasoning_effort (Codex's models take low … max)
             _ => false,
         };
         OnPropertyChanged(nameof(BillingUrl));
@@ -759,6 +761,7 @@ public partial class ChatViewModel : ViewModelBase
                 : type == AiProviderType.ClaudeDev ? Loc("chat.usage.cliTip")
                 : type == AiProviderType.GeminiDev ? Loc("chat.usage.geminiCliTip")
                 : type == AiProviderType.AntigravityDev ? Loc("chat.usage.agyTip")
+                : type == AiProviderType.OpenAIDev ? Loc("chat.usage.codexTip")
                 : Loc("chat.usage.unknownTip");
         }
 
@@ -3136,9 +3139,10 @@ public partial class ChatViewModel : ViewModelBase
             {
                 AiProviderType.GeminiDev => _providerManager.GetProvider(AiProviderType.GeminiDev) is Services.Providers.GeminiDevProvider gd && gd.OpenLoginTerminal(),
                 AiProviderType.AntigravityDev => _providerManager.GetProvider(AiProviderType.AntigravityDev) is Services.Providers.AntigravityDevProvider agy && agy.OpenLoginTerminal(),
+                AiProviderType.OpenAIDev => _providerManager.GetProvider(AiProviderType.OpenAIDev) is Services.Providers.OpenAIDevProvider od && od.OpenLoginTerminal(),
                 _ => Services.Providers.ClaudeDevProvider.OpenLoginTerminal(),
             };
-            string key = active switch { AiProviderType.GeminiDev => "gemini", AiProviderType.AntigravityDev => "agy", _ => "" };
+            string key = active switch { AiProviderType.GeminiDev => "gemini", AiProviderType.AntigravityDev => "agy", AiProviderType.OpenAIDev => "codex", _ => "" };
             Messages.Add(new ChatMessage
             {
                 Role = MessageRole.System,

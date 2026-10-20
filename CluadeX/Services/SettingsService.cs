@@ -256,16 +256,67 @@ public class SettingsService
                 // Don't silently reset to defaults over a recoverable file — a single bad parse would
                 // otherwise be overwritten by the next Save(), PERMANENTLY losing the user's config +
                 // API keys. Preserve the bad file for recovery first, then fall back to defaults.
+                // (Invariant culture: on a Thai system the name came out as ".corrupt-25691019-…", the Buddhist year.)
                 try
                 {
                     if (File.Exists(_settingsPath))
-                        File.Copy(_settingsPath, _settingsPath + $".corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: true);
+                        File.Copy(_settingsPath, _settingsPath + $".corrupt-{DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)}", overwrite: true);
                 }
                 catch { /* best-effort backup */ }
-                System.Diagnostics.Debug.WriteLine($"Settings load failed (backed up, using defaults): {ex.Message}");
-                _settings = new AppSettings();
+                System.Diagnostics.Debug.WriteLine($"Settings load failed (backed up): {ex.Message}");
+                // One value this build cannot read must not cost every other one. An older build meeting a newer
+                // provider ("ActiveProvider": "GeminiDev" read by 3.0.153, 2026-10-19) threw on that one enum and reset
+                // the whole file — the API keys with it. Keep every setting that still reads; only the rest is default.
+                AppSettings? salvaged = null;
+                try { if (File.Exists(_settingsPath)) salvaged = Salvage(File.ReadAllText(_settingsPath), out _); }
+                catch { salvaged = null; }
+                _settings = salvaged ?? new AppSettings();
+                if (salvaged != null) DecryptSecrets(_settings);
             }
         }
+    }
+
+    /// <summary>
+    /// The settings in <paramref name="json"/> that this build can read: each top-level setting is tried on its own, and
+    /// one that does not read (an enum value from a newer build, a changed type) is left at its default and named in
+    /// <paramref name="dropped"/>. Null when the text is not a JSON object at all. Pure, so the harness can check it.
+    /// </summary>
+    public static AppSettings? Salvage(string json, out List<string> dropped)
+    {
+        dropped = new List<string>();
+        if (System.Text.Json.Nodes.JsonNode.Parse(json) is not System.Text.Json.Nodes.JsonObject all) return null;
+        var kept = new System.Text.Json.Nodes.JsonObject();
+        foreach (var (name, value) in all)
+        {
+            var one = new System.Text.Json.Nodes.JsonObject { [name] = value?.DeepClone() };
+            try
+            {
+                JsonSerializer.Deserialize<AppSettings>(one.ToJsonString(), JsonOptions);
+                kept[name] = value?.DeepClone();
+            }
+            catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+            {
+                // A map such as ProviderConfigs (where the API keys live): keep each entry that reads on its own.
+                if (value is System.Text.Json.Nodes.JsonObject children)
+                {
+                    var keptChildren = new System.Text.Json.Nodes.JsonObject();
+                    foreach (var (child, childValue) in children)
+                    {
+                        var probe = new System.Text.Json.Nodes.JsonObject { [name] = new System.Text.Json.Nodes.JsonObject { [child] = childValue?.DeepClone() } };
+                        try
+                        {
+                            JsonSerializer.Deserialize<AppSettings>(probe.ToJsonString(), JsonOptions);
+                            keptChildren[child] = childValue?.DeepClone();
+                        }
+                        catch (Exception cex) when (cex is JsonException or NotSupportedException or InvalidOperationException) { dropped.Add($"{name}.{child}"); }
+                    }
+                    if (keptChildren.Count > 0) kept[name] = keptChildren;
+                    continue;
+                }
+                dropped.Add(name);
+            }
+        }
+        return JsonSerializer.Deserialize<AppSettings>(kept.ToJsonString(), JsonOptions) ?? new AppSettings();
     }
 
     /// <summary>Why the last <see cref="Save"/> failed (null after a successful save).</summary>

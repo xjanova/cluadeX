@@ -69,7 +69,7 @@ public partial class ChatViewModel
         AiProviderType.OpenAI => OpenAiProvider.DefaultModel,
         AiProviderType.Gemini => GeminiProvider.DefaultModel,
         AiProviderType.BrainX => BrainXRoomModel,
-        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev => "default",
+        AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev => "default",
         _ => "",
     };
 
@@ -77,6 +77,8 @@ public partial class ChatViewModel
     private bool _geminiCliInstalled;
     /// <summary>Is Google's Antigravity CLI (agy) installed (looked up with the Gemini CLI; the box lists Antigravity Dev then).</summary>
     private bool _agyInstalled;
+    /// <summary>Is OpenAI's Codex CLI installed (looked up with the Gemini CLI; the box lists OpenAI Dev then).</summary>
+    private bool _codexInstalled;
     private bool _geminiCliProbed;
 
     private async void ProbeGeminiCliForChatBox()
@@ -87,10 +89,12 @@ public partial class ChatViewModel
         {
             bool found = await Task.Run(Services.Providers.GeminiDevProvider.IsInstalled);
             bool agy = await Task.Run(Services.Providers.AntigravityDevProvider.IsInstalled);
-            if (found != _geminiCliInstalled || agy != _agyInstalled)
+            bool codex = await Task.Run(Services.Providers.OpenAIDevProvider.IsInstalled);
+            if (found != _geminiCliInstalled || agy != _agyInstalled || codex != _codexInstalled)
             {
                 _geminiCliInstalled = found;
                 _agyInstalled = agy;
+                _codexInstalled = codex;
                 RefreshChatModelChoices();
             }
             // The slugs the signed-in Google plan may use (agy models — a network call, so after the box is up).
@@ -172,6 +176,17 @@ public partial class ChatViewModel
             var agModels = Services.Providers.AntigravityDevProvider.KnownModels.Concat(Services.Providers.AntigravityDevProvider.DiscoveredModels).Distinct().ToList();
             if (!agModels.Contains(ag)) agModels.Insert(0, ag);
             list.AddRange(agModels.Select(m => new ChatModelChoice(AiProviderType.AntigravityDev, m, agLabel, Loc("chat.model.agyPlan"))));
+        }
+        // OpenAI Dev: the Codex CLI on the owner's ChatGPT sign-in (no API key, no per-token price) — owner 2026-10-20:
+        // "อยากให้เพิ่ม openai DEV คือติดต่อตรงผ่าน codex".
+        if (_codexInstalled)
+        {
+            string od = s.ProviderConfigs.TryGetValue(nameof(AiProviderType.OpenAIDev), out var odCfg) && !string.IsNullOrWhiteSpace(odCfg.EffectiveModelId)
+                ? odCfg.EffectiveModelId!.Trim() : "default";
+            string odLabel = _providerManager.GetProvider(AiProviderType.OpenAIDev).DisplayName;
+            var odModels = Services.Providers.OpenAIDevProvider.KnownModels.ToList();
+            if (!odModels.Contains(od)) odModels.Insert(0, od);
+            list.AddRange(odModels.Select(m => new ChatModelChoice(AiProviderType.OpenAIDev, m, odLabel, Loc("chat.model.codexPlan"))));
         }
         // Ollama: every model it has, whenever it answers (the quiet probe below) — Ollama loads the picked one itself.
         // (owner 2026-10-19: "ต้องมีให้เลือกทุกอย่างที่ใช้งานได้แล้ว ... ติดต่อ local ai ได้ ต้องโชว์ให้หมด")
@@ -255,6 +270,14 @@ public partial class ChatViewModel
         finally
         {
             RefreshUsageStrip();   // shows what really answers now (the old pick when the switch was refused)
+            // The box shows what answers, never a pick that was refused: the ComboBox kept "claude-haiku-5-5 · ยังไม่มีคีย์"
+            // while Claude Dev (sonnet) went on answering (owner 2026-10-20: "ฉันเลือก haiku แต่มันตอบว่าเป็น sonnet").
+            // A PropertyChanged raised inside the box's own selection update is ignored by WPF, so it goes after it.
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                RefreshChatModelChoices();
+                OnPropertyChanged(nameof(SelectedChatModel));
+            });
         }
     }
 
