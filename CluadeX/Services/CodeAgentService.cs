@@ -2095,7 +2095,10 @@ public partial class CodeAgentService
         // CluadeX's chat tools for the CLI (open_project / new_chat / close_chat, run here through the same gate inside
         // this chat's run) and the folders the user allowed beside the project.
         using var chatTools = cliAgent
-            ? Tools.ChatToolBridge.Register(AgentRunScope.Current, (call, c) => _agentToolService.ExecuteToolAsync(call, c), folder, ct)
+            ? Tools.ChatToolBridge.Register(AgentRunScope.Current, (call, c) => _agentToolService.ExecuteToolAsync(call, c), folder, ct,
+                // Claude Dev asks before an MCP tool it was not given (its --permission-prompt-tool): CluadeX's MCP gate
+                // answers — the user's rules, "Allow in this chat", or the permission row in this chat.
+                delegated == AiProviderType.ClaudeDev ? _agentToolService.AuthorizeCliMcpCallAsync : null)
             : null;
         if (cliAgent)
         {

@@ -483,6 +483,26 @@ public class AgentToolService : IDisposable
         return allowed ? null : Fail(call, $"User denied permission for {call.ToolName}");
     }
 
+    /// <summary>
+    /// The same gate for an MCP call a CLI agent (Claude Dev) is about to make with ITS OWN MCP client: the CLI asks
+    /// through its --permission-prompt-tool (Tools.ChatToolBridge "approve"), and the answer comes from here — the
+    /// user's rules, "Allow in this chat", or the permission row in the asking chat (the bridge runs this inside that
+    /// chat's AgentRunScope). Nothing is executed here: only (allowed, reason).
+    /// </summary>
+    public async Task<(bool Allow, string? Reason)> AuthorizeCliMcpCallAsync(string qualifiedName, Dictionary<string, string> args)
+    {
+        if (!IsToolAllowed(ToolType.McpTool))
+            return (false, "MCP tools are switched off in CluadeX (Features page).");
+        var call = new ToolCall { Type = ToolType.McpTool, ToolName = qualifiedName, Arguments = args };
+        if (_mcpManager.ToolRegistry.ResolveTool(qualifiedName) is { } known)
+        {
+            call.McpServerName = known.ServerName;
+            call.McpToolName = known.Name;
+        }
+        var refused = await CheckMcpPermissionAsync(call);
+        return refused == null ? (true, null) : (false, refused.Error ?? $"Permission denied for {qualifiedName}");
+    }
+
     private static bool McpPolicyHides(IMcpToolPolicy policy, McpToolKey key)
     {
         try { return policy.Hide(key); }

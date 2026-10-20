@@ -58,7 +58,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     public event Action<string>? OnError;
 
     /// <summary>Read-only tools the headless CLI may use without a human to approve
-    /// them. Everything else is denied by the CLI's own permission layer.</summary>
+    /// them. Any other MCP tool goes to the user through CluadeX (--permission-prompt-tool, Tools.ChatToolBridge);
+    /// any other built-in tool is refused unless the grant opens it.</summary>
     private const string AllowedTools =
         "Read,Grep,Glob," +
         "mcp__brainx-brain__brain_search,mcp__brainx-brain__brain_semantic_search," +
@@ -218,6 +219,9 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         // (and acceptEdits) work in each allowed folder as they do in the project. One flag per folder: both options take
         // a list, and a list must never swallow the flag after it.
         if (chatTools) args.Append(" --mcp-config ").Append(Quote(toolsConfig!));
+        // An MCP tool not in --allowedTools is put to the user in CluadeX (the bridge's approve tool) instead of being
+        // refused silently: headless, the CLI had no one to ask.
+        if (chatTools) args.Append(" --permission-prompt-tool ").Append(Quote(Tools.ChatToolBridge.ApproveToolQualified));
         foreach (var dir in addDirs) args.Append(" --add-dir ").Append(Quote(dir));
         if (grant is { Run: true }) args.Append(" --disallowedTools ").Append(Quote(NeverTools));
         if (grant is { Edit: true }) args.Append(" --permission-mode acceptEdits");
