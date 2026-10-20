@@ -44,18 +44,13 @@ public partial class ChatView : UserControl
         // editor (the editor keeps the caret).
         IsVisibleChanged += (_, e) =>
         {
-            // A hidden chat view (the kept page while the editor shows, the editor's docked chat while the chat page
-            // shows) lets go of the message list: it used to build the rows of every chat opened, and of every
-            // streamed update, for nobody to see — two or three views' worth of work per switch.
-            if (e.NewValue is true)
-            {
-                if (BindingOperations.GetBinding(ChatList, ItemsControl.ItemsSourceProperty) == null)
-                    ChatList.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Messages"));
-            }
-            else
-            {
-                BindingOperations.ClearBinding(ChatList, ItemsControl.ItemsSourceProperty);
-            }
+            // A hidden chat view KEEPS its message list (2026-10-20). It used to let go of it, so every Chat ⇄ Code switch
+            // rebuilt every visible row and re-parsed each bubble's Markdown — the biggest UI stall in the log (Chat
+            // shown in ~330 ms, up to 800 ms, many times an hour). Hidden, the list is collapsed: no new rows are laid
+            // out, and a streamed update waits in MarkdownHelper until its row is visible again — so the work that
+            // made the unbinding worthwhile is gone, and coming back is instant.
+            if (e.NewValue is true && BindingOperations.GetBinding(ChatList, ItemsControl.ItemsSourceProperty) == null)
+                ChatList.SetBinding(ItemsControl.ItemsSourceProperty, new Binding("Messages"));
             if (e.NewValue is true && !_hostedInEditor)
                 Dispatcher.InvokeAsync(() => InputBox.Focus(), System.Windows.Threading.DispatcherPriority.Input);
         };
@@ -195,6 +190,8 @@ public partial class ChatView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         _hostedInEditor = FindAncestor<CodeEditorView>(this) != null;
+        // The desktop pet steps out of the box the user types in (Services/Pet/PetZones).
+        CluadeX.Services.Pet.PetZones.Register(ComposerCard);
         UpdateSidePanelRoom();
         InputBox.Focus();
         HookScrollViewer();

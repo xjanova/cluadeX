@@ -31,19 +31,36 @@ public sealed class MarqueeScroller : ScrollViewer
         HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden;
         VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
         Focusable = false;
-        Loaded += (_, _) => UpdateHook();
+        Loaded += (_, _) =>
+        {
+            // The glide is for someone looking: a minimised window or a hidden bar stops it — a frame callback keeps the
+            // whole window rendering 60 times a second.
+            if (Window.GetWindow(this) is { } w && !ReferenceEquals(w, _window))
+            {
+                if (_window != null) { _window.Activated -= OnWindowActive; _window.Deactivated -= OnWindowActive; }
+                _window = w;
+                w.Activated += OnWindowActive;
+                w.Deactivated += OnWindowActive;
+            }
+            UpdateHook();
+        };
         Unloaded += (_, _) => Hook(false);
+        IsVisibleChanged += (_, _) => UpdateHook();
         SizeChanged += (_, _) => { FitContent(); UpdateHook(); };
         ScrollChanged += (_, _) => UpdateHook();
     }
 
-    /// <summary>Animate only while the row overflows: a frame callback keeps WPF rendering every frame, which a bar
-    /// that fits must not cost.</summary>
+    private Window? _window;
+    private void OnWindowActive(object? sender, EventArgs e) => UpdateHook();
+
+    /// <summary>Animate only while the row overflows and is on screen (its window not minimised): a frame callback keeps
+    /// WPF rendering every frame, which a bar that fits — or that nobody can see — must not cost.</summary>
     private void UpdateHook()
     {
         bool overflow = ScrollableWidth > MinOverflow;
         if (!overflow && HorizontalOffset > 0) ScrollToHorizontalOffset(_offset = 0);
-        Hook(IsLoaded && overflow);
+        bool watched = IsVisible && (_window == null || _window.WindowState != WindowState.Minimized);
+        Hook(IsLoaded && overflow && watched);
     }
     /// <summary>A few pixels over is left clipped at the end, as before, rather than set the row drifting.</summary>
     private const double MinOverflow = 12;

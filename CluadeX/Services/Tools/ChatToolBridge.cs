@@ -289,8 +289,10 @@ public static class ChatToolBridge
         name = s.Name,
         description = s.Name == ProjectToolModule.ToolName
             ? "Open another project folder for this CluadeX chat — CluadeX asks the user first unless they always allow it. "
-              + "Use it when the task needs code in a project outside the folders you were started with (find the path with "
-              + "brain_search). add=\"true\" keeps the current project and opens this one beside it. The folder is readable "
+              + "Use it when the task needs code in a project outside the folders you were started with: pass its path or just its "
+              + "name (CluadeX finds the folder among the projects on this PC). For a NEW project pass create=\"true\" instead of "
+              + "making the folder yourself — CluadeX puts it beside the user's other projects. "
+              + "add=\"true\" keeps the current project and opens this one beside it. The folder is readable "
               + "by absolute path at once and fully workable from the chat's next turn; to work in it right away, use new_chat "
               + "with its path. Never answer that you cannot open a folder."
             : s.Description,

@@ -572,6 +572,10 @@ public class GitService
             _fileSystem.WorkingDirectory, CancellationToken.None, timeoutMs);
     }
 
+    /// <summary>git with an argv list in any folder (another repo of the project — <see cref="GitMultiRepo"/>).</summary>
+    public static Task<GitResult> RunIn(string workingDir, IReadOnlyList<string> args, int timeoutMs = 30000, CancellationToken ct = default)
+        => RunGitCommandAsync(psi => { foreach (var a in args) psi.ArgumentList.Add(a); }, workingDir, ct, timeoutMs);
+
     private static Task<GitResult> RunGitCommandAsync(
         string arguments, string workingDir, CancellationToken ct, int timeoutMs = 30000)
         => RunGitCommandAsync(psi => psi.Arguments = arguments, workingDir, ct, timeoutMs);
@@ -595,6 +599,9 @@ public class GitService
                 StandardErrorEncoding = Encoding.UTF8,
             };
             setArgs(psi);
+            // No console here to type a username into: git must fail at once instead of waiting for the timeout.
+            // (A credential manager's own sign-in window still opens — the user can answer that one.)
+            psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
 
             using var process = Process.Start(psi);
             if (process == null)

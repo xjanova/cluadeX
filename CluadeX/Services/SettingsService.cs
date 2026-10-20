@@ -249,6 +249,18 @@ public class SettingsService
                     // compaction can't rescue it (that floor isn't history). Exact old defaults are
                     // treated as "never deliberately changed"; a hand-picked value is left alone.
                     if (_settings.ContextSize is 4096 or 8192) _settings.ContextSize = 12288;
+
+                    // Owner 2026-10-20: the editor follows the files, it no longer takes the user off their page.
+                    // Saved files carry the old default (true); switch it off once — a later choice in Settings stays.
+                    bool changed = false;
+                    if (!_settings.EditorNoAutoSwitchMigrated)
+                    {
+                        _settings.AutoOpenEditorOnAgentEdit = false;
+                        _settings.EditorNoAutoSwitchMigrated = true;
+                        changed = true;
+                    }
+                    changed |= RecoverKeysFromBackups();
+                    if (changed) _saveAfterLoad = true;
                 }
             }
             catch (Exception ex)
@@ -274,6 +286,82 @@ public class SettingsService
                 if (salvaged != null) DecryptSecrets(_settings);
             }
         }
+        if (_saveAfterLoad)
+        {
+            _saveAfterLoad = false;
+            try { Save(); } catch { /* the next save writes it */ }
+        }
+    }
+
+    private bool _saveAfterLoad;
+
+    /// <summary>The providers whose API keys came back from a settings.json.corrupt-* backup at this start (for a notice).</summary>
+    public IReadOnlyList<string> RecoveredKeys { get; private set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// A load that failed once reset settings.json and the next save dropped the API keys (2026-10-19, an older build
+    /// over "ActiveProvider": "GeminiDev"); the keys stayed in the .corrupt-* backup it made. Each backup not looked at
+    /// before gives back the keys that are empty now — never one the user has since typed in. True when anything
+    /// changed (a key, or the marker of the newest backup looked at).
+    /// </summary>
+    private bool RecoverKeysFromBackups()
+    {
+        try
+        {
+            string? dir = Path.GetDirectoryName(_settingsPath);
+            if (dir == null || !Directory.Exists(dir)) return false;
+            var backups = new DirectoryInfo(dir).GetFiles(Path.GetFileName(_settingsPath) + ".corrupt-*")
+                .OrderByDescending(f => f.LastWriteTimeUtc).ToList();
+            if (backups.Count == 0 || backups[0].Name == _settings.KeyRecoveryCheckedBackup) return false;
+            var unseen = new List<AppSettings>();
+            foreach (var f in backups)
+            {
+                if (f.Name == _settings.KeyRecoveryCheckedBackup) break;   // older ones were looked at already
+                AppSettings? s;
+                try { s = Salvage(File.ReadAllText(f.FullName), out _); }
+                catch { continue; }
+                if (s == null) continue;
+                foreach (var c in s.ProviderConfigs.Values)
+                    if (!string.IsNullOrEmpty(c.ApiKey))
+                    {
+                        c.ApiKey = DecryptString(c.ApiKey, out bool failed);
+                        if (failed) c.ApiKey = "";   // another Windows user's key: nothing to give back
+                    }
+                unseen.Add(s);
+            }
+            RecoveredKeys = RecoverKeys(_settings, unseen);
+            _settings.KeyRecoveryCheckedBackup = backups[0].Name;
+            if (RecoveredKeys.Count > 0)
+                System.Diagnostics.Debug.WriteLine($"API keys recovered from a settings backup: {string.Join(", ", RecoveredKeys)}");
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Fill the API keys that are empty in <paramref name="current"/> from <paramref name="backupsNewestFirst"/> (already
+    /// decrypted): a provider missing entirely comes back whole, one whose key is empty gets the key only; a key the
+    /// user has now is never replaced. Returns the providers that got a key. Pure, so the harness checks it.
+    /// </summary>
+    public static List<string> RecoverKeys(AppSettings current, IEnumerable<AppSettings> backupsNewestFirst)
+    {
+        var got = new List<string>();
+        foreach (var backup in backupsNewestFirst)
+            foreach (var (name, cfg) in backup.ProviderConfigs)
+            {
+                if (string.IsNullOrEmpty(cfg.ApiKey) || got.Contains(name)) continue;
+                if (!current.ProviderConfigs.TryGetValue(name, out var now))
+                {
+                    current.ProviderConfigs[name] = cfg;
+                    got.Add(name);
+                }
+                else if (string.IsNullOrEmpty(now.ApiKey))
+                {
+                    now.ApiKey = cfg.ApiKey;
+                    got.Add(name);
+                }
+            }
+        return got;
     }
 
     /// <summary>

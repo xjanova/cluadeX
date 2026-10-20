@@ -72,13 +72,22 @@ public sealed class ProjectToolModule : IAgentToolModule
                 ["path"] = new Dictionary<string, string>
                 {
                     ["type"] = "string",
-                    ["description"] = "Absolute path of the project folder, e.g. D:\\Code\\Atmos",
+                    ["description"] = "The project folder: its absolute path (e.g. D:\\Code\\Atmos) or just the project's name "
+                        + "(e.g. \"atmos\") — CluadeX finds the folder among the projects on this PC (case, spaces and dashes "
+                        + "do not matter; small typos are forgiven).",
                 },
                 ["add"] = new Dictionary<string, string>
                 {
                     ["type"] = "string",
                     ["description"] = "\"true\" = open it BESIDE the current project (a related repo: a shared library, the API a "
                         + "client calls) instead of switching to it. Reach its files by absolute path.",
+                },
+                ["create"] = new Dictionary<string, string>
+                {
+                    ["type"] = "string",
+                    ["description"] = "\"true\" = the user wants a NEW project and no folder of that name exists: create it and "
+                        + "open it. With a name, CluadeX puts it beside the user's other projects; with a full path, there. "
+                        + "If a project of that name already exists, that one opens instead (no duplicate).",
                 },
             },
             ["required"] = new[] { "path" },
@@ -87,8 +96,10 @@ public sealed class ProjectToolModule : IAgentToolModule
         {
             Name = ToolName,
             Description = "Open a project folder so the file, search, shell and build tools work in it (from your next step on). "
-                + "Use it when the user names a project and no folder — or the wrong one — is open: find the path (brain_search "
-                + "notes record where each project lives), then call this. Do not ask the user to open it and do not hand the task off. "
+                + "Use it when the user names a project and no folder — or the wrong one — is open: pass its name or path "
+                + "(the list of projects opened before, or brain_search notes, say where each lives), then call this. Do not ask "
+                + "the user to open it and do not hand the task off. For a NEW project (nothing of that name exists) call it "
+                + "with create=\"true\" — never make a project folder yourself with mkdir. "
                 + "When the task also spans a related project, open that one with add=\"true\" so both stay open.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(schema)).RootElement.Clone(),
         };
@@ -169,9 +180,26 @@ public sealed class ProjectToolModule : IAgentToolModule
     public ToolPermission DescribePermission(ToolCall call, ToolModuleContext context)
     {
         string path = call.GetArg("path");
-        string? full = FullPathOrNull(path);
-        if (full == null || string.IsNullOrWhiteSpace(context.WorkingDirectory)) return ToolPermission.Free("read", path);
+        var target = Target(call);
+        string? full = target.Path;
         var s = _settings?.Settings;
+        // A new project folder beside the user's other projects (or in a folder they allowed) is the ordinary case and
+        // free; anywhere else the user says where new folders may appear.
+        if (target.Creating && full != null)
+        {
+            string? parent = Path.GetDirectoryName(full);
+            bool known = parent != null && (KnownRoots().Any(r => string.Equals(r.TrimEnd('\\', '/'), parent.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                || (s?.AllowedProjectFolders ?? new()).Any(a => IsSameOrInside(a, full)));
+            if (known) return ToolPermission.Free("write", full);
+            return new ToolPermission
+            {
+                Scope = "write",
+                Resource = full,
+                Detail = string.Format(L("chat.perm.createProject"), full),
+                OnceKey = "create-folder|" + full.ToLowerInvariant(),
+            };
+        }
+        if (full == null || string.IsNullOrWhiteSpace(context.WorkingDirectory)) return ToolPermission.Free("read", path);
         if (string.Equals(s?.RelatedFolderAccess?.Trim(), "allow", StringComparison.OrdinalIgnoreCase))
             return ToolPermission.Free("read", full);
 
@@ -280,26 +308,26 @@ public sealed class ProjectToolModule : IAgentToolModule
         ToolResult Fail(string msg) => new() { Type = call.Type, ToolName = call.ToolName, Success = false, Output = msg, Error = msg };
 
         string raw = call.GetArg("path").Trim().Trim('"', '\'');
-        if (raw.Length == 0) return Task.FromResult(Fail("open_project needs a path, e.g. D:\\Code\\Atmos."));
-        raw = Environment.ExpandEnvironmentVariables(raw);
-        if (raw.StartsWith("~")) raw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), raw.TrimStart('~', '/', '\\'));
-        if (!Path.IsPathRooted(raw))
-            return Task.FromResult(Fail($"'{raw}' is not an absolute path. Give the full folder path (e.g. D:\\Code\\Atmos) — brain_search usually has it."));
-
-        string full;
-        try { full = Path.GetFullPath(raw).TrimEnd('\\', '/'); }
-        catch (Exception ex) { return Task.FromResult(Fail($"'{raw}' is not a valid path: {ex.Message}")); }
-        if (full.EndsWith(':')) full += "\\";
+        if (raw.Length == 0) return Task.FromResult(Fail("open_project needs a path or a project name, e.g. D:\\Code\\Atmos or atmos."));
+        var target = Target(call);
+        if (target.Error != null) return Task.FromResult(Fail(target.Error));
+        string full = target.Path!;
 
         if (File.Exists(full))
             return Task.FromResult(Fail($"{full} is a file, not a folder. Open the folder that contains it: {Path.GetDirectoryName(full)}"));
-        if (!Directory.Exists(full))
-            return Task.FromResult(Fail($"No folder at {full}. The note may be out of date — search for the project (brain_search, or ask the user where it is now)."));
         // A drive root, the user profile, Windows, Program Files, AppData, CluadeX's own data: the agent never makes
         // one of these its project on its own — the user can, with the Open Folder button.
         if (PermissionService.IsUnsafeAcceptEditsRoot(full, _settings?.DataRoot))
             return Task.FromResult(Fail($"{full} is a drive root or a system / profile folder, which the agent does not open by itself. "
                 + "Ask the user to open it with the Open Folder button if they really mean it."));
+        if (target.Creating)
+        {
+            try { Directory.CreateDirectory(full); }
+            catch (Exception ex) { return Task.FromResult(Fail($"Could not create {full}: {ex.Message}")); }
+        }
+        else if (!Directory.Exists(full))
+            return Task.FromResult(Fail($"No folder at {full}."));
+        string note = target.Note is { Length: > 0 } n ? n + " " : "";
 
         string? before = context.WorkingDirectory;
         bool add = call.GetArg("add").Trim().Equals("true", StringComparison.OrdinalIgnoreCase)
@@ -312,7 +340,7 @@ public sealed class ProjectToolModule : IAgentToolModule
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[open_project] RelatedFolderAdded handler failed: {ex.Message}"); }
             var all = new List<string> { before! };
             if (AgentRunScope.Current is { } sc) all.AddRange(sc.ExtraFolders);
-            string addText = (added ? $"Opened {full} beside the project." : $"{full} was already open.")
+            string addText = note + (added ? $"Opened {full} beside the project." : $"{full} was already open.")
                 + $" {all.Count} folders are open: " + string.Join(", ", all)
                 + $". Relative paths stay in {before}; reach {full} by absolute path. Top level:\n" + Listing(full);
             return Task.FromResult(new ToolResult
@@ -331,7 +359,7 @@ public sealed class ProjectToolModule : IAgentToolModule
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[open_project] ProjectOpened handler failed: {ex.Message}"); }
 
         bool same = before != null && string.Equals(Path.GetFullPath(before).TrimEnd('\\', '/'), full, StringComparison.OrdinalIgnoreCase);
-        string text = (same ? $"{full} was already the open project." : $"Opened project {full}.")
+        string text = note + (same ? $"{full} was already the open project." : $"Opened project {full}.")
             + " The file, search, shell and build tools now work in it (paths relative to this folder). Top level:\n"
             + Listing(full);
         return Task.FromResult(new ToolResult
@@ -339,6 +367,71 @@ public sealed class ProjectToolModule : IAgentToolModule
             Type = call.Type, ToolName = call.ToolName, Success = true, Output = text,
             Summary = $"📁 {full}", FilePath = full,
         });
+    }
+
+    /// <summary>The folder a call means: Path (null with Error), Creating = a new project folder is to be made, Note =
+    /// what the result says about how it was found ("no folder at X — opened Y, the project of that name").</summary>
+    private sealed record Resolved(string? Path, bool Creating, string? Note, string? Error);
+
+    /// <summary>
+    /// An existing absolute path is itself. A name — or an absolute path that is not there (a model guessing the drive,
+    /// a note out of date) — is looked up by its last segment (<see cref="ProjectResolver"/>): one clear match opens;
+    /// several are listed for the model to choose; none fails with where a new one would go. create="true" makes the
+    /// folder (at the full path given, else beside the user's other projects) — unless a project of that name exists,
+    /// which then opens instead.
+    /// </summary>
+    private Resolved Target(ToolCall call)
+    {
+        string raw = call.GetArg("path").Trim().Trim('"', '\'');
+        bool create = call.GetArg("create").Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+        if (raw.Length == 0) return new Resolved(null, false, null, "open_project needs a path or a project name.");
+        string? full = FullPathOrNull(raw);
+        if (full != null && (Directory.Exists(full) || File.Exists(full))) return new Resolved(full, false, null, null);
+        if (full != null && full.EndsWith(":\\")) return new Resolved(full, false, null, null);   // a drive root: refused later
+
+        string name = full != null ? Path.GetFileName(full) : raw;
+        var (known, roots, defaultRoot) = Knowledge();
+        var found = ProjectResolver.Resolve(name, known, roots, SafeDirs, defaultRoot);
+        if (found.Found != null)
+            return new Resolved(found.Found, false, full != null
+                ? $"(There is no folder at {full}; the project \"{name}\" is at {found.Found} — opened that.)"
+                : $"(Project \"{name}\" is at {found.Found}.)", null);
+        if (found.Matches.Count > 1 && !(create && full != null))
+            return new Resolved(null, false, null, $"Several projects match \"{name}\": {string.Join(", ", found.Matches.Take(6))}. "
+                + "Call open_project again with the full path of the one the user means (ask the user if it is not clear).");
+        if (create)
+        {
+            string target = full ?? found.NewPath;
+            return new Resolved(target, true, $"(Created the new project folder {target}.)", null);
+        }
+        return new Resolved(null, false, null, (full != null ? $"No folder at {full}, and no project named \"{name}\" on this PC. " : $"No project named \"{name}\" on this PC. ")
+            + $"If the user wants a NEW project, call open_project again with create=\"true\" (it will be made at {found.NewPath}, "
+            + "beside the user's other projects — or pass a full path to put it elsewhere). If it should exist, search for it (brain_search) or ask the user where it is.");
+    }
+
+    /// <summary>The projects opened before, the folders that hold them, and where a new project goes.</summary>
+    private (List<ProjectResolver.Candidate> Known, List<string> Roots, string DefaultRoot) Knowledge()
+    {
+        var registry = _registry ?? ProjectRegistryService.Current;
+        var recent = registry?.Recent(50) ?? Array.Empty<ProjectRegistryService.Entry>();
+        var known = recent.Select(e => new ProjectResolver.Candidate(e.Path, e.Name, e.Opens, e.LastOpened)).ToList();
+        string? setting = _settings?.Settings.DefaultProjectRoot;
+        string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        var paths = known.Select(k => k.Path).ToList();
+        return (known, ProjectResolver.Roots(paths, setting), ProjectResolver.DefaultRoot(setting, paths, documents));
+    }
+
+    private List<string> KnownRoots()
+    {
+        var (_, roots, defaultRoot) = Knowledge();
+        if (!roots.Contains(defaultRoot, StringComparer.OrdinalIgnoreCase)) roots.Add(defaultRoot);
+        return roots;
+    }
+
+    private static IEnumerable<string> SafeDirs(string root)
+    {
+        try { return Directory.Exists(root) ? Directory.EnumerateDirectories(root).Take(500).ToList() : Array.Empty<string>(); }
+        catch { return Array.Empty<string>(); }
     }
 
     private static string Listing(string dir)

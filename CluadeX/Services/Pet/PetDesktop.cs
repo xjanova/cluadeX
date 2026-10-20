@@ -84,6 +84,40 @@ public static class PetDesktop
 
     public static PetRect WindowRect(nint hwnd) => GetWindowRect(hwnd, out RECT r) ? r.ToPet() : default;
 
+    /// <summary>The text caret of the app in front, in screen pixels (null when that app shows no system caret — many
+    /// browsers and WPF apps draw their own; CluadeX's own boxes come from PetZones).</summary>
+    public static PetRect? CaretRect()
+    {
+        try
+        {
+            nint fg = GetForegroundWindow();
+            if (fg == 0) return null;
+            uint thread = GetWindowThreadProcessId(fg, out _);
+            var gti = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+            if (!GetGUIThreadInfo(thread, ref gti) || gti.hwndCaret == 0) return null;
+            var r = gti.rcCaret;
+            if (r.Right - r.Left <= 0 && r.Bottom - r.Top <= 0) return null;
+            var pts = new[] { new POINT { X = r.Left, Y = r.Top }, new POINT { X = r.Right, Y = r.Bottom } };
+            MapWindowPoints(gti.hwndCaret, 0, pts, 2);
+            return new PetRect(pts[0].X, pts[0].Y, Math.Max(pts[1].X, pts[0].X + 2), Math.Max(pts[1].Y, pts[0].Y + 2));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>A prank patch lets every click through to the window under it (it only looks like a hole).</summary>
+    public static void MakeClickThrough(nint hwnd)
+    {
+        long ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, new nint(ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED));
+    }
+
+    const long WS_EX_TRANSPARENT = 0x20, WS_EX_LAYERED = 0x80000;
+    [StructLayout(LayoutKind.Sequential)]
+    struct GUITHREADINFO { public int cbSize; public uint flags; public nint hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret; public RECT rcCaret; }
+    [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO info);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint hWnd, out uint pid);
+    [DllImport("user32.dll")] static extern int MapWindowPoints(nint from, nint to, [In, Out] POINT[] pts, int count);
+
     // ─── interop ──────────────────────────────────────────────────────────
     const int GWL_EXSTYLE = -20;
     const long WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;

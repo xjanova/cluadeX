@@ -110,20 +110,56 @@ public static class MarkdownHelper
     public static string GetMarkdown(DependencyObject obj) => (string)obj.GetValue(MarkdownProperty);
     public static void SetMarkdown(DependencyObject obj, string value) => obj.SetValue(MarkdownProperty, value);
 
+    /// <summary>The text last rendered into a panel (what its children show).</summary>
+    private static readonly DependencyProperty RenderedTextProperty =
+        DependencyProperty.RegisterAttached("RenderedText", typeof(string), typeof(MarkdownHelper), new PropertyMetadata(null));
+
+    /// <summary>A panel that is waiting to be shown before it renders (see <see cref="OnMarkdownChanged"/>).</summary>
+    private static readonly DependencyProperty WaitingProperty =
+        DependencyProperty.RegisterAttached("Waiting", typeof(bool), typeof(MarkdownHelper), new PropertyMetadata(false));
+
     private static void OnMarkdownChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not StackPanel panel) return;
-        string text = e.NewValue as string ?? "";
+        // A row of a chat that is not on screen (the chat page while the editor shows, a streamed reply in a hidden
+        // view) renders when it is shown, once, with the text it has then — not on every streamed token for nobody.
+        if (panel.IsLoaded && !panel.IsVisible)
+        {
+            if (!(bool)panel.GetValue(WaitingProperty))
+            {
+                panel.SetValue(WaitingProperty, true);
+                panel.IsVisibleChanged += RenderWhenShown;
+            }
+            return;
+        }
+        Render(panel, e.NewValue as string ?? "");
+    }
 
+    private static void RenderWhenShown(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not StackPanel panel || e.NewValue is not true) return;
+        panel.IsVisibleChanged -= RenderWhenShown;
+        panel.SetValue(WaitingProperty, false);
+        Render(panel, GetMarkdown(panel) ?? "");
+    }
+
+    private static void Render(StackPanel panel, string text)
+    {
         if (string.IsNullOrEmpty(text))
         {
             panel.Children.Clear();
             panel.SetValue(StableCountProperty, 0);
+            panel.SetValue(RenderedTextProperty, null);
             return;
         }
 
         var segments = ParseSegments(text);
-        int stableCount = (int)panel.GetValue(StableCountProperty);
+        // The stable prefix is only this message's prefix when the new text grows the one rendered: a recycled row
+        // that now shows ANOTHER message kept the previous message's first blocks.
+        string? rendered = (string?)panel.GetValue(RenderedTextProperty);
+        int stableCount = rendered != null && text.StartsWith(rendered, StringComparison.Ordinal)
+            ? (int)panel.GetValue(StableCountProperty) : 0;
+        panel.SetValue(RenderedTextProperty, text);
 
         // Incremental: if we have stable children, only re-render from stable boundary
         if (stableCount > 0

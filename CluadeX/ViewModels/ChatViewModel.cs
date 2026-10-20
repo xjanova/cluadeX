@@ -224,8 +224,7 @@ public partial class ChatViewModel : ViewModelBase
     /// <summary>Rebuild VisibleSessions from Sessions, applying the project filter.</summary>
     private void RebuildVisibleSessions()
     {
-        // Capture on UI thread — all callers should already be on the dispatcher, but be defensive.
-        VisibleSessions.Clear();
+        if (_bulkSessions) return;   // the start-up load adds every chat, then rebuilds once
 
         // No project open, or user opted to see everything → passthrough
         bool filter = HasProject && !ShowAllProjectSessions;
@@ -256,10 +255,19 @@ public partial class ChatViewModel : ViewModelBase
             flat.Add(s);
         }
 
-        foreach (var s in SplitTree(flat)) VisibleSessions.Add(s);
+        // Unchanged (a chat switch, a run's state, a title typed elsewhere): the sidebar keeps its rows. It was cleared and
+        // refilled every time — re-grouping, re-templating and restarting each row's animations on the UI thread.
+        var tree = SplitTree(flat).ToList();
+        if (!tree.SequenceEqual(VisibleSessions))
+        {
+            VisibleSessions.Clear();
+            foreach (var s in tree) VisibleSessions.Add(s);
+        }
         UpdateSplitSummaries();
         OnPropertyChanged(nameof(VisibleSessionsCount));
     }
+
+    private bool _bulkSessions;
 
     /// <summary>
     /// The list as a tree (owner 2026-10-18: "ทำผังว่าแยกไปที่ไหนทำอะไร"): each split chat right under the chat that
@@ -1026,6 +1034,9 @@ public partial class ChatViewModel : ViewModelBase
         _showThinking = settingsService.Settings.ShowThinkingSteps;
         _showAgentInternals = settingsService.Settings.ShowAgentInternals;
         _statusText = Loc("chat.status.ready");
+        // API keys a failed settings load had dropped came back from its backup at this start: say which.
+        if (settingsService.RecoveredKeys.Count > 0)
+            _statusText = LocF("chat.keysRecovered", string.Join(", ", settingsService.RecoveredKeys));
 
         RefreshModelsCommand = new RelayCommand(RefreshLocalModelsList);
         // Started, not awaited: a run lasts as long as it lasts, and an awaited command stays "executing" — which
@@ -1361,9 +1372,15 @@ public partial class ChatViewModel : ViewModelBase
                 }
                 OnPropertyChanged(nameof(SelectedLocalModel));
 
-                // Sessions
-                foreach (var session in savedSessions)
-                    Sessions.Add(session);
+                // Sessions — one sidebar rebuild for the lot, not one per chat (it was quadratic at start-up)
+                _bulkSessions = true;
+                try
+                {
+                    foreach (var session in savedSessions)
+                        Sessions.Add(session);
+                }
+                finally { _bulkSessions = false; }
+                RebuildVisibleSessions();
                 // Split links of chats that are gone (deleted, or dropped above as empty) are forgotten.
                 ChatLinkStore.Current?.Prune(savedSessions.Select(s => s.Id));
                 // Projects the saved chats worked in join the project list (the agent opens them by name).
@@ -2200,7 +2217,7 @@ public partial class ChatViewModel : ViewModelBase
     /// the Code page hosts this same chat docked beside the editor.</summary>
     private Task NewSessionFromUserAsync()
     {
-        NewSession();   // a reply running in the chat on screen carries on in the background
+        NewSession(keepProject: false);   // a reply running in the chat on screen carries on in the background
         return Task.CompletedTask;
     }
 
@@ -2209,7 +2226,7 @@ public partial class ChatViewModel : ViewModelBase
     /// did nothing.</summary>
     private Task NewChatAndShowAsync()
     {
-        NewSession();
+        NewSession(keepProject: false);
         NavigateToChatRequested?.Invoke();
         return Task.CompletedTask;
     }
@@ -2220,9 +2237,22 @@ public partial class ChatViewModel : ViewModelBase
     /// only — callers from background threads must Dispatcher.Invoke.
     /// Does not stop a running turn: UI paths go through NewSessionFromUserAsync, MCP waits for idle.
     /// </summary>
-    public void NewSession()
+    public void NewSession() => NewSession(keepProject: true);
+
+    /// <summary>
+    /// <paramref name="keepProject"/> false = the user's own New Chat (button, Ctrl+N, palette): it starts with NO folder
+    /// open (owner 2026-10-20: "โฟลเด้อเริ่มใน new chat ไม่ควรเปิดโฟลเด้อรอ ถ้าไม่ใช่เป็นการโยนงานมาจากแชทอื่น") — the
+    /// project opens when the user names one (or opens a folder). A chat handed work by another chat (new_chat, a pipe
+    /// task) keeps the folder it was given.
+    /// </summary>
+    public void NewSession(bool keepProject)
     {
-        string projectPath = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+        string projectPath = keepProject && _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : "";
+        // The app's folder goes with it — after the chat is made, so the chat being left keeps its own project.
+        void CloseFolderIfFresh()
+        {
+            if (!keepProject && _fileSystemService.HasWorkingDirectory) ApplyWorkingDirectory(string.Empty, announce: false, showEditor: false);
+        }
 
         // Already on an untouched chat → reuse it instead of stacking another empty "New Chat".
         if (CurrentSession != null && Messages.Count == 0
@@ -2235,6 +2265,7 @@ public partial class ChatViewModel : ViewModelBase
             if (at < 0) Sessions.Insert(0, CurrentSession);
             else if (at > 0) Sessions.Move(at, 0);
             RebuildVisibleSessions();   // the project tag may have changed
+            CloseFolderIfFresh();
             StatusText = Loc("chat.status.ready");
             return;
         }
@@ -2263,6 +2294,7 @@ public partial class ChatViewModel : ViewModelBase
 
         // Not written to the DB yet: AutoSave stores it once it has a message, so a chat that is opened
         // and never used leaves nothing behind (LoadSession falls back to the in-memory entry).
+        CloseFolderIfFresh();
         StatusText = Loc("chat.status.ready");
     }
 

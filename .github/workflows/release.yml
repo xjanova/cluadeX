@@ -57,7 +57,9 @@ jobs:
         run: dotnet build CluadeX.sln -c Release --no-restore --nologo
 
       - name: Publish (win-x64, self-contained)
-        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo -p:ErrorOnDuplicatePublishOutputFiles=false
+        # ReadyToRun: precompiled code, so start-up and each page's first visit don't wait for the JIT (the Portable
+        # profile already did this; the released build did not).
+        run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo -p:ErrorOnDuplicatePublishOutputFiles=false -p:PublishReadyToRun=true
 
       - name: Velopack pack (self-update assets)
         # Produces Releases/ — *-full.nupkg, *-delta.nupkg, CluadeX-win-Setup.exe

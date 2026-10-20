@@ -16,13 +16,23 @@ namespace CluadeX.Views.Pet;
 /// </summary>
 public partial class PetWindow : Window
 {
-    private enum Act { Idle, Walk, Sit, Sleep, Chase, Hatching }
+    private enum Act { Idle, Walk, Sit, Sleep, Chase, Hatching, Climb, Hang }
 
     private readonly PetService _svc;
     private readonly PetBody _body = new();
     private readonly Random _rng = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
-    private readonly DispatcherTimer _tick = new(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(33) };
+    // Background, not Render: a Render-priority timer ran ahead of the app's own input and layout at 30 fps, always —
+    // asleep, idle or hidden (2026-10-20 stall audit). The interval also drops when nothing moves (see Frame).
+    private readonly DispatcherTimer _tick = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
+
+    // Where the user works (PetZones + the caret of the app in front), the screen's climbable edges, prank windows.
+    private List<PetRect> _zones = new();
+    private List<(int X, int Top, int Bottom, int Side)> _walls = new();
+    private (int X, int Top, int Bottom, int Side)? _wall;
+    private bool _hurry, _climbAfterWalk;
+    private double _dodgeAt, _saidDodgeAt = -999, _climbTop, _poopAt, _biteAt, _prankPauseUntil;
+    private readonly List<PetPrank> _pranks = new();
     private readonly Dictionary<string, (BitmapSource bmp, int emptyRows)> _frames = new();
 
     private List<PetFloor> _floors = new();
@@ -72,6 +82,7 @@ public partial class PetWindow : Window
             _tick.Stop();
             _svc.Moment -= OnMoment;
             _svc.Changed -= OnChanged;
+            ClearPranks();
         };
     }
 
@@ -102,6 +113,8 @@ public partial class PetWindow : Window
         _last = Now;
         _decideAt = Now + 2;
         _talkAt = Now + 40 + _rng.Next(40);
+        _poopAt = Now + 150 + _rng.Next(120);
+        _biteAt = Now + 120 + _rng.Next(120);
         Place();
         _tick.Start();
         if (!_svc.IsHatched) Say(PetMoment.EggIdle);
@@ -117,7 +130,7 @@ public partial class PetWindow : Window
         _last = now;
 
         if (now >= _scanAt) { Scan(); _scanAt = now + 0.4; }
-        if (_hiddenForFullScreen) return;
+        if (_hiddenForFullScreen) { SetPace(500); return; }
 
         // The button is no longer down but no release reached us (it went to a window that popped up): let go.
         if ((_dragging || _pressed) && !PetDesktop.LeftButtonDown()) EndPress(click: false);
@@ -130,6 +143,7 @@ public partial class PetWindow : Window
             _dragTrail.Enqueue((now, _body.X, _body.Y));
             while (_dragTrail.Count > 0 && now - _dragTrail.Peek().t > 0.12) _dragTrail.Dequeue();
         }
+        else if (_act is Act.Climb or Act.Hang) Climbing(now, dt);
         else
         {
             bool wasFalling = !_body.Grounded;
@@ -142,6 +156,174 @@ public partial class PetWindow : Window
         Talk(now);
         Draw(now);
         Place();
+
+        // Nothing moving (sitting, asleep, standing still, no wobble, no bubble fading): 10 frames a second is plenty.
+        bool calm = _body.Grounded && !_dragging && !_pressed && Math.Abs(_body.Vx) < 1 && now >= _wobbleUntil && now >= _squashUntil
+                    && _act is Act.Idle or Act.Sit or Act.Sleep && (Bubble.Opacity <= 0 || now < _bubbleUntil);
+        SetPace(calm ? 100 : 33);
+    }
+
+    private void SetPace(int ms)
+    {
+        if ((int)_tick.Interval.TotalMilliseconds != ms) _tick.Interval = TimeSpan.FromMilliseconds(ms);
+    }
+
+    // The pet's body inside its window (the 96 px sprite, not the bubble's room above it).
+    private double HalfW => Px(40);
+    private double BodyH => Px(88);
+
+    // ─── keeping out of the way ──────────────────────────────────────────
+
+    /// <summary>Standing on (or in front of) the box the user is typing in: step aside — or hop to another floor when
+    /// this one has no clear spot. Wakes up first if it was asleep there.</summary>
+    private void Dodge(double now)
+    {
+        if (_zones.Count == 0 || _body.Floor is not { } f) return;
+        var x = PetWorld.DodgeX(f, _zones, _body.X, _body.Y, HalfW, BodyH, Px(8));
+        if (x == null) return;
+        if (_act == Act.Sleep) _sleepingForIdle = false;
+        if (now - _saidDodgeAt > 30) { _saidDodgeAt = now; Say(PetMoment.Dodge); }
+        _climbAfterWalk = false;
+        if (double.IsNaN(x.Value))
+        {
+            if (JumpSomewhere(towardApp: false, avoidZones: true)) return;
+            // Nowhere on this floor and nowhere to jump: walk off its nearer end and drop down.
+            _walkTarget = _body.X - f.X1 < f.X2 - _body.X ? f.X1 - Px(40) : f.X2 + Px(40);
+            _hurry = true;
+            Do(Act.Walk, 6);
+            return;
+        }
+        _walkTarget = x.Value;
+        _hurry = true;
+        Do(Act.Walk, 6);
+    }
+
+    private bool InZone(double x, double y) => _zones.Any(z => PetWorld.Overlaps(z, x, y, HalfW, BodyH, Px(8)));
+
+    // ─── climbing the screen's edges ─────────────────────────────────────
+
+    /// <summary>Walk to the end of this floor where it meets the edge of the screen, then climb it.</summary>
+    private bool StartClimb()
+    {
+        if (_body.Floor is not { } f) return false;
+        var reach = _walls.Where(w => _body.Y > w.Top + Px(260) && _body.Y <= w.Bottom + 2
+                                      && (w.Side < 0 ? Math.Abs(f.X1 - w.X) <= Px(6) : Math.Abs(f.X2 - (w.X - 1)) <= Px(6))).ToList();
+        if (reach.Count == 0) return false;
+        var wall = reach[_rng.Next(reach.Count)];
+        _wall = wall;
+        _walkTarget = wall.Side < 0 ? f.X1 + Px(14) : f.X2 - Px(14);
+        _climbAfterWalk = true;
+        Do(Act.Walk, 20);
+        return true;
+    }
+
+    private void BeginClimbing()
+    {
+        if (_wall is not { } w) return;
+        _climbAfterWalk = false;
+        _body.Grounded = false;
+        _body.Floor = null;
+        _body.Vx = _body.Vy = 0;
+        _body.X = w.Side < 0 ? w.X + 2 : w.X - 2;
+        double low = w.Top + Px(120), high = _body.Y - Px(160);
+        _climbTop = high > low ? low + _rng.NextDouble() * (high - low) : low;
+        _facing = -w.Side;
+        Do(Act.Climb, 30);
+    }
+
+    private void Climbing(double now, double dt)
+    {
+        if (_wall is not { } w) { Do(Act.Idle, 1); _body.Grounded = false; return; }
+        if (_act == Act.Climb)
+        {
+            _body.Y -= Px(75) * dt;
+            if (_body.Y <= _climbTop || now >= _actUntil)
+            {
+                Do(Act.Hang, 3 + _rng.NextDouble() * 6);
+                if (_rng.Next(2) == 0) Say(PetMoment.Climb);
+            }
+        }
+        else if (now >= _actUntil || InZone(_body.X, _body.Y))
+        {
+            // Let go: a little push away from the wall, then gravity — it lands on whatever is below.
+            _wall = null;
+            _body.Grounded = false;
+            _body.Vx = -w.Side * Px(140);
+            _body.Vy = -Px(180);
+            Do(Act.Idle, 1.5);
+        }
+    }
+
+    // ─── prank mode ──────────────────────────────────────────────────────
+
+    private void Prank(double now)
+    {
+        if (!_svc.Pranks || now < _prankPauseUntil || _act is Act.Sleep or Act.Hatching || _body.Floor is not { } f) return;
+        if (now >= _poopAt && _act is Act.Idle or Act.Sit)
+        {
+            _poopAt = now + 240 + _rng.Next(360);
+            if (_pranks.Count(p => p.What == PetPrank.Kind.Poop) < 3)
+            {
+                int px = (int)(_body.X - _facing * Px(50));
+                if (px > f.X1 + Px(16) && px < f.X2 - Px(16) && !_zones.Any(z => PetWorld.Overlaps(z, px, _body.Y, Px(16), Px(30), Px(6))))
+                {
+                    var poop = PetPrank.Poop(px, (int)_body.Y, _scale, CleanPoop);
+                    poop.Show();
+                    _pranks.Add(poop);
+                    SetFace(PetFace.Happy, 2);
+                    Say(PetMoment.Poop);
+                }
+            }
+        }
+        if (now >= _biteAt)
+        {
+            _biteAt = now + 180 + _rng.Next(300);
+            if (_pranks.Count(p => p.What == PetPrank.Kind.Bite) < 2 && BitePlace(f) is { } rect)
+            {
+                var bite = PetPrank.Bite(rect, _scale, _rng.Next());
+                bite.Show();
+                _pranks.Add(bite);
+                SetFace(PetFace.Happy, 2.5);
+                Say(PetMoment.Bite);
+                Hop();
+            }
+        }
+    }
+
+    /// <summary>A patch beside the pet to nibble: into the window it stands on (just under its top edge), else above
+    /// its floor — never over a work zone, always inside the screen.</summary>
+    private PetRect? BitePlace(PetFloor f)
+    {
+        int w = Px(150 + _rng.Next(80)), h = Px(90 + _rng.Next(60));
+        var mon = _monitors.FirstOrDefault(m => m.Bounds.Contains((int)_body.X, Math.Max(m.Bounds.Top, (int)_body.Y - 1)));
+        if (mon.Bounds.Width == 0) return null;
+        int side = _facing >= 0 ? 1 : -1;
+        foreach (var (dx, below) in new[] { (side, true), (-side, true), (side, false), (-side, false) })
+        {
+            if (below && f.Kind != PetFloorKind.Window) continue;
+            int left = dx > 0 ? (int)_body.X + Px(30) : (int)_body.X - Px(30) - w;
+            int top = below ? (int)_body.Y + Px(14) : (int)_body.Y - Px(20) - h;
+            var r = new PetRect(left, top, left + w, top + h);
+            bool inside = r.Left >= mon.Work.Left && r.Right <= mon.Work.Right && r.Top >= mon.Work.Top && r.Bottom <= mon.Work.Bottom;
+            bool clear = !_zones.Any(z => z.Left < r.Right + Px(30) && z.Right > r.Left - Px(30) && z.Top < r.Bottom + Px(30) && z.Bottom > r.Top - Px(30));
+            if (inside && clear) return r;
+        }
+        return null;
+    }
+
+    private void CleanPoop(PetPrank p)
+    {
+        _pranks.Remove(p);
+        p.Close();
+        if (!_svc.IsHatched) return;
+        SetFace(PetFace.Sad, 2);
+        Say(PetMoment.Cleaned);
+    }
+
+    private void ClearPranks()
+    {
+        foreach (var p in _pranks.ToList()) { try { p.Close(); } catch { } }
+        _pranks.Clear();
     }
 
     private void Scan()
@@ -151,16 +333,27 @@ public partial class PetWindow : Window
         _screen = new PetRect(_monitors.Min(m => m.Bounds.Left), _monitors.Min(m => m.Bounds.Top),
                               _monitors.Max(m => m.Bounds.Right), _monitors.Max(m => m.Bounds.Bottom));
         var skip = new HashSet<nint> { _hwnd };
+        foreach (var p in _pranks) { var h = new WindowInteropHelper(p).Handle; if (h != 0) skip.Add(h); }
         _floors = PetWorld.Floors(_monitors, PetDesktop.Windows(skip), Px(90));
         PetWorld.Follow(_body, _floors);
+        _walls = PetWorld.Walls(_monitors);
 
-        var ours = new HashSet<nint> { _hwnd };
+        // Where the user works: CluadeX's input boxes, and a band around the text caret of the app in front.
+        _zones = PetZones.CluadeXAreas();
+        if (PetDesktop.CaretRect() is { } caret)
+            _zones.Add(new PetRect(caret.Left - Px(160), caret.Top - Px(36), caret.Right + Px(260), caret.Bottom + Px(36)));
+
+        // Prank leftovers heal by themselves after a while.
+        foreach (var p in _pranks.Where(p => DateTime.Now >= p.Until).ToList()) { _pranks.Remove(p); try { p.Close(); } catch { } }
+
+        var ours = new HashSet<nint>(skip);
         if (Application.Current?.MainWindow is { } mw) ours.Add(new WindowInteropHelper(mw).Handle);
         bool fs = PetDesktop.FullScreenAppInFront(_monitors, ours);
         if (fs != _hiddenForFullScreen)
         {
             _hiddenForFullScreen = fs;
             Visibility = fs ? Visibility.Hidden : Visibility.Visible;
+            foreach (var p in _pranks) p.Visibility = fs ? Visibility.Hidden : Visibility.Visible;   // never over a game or a film
         }
     }
 
@@ -209,17 +402,33 @@ public partial class PetWindow : Window
             Do(Act.Sleep, 9999);
         }
 
+        // Out of the way of the box the user is typing in (checked a few times a second).
+        if (now >= _dodgeAt) { _dodgeAt = now + 0.3; Dodge(now); }
+
         switch (_act)
         {
             case Act.Walk:
             case Act.Chase:
             {
-                if (_act == Act.Chase) _walkTarget = PetDesktop.Cursor().x;
-                if (_body.Floor is { } f) _walkTarget = Math.Clamp(_walkTarget, f.X1 + Px(14), f.X2 - Px(14));
+                if (_act == Act.Chase)
+                {
+                    _walkTarget = PetDesktop.Cursor().x;
+                    if (InZone(_walkTarget, _body.Y)) { _body.Vx = 0; Do(Act.Idle, 2); break; }   // not into the typing area
+                }
+                // A dodge with no clear spot may walk off the edge on purpose; anything else stays on its floor.
+                bool offEdge = _hurry && _body.Floor is { } ff && (_walkTarget < ff.X1 || _walkTarget > ff.X2);
+                if (!offEdge && _body.Floor is { } f) _walkTarget = Math.Clamp(_walkTarget, f.X1 + Px(14), f.X2 - Px(14));
                 double d = _walkTarget - _body.X;
-                if (Math.Abs(d) < Px(4) || now >= _actUntil) { _body.Vx = 0; Do(Act.Idle, 1.5 + _rng.NextDouble() * 2); break; }
+                if (Math.Abs(d) < Px(4) || now >= _actUntil)
+                {
+                    _body.Vx = 0;
+                    _hurry = false;
+                    if (_climbAfterWalk && Math.Abs(d) < Px(4)) BeginClimbing();
+                    else { _climbAfterWalk = false; Do(Act.Idle, 1.5 + _rng.NextDouble() * 2); }
+                    break;
+                }
                 _facing = Math.Sign(d);
-                double speed = (_act == Act.Chase ? 95 : 55) * (_svc.State.Personality == PetPersonality.Hyper ? 1.6 : 1.0);
+                double speed = (_act == Act.Chase ? 95 : _hurry ? 130 : 55) * (_svc.State.Personality == PetPersonality.Hyper ? 1.6 : 1.0);
                 _body.Vx = _facing * Px(speed);
                 break;
             }
@@ -228,6 +437,7 @@ public partial class PetWindow : Window
                 break;
         }
 
+        Prank(now);
         if (now >= _actUntil && _act is Act.Idle or Act.Sit or Act.Sleep && !_sleepingForIdle) Decide(now);
     }
 
@@ -241,17 +451,17 @@ public partial class PetWindow : Window
     {
         var p = _svc.State.Personality;
         bool night = DateTime.Now.Hour is >= 22 or < 5;
-        // idle, walk, sit, sleep, chase, jump
+        // idle, walk, sit, sleep, chase, jump, climb (the screen's edge)
         double[] w = p switch
         {
-            PetPersonality.Cheerful => [3, 4, 2, 0.5, 1, 2],
-            PetPersonality.Grumpy => [3, 2, 4, 1, 0.3, 0.5],
-            PetPersonality.Sassy => [2, 3, 2, 0.5, 3, 1.5],
-            PetPersonality.Shy => [3, 3, 3, 1, 0, 0.5],
-            PetPersonality.Sleepy => [2, 1.5, 3, 4, 0.2, 0.3],
-            PetPersonality.Hyper => [1, 5, 0.5, 0.2, 2, 4],
-            PetPersonality.Caring => [3, 3, 2, 0.5, 1.5, 1.5],
-            _ => [3, 2, 4, 0.5, 0.5, 1],
+            PetPersonality.Cheerful => [3, 4, 2, 0.5, 1, 2, 1],
+            PetPersonality.Grumpy => [3, 2, 4, 1, 0.3, 0.5, 0.3],
+            PetPersonality.Sassy => [2, 3, 2, 0.5, 3, 1.5, 1],
+            PetPersonality.Shy => [3, 3, 3, 1, 0, 0.5, 0.5],
+            PetPersonality.Sleepy => [2, 1.5, 3, 4, 0.2, 0.3, 0.2],
+            PetPersonality.Hyper => [1, 5, 0.5, 0.2, 2, 4, 2.5],
+            PetPersonality.Caring => [3, 3, 2, 0.5, 1.5, 1.5, 0.6],
+            _ => [3, 2, 4, 0.5, 0.5, 1, 0.8],
         };
         if (night) w[3] *= 3;
         if (!_svc.Mischief) w[4] = 0;
@@ -265,28 +475,31 @@ public partial class PetWindow : Window
             case 1:
             {
                 var f = _body.Floor!.Value;
-                // Shy ones head for an edge; others anywhere along the floor.
+                // Shy ones head for an edge; others anywhere along the floor — never into the typing area.
                 _walkTarget = p == PetPersonality.Shy
                     ? (_rng.Next(2) == 0 ? f.X1 : f.X2)
                     : Math.Clamp(_body.X + (_rng.NextDouble() * 2 - 1) * Px(420), f.X1, f.X2);
+                if (InZone(_walkTarget, _body.Y)) { Do(Act.Sit, 4); break; }
                 Do(Act.Walk, 12);
                 break;
             }
             case 2: Do(Act.Sit, 5 + _rng.NextDouble() * 10); break;
             case 3: Do(Act.Sleep, 15 + _rng.NextDouble() * 25); break;
             case 4: Do(Act.Chase, 5 + _rng.NextDouble() * 6); break;
-            case 5: if (!JumpSomewhere(p == PetPersonality.Caring)) Do(Act.Idle, 2); break;
+            case 5: if (!JumpSomewhere(p == PetPersonality.Caring, avoidZones: true)) Do(Act.Idle, 2); break;
+            case 6: if (!StartClimb()) Do(Act.Idle, 2); break;
         }
     }
 
     /// <summary>Hop onto another floor in reach — a window's top edge above or below, or the taskbar.</summary>
-    private bool JumpSomewhere(bool towardApp)
+    private bool JumpSomewhere(bool towardApp, bool avoidZones = false)
     {
         nint mainHwnd = Application.Current?.MainWindow is { } mw ? new WindowInteropHelper(mw).Handle : 0;
         var candidates = _floors.Where(f => !Equals(f, _body.Floor)
                                             && f.Y > _body.Y - Px(330) && f.Y < _body.Y + Px(650)
                                             && Math.Min(Math.Abs(f.X1 - _body.X), Math.Abs(f.X2 - _body.X)) < Px(480)
-                                            && f.X2 - f.X1 > Px(60)).ToList();
+                                            && f.X2 - f.X1 > Px(60)
+                                            && (!avoidZones || !InZone(Math.Clamp(_body.X, f.X1 + Px(30), f.X2 - Px(30)), f.Y))).ToList();
         if (towardApp && candidates.Any(f => f.Owner == mainHwnd)) candidates = candidates.Where(f => f.Owner == mainHwnd).ToList();
         if (candidates.Count == 0) return false;
         var target = candidates[_rng.Next(candidates.Count)];
@@ -421,6 +634,8 @@ public partial class PetWindow : Window
             PetPose pose;
             PetFace face = _face;
             if (_dragging) { pose = PetPose.Dangle; face = PetFace.Surprised; }
+            else if (_act == Act.Climb) pose = ((int)(now * 5) % 2 == 0) ? PetPose.Walk1 : PetPose.Walk2;
+            else if (_act == Act.Hang) pose = PetPose.Dangle;
             else if (!_body.Grounded) pose = PetPose.Jump;
             else if (_act == Act.Sleep) { pose = PetPose.Sleep; face = PetFace.Sleepy; }
             else if (_act == Act.Sit) pose = PetPose.Sit;
@@ -454,6 +669,9 @@ public partial class PetWindow : Window
         Flip.ScaleY = squash ? 0.86 : 1;
         Flip.ScaleX *= squash ? 1.12 : 1;
         Wobble.Angle = now < _wobbleUntil ? Math.Sin(now * (_act == Act.Hatching ? 40 : 18)) * (_act == Act.Hatching ? 12 : 7) : 0;
+        // On the wall: lying along the screen's edge, feet on it (turned about its feet), swaying a little while it hangs.
+        if (_act is Act.Climb or Act.Hang && _wall is { } wall)
+            Wobble.Angle = (wall.Side < 0 ? 90 : -90) + (_act == Act.Hang ? Math.Sin(now * 2.2) * 6 : 0);
         Nudge.Y = frame.emptyRows * unit;
         Nudge.X = _act == Act.Hatching ? Math.Sin(now * 55) * 2 : 0;
         // Zzz while asleep
@@ -490,7 +708,7 @@ public partial class PetWindow : Window
         _body.Floor = null;
         _body.Vx = _body.Vy = 0;
         _dragTrail.Clear();
-        if (_act is Act.Sleep or Act.Walk or Act.Chase) Do(Act.Idle, 2);
+        if (_act is Act.Sleep or Act.Walk or Act.Chase or Act.Climb or Act.Hang) { _wall = null; _climbAfterWalk = false; _hurry = false; Do(Act.Idle, 2); }
         Say(PetMoment.PickedUp);
     }
 
@@ -540,6 +758,17 @@ public partial class PetWindow : Window
         }
         if (_act == Act.Sleep) { _sleepingForIdle = false; Do(Act.Idle, 2); Say(PetMoment.WakeUp); return; }
         bool doubleClick = _clickTimes.Count >= 2 && now - _clickTimes[^2] < 0.35;
+        // Punished for its pranks (clicked fast while its mess is on screen): everything goes back, it says sorry and
+        // behaves for ten minutes.
+        if (_clickTimes.Count >= 6 && _pranks.Count > 0)
+        {
+            ClearPranks();
+            _clickTimes.Clear();
+            _prankPauseUntil = now + 600;
+            SetFace(PetFace.Sad, 3);
+            Say(PetMoment.Punished);
+            return;
+        }
         if (_clickTimes.Count >= 6)
         {
             _svc.AddAffection(-2);
@@ -613,6 +842,14 @@ public partial class PetWindow : Window
         talk.IsCheckable = true; talk.IsChecked = _svc.Talks;
         var tease = Item(th ? "แกล้งได้ (เดินตามเมาส์เอง)" : "Teases (follows the mouse on its own)", () => _svc.SetMischief(!_svc.Mischief));
         tease.IsCheckable = true; tease.IsChecked = _svc.Mischief;
+        var prank = Item(th ? "โหมดแกล้ง (ขี้ทิ้ง · แทะหน้าจอ — จิ้มรัว ๆ เพื่อทำโทษ)" : "Prank mode (poops · nibbles the screen — click fast to punish)", () =>
+        {
+            bool on = !_svc.Pranks;
+            _svc.SetPranks(on);
+            if (on) { _poopAt = Now + 25; _biteAt = Now + 40; _prankPauseUntil = 0; }
+            else ClearPranks();
+        });
+        prank.IsCheckable = true; prank.IsChecked = _svc.Pranks;
         menu.Items.Add(new Separator());
         Item(th ? "เก็บเข้าบ้าน (ซ่อน)" : "Put away (hide)", _svc.PutAway);
         menu.IsOpen = true;

@@ -151,6 +151,54 @@ public static class PetWorld
         return landed;
     }
 
+    /// <summary>The pet's box (feet at x, y; <paramref name="halfW"/> each side, <paramref name="h"/> tall) comes within
+    /// <paramref name="margin"/> of <paramref name="zone"/>.</summary>
+    public static bool Overlaps(PetRect zone, double x, double y, double halfW, double h, int margin) =>
+        x + halfW > zone.Left - margin && x - halfW < zone.Right + margin && y > zone.Top - margin && y - h < zone.Bottom + margin;
+
+    /// <summary>
+    /// Where to step to on <paramref name="floor"/> so the pet no longer covers any work zone (the box being typed in):
+    /// null = it covers none; NaN = no spot on this floor is clear (jump elsewhere); else the clear x nearest to it.
+    /// Pure, so the harness checks it.
+    /// </summary>
+    public static double? DodgeX(PetFloor floor, IReadOnlyList<PetRect> zones, double x, double y, double halfW, double h, int margin)
+    {
+        var hit = zones.Where(z => Overlaps(z, x, y, halfW, h, margin)).ToList();
+        if (hit.Count == 0) return null;
+        double lo = floor.X1 + halfW, hi = floor.X2 - halfW;
+        if (hi < lo) return double.NaN;
+        var spots = new List<double> { lo, hi };
+        foreach (var z in zones)
+        {
+            spots.Add(z.Left - margin - halfW - 1);
+            spots.Add(z.Right + margin + halfW + 1);
+        }
+        double best = double.NaN;
+        foreach (var s in spots)
+        {
+            if (s < lo || s > hi) continue;
+            if (zones.Any(z => Overlaps(z, s, y, halfW, h, margin))) continue;
+            if (double.IsNaN(best) || Math.Abs(s - x) < Math.Abs(best - x)) best = s;
+        }
+        return best;
+    }
+
+    /// <summary>The side edges of the work areas the pet can climb: (x of the edge, top, bottom, side −1 = left wall /
+    /// +1 = right wall). Pure.</summary>
+    public static List<(int X, int Top, int Bottom, int Side)> Walls(IReadOnlyList<PetMonitor> monitors)
+    {
+        var walls = new List<(int, int, int, int)>();
+        foreach (var m in monitors)
+        {
+            // An edge shared with a neighbouring monitor is not a wall (the pet would climb in mid-air).
+            bool LeftOpen() => monitors.Any(o => !o.Equals(m) && o.Work.Right == m.Work.Left && o.Work.Top < m.Work.Bottom && o.Work.Bottom > m.Work.Top);
+            bool RightOpen() => monitors.Any(o => !o.Equals(m) && o.Work.Left == m.Work.Right && o.Work.Top < m.Work.Bottom && o.Work.Bottom > m.Work.Top);
+            if (!LeftOpen()) walls.Add((m.Work.Left, m.Work.Top, m.Work.Bottom, -1));
+            if (!RightOpen()) walls.Add((m.Work.Right, m.Work.Top, m.Work.Bottom, 1));
+        }
+        return walls;
+    }
+
     /// <summary>The launch velocity for a jump from the body's feet to (x, y): up high enough to clear the target
     /// edge by a little, across in the time that takes.</summary>
     public static (double vx, double vy) JumpTo(PetBody b, double x, double y)

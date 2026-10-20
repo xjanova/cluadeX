@@ -275,6 +275,12 @@ internal static class Program
         Check("never run headless: git push --force", GuardHook.NeverRun(push) != null);
         Check("never run headless: chained git reset --hard", GuardHook.NeverRun(reset) != null);
         Check("an ordinary push is not on that list", GuardHook.NeverRun("git push origin main") == null);
+        // A force push written any other way (2026-10-20: only `git push --force` / `-f` right after push were caught).
+        foreach (var force in new[] { "git push origin main --force", "git push -u origin feat --force-with-lease", "git push -fu origin x",
+                                      "git push origin +main", "git -C D:\\Code\\App push -f", "cd app && git push origin HEAD:main --force" })
+            Check($"never run headless: a force push however written ({force})", GuardHook.NeverRun(force) != null);
+        foreach (var fine in new[] { "git push -u origin feature/fix", "git push --recurse-submodules=check", "git push origin main --tags", "git push --dry-run" })
+            Check($"…an ordinary push stays allowed ({fine})", GuardHook.NeverRun(fine) == null);
 
         var settings = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: true).ToJsonString();
         Check("the turn's settings hold the BeforeTool hook on Gemini's shell/write/replace with --cx-guard, timeout in ms",

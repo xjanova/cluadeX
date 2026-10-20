@@ -48,6 +48,8 @@ internal static class SetupKeys
         ["setup.item.claudecode"] = E("Claude Code CLI (Claude Dev)", "Claude Code CLI (Claude Dev)"),
         ["setup.why.claudecode"] = E("Claude on your Claude subscription — no API key. Install it, then sign in once.", "ใช้ Claude ด้วยแพ็กเกจ Claude ของคุณ ไม่ต้องใช้ API key — ติดตั้งแล้วล็อกอินครั้งเดียว"),
         ["setup.item.geminicli"] = E("Gemini CLI (Gemini Dev)", "Gemini CLI (Gemini Dev)"),
+        ["setup.item.codexcli"] = E("Codex CLI (OpenAI Dev)", "Codex CLI (OpenAI Dev)"),
+        ["setup.why.codexcli"] = E("OpenAI's coding agent on your ChatGPT plan — no API key. Install it, then sign in with ChatGPT once.", "เอเจนต์เขียนโค้ดของ OpenAI ด้วยแพ็กเกจ ChatGPT ของคุณ ไม่ต้องใช้ API key — ติดตั้งแล้วล็อกอินด้วย ChatGPT ครั้งเดียว"),
         ["setup.why.geminicli"] = E("Gemini on your Google account — no API key. Install it, then sign in with Google once.", "ใช้ Gemini ด้วยบัญชี Google ของคุณ ไม่ต้องใช้ API key — ติดตั้งแล้วล็อกอินด้วย Google ครั้งเดียว"),
         ["setup.item.ollama"] = E("Ollama", "Ollama"),
         ["setup.why.ollama"] = E("Runs open models on this PC for free. Needs a model downloaded once.", "รันโมเดลโอเพนซอร์สบนเครื่องนี้ฟรี ต้องโหลดโมเดลหนึ่งครั้ง"),

@@ -99,6 +99,11 @@ public partial class ChatViewModel
 
     public bool HasRunningElsewhere => _runs.Any(r => !ReferenceEquals(r.Session, CurrentSession));
 
+    /// <summary>A run (any chat) is working in <paramref name="folder"/> or a folder inside it — the editor is read-only then.</summary>
+    public bool IsAgentWorkingIn(string folder) =>
+        !string.IsNullOrEmpty(folder) && _runs.Any(r => r.Scope?.WorkingDirectory is { Length: > 0 } wd
+            && (IsInsideFolder(wd, folder) || IsInsideFolder(folder, wd)));
+
     /// <summary>Open the chat of a run that is going on elsewhere (the one waiting for an answer first).</summary>
     public ICommand ShowRunningChatCommand => _showRunningChatCommand ??= new AsyncRelayCommand(async () =>
     {

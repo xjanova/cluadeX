@@ -60,6 +60,9 @@ public sealed class PetService : IDisposable
     public bool Talks => _settings.Settings.PetTalks;
     public void SetTalks(bool on) => _settings.UpdateSettings(s => s.PetTalks = on);
     public void SetMischief(bool on) => _settings.UpdateSettings(s => s.PetMischief = on);
+    /// <summary>Prank mode: poops and nibbles the screen now and then (off by default).</summary>
+    public bool Pranks => _settings.Settings.PetPranks;
+    public void SetPranks(bool on) => _settings.UpdateSettings(s => s.PetPranks = on);
     public bool Enabled => _settings.Settings.Features.BuddyCompanion;
     public bool IsHatched => State.Hatched;
     public double HatchProgress => PetBrain.HatchProgress(State.Habits);
