@@ -171,6 +171,10 @@ public class ContextMemoryService
             case AiProviderType.AntigravityDev:
                 return 1_048_576;   // agy's default is a Gemini 3.x model (1M); its Claude / GPT-OSS slugs are smaller
 
+            case AiProviderType.OpenAIDev:
+                // Codex's models are the API's: the same windows; "default" is Codex's own pick (a GPT-6, 1M+).
+                return ContextWindowFor(AiProviderType.OpenAI, id is "" or "default" or "auto" ? "gpt-6" : id, localContextSize);
+
             case AiProviderType.BrainX:
                 return 200_000;   // the room's agents run the Claude Code CLI's standard window
 

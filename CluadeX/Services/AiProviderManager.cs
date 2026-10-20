@@ -62,6 +62,8 @@ public class AiProviderManager : IDisposable
         _providers[AiProviderType.GeminiDev] = new GeminiDevProvider(settingsService, fileSystemService);
         // Google's Antigravity CLI (agy): where personal Google accounts went when the Gemini CLI stopped serving them.
         _providers[AiProviderType.AntigravityDev] = new AntigravityDevProvider(settingsService, fileSystemService);
+        // OpenAI's Codex CLI on the user's ChatGPT sign-in (OpenAIDevProvider).
+        _providers[AiProviderType.OpenAIDev] = new OpenAIDevProvider(settingsService, fileSystemService);
 
         // Set initial active provider
         var activeType = settingsService.Settings.ActiveProvider;

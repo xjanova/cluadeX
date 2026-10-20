@@ -1984,7 +1984,7 @@ public partial class CodeAgentService
         // it and re-prompt it with CluadeX's tool catalogue — two agents fighting
         // over one task. One call, its answer is the turn.
         // The BrainX cowork room is the same shape: complete agents answer there — one delegated call per turn.
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.BrainX)
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.BrainX)
             return await RunDelegatedTurnAsync(_providerManager.ActiveProvider, _providerManager.ActiveProviderType,
                 history, userMessage ?? "", ct, progress);
 
@@ -2037,7 +2037,7 @@ public partial class CodeAgentService
     {
         var result = await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
         if (!result.AuthRefused || provider is not Providers.IDelegatedCliProvider claudeDev) return result;
-        string cliName = delegated switch { AiProviderType.GeminiDev => "Gemini Dev", AiProviderType.AntigravityDev => "Antigravity Dev", _ => "Claude Dev" };
+        string cliName = delegated switch { AiProviderType.GeminiDev => "Gemini Dev", AiProviderType.AntigravityDev => "Antigravity Dev", AiProviderType.OpenAIDev => "OpenAI Dev", _ => "Claude Dev" };
 
         bool th = _localizationService.CurrentLanguage == "th";
         bool loggedIn = await claudeDev.IsLoggedInAsync(ct);
@@ -2081,7 +2081,7 @@ public partial class CodeAgentService
         var sendHistory = brief != null ? new List<ChatMessage>() : history;
         string sendMessage = brief != null ? AgentHandoff.WithBrief(userMessage, brief) : userMessage;
         // A CLI agent on this machine (Claude Dev, Gemini Dev): the edit/run grant, the guard, the chat tools, the rows.
-        bool cliAgent = delegated is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev;
+        bool cliAgent = delegated is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev;
         var grant = cliAgent ? WorkerGrantFor(folder) : null;
         _debugLog?.Info("Agent", $"{delegated} passthrough · delegating the turn · folder={folder ?? "(none)"}"
             + $" · handoff={(brief != null ? brief.Length + " chars" : "no")}"
@@ -2238,7 +2238,7 @@ public partial class CodeAgentService
         if (result.StopReason != "error" || !IsQuotaExhausted(result.FinalResponse)) return result;
         NoteQuotaExhausted();   // sub-agents started from here on go to Claude Dev too
         if (!_settingsService.Settings.AutoFailoverOnQuota) return result;
-        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.BrainX) return result;
+        if (_providerManager.ActiveProviderType is AiProviderType.ClaudeDev or AiProviderType.GeminiDev or AiProviderType.AntigravityDev or AiProviderType.OpenAIDev or AiProviderType.BrainX) return result;
         var fallback = _providerManager.GetProvider(AiProviderType.ClaudeDev);
         try { await fallback.InitializeAsync(ct); } catch { }
         if (!fallback.IsReady)

@@ -555,6 +555,7 @@ internal static class Program
         await ClaudeDevStreamWire.Run(Check, Section);
         await GeminiDevWire.Run(Check, Section);
         await AntigravityDevWire.Run(Check, Section);
+        await OpenAIDevWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
         await CommentPolicyWire.Run(Check, Section);
