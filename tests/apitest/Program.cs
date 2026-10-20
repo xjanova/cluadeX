@@ -209,6 +209,7 @@ internal static class Program
             }
             return Finish();
         }
+        if (args.Contains("--live-update")) { await UpdateDownloadWire.RunLive(Check, Section); return Finish(); }
         if (args.Contains("--offline")) return Finish();
 
         var (cfgKey, cfgWs) = ReadUserAnthropicConfig();
@@ -558,6 +559,7 @@ internal static class Program
         await OpenAIDevWire.Run(Check, Section);
         await DispatchWire.Run(Check, Section);
         await UpdateWire.Run(Check, Section);
+        await UpdateDownloadWire.Run(Check, Section);
         await CommentPolicyWire.Run(Check, Section);
         await SettingsSalvageWire.Run(Check, Section);
         await GitMultiRepoWire.Run(Check, Section);

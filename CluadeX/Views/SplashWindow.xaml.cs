@@ -184,26 +184,46 @@ public partial class SplashWindow : Window
                 update.Warn(T("รุ่น dev/พกพา — ไม่อัปเดตอัตโนมัติ", "dev/portable build — no auto-update"));
                 return false;
             }
-            void OnProgress(double p, string s) => Dispatcher.Invoke(() =>
+            void OnProgress(UpdateProgressInfo p)
             {
-                UpdatePanel.Visibility = Visibility.Visible;
-                UpdateBar.Value = p;
-                UpdateText.Text = s;
-                update.Detail = $"{p:0}%";
-            });
-            up.OnDownloadProgress += OnProgress;
+                if (p.Phase != UpdatePhase.Downloading) return;
+                Dispatcher.BeginInvoke(() =>
+                {
+                    UpdatePanel.Visibility = Visibility.Visible;
+                    UpdateBar.Value = p.Percent;
+                    UpdateText.Text = $"v{p.Version} · {p.Describe(_thai)}";
+                    update.Detail = $"{p.Percent:0}%";
+                });
+            }
+            up.ProgressChanged += OnProgress;
             try
             {
                 update.Detail = T("กำลังตรวจหาเวอร์ชันใหม่…", "checking for a new version…");
-                var check = up.VelopackCheckAndStageAsync();
-                // A check that cannot reach GitHub in 20 s does not hold the app: it goes on in the background.
-                if (await Task.WhenAny(check, Task.Delay(20000)) != check)
+                var check = up.VelopackCheckAndStageAsync();   // the same job the main window and the probe join
+                // The app is not held for long: 20 s, or up to 60 s while a download is about to finish. Past that the
+                // download goes on in the background — the main window's bar shows it — and installs when the app closes.
+                var waited = System.Diagnostics.Stopwatch.StartNew();
+                while (!check.IsCompleted)
                 {
-                    update.Warn(T("เน็ตช้า — ตรวจต่อเบื้องหลัง", "slow network — checking in the background"));
-                    return false;   // StartupUpdateHandled stays false: the app's own check runs after it opens
+                    await Task.WhenAny(check, Task.Delay(500));
+                    if (check.IsCompleted) break;
+                    var p = up.Progress;
+                    bool almostDone = p.EtaSeconds is double eta && eta <= 15 && waited.Elapsed < TimeSpan.FromSeconds(60);
+                    if (waited.Elapsed < TimeSpan.FromSeconds(20) || almostDone) continue;
+                    update.Warn(p.Phase == UpdatePhase.Downloading
+                        ? T($"โหลด v{p.Version} ต่อเบื้องหลัง ({p.Percent:0}%) — ติดตั้งให้ตอนปิดโปรแกรม", $"v{p.Version} keeps downloading in the background ({p.Percent:0}%) — installs when you close the app")
+                        : T("เน็ตช้า — ตรวจต่อเบื้องหลัง", "slow network — checking in the background"));
+                    return false;   // StartupUpdateHandled stays false: the main window joins the same job
                 }
                 string? staged = await check;
-                if (staged == null) { StartupUpdateHandled = true; update.Ok(T("เป็นเวอร์ชันล่าสุดแล้ว", "up to date")); return false; }
+                if (staged == null)
+                {
+                    StartupUpdateHandled = true;   // the background probe retries; the main window does not start a second check
+                    if (up.Progress is { Phase: UpdatePhase.Failed } failed)
+                        update.Warn(T($"อัปเดตไม่สำเร็จ ({failed.Error}) — จะลองใหม่เองเบื้องหลัง", $"update failed ({failed.Error}) — retries in the background"));
+                    else update.Ok(T("เป็นเวอร์ชันล่าสุดแล้ว", "up to date"));
+                    return false;
+                }
                 // Already in the app (Enter was pressed): never restart under the user — the app's banner offers it.
                 if (_entered) return false;
                 StartupUpdateHandled = true;
@@ -212,7 +232,7 @@ public partial class SplashWindow : Window
                 await Task.Delay(1200);
                 return up.VelopackApplyAndRestart();
             }
-            finally { up.OnDownloadProgress -= OnProgress; }
+            finally { up.ProgressChanged -= OnProgress; }
         }
         catch (Exception ex) { update.Warn(ex.Message); return false; }
     }

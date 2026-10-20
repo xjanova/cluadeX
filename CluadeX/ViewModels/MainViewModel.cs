@@ -489,7 +489,11 @@ public class MainViewModel : ViewModelBase
         });
         PetBuddyCommand = new RelayCommand(() => _pet.Pat());
         InstallUpdateCommand = new AsyncRelayCommand(InstallUpdate);
-        DismissUpdateCommand = new RelayCommand(() => ShowUpdateBar = false);
+        DismissUpdateCommand = new RelayCommand(() =>
+        {
+            ShowUpdateBar = false;
+            _dismissedUpdateKey = _pendingUpdate != null && !_autoUpdate.CanSelfUpdate ? "offer:" + _pendingUpdate.NewVersion : UpdateKey(_autoUpdate.Progress);
+        });
         CheckUpdateCommand = new AsyncRelayCommand(() => CheckForUpdate(manual: true));
         OpenLicenseCommand = new RelayCommand(() => OpenLicense(null));
         OpenDgxSparkCommand = new RelayCommand(OpenDgxSpark);
@@ -503,13 +507,13 @@ public class MainViewModel : ViewModelBase
             else OpenBrainXInvite();
         });
 
-        // Wire up auto-update events
-        _autoUpdate.OnDownloadProgress += (percent, status) =>
-            App.Current?.Dispatcher.Invoke(() =>
-            {
-                UpdateProgress = percent;
-                UpdateProgressText = status;
-            });
+        // Wire up auto-update events. BeginInvoke: a download reports from a pool thread and must never wait on the UI.
+        _autoUpdate.ProgressChanged += p => App.Current?.Dispatcher.BeginInvoke(() => RenderUpdate(p));
+        // A portable copy's background check found a release (an installed copy downloads it instead — ProgressChanged).
+        _autoUpdate.OnUpdateAvailable += info =>
+        {
+            if (!_autoUpdate.CanSelfUpdate) App.Current?.Dispatcher.BeginInvoke(() => ShowPortableOffer(info));
+        };
 
         // Check for updates on startup (delayed 5 seconds)
         _ = Task.Run(async () =>
@@ -856,16 +860,15 @@ public class MainViewModel : ViewModelBase
     /// there is something to install.</param>
     private async Task CheckForUpdate(bool manual)
     {
-        string L(string key) => _loc.T(key);
-        // The splash already checked (and installed, if there was one) this launch.
-        if (!manual && Views.SplashWindow.StartupUpdateHandled) return;
         if (manual)
             App.Current?.Dispatcher.Invoke(() =>
             {
                 UpdateMessage = L("update.checking");
                 CanInstallUpdate = false;
                 ShowUpdateBar = true;
+                _dismissedUpdateKey = null;
             });
+        _manualCheck |= manual;
         try
         {
             // Whatever we are running now is the verdict on the last apply attempt.
@@ -887,42 +890,37 @@ public class MainViewModel : ViewModelBase
                 });
             }
 
-            // Preferred path: a real Velopack install self-updates atomically.
-            string? staged = await _autoUpdate.VelopackCheckAndStageAsync();
-            if (staged != null)
+            if (_autoUpdate.CanSelfUpdate)
             {
+                // The splash already checked this launch and found nothing (or installed it); the background probe takes
+                // it from here. A download the splash left running is shown through ProgressChanged.
+                if (!manual && Views.SplashWindow.StartupUpdateHandled && !_autoUpdate.IsBusy) return;
+                // Joins a check or download already running (the splash's, the probe's) — never a second one.
+                string? staged = await _autoUpdate.VelopackCheckAndStageAsync();
+                if (staged != null || !manual) return;   // a staged update is shown through ProgressChanged
+                var now = _autoUpdate.Progress;
                 App.Current?.Dispatcher.Invoke(() =>
                 {
-                    UpdateMessage = "🔔 " + string.Format(L("update.staged"), staged);
-                    CanInstallUpdate = true;
+                    if (now.Phase == UpdatePhase.Failed) return;   // RenderUpdate said why
+                    UpdateMessage = paused != null ? "⚠ " + paused : string.Format(L("update.upToDate"), AutoUpdateService.CurrentVersion);
+                    CanInstallUpdate = false;
                     ShowUpdateBar = true;
-                    IsUpdating = false;
                 });
                 return;
             }
 
-            // Fallback for portable / dev builds, which Velopack cannot update: still
-            // tell the user a newer release exists so they can install it by hand.
+            // Portable / dev builds, which Velopack cannot update: still tell the user a newer release exists so they
+            // can install it by hand.
+            if (!manual && Views.SplashWindow.StartupUpdateHandled) return;
             var info = await _autoUpdate.CheckForUpdateAsync();
             if (info != null)
-            {
-                _pendingUpdate = info;
-                App.Current?.Dispatcher.Invoke(() =>
-                {
-                    UpdateMessage = _autoUpdate.CanSelfUpdate
-                        ? $"🔔 Update available: v{info.NewVersion} (current: v{info.CurrentVersion}) — {info.FileSizeDisplay}"
-                        : $"🔔 v{info.NewVersion} is out (running v{info.CurrentVersion}) — this is a portable build, install via Setup.exe once to enable self-update.";
-                    CanInstallUpdate = true;
-                    ShowUpdateBar = true;
-                    IsUpdating = false;
-                });
-            }
+                App.Current?.Dispatcher.Invoke(() => ShowPortableOffer(info));
             else if (manual && paused == null)
             {
                 App.Current?.Dispatcher.Invoke(() =>
                 {
                     UpdateMessage = string.Format(L("update.upToDate"), AutoUpdateService.CurrentVersion)
-                        + (_autoUpdate.CanSelfUpdate ? "" : " " + L("update.devBuildNote"));
+                        + " " + L("update.devBuildNote");
                     CanInstallUpdate = false;
                     ShowUpdateBar = true;
                 });
@@ -938,6 +936,61 @@ public class MainViewModel : ViewModelBase
                     CanInstallUpdate = false;
                     ShowUpdateBar = true;
                 });
+        }
+        finally
+        {
+            if (manual) _manualCheck = false;
+            _autoUpdate.StartBackgroundChecks();   // from here on a new release is found while the app runs
+        }
+    }
+
+    private void ShowPortableOffer(UpdateInfo info)
+    {
+        if (_dismissedUpdateKey == "offer:" + info.NewVersion || IsUpdating) return;
+        _pendingUpdate = info;
+        UpdateMessage = $"🔔 v{info.NewVersion} is out (running v{info.CurrentVersion}) — this is a portable build, install via Setup.exe once to enable self-update.";
+        CanInstallUpdate = true;
+        ShowUpdateBar = true;
+        IsUpdating = false;
+    }
+
+    // ─── the update bar follows the download ───
+    private string? _dismissedUpdateKey;   // the state the bar was closed on: it stays closed until the state moves on
+    private bool _sawDownload;             // a failure is shown for a download the bar was showing, or a manual check
+    private bool _manualCheck;
+    private static string UpdateKey(UpdateProgressInfo p) => $"{p.Phase}:{p.Version}";
+
+    private void RenderUpdate(UpdateProgressInfo p)
+    {
+        if (IsRestartingForUpdate) return;
+        if (_dismissedUpdateKey == UpdateKey(p)) return;
+        bool thai = _loc.CurrentLanguage.StartsWith("th", StringComparison.OrdinalIgnoreCase);
+        switch (p.Phase)
+        {
+            case UpdatePhase.Downloading:
+                _sawDownload = true;
+                UpdateMessage = string.Format(L("update.bgDownloading"), p.Version, p.Describe(thai));
+                UpdateProgress = p.Percent;
+                UpdateProgressText = p.Describe(thai);
+                IsUpdating = true;
+                CanInstallUpdate = false;
+                ShowUpdateBar = true;
+                break;
+            case UpdatePhase.Staged when _autoUpdate.HasStagedUpdate:
+                _sawDownload = false;
+                UpdateMessage = "🔔 " + string.Format(L("update.staged"), p.Version);
+                UpdateProgress = 100;
+                IsUpdating = false;
+                CanInstallUpdate = true;
+                ShowUpdateBar = true;
+                break;
+            case UpdatePhase.Failed when _sawDownload || _manualCheck:
+                _sawDownload = false;
+                UpdateMessage = "⚠ " + string.Format(L("update.bgFailed"), p.Version ?? "", p.Error ?? "");
+                IsUpdating = false;
+                CanInstallUpdate = false;
+                ShowUpdateBar = true;
+                break;
         }
     }
 
@@ -1003,7 +1056,8 @@ public class MainViewModel : ViewModelBase
     private async Task InstallUpdate()
     {
         if (IsUpdating) return;
-        if (!_autoUpdate.HasStagedUpdate && _pendingUpdate == null) return;   // nothing to install — nothing to ask
+        // Nothing to install — nothing to ask. An installed copy installs only what Velopack staged (never the zip).
+        if (!_autoUpdate.HasStagedUpdate && (_pendingUpdate == null || _autoUpdate.CanSelfUpdate)) return;
 
         if (!ConfirmRestartForUpdate())
         {

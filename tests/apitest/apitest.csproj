@@ -22,6 +22,11 @@
       <HintPath>$(CluadeXBin)CluadeX.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <!-- UpdateDownloadWire: ResumableDownloader implements Velopack's IFileDownloader — the same Velopack CluadeX ships. -->
+    <Reference Include="Velopack">
+      <HintPath>$(CluadeXBin)Velopack.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- Versions must match what CluadeX was COMPILED against (Abstractions is unified to 10.x). -->
