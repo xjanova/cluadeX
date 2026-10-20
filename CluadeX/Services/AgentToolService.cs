@@ -1099,7 +1099,13 @@ public class AgentToolService : IDisposable
         // GitHub / publish tools — pushing to a remote is the monetized "publish" step.
         if (githubEnabled)
         {
-            schemas.Add(new() { Name = "git_push", Description = "Push commits to a remote", InputSchema = MakeSchema(("remote", "string", "Remote name", false), ("branch", "string", "Branch name", false)) });
+            schemas.Add(new() { Name = "git_push", Description = "Push commits to the remote. With no arguments it pushes the current "
+                + "branch and sets its upstream when the branch is new (no need to pass set_upstream). all=\"true\" pushes EVERY "
+                + "repo of the project — folders opened beside it, submodules, nested repos — innermost first, and reports each. "
+                + "It never force-pushes; a rejected push means pull --rebase first.",
+                InputSchema = MakeSchema(("remote", "string", "Remote name (omit for the branch's upstream / origin)", false),
+                    ("branch", "string", "Branch name (omit for the current branch)", false),
+                    ("all", "string", "\"true\" = push every repository of the project", false)) });
         }
         // The gh-based tools step aside while the GitHub connection (its official MCP server, via BrainX or CluadeX)
         // is live: one set of GitHub tools for the model — the connection's, which does more.
@@ -3107,6 +3113,27 @@ public class AgentToolService : IDisposable
         string remote = call.GetArg("remote", "");
         string branch = call.GetArg("branch", "");
         bool setUpstream = call.GetArg("set_upstream", "false") == "true";
+        bool all = call.GetArg("all", "false").Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+
+        // The plain push (and push all): GitMultiRepo knows a new branch needs -u, a detached HEAD has nothing to push,
+        // a rejected push wants a pull --rebase — and with all="true" pushes every repo of the project (folders opened
+        // beside it, submodules, nested repos), innermost first. Never --force.
+        if (all || (remote.Length == 0 && branch.Length == 0 && !setUpstream))
+        {
+            if (!_fileSystem.HasWorkingDirectory) return Fail(call, "No project folder is open.");
+            string root = _fileSystem.WorkingDirectory;
+            var results = all
+                ? await GitMultiRepo.PushAllAsync(root, AgentRunScope.Current?.ExtraFolders)
+                : new List<GitMultiRepo.PushResult> { await GitMultiRepo.PushOneAsync(root) };
+            string text = GitMultiRepo.Summary(results);
+            bool ok = results.Count > 0 && results.All(x => x.Outcome != GitMultiRepo.Outcome.Failed);
+            int pushed = results.Count(x => x.Outcome == GitMultiRepo.Outcome.Pushed);
+            return new ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = ok, Output = text, Error = ok ? "" : text,
+                Summary = all ? $"⬆ {pushed}/{results.Count} repos" : (ok ? "⬆ " + results[0].Detail : "✗ push"),
+            };
+        }
 
         GitResult r;
         if (setUpstream)

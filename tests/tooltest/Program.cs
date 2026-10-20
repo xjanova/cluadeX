@@ -263,7 +263,8 @@ internal static partial class Program
                 var drive = await T("open_project", ("path", Path.GetPathRoot(root)!));
                 Check("OP6", "a drive root is refused (the user opens those, not the agent)", !drive.Success && scope.WorkingDirectory == root, Seen(drive));
                 var rel = await T("open_project", ("path", "Atmos"));
-                Check("OP7", "a relative path is refused with a hint to give the full path", !rel.Success && Seen(rel).Contains("absolute"), Seen(rel));
+                Check("OP7", "a project name that matches nothing fails and says how to make a NEW one (create=\"true\")",
+                    !rel.Success && Seen(rel).Contains("create=\"true\"") && scope.WorkingDirectory == root, Seen(rel));
                 var alias = await T("open_folder", ("path", root));
                 Check("OP8", "the name models also write (open_folder) works", alias.Success, Seen(alias));
                 var reg = ProjectRegistryService.Current;
@@ -272,6 +273,34 @@ internal static partial class Program
                     && reg.PromptList().Contains(root), reg?.PromptList() ?? "no registry");
                 Check("OP10", "a project's memory lives outside the project (~/.cluadex/projects/<slug>/memory)",
                     MemoryService.ProjectSlug(@"D:\Code\Atmos") == "D--Code-Atmos", MemoryService.ProjectSlug(@"D:\Code\Atmos"));
+
+                // Owner 2026-10-20: open the related folder by itself; when there is none, make a new one sensibly.
+                string leaf = Path.GetFileName(root);
+                var byName = await T("open_project", ("path", leaf.ToUpperInvariant().Replace("-", " ")));
+                Check("OP11", "a project opened before opens by its name alone (case, spaces and dashes do not matter)",
+                    byName.Success && scope.WorkingDirectory == root && Seen(byName).Contains(root), Seen(byName));
+                var wrongDrive = await T("open_project", ("path", Path.Combine(@"Q:\nowhere", leaf)));
+                Check("OP12", "a path that is not there (a guessed drive) opens the project of that name and says so",
+                    wrongDrive.Success && scope.WorkingDirectory == root && Seen(wrongDrive).Contains("no folder at"), Seen(wrongDrive));
+                string newRoot = Path.Combine(Path.GetTempPath(), "tooltest-projects-" + Guid.NewGuid().ToString("N")[..8]);
+                Directory.CreateDirectory(newRoot);
+                string? oldDefault = settings.Settings.DefaultProjectRoot;
+                settings.Settings.DefaultProjectRoot = newRoot;
+                try
+                {
+                    var made = await T("open_project", ("path", "Coffee Shop Site"), ("create", "true"));
+                    string expected = Path.Combine(newRoot, "Coffee-Shop-Site");
+                    Check("OP13", "create=\"true\" with a name makes the folder beside the user's projects (spaces → dashes) and opens it",
+                        made.Success && Directory.Exists(expected) && scope.WorkingDirectory == expected, Seen(made));
+                    var twice = await T("open_project", ("path", "coffee shop site"), ("create", "true"));
+                    Check("OP14", "asking to create it again opens the one that exists — no duplicate folder",
+                        twice.Success && scope.WorkingDirectory == expected && Directory.GetDirectories(newRoot).Length == 1, Seen(twice));
+                }
+                finally
+                {
+                    settings.Settings.DefaultProjectRoot = oldDefault;
+                    try { Directory.Delete(newRoot, true); } catch { }
+                }
             }
             finally { AgentRunScope.Enter(null); Fs.WorkingDirectory = Root; }
         });

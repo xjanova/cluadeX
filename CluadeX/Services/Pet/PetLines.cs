@@ -5,6 +5,8 @@ public enum PetMoment
 {
     Hello, Idle, Poked, PokedALot, Patted, PickedUp, Dropped, BuildFailed, BuildPassed, TurnDone, Error,
     LateNight, LongSession, Morning, FallAsleep, WakeUp, Hatched, EggPoked, EggIdle, EggAlmost, OnTaskbar, OnWindow, PutAway,
+    // 2026-10-20: it steps out of the way, climbs the screen's edges, and (prank mode) poops and nibbles the screen.
+    Dodge, Climb, Poop, Bite, Punished, Cleaned,
 }
 
 /// <summary>
@@ -41,6 +43,17 @@ public static class PetLines
         [PetMoment.OnTaskbar] = (["ขอนั่งตรงนี้นะ", "ทาสก์บาร์อุ่นดี"], ["I'll sit here", "The taskbar is warm"]),
         [PetMoment.OnWindow] = (["วิวสวยจากบนนี้", "ขอเกาะหน้าต่างหน่อย"], ["Nice view up here", "Mind if I sit on your window?"]),
         [PetMoment.PutAway] = (["บ๊ายบาย เรียกได้นะ", "ไปพักก่อนนะ"], ["Bye-bye, call me back anytime", "Going to rest"]),
+        [PetMoment.Dodge] = (["อุ๊ย ขวางอยู่เหรอ หลบให้นะ~", "ขอโทษ ๆ ไปละ", "*ค่อย ๆ ถอยออก*", "พิมพ์ต่อเลย ไม่กวนแล้ว"],
+                             ["Oops, in your way? Moving~", "Sorry sorry, going", "*tiptoes away*", "Keep typing, I'll be over here"]),
+        [PetMoment.Climb] = (["ปีนขึ้นมาแล้ว~", "สูงดีนะตรงนี้", "*ห้อยต่องแต่ง*", "ดูเราสิ ปีนเก่งไหม"],
+                             ["Up I go~", "Nice and high here", "*dangles*", "Look, I can climb!"]),
+        [PetMoment.Poop] = (["อุ๊ย… ไม่ใช่เราน้า", "*ทำหน้าไม่รู้ไม่ชี้*", "หึหึ ของขวัญ", "ปวดท้องอะ…"],
+                            ["Oops… wasn't me", "*looks innocent*", "Hehe, a present", "Tummy ache…"]),
+        [PetMoment.Bite] = (["หม่ำ! อร่อยจัง", "*งับ*", "ขอชิมหน้าจอหน่อย", "แทะนิดเดียวเอง~"],
+                            ["Nom! Tasty", "*chomp*", "Just a taste of your screen", "Only a little nibble~"]),
+        [PetMoment.Punished] = (["ขอโทษค่ะ! ไม่ทำแล้ว", "งื้อ… คืนให้แล้ว", "*สำนึกผิด*", "เข็ดแล้ว เข็ดแล้ว"],
+                                ["Sorry! I'll stop", "Waah… put it all back", "*sulks, sorry*", "Okay okay, I learned"]),
+        [PetMoment.Cleaned] = (["*อาย*", "ขอบคุณที่เก็บให้…", "แหะ ๆ"], ["*embarrassed*", "Thanks for cleaning up…", "Heh…"]),
     };
 
     static readonly Dictionary<PetPersonality, Dictionary<PetMoment, (string[] th, string[] en)>> ByPersonality = new()

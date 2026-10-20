@@ -883,6 +883,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <Border Background="{DynamicResource Surface.Input}" BorderBrush="{DynamicResource Border.Default}"
                                     BorderThickness="1" CornerRadius="4" Margin="0,0,4,0">
@@ -921,6 +922,35 @@
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,4,0"/>
                                     <TextBlock Text="{services:Loc editor.commit}"/>
+                                </StackPanel>
+                            </Button>
+                            <!-- Push every repo of the project (CodeEditorViewModel.Push): the list is shown and confirmed first -->
+                            <Button Grid.Column="2" Command="{Binding PushAllCommand}" Cursor="Hand" Margin="4,0,0,0"
+                                    Padding="8,3" Background="{DynamicResource Button.Flat.Background}" BorderBrush="{DynamicResource Border.Default}"
+                                    BorderThickness="1" Foreground="{DynamicResource Button.Flat.Foreground}" FontSize="10"
+                                    ToolTip="{services:Loc editor.pushAllTip}">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="bd" Property="Opacity" Value="0.35"/>
+                                                <Setter Property="Cursor" Value="Arrow"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Button.Template>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE898;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,4,0"/>
+                                    <TextBlock Text="{services:Loc editor.pushAll}"/>
                                 </StackPanel>
                             </Button>
                         </Grid>
@@ -2153,8 +2183,29 @@
                                            WordWrap="False"
                                            BorderThickness="0"
                                            Padding="8,12,0,12"
+                                           IsReadOnly="{Binding IsLockedByAgent}"
                                            HorizontalScrollBarVisibility="Auto"
                                            VerticalScrollBarVisibility="Auto"/>
+
+                    <!-- Read-only while an AI run works in this project (CodeEditorViewModel.DiskSync): says why typing does nothing -->
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,18,0" Padding="10,3"
+                            CornerRadius="10" Background="{DynamicResource State.Fill.Faint}" IsHitTestVisible="False">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsLockedByAgent}" Value="True"/>
+                                            <Condition Binding="{Binding HasActiveTab}" Value="True"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="{services:Loc editor.lockedByAgent}" FontSize="11" Foreground="{DynamicResource Text.Muted}"/>
+                    </Border>
                 </Grid>
 
                 <!-- Minimap — real document overview: line bars + draggable viewport (MinimapControl) -->

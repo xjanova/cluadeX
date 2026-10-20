@@ -136,8 +136,20 @@ public class AppSettings
     /// <summary>Model per sub-agent kind ("explore", "code", "review", "fix", "hardfix"); empty = the policy's choice.</summary>
     public Dictionary<string, string> SubAgentModelOverrides { get; set; } = new();
     /// <summary>When the agent mutates a file while the user is on the Chat page, auto-switch to the
-    /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).</summary>
-    public bool AutoOpenEditorOnAgentEdit { get; set; } = true;
+    /// Code Editor page so the edit is visible live (the editor embeds the same chat docked right).
+    /// Off by default since 2026-10-20 (owner: "ไม่จำเป็นต้องสลับไปดูแบบ real time อัตโนมัติแล้ว แต่ให้อัพเดทตามกันจริงๆ
+    /// เมื่อเขียนไฟล์") — the editor follows the files without taking the user off the page they are on.</summary>
+    public bool AutoOpenEditorOnAgentEdit { get; set; } = false;
+
+    /// <summary>Where a new project the AI creates goes (open_project create="true" with a name). Empty = the folder that
+    /// already holds most of the user's projects (e.g. D:\Code), else Documents\CluadeX Projects.</summary>
+    public string? DefaultProjectRoot { get; set; }
+
+    /// <summary>The one-time switch of <see cref="AutoOpenEditorOnAgentEdit"/> to off (2026-10-20) was applied.</summary>
+    public bool EditorNoAutoSwitchMigrated { get; set; }
+
+    /// <summary>The newest settings.json.corrupt-* backup already looked at for lost API keys (each backup once).</summary>
+    public string? KeyRecoveryCheckedBackup { get; set; }
     /// <summary>Animate agent edits in the Code Editor as live typing (typewriter reveal of the changed
     /// region + flash highlight when done). Falls back to an instant refresh for very large changes.</summary>
     public bool LiveCodingAnimationEnabled { get; set; } = true;
@@ -310,6 +322,10 @@ public class AppSettings
 
     /// <summary>The pet may follow the mouse around to tease you.</summary>
     public bool PetMischief { get; set; } = true;
+
+    /// <summary>Prank mode (off by default): the pet now and then leaves a poop on its floor and nibbles a patch of the
+    /// screen. Clicking the pet fast (punishing it) puts everything back. Never over the place you are typing.</summary>
+    public bool PetPranks { get; set; }
 
     /// <summary>
     /// Instinct learning loop. When ON, after a session ends CluadeX runs a background LLM pass over the

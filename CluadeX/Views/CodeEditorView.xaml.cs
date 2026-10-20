@@ -50,6 +50,9 @@ public partial class CodeEditorView : UserControl
     {
         InitializeComponent();
         Unloaded += OnUnloaded;
+        // The view model plays the agent's "typing" reveal only while someone can see it (a 60 fps rewrite of the whole
+        // buffer is pure cost on a hidden page).
+        IsVisibleChanged += (_, e) => { if (_vm != null) _vm.EditorOnScreen = e.NewValue is true; };
         // Preview, so Ctrl+S reaches us even when the focused control (editor, terminal box) would
         // otherwise swallow the key.
         PreviewKeyDown += OnPagePreviewKeyDown;
@@ -177,6 +180,8 @@ public partial class CodeEditorView : UserControl
         DetachVm();
         _hooked = true;
         _vm = vm;
+        vm.EditorOnScreen = IsVisible;
+        CluadeX.Services.Pet.PetZones.Register(Editor);   // the desktop pet keeps off the code being typed
         vm.ScrollToLineRequested += OnScrollToLine;
         vm.AgentEditFlashRequested += OnAgentEditFlash;
         vm.SelectRangeRequested += OnSelectRange;

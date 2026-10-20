@@ -139,7 +139,28 @@ public static class GuardHook
         foreach (var bad in new[] { "git push --force", "git push -f", "git reset --hard", "git clean", "shutdown" })
             if (c.StartsWith(bad, StringComparison.Ordinal) || c.Contains("&& " + bad) || c.Contains("; " + bad) || c.Contains("| " + bad))
                 return $"CluadeX safety: `{bad}` is never run by a headless agent — ask the user to run it themselves.";
+        // A force push written any other way: the flag after the remote/branch (`git push origin main --force`,
+        // `--force-with-lease`, `-fu`), a `+branch` refspec, or `git -C <dir> push … -f`.
+        if (IsForcePush(c))
+            return "CluadeX safety: a force push is never run by a headless agent — ask the user to run it themselves.";
         return null;
+    }
+
+    /// <summary>Any git push in <paramref name="c"/> (lower case, single spaces) that forces. Pure.</summary>
+    public static bool IsForcePush(string c)
+    {
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(c,
+                     @"\bgit(?:\.exe)?(?:\s+(?:-c\s+\S+|-C\s+(?:""[^""]*""|\S+)|--\S+))*\s+push\b([^;&|]*)",
+                     System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            foreach (var tok in m.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (tok is "--force" or "--force-with-lease" or "--force-if-includes" || tok.StartsWith("--force-with-lease=")) return true;
+                if (tok.StartsWith('-') && !tok.StartsWith("--") && tok.Contains('f')) return true;   // -f, -fu, -uf
+                if (tok.StartsWith('+') && tok.Length > 1) return true;                             // +main, +HEAD:main
+            }
+        }
+        return false;
     }
 
     /// <summary>The hook's entry point. Exit 0 = allow, 2 = block.</summary>

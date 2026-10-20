@@ -51,6 +51,8 @@ public sealed record SetupFacts
     public bool ClaudeSignedIn { get; init; }
     public string? GeminiCli { get; init; }
     public bool GeminiSignedIn { get; init; }
+    public string? CodexCli { get; init; }
+    public bool CodexSignedIn { get; init; }
     public bool AnthropicKey { get; init; }
     public bool OpenAiKey { get; init; }
     public bool GeminiKey { get; init; }
@@ -150,6 +152,22 @@ public sealed class SystemSetupService
         else
             items.Add(new SetupItem("geminicli", GroupChat, SetupState.Ready, f.GeminiCli, true));
 
+        // OpenAI Dev: the Codex CLI on the ChatGPT sign-in (npm @openai/codex ships a native codex.exe; the Codex desktop
+        // app's own copy counts too).
+        if (f.CodexCli == null)
+        {
+            var lines = new List<string>();
+            if (f.Npm == null) lines.Add(WingetInstall("OpenJS.NodeJS.LTS"));
+            lines.Add($"\"{f.Npm ?? NpmExe}\" install -g @openai/codex");
+            items.Add(new SetupItem("codexcli", GroupChat, SetupState.Missing, f.Npm == null ? "needs-node" : "", true,
+                new SetupAction(SetupActionKind.Install, "setup.act.install", lines, SizeHint: f.Npm == null ? "~150 MB" : "~90 MB")));
+        }
+        else if (!f.CodexSignedIn)
+            items.Add(new SetupItem("codexcli", GroupChat, SetupState.NeedsSignIn, f.CodexCli, true,
+                new SetupAction(SetupActionKind.SignIn, "setup.act.signin", Target: "codex")));
+        else
+            items.Add(new SetupItem("codexcli", GroupChat, SetupState.Ready, f.CodexCli, true));
+
         // ── AI on this PC ──
         if (f.Ollama == null)
             items.Add(new SetupItem("ollama", GroupLocal, SetupState.Missing, "", true,
@@ -243,7 +261,8 @@ public sealed class SystemSetupService
 
     /// <summary>Can the chat be answered by anything at all right now? (The page says so at the top when not.)</summary>
     public static bool AnyChatModelReady(SetupFacts f) =>
-        (f.Licensed && (f.AnthropicKey || f.OpenAiKey || f.GeminiKey || f.ClaudeCli != null && f.ClaudeSignedIn || f.GeminiCli != null && f.GeminiSignedIn))
+        (f.Licensed && (f.AnthropicKey || f.OpenAiKey || f.GeminiKey || f.ClaudeCli != null && f.ClaudeSignedIn || f.GeminiCli != null && f.GeminiSignedIn
+                         || f.CodexCli != null && f.CodexSignedIn))
         || f.OllamaRunning && f.OllamaModels > 0;
 
     // ═══════════════════════════════════════════════════════════════════
@@ -330,6 +349,9 @@ public sealed class SystemSetupService
             appData, home, File.Exists, Directory.Exists, d => Directory.GetDirectories(d));
         var gemini = Providers.GeminiDevProvider.FindCli(path.Split(';').Select(d => SafeCombine(d, "gemini.cmd")).Where(File.Exists),
             node != null ? new[] { node } : Array.Empty<string>(), appData, pf, File.Exists);
+        string? codex = Providers.OpenAIDevProvider.FindCli(
+            path.Split(';').SelectMany(d => new[] { SafeCombine(d, "codex.exe"), SafeCombine(d, "codex.cmd") }).Where(File.Exists),
+            appData, local, File.Exists, NewestFirst);
 
         var nodeV = node != null ? RunAsync(node, "--version", ct) : Task.FromResult<RunResult?>(null);
         var gitV = git != null ? RunAsync(git, "--version", ct) : Task.FromResult<RunResult?>(null);
@@ -365,6 +387,7 @@ public sealed class SystemSetupService
             LlamaServer = llama,
             ClaudeCli = claude, ClaudeSignedIn = auth.Result?.Out.Contains("\"loggedIn\": true", StringComparison.OrdinalIgnoreCase) == true,
             GeminiCli = gemini?.Script, GeminiSignedIn = Providers.GeminiDevProvider.SignedIn(),
+            CodexCli = codex, CodexSignedIn = Providers.OpenAIDevProvider.SignedIn(),
             AnthropicKey = HasKey(AiProviderType.Anthropic), OpenAiKey = HasKey(AiProviderType.OpenAI), GeminiKey = HasKey(AiProviderType.Gemini),
             BrainConnected = BrainSyncService.Current?.IsBrainAvailable == true,
             BrainExe = File.Exists(brainExe) ? brainExe : null,
@@ -372,6 +395,12 @@ public sealed class SystemSetupService
             InsidePackage = InsidePackage(),
             Connections = connections,
         };
+    }
+
+    private static IEnumerable<string> NewestFirst(string dir)
+    {
+        try { return new DirectoryInfo(dir).GetDirectories().OrderByDescending(d => d.LastWriteTimeUtc).Select(d => d.FullName).ToList(); }
+        catch { return Array.Empty<string>(); }
     }
 
     private static string SafeCombine(string dir, string name)
@@ -475,6 +504,8 @@ public sealed class SystemSetupService
         if (which == "claude") return Providers.ClaudeDevProvider.OpenLoginTerminal(facts.ClaudeCli);
         if (which == "gemini" && _providers?.GetProvider(AiProviderType.GeminiDev) is Providers.GeminiDevProvider gd)
             return gd.OpenLoginTerminal();
+        if (which == "codex" && _providers?.GetProvider(AiProviderType.OpenAIDev) is Providers.OpenAIDevProvider od)
+            return od.OpenLoginTerminal();
         return false;
     }
 

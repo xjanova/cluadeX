@@ -1006,6 +1006,7 @@ public class LocalizationService
         ["chat.model.noKeyLabel"] = new() { ["en"] = "needs a key", ["th"] = "ยังไม่มีคีย์" },
         ["chat.model.claudeCodePlan"] = new() { ["en"] = "your Claude plan", ["th"] = "แพ็กเกจ Claude ของคุณ" },
         ["chat.model.geminiCliPlan"] = new() { ["en"] = "your Google sign-in", ["th"] = "บัญชี Google ของคุณ" },
+        ["chat.keysRecovered"] = new() { ["en"] = "API keys restored from the settings backup: {0}", ["th"] = "กู้คีย์ API คืนจากไฟล์สำรองของการตั้งค่าแล้ว: {0}" },
         ["chat.model.codexPlan"] = new() { ["en"] = "your ChatGPT plan (Codex)", ["th"] = "แพ็กเกจ ChatGPT ของคุณ (Codex)" },
         ["chat.model.agyPlan"] = new() { ["en"] = "your Google AI plan (Antigravity)", ["th"] = "แพ็กเกจ Google AI ของคุณ (Antigravity)" },
         ["chat.model.thisPc"] = new() { ["en"] = "on this PC", ["th"] = "ในเครื่องนี้" },

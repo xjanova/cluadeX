@@ -150,6 +150,10 @@ internal static partial class Program
             // PB7 — the cowork room: the composer frame and tag follow the member answering.
             Settings.UpdateSettings(s => s.ActiveProvider = AiProviderType.BrainX);
             await FreshChat();
+            // The frame colour without the caret in the box (with it, the box shows her stronger accent). The chat page no
+            // longer jumps to the editor on agent edits (2026-10-20), so the input box can still hold the focus here.
+            System.Windows.Input.Keyboard.ClearFocus();
+            await Render();
             var composer = (Border)View.FindName("ComposerCard");
             var who = (ContentControl)View.FindName("ComposerWho");
             Check("PB7 the room before anyone answers: the BrainX girl frames the composer",
@@ -173,6 +177,7 @@ internal static partial class Program
             Settings.UpdateSettings(s => s.ActiveProvider = AiProviderType.Anthropic);
             await FreshChat();
             var cq = AddOpenQuestion(ChatCharacter.Claude);
+            System.Windows.Input.Keyboard.ClearFocus();
             await Task.Delay(700); await Render();
             var cCard = ById<Border>(cq, "CxGuard.QuestionCard");
             var accent1 = ((SolidColorBrush)View.FindResource("Accent.1")).Color;

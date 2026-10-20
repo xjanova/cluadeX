@@ -152,6 +152,7 @@ internal static class ChatKeys
         ["chat.perm.allowAlways"] = new() { ["en"] = "Always allow this folder", ["th"] = "อนุญาตโฟลเดอร์นี้เสมอ" },
         ["chat.perm.allowAlways.tip"] = new() { ["en"] = "Remember it: the agent opens this folder (and the folders inside it) in every chat without asking again. Undo on the Permissions page.", ["th"] = "จำไว้: ทุกแชทเปิดโฟลเดอร์นี้ (และโฟลเดอร์ย่อย) ได้โดยไม่ถามอีก ยกเลิกได้ที่หน้า สิทธิ์การเข้าถึง" },
         ["chat.perm.allowedAlways"] = new() { ["en"] = "✓ Always allowed — not asked again", ["th"] = "✓ อนุญาตเสมอแล้ว — จะไม่ถามอีก" },
+        ["chat.perm.createProject"] = new() { ["en"] = "Create a new project folder: {0}", ["th"] = "สร้างโฟลเดอร์โปรเจกต์ใหม่: {0}" },
         ["chat.perm.openFolder"] = new() { ["en"] = "Open a folder outside the project: {0}", ["th"] = "เปิดโฟลเดอร์นอกโปรเจกต์: {0}" },
 
         // ─── Agent tool results (web_fetch, repl) ───

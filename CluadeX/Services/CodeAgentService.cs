@@ -1581,10 +1581,12 @@ public partial class CodeAgentService
                     sb.AppendLine("NOTE: No project folder is open, so the file/build tools are unavailable this turn. "
                         + "This does NOT leave you without tools — see the next line, and use them. "
                         + "If the user names a project or asks for work that needs files, open it YOURSELF with open_project: "
-                        + "take its path from the list of projects opened before (when one is given) or find it (brain_search — notes record where each project lives) and call open_project; the file, "
+                        + "pass its path or just its name (CluadeX finds the folder among the projects on this PC; the list of projects opened "
+                        + "before and brain_search notes say where each lives); the file, "
                         + "search, shell and build tools arrive on your next step. Never tell the user you have no file tools, never ask "
-                        + "them to open the folder, and never hand the task to another agent for that reason. Only if no path can be "
-                        + "found, ask the user where the project is.");
+                        + "them to open the folder, and never hand the task to another agent for that reason. For a NEW project (none of "
+                        + "that name exists) call open_project with create=\"true\" — never mkdir a project folder yourself. Only if a "
+                        + "project that should exist cannot be found, ask the user where it is.");
                 }
                 else if (contextTokens >= 16000)
                 {

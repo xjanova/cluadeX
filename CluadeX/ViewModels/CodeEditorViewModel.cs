@@ -298,6 +298,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
 
         // Live-follow: when the agent edits a file, open/refresh it in the editor and scroll to the change.
         ChatVM.FileMutatedByAgent += OnAgentFileMutated;
+        // Open tabs follow the files on disk; the editor is read-only while an AI run works in this project.
+        HookDiskSync();
 
         _terminal.OutputReceived += AppendTerminal;
         _terminal.Exited += () => AppendTerminal(T("ide.termExited"));
@@ -316,6 +318,8 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
         try { _terminal.Dispose(); } catch { /* shutting down */ }
         try { _terminalFlush?.Stop(); } catch { }
         try { _typeTimer?.Stop(); } catch { }
+        try { _diskDebounce?.Stop(); StopWatchingProjectFiles(); } catch { }
+        try { _gitRefreshDebounce?.Stop(); } catch { }
         try { _conflictDebounce?.Stop(); } catch { }
         try { _searchDebounce?.Stop(); } catch { }
         try { _searchCts?.Cancel(); } catch { }
@@ -938,6 +942,9 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     /// so the freshly typed region glows for a moment.</summary>
     public event Action<int, int>? AgentEditFlashRequested;
 
+    /// <summary>The editor view is on screen (set by the view). Unknown (no view yet, a harness) counts as on screen.</summary>
+    public bool EditorOnScreen { get; set; } = true;
+
     // ── Agent live-typing reveal state ──
     private System.Windows.Threading.DispatcherTimer? _typeTimer;
     private OpenFileTab? _typingTab;
@@ -1021,10 +1028,38 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
                 CluadeX.Helpers.UiStallWatchdog.Note("");
             });
 
-            _ = _workspace.EnrichGitStatusAsync(Tree);   // live git badges
-            _ = RefreshGitAsync();                        // live source-control panel
+            QueueGitRefresh();   // live git badges + source-control panel, once per burst of edits
         }
         catch { /* live-follow is best-effort — never disrupt the agent run */ }
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _gitRefreshDebounce;
+
+    /// <summary>
+    /// One git refresh after a burst of agent edits, not two per edit: each refresh starts several git processes and
+    /// refills the changes list and the tree's badges on the UI thread — an agent writing ten files in a row ran it twenty
+    /// times (2026-10-20 stall log). 1.5 s after the last edit, at Background priority.
+    /// </summary>
+    private void QueueGitRefresh()
+    {
+        _gitRefreshDebounce ??= NewGitRefreshDebounce();
+        _gitRefreshDebounce.Stop();
+        _gitRefreshDebounce.Start();
+    }
+
+    private System.Windows.Threading.DispatcherTimer NewGitRefreshDebounce()
+    {
+        var t = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            _ = _workspace.EnrichGitStatusAsync(Tree);
+            _ = RefreshGitAsync();
+        };
+        return t;
     }
 
     private bool TreeContains(string fullPath)
@@ -1108,6 +1143,7 @@ public partial class CodeEditorViewModel : ViewModelBase, IDisposable
     /// </summary>
     private bool TryStartTypingReveal(OpenFileTab tab, string oldText, string newText)
     {
+        if (!EditorOnScreen) return false;               // nobody sees it: show the result at once
         if (string.Equals(oldText, newText, StringComparison.Ordinal)) return false;
         if (newText.Length > 1_000_000) return false;    // intermediate strings would be too costly
 

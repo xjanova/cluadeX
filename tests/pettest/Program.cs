@@ -399,6 +399,24 @@ internal static class Program
         var lost = new PetBody { X = 50, Y = 2000, Vy = 500 };
         PetWorld.Step(lost, floors, 1 / 30.0, screen);
         Check("below every floor (off-screen): caught on the ground under it", lost.Grounded && lost.Y == 1032, $"y={lost.Y}");
+
+        // Owner 2026-10-20: it steps out of the box the user is typing in.
+        var taskbar = new PetFloor(1032, 0, 1919, PetFloorKind.Taskbar);
+        var typing = new PetRect(600, 960, 1300, 1030);   // a chat box just above the taskbar
+        Check("standing in front of the typing box → it covers it", PetWorld.Overlaps(typing, 900, 1032, 40, 88, 8), "");
+        double? to = PetWorld.DodgeX(taskbar, [typing], 900, 1032, 40, 88, 8);
+        Check("…and steps to the nearest clear spot beside it", to is { } t1 && !double.IsNaN(t1) && (t1 < 600 - 40 - 8 || t1 > 1300 + 40 + 8)
+            && !PetWorld.Overlaps(typing, t1, 1032, 40, 88, 8), $"to={to}");
+        Check("…the nearer side (from x=700 it goes left)", PetWorld.DodgeX(taskbar, [typing], 700, 1032, 40, 88, 8) is { } t2 && t2 < 600, "");
+        Check("already clear → no move", PetWorld.DodgeX(taskbar, [typing], 200, 1032, 40, 88, 8) == null, "");
+        var shortFloor = new PetFloor(1000, 650, 1250, PetFloorKind.Window);
+        Check("a floor with no clear spot → NaN (jump elsewhere)", PetWorld.DodgeX(shortFloor, [new PetRect(600, 900, 1300, 1010)], 900, 1000, 40, 88, 8) is { } t3 && double.IsNaN(t3), "");
+
+        // …and climbs the screen's outer edges (not an edge shared with the next monitor).
+        var right = new PetMonitor(new PetRect(1920, 0, 3840, 1080), new PetRect(1920, 0, 3840, 1032));
+        var walls = PetWorld.Walls([Screen1, right]);
+        Check("two monitors side by side: the two outer edges are walls, the shared middle edge is not",
+            walls.Count == 2 && walls.Any(w => w.X == 0 && w.Side < 0) && walls.Any(w => w.X == 3840 && w.Side > 0), string.Join(" ", walls));
     }
 
     static void Lines()
