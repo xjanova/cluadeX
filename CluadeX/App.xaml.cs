@@ -937,6 +937,8 @@ public partial class App : Application
         services.AddSingleton<DgxSparkService>();
         services.AddSingleton<BugReportService>();
         services.AddSingleton<AutoUpdateService>();
+        // On exit: a downloaded update installs once the process is gone; a download stops and resumes next launch.
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<AutoUpdateService>());
         services.AddSingleton<LspClientService>();
         services.AddSingleton<SkillService>();
         services.AddSingleton<CostTrackingService>();

@@ -61,6 +61,23 @@ jobs:
         # profile already did this; the released build did not).
         run: dotnet publish CluadeX/CluadeX.csproj -c Release -r win-x64 --self-contained -o publish --nologo -p:ErrorOnDuplicatePublishOutputFiles=false -p:PublishReadyToRun=true
 
+      - name: Fetch the previous release (base for the delta)
+        # vpk pack writes CluadeX-<ver>-delta.nupkg only when the previous release's full package sits in Releases/.
+        # Without this step there never was a delta: every update downloaded the whole ~500 MB package (owner
+        # 2026-10-20: "โหลดช้าก็ตัด"). A delta carries only the files that changed. If the fetch fails, this release
+        # ships without one and installed apps take the full package as before.
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          dotnet tool install -g vpk --version 1.1.1
+          $v = '${{ steps.version.outputs.VERSION }}'
+          vpk download github --repoUrl "https://github.com/${{ github.repository }}" --token "${{ secrets.GITHUB_TOKEN }}" --outputDir Releases
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::no previous release fetched — this release has no delta package"; Remove-Item Releases -Recurse -Force -ErrorAction SilentlyContinue; exit 0 }
+          # A re-run of a version that is already published: a delta against itself makes no sense, and pack would refuse.
+          if (Get-ChildItem Releases -Filter "CluadeX-$v-*" -ErrorAction SilentlyContinue) { Write-Host "::warning::v$v is already published — no delta"; Remove-Item Releases -Recurse -Force; exit 0 }
+          Get-ChildItem Releases | ForEach-Object { Write-Host "delta base: $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)" }
+
       - name: Velopack pack (self-update assets)
         # Produces Releases/ — *-full.nupkg, *-delta.nupkg, CluadeX-win-Setup.exe
         # and RELEASES. AutoUpdateService's UpdateManager(GithubSource) reads
@@ -71,16 +88,33 @@ jobs:
         # arrives on its own, as a delta.
         shell: pwsh
         run: |
-          dotnet tool install -g vpk --version 1.1.1
-          vpk pack `
-            --packId CluadeX `
-            --packVersion ${{ steps.version.outputs.VERSION }} `
-            --packDir publish `
-            --mainExe CluadeX.exe `
-            --icon CluadeX/Assets/app.ico `
-            --packTitle "CluadeX" `
-            --packAuthors "Xman Studio" `
-            --outputDir Releases
+          $PSNativeCommandUseErrorActionPreference = $false   # a failed pack is handled below, not thrown
+          if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) { dotnet tool install -g vpk --version 1.1.1 }
+          $v = '${{ steps.version.outputs.VERSION }}'
+          function Pack {
+            vpk pack `
+              --packId CluadeX `
+              --packVersion $v `
+              --packDir publish `
+              --mainExe CluadeX.exe `
+              --icon CluadeX/Assets/app.ico `
+              --packTitle "CluadeX" `
+              --packAuthors "Xman Studio" `
+              --outputDir Releases
+          }
+          Pack
+          # The delta is an extra: if packing against the previous release fails, the release still ships (full only).
+          if ($LASTEXITCODE -ne 0 -and (Get-ChildItem Releases -Filter 'CluadeX-*-full.nupkg' -ErrorAction SilentlyContinue | Where-Object Name -ne "CluadeX-$v-full.nupkg")) {
+            Write-Host "::warning::pack with a delta failed — packing the full package only"
+            Remove-Item Releases -Recurse -Force
+            Pack
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The previous full package was only the delta's base: it is already on its own release, not uploaded again.
+          Get-ChildItem Releases -Filter 'CluadeX-*-full.nupkg' | Where-Object Name -ne "CluadeX-$v-full.nupkg" | Remove-Item -Force
+          Get-ChildItem Releases | ForEach-Object { Write-Host "$($_.Name)  $([math]::Round($_.Length / 1MB, 1)) MB" }
+          $delta = Get-Item "Releases/CluadeX-$v-delta.nupkg" -ErrorAction SilentlyContinue
+          if ($delta) { echo "- delta package: $([math]::Round($delta.Length / 1MB, 1)) MB" >> $env:GITHUB_STEP_SUMMARY } else { echo "- no delta package (full only)" >> $env:GITHUB_STEP_SUMMARY }
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
