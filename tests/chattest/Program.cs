@@ -2229,6 +2229,14 @@ internal static partial class Program
         var noKey = Vm.ChatModelChoices.FirstOrDefault(c => c.Model == "claude-sonnet-5-5");
         Check("U7 text: no key → Claude's models stay listed, marked as needing a key (every vendor is in the box)",
             noKey is { NeedsKey: true } && noKey.PriceLabel.Contains(L("chat.model.noKeyLabel")), noKey?.PriceLabel);
+        // A refused pick springs back: the box kept showing "claude-haiku-5-5 · ยังไม่มีคีย์" while another model went on
+        // answering (owner 2026-10-20). Picked on screen (the ComboBox), as the owner does.
+        var before = Vm.SelectedChatModel;
+        modelBox.SelectedItem = noKey;
+        await Task.Delay(100); await Render();
+        Check("U7 model box: a model without a key is refused and the box shows what still answers",
+            !Equals(modelBox.SelectedItem, noKey) && Equals(Vm.SelectedChatModel, before) && Vm.StatusText.Length > 0,
+            $"box={(modelBox.SelectedItem as ChatViewModel.ChatModelChoice)?.Model} vm={Vm.SelectedChatModel?.Model} status={Vm.StatusText}");
         // The credit link moved to the window's title bar (the "today" chip's menu): MainWindow, not this view.
         Check("U7 text: the composer's \"+\" menu carries the agent switches and the chat actions",
             ((Button)View.FindName("MoreButton")).ContextMenu.Items.OfType<MenuItem>().Count() >= 9);

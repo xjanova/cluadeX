@@ -255,6 +255,14 @@ public partial class ChatViewModel
         finally
         {
             RefreshUsageStrip();   // shows what really answers now (the old pick when the switch was refused)
+            // The box shows what answers, never a pick that was refused: the ComboBox kept "claude-haiku-5-5 · ยังไม่มีคีย์"
+            // while Claude Dev (sonnet) went on answering (owner 2026-10-20: "ฉันเลือก haiku แต่มันตอบว่าเป็น sonnet").
+            // A PropertyChanged raised inside the box's own selection update is ignored by WPF, so it goes after it.
+            App.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                RefreshChatModelChoices();
+                OnPropertyChanged(nameof(SelectedChatModel));
+            });
         }
     }
 
