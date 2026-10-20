@@ -53,6 +53,7 @@ internal static class Program
             AntigravityGuardChecks(work);
             ChatTools(work);
             RunGates(work);
+            DayApprovalChecks(work);
             DangerGate();
             PlainWords(work);
             Cleanup(work);
@@ -598,6 +599,38 @@ internal static class Program
         }
         else Check("a second turn gets a ticket", false);
         Check("every --cx-tools process exits by itself once the CLI closes its stdin (none left running)", lingered == 0, $"lingered={lingered}");
+    }
+
+    static void DayApprovalChecks(string work)
+    {
+        Console.WriteLine("Allow for today (DayApprovals, a pinned clock)");
+        string file = Path.Combine(work, "day", DayApprovals.FileName);
+        var now = new DateTime(2026, 10, 20, 23, 58, 0);
+        var day = new DayApprovals(file, () => now);
+        const string key = "chat-tool|brainx-brain|chrome__navigate";
+        Check("today: nothing is allowed before the click", !day.Contains(key) && day.Count == 0);
+        day.Add(key);
+        Check("today: the tool is allowed after 'Allow for today'", day.Contains(key) && day.Contains(key.ToUpperInvariant()));
+        Check("today: another tool is not", !day.Contains("chat-tool|brainx-brain|chrome__javascript_tool"));
+        Check("today: an empty key is never allowed", !day.Contains("") && !day.Contains(null));
+        var restarted = new DayApprovals(file, () => now.AddMinutes(1));
+        Check("a restart the same day keeps it (the file)", restarted.Contains(key), File.Exists(file) ? File.ReadAllText(file) : "no file");
+        now = now.AddMinutes(3);   // 00:01 the next day
+        Check("after midnight it asks again (memory)", !day.Contains(key) && day.Count == 0);
+        var tomorrow = new DayApprovals(file, () => new DateTime(2026, 10, 21, 9, 0, 0));
+        Check("after midnight it asks again (yesterday's file is ignored)", !tomorrow.Contains(key));
+        File.WriteAllText(file, "{not json");
+        Check("a damaged file starts the day empty, no crash", !new DayApprovals(file, () => now).Contains(key));
+
+        // the prompt itself: offered exactly where "Allow in this chat" is, and only once
+        var prompt = new CluadeX.Models.ChatMessage { Role = CluadeX.Models.MessageRole.PermissionRequest, PermissionCanAllowForChat = false };
+        bool? answered = null;
+        prompt.PermissionCallback = a => answered = a;
+        Check("not offered where 'Allow in this chat' is not (an Ask rule, always-ask, the red prompt)", !prompt.AllowPermissionForDay() && answered == null);
+        var offered = new CluadeX.Models.ChatMessage { Role = CluadeX.Models.MessageRole.PermissionRequest, PermissionCanAllowForChat = true };
+        offered.PermissionCallback = a => answered = a;
+        Check("'Allow for today' allows and says so", offered.AllowPermissionForDay() && answered == true && offered.PermissionAllowedForDay && !offered.PermissionAllowedForChat);
+        Check("a second click does nothing", !offered.AllowPermissionForDay() && !offered.AllowPermissionForChat());
     }
 
     static void RunGates(string work)

@@ -483,6 +483,12 @@ public partial class ChatView : UserControl
             msg.AllowPermissionForChat();
     }
 
+    private void PermissionAllowDay_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)
+            msg.AllowPermissionForDay();
+    }
+
     private void PermissionAllowAlways_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is ChatMessage msg)

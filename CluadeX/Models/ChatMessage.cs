@@ -427,6 +427,19 @@ public class ChatMessage : INotifyPropertyChanged
         return ResolvePermission(PermissionOutcome.Allowed);
     }
 
+    /// <summary>It was answered with "Allow for today" (the outcome label says so).</summary>
+    public bool PermissionAllowedForDay { get; private set; }
+
+    /// <summary>Answer "Allow for today": allowed, and the tool runs without asking in every chat until midnight.
+    /// Offered exactly where "Allow in this chat" is. False when not offered or already answered.</summary>
+    public bool AllowPermissionForDay()
+    {
+        if (!PermissionCanAllowForChat || PermissionAnswered) return false;
+        PermissionAllowedForDay = true;
+        OnPropertyChanged(nameof(PermissionAllowedForDay));
+        return ResolvePermission(PermissionOutcome.Allowed);
+    }
+
     /// <summary>The prompt offers "Always allow" (a folder outside the project: remembered, never asked again).</summary>
     public bool PermissionCanAllowAlways { get; set; }
 
