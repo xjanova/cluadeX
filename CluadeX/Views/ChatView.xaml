@@ -835,43 +835,52 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <!-- Allow / Deny until answered; then the outcome, localized -->
-                                        <StackPanel Orientation="Horizontal" Margin="22,0,0,0"
-                                                    Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
-                                            <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,0"
+                                        <!-- Allow / Deny until answered; then the outcome, localized. A WrapPanel: with four buttons a
+                                             narrow chat (docked beside the editor) cut the last ones off — Deny included (owner 2026-10-20). -->
+                                        <WrapPanel Orientation="Horizontal" Margin="22,0,0,-6"
+                                                   Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                            <Button Content="{services:Loc chat.allow}" Padding="14,3" Margin="0,0,8,6"
                                                     Style="{StaticResource CxCharPrimary}"
                                                     FontSize="12"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionAllow"
                                                     Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"
                                                     Click="PermissionAllow_Click"/>
                                             <!-- The red prompt's yes says what it is: running something that deletes -->
-                                            <Button Content="{services:Loc chat.perm.danger.allow}" Padding="14,3" Margin="0,0,8,0"
+                                            <Button Content="{services:Loc chat.perm.danger.allow}" Padding="14,3" Margin="0,0,8,6"
                                                     FontSize="12" FontWeight="Bold" Foreground="White"
                                                     Background="{DynamicResource Status.Danger}" BorderBrush="{DynamicResource Status.Danger}"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionAllowDanger"
                                                     Visibility="{Binding IsPermissionDanger, Converter={StaticResource BoolVis}}"
                                                     Click="PermissionAllow_Click"/>
                                             <!-- An MCP tool no policy judged: allow it for the rest of this chat (one ChatGPT session asked 18×) -->
-                                            <Button Content="{services:Loc chat.perm.allowChat}" Padding="14,3" Margin="0,0,8,0"
+                                            <Button Content="{services:Loc chat.perm.allowChat}" Padding="14,3" Margin="0,0,8,6"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
                                                     ToolTip="{services:Loc chat.perm.allowChat.tip}"
                                                     Visibility="{Binding PermissionCanAllowForChat, Converter={StaticResource BoolVis}}"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionAllowChat"
                                                     Click="PermissionAllowChat_Click"/>
+                                            <!-- The same, for every chat until midnight (owner 2026-10-20: "อนุญาตทั้งวัน") -->
+                                            <Button Content="{services:Loc chat.perm.allowDay}" Padding="14,3" Margin="0,0,8,6"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    FontSize="12"
+                                                    ToolTip="{services:Loc chat.perm.allowDay.tip}"
+                                                    Visibility="{Binding PermissionCanAllowForChat, Converter={StaticResource BoolVis}}"
+                                                    AutomationProperties.AutomationId="CxGuard.PermissionAllowDay"
+                                                    Click="PermissionAllowDay_Click"/>
                                             <!-- A folder outside the project: remember it, never ask again (owner 2026-10-18) -->
-                                            <Button Content="{services:Loc chat.perm.allowAlways}" Padding="14,3" Margin="0,0,8,0"
+                                            <Button Content="{services:Loc chat.perm.allowAlways}" Padding="14,3" Margin="0,0,8,6"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
                                                     ToolTip="{services:Loc chat.perm.allowAlways.tip}"
                                                     Visibility="{Binding PermissionCanAllowAlways, Converter={StaticResource BoolVis}}"
                                                     Click="PermissionAllowAlways_Click"/>
-                                            <Button Content="{services:Loc chat.deny}" Padding="14,3"
+                                            <Button Content="{services:Loc chat.deny}" Padding="14,3" Margin="0,0,0,6"
                                                     Style="{StaticResource SecondaryButton}"
                                                     FontSize="12"
                                                     AutomationProperties.AutomationId="CxGuard.PermissionDeny"
                                                     Click="PermissionDeny_Click"/>
-                                        </StackPanel>
+                                        </WrapPanel>
                                         <Grid Margin="22,0,0,0"
                                               Visibility="{Binding PermissionAnswered, Converter={StaticResource BoolVis}}">
                                             <TextBlock Text="{services:Loc chat.perm.allowed}" FontSize="12" FontWeight="SemiBold"
@@ -886,6 +895,9 @@
                                                             <DataTrigger Binding="{Binding PermissionAllowedForChat}" Value="True">
                                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                             </DataTrigger>
+                                                            <DataTrigger Binding="{Binding PermissionAllowedForDay}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
                                                             <DataTrigger Binding="{Binding PermissionAllowedAlways}" Value="True">
                                                                 <Setter Property="Visibility" Value="Collapsed"/>
                                                             </DataTrigger>
@@ -896,6 +908,9 @@
                                             <TextBlock Text="{services:Loc chat.perm.allowedChat}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Success}"
                                                        Visibility="{Binding PermissionAllowedForChat, Converter={StaticResource BoolVis}}"/>
+                                            <TextBlock Text="{services:Loc chat.perm.allowedDay}" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource Status.Success}"
+                                                       Visibility="{Binding PermissionAllowedForDay, Converter={StaticResource BoolVis}}"/>
                                             <TextBlock Text="{services:Loc chat.perm.allowedAlways}" FontSize="12" FontWeight="SemiBold"
                                                        Foreground="{DynamicResource Status.Success}"
                                                        Visibility="{Binding PermissionAllowedAlways, Converter={StaticResource BoolVis}}"/>

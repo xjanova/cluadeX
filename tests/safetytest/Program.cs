@@ -53,6 +53,7 @@ internal static class Program
             AntigravityGuardChecks(work);
             ChatTools(work);
             RunGates(work);
+            DayApprovalChecks(work);
             DangerGate();
             PlainWords(work);
             Cleanup(work);
@@ -483,6 +484,25 @@ internal static class Program
         Check("the guard hook stays on a turn with chat tools", full.Contains("--settings") && full.Contains("git push --force"), full);
         string adviceTools = CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "default", "auto", cfg, dirs);
         Check("an advice turn gets the chat tools but still no shell or edits", adviceTools.Contains("mcp__cluadex__new_chat") && !adviceTools.Contains(",Bash") && !adviceTools.Contains("Edit,Write"), adviceTools);
+        Check("chat tools: an MCP tool the CLI was not given is asked through CluadeX (--permission-prompt-tool mcp__cluadex__approve)",
+            full.Contains("--permission-prompt-tool \"mcp__cluadex__approve\"") && adviceTools.Contains("--permission-prompt-tool")
+            && !plain.Contains("--permission-prompt-tool") && !full.Contains("mcp__cluadex__approve,"), full);
+
+        // ── the permission prompt's rules and verdicts (pure) ──
+        Check("approve: an MCP tool goes to CluadeX's gate", CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__brainx-brain__chrome__navigate", true) == null);
+        Check("approve: the CLI's own tools are never put to the user here (the grant decides them)",
+            CluadeX.Services.Tools.ChatToolBridge.RefusalFor("Bash", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("Edit", true) != null
+            && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("WebFetch", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__", true) != null);
+        Check("approve: CluadeX's own server is not asked about (approve itself included)",
+            CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__cluadex__approve", true) != null && CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__cluadex__new_chat", true) != null);
+        Check("approve: a turn without an approver refuses everything", CluadeX.Services.Tools.ChatToolBridge.RefusalFor("mcp__x__y", false) != null);
+        using (var vin = JsonDocument.Parse("{\"url\":\"https://chatgpt.com/\",\"n\":2}"))
+        {
+            string allowV = CluadeX.Services.Tools.ChatToolBridge.Verdict(true, vin.RootElement, null);
+            string denyV = CluadeX.Services.Tools.ChatToolBridge.Verdict(false, vin.RootElement, "ไม่อนุญาต");
+            Check("verdict: allow echoes the input as updatedInput", allowV.Contains("\"behavior\":\"allow\"") && allowV.Contains("\"updatedInput\":{\"url\":\"https://chatgpt.com/\",\"n\":2}"), allowV);
+            Check("verdict: deny carries the reason, Thai intact", denyV.Contains("\"behavior\":\"deny\"") && denyV.Contains("ไม่อนุญาต"), denyV);
+        }
 
         // ── the protocol, without a pipe ──
         var noRelay = new Func<string, string, JsonElement, (bool, string)>((_, _, _) => (true, "relayed"));
@@ -490,7 +510,7 @@ internal static class Program
         string? init = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}", "t", noRelay);
         Check("initialize echoes the client's protocol version and the id", init != null && init.Contains("\"2025-06-18\"") && init.Contains("\"id\":1") && init.Contains("tools"), init ?? "");
         string? list = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":\"x\",\"method\":\"tools/list\"}", "t", noRelay);
-        Check("tools/list: exactly new_chat, open_project, close_chat", list != null && list.Contains("\"new_chat\"") && list.Contains("\"open_project\"") && list.Contains("\"close_chat\"") && list.Contains("\"id\":\"x\""), list ?? "");
+        Check("tools/list: new_chat, open_project, close_chat and the permission prompt", list != null && list.Contains("\"new_chat\"") && list.Contains("\"open_project\"") && list.Contains("\"close_chat\"") && list.Contains("\"approve\"") && list.Contains("\"id\":\"x\""), list ?? "");
         string? noTok = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"new_chat\"}}", "", noRelay);
         Check("without a turn token nothing is relayed", noTok != null && noTok.Contains("\"isError\":true") && !noTok.Contains("relayed"), noTok ?? "");
         string? unknown = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"resources/list\"}", "t", noRelay);
@@ -547,7 +567,70 @@ internal static class Program
         var after = Talk(ticket.Token, newChat);
         Check("after the turn ends its token opens nothing, and its config file is gone",
             after.Count == 1 && after[0].Contains("\"isError\":true") && seen.Count == 1 && !File.Exists(ticket.ConfigFile), string.Join("\n", after));
+        // ── the CLI's permission prompt, end to end: the real --cx-tools process, a stand-in approver ──
+        var asked = new List<string>();
+        AgentRunScope? scopeAsked = null;
+        using var turn2 = new CancellationTokenSource();
+        var ticket2 = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+            proj, turn2.Token, (name, a) =>
+            {
+                lock (asked) { asked.Add(name + ":" + (a.TryGetValue("url", out var u) ? u : "")); scopeAsked = AgentRunScope.Current; }
+                return Task.FromResult(name.EndsWith("navigate", StringComparison.Ordinal) ? (true, (string?)null) : (false, (string?)"ผู้ใช้ไม่อนุญาต"));
+            });
+        if (ticket2 != null)
+        {
+            string Ask(int id, string tool, object input) => JsonSerializer.Serialize(new { jsonrpc = "2.0", id, method = "tools/call",
+                @params = new { name = "approve", arguments = new { tool_name = tool, input, tool_use_id = "toolu_x" } } });
+            var ans = Talk(ticket2.Token,
+                Ask(11, "mcp__brainx-brain__chrome__navigate", new { url = "https://chatgpt.com/" }),
+                Ask(12, "mcp__brainx-brain__ssh_run", new { host = "prod" }),
+                Ask(13, "Bash", new { command = "echo hi" }));
+            string A(int id) => ans.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
+            // the verdict is the tool's TEXT (JSON in a string), so its quotes arrive escaped
+            Check("approve: an allowed MCP call → allow with the input, asked inside the chat's run",
+                A(11).Contains("\\u0022behavior\\u0022:\\u0022allow\\u0022") || A(11).Contains("\\\"behavior\\\":\\\"allow\\\""), A(11));
+            Check("approve: the approver saw the real tool and its argument, in the asking chat's scope",
+                asked.Contains("mcp__brainx-brain__chrome__navigate:https://chatgpt.com/") && ReferenceEquals(scopeAsked, scope), string.Join(",", asked));
+            Check("approve: a refused MCP call → deny with the user's reason", A(12).Contains("deny") && A(12).Contains("ผู้ใช้ไม่อนุญาต"), A(12));
+            Check("approve: the CLI's own Bash is refused without asking anyone", A(13).Contains("deny") && !asked.Any(s => s.StartsWith("Bash")), A(13));
+            var forgedAsk = Talk("0000", Ask(14, "mcp__brainx-brain__chrome__navigate", new { url = "x" }));
+            Check("approve: a wrong token is a deny, never an allow", forgedAsk.Count == 1 && forgedAsk[0].Contains("deny") && !forgedAsk[0].Contains("allow") && asked.Count == 2, string.Join("\n", forgedAsk));
+            ticket2.Dispose();
+        }
+        else Check("a second turn gets a ticket", false);
         Check("every --cx-tools process exits by itself once the CLI closes its stdin (none left running)", lingered == 0, $"lingered={lingered}");
+    }
+
+    static void DayApprovalChecks(string work)
+    {
+        Console.WriteLine("Allow for today (DayApprovals, a pinned clock)");
+        string file = Path.Combine(work, "day", DayApprovals.FileName);
+        var now = new DateTime(2026, 10, 20, 23, 58, 0);
+        var day = new DayApprovals(file, () => now);
+        const string key = "chat-tool|brainx-brain|chrome__navigate";
+        Check("today: nothing is allowed before the click", !day.Contains(key) && day.Count == 0);
+        day.Add(key);
+        Check("today: the tool is allowed after 'Allow for today'", day.Contains(key) && day.Contains(key.ToUpperInvariant()));
+        Check("today: another tool is not", !day.Contains("chat-tool|brainx-brain|chrome__javascript_tool"));
+        Check("today: an empty key is never allowed", !day.Contains("") && !day.Contains(null));
+        var restarted = new DayApprovals(file, () => now.AddMinutes(1));
+        Check("a restart the same day keeps it (the file)", restarted.Contains(key), File.Exists(file) ? File.ReadAllText(file) : "no file");
+        now = now.AddMinutes(3);   // 00:01 the next day
+        Check("after midnight it asks again (memory)", !day.Contains(key) && day.Count == 0);
+        var tomorrow = new DayApprovals(file, () => new DateTime(2026, 10, 21, 9, 0, 0));
+        Check("after midnight it asks again (yesterday's file is ignored)", !tomorrow.Contains(key));
+        File.WriteAllText(file, "{not json");
+        Check("a damaged file starts the day empty, no crash", !new DayApprovals(file, () => now).Contains(key));
+
+        // the prompt itself: offered exactly where "Allow in this chat" is, and only once
+        var prompt = new CluadeX.Models.ChatMessage { Role = CluadeX.Models.MessageRole.PermissionRequest, PermissionCanAllowForChat = false };
+        bool? answered = null;
+        prompt.PermissionCallback = a => answered = a;
+        Check("not offered where 'Allow in this chat' is not (an Ask rule, always-ask, the red prompt)", !prompt.AllowPermissionForDay() && answered == null);
+        var offered = new CluadeX.Models.ChatMessage { Role = CluadeX.Models.MessageRole.PermissionRequest, PermissionCanAllowForChat = true };
+        offered.PermissionCallback = a => answered = a;
+        Check("'Allow for today' allows and says so", offered.AllowPermissionForDay() && answered == true && offered.PermissionAllowedForDay && !offered.PermissionAllowedForChat);
+        Check("a second click does nothing", !offered.AllowPermissionForDay() && !offered.AllowPermissionForChat());
     }
 
     static void RunGates(string work)

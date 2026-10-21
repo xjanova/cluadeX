@@ -8,6 +8,16 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
 
+    /// <summary>An activity-bar button checked without a press (UI Automation Select): navigate like a click. A click
+    /// (IsPressed during the check) runs its Command itself; a check from the binding is already the current page.</summary>
+    private void OnActivityChecked(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not System.Windows.Controls.RadioButton { GroupName: "Activity" } rb || rb.IsPressed) return;
+        string? page = rb.CommandParameter?.ToString();
+        if (page == null || string.Equals(page, _viewModel?.SelectedNavItem, StringComparison.Ordinal)) return;
+        if (rb.Command?.CanExecute(rb.CommandParameter) == true) rb.Command.Execute(rb.CommandParameter);
+    }
+
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
@@ -27,6 +37,10 @@ public partial class MainWindow : Window
         }
         // Activity bar uses RadioButtons bound via SelectedNavItem converter —
         // initial selection comes from MainViewModel.SelectedNavItem ("Chat" default).
+        // Their Command only runs on a click; UI Automation's Select (screen readers, test and filming tools) checked
+        // the button but never changed the page (phase 3 of the dictionary video, 2026-10-20). A check that did not come
+        // from a press runs the same command.
+        AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent, new RoutedEventHandler(OnActivityChecked));
         StateChanged += OnStateChanged;
         Closing += OnClosing;
         // The pet is its own top-level window (not owned, so it stays out when CluadeX is minimized): it must go

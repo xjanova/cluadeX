@@ -227,8 +227,24 @@ public class AgentToolService : IDisposable
     private bool IsOnceApproved(string? onceKey)
     {
         if (string.IsNullOrEmpty(onceKey)) return false;
-        // Per chat: two chats running at once never share an "allow once".
-        lock (_onceLock) return _onceApprovals.Contains(SessionKey + "|" + onceKey);
+        // Per chat: two chats running at once never share an "allow once". "Allow for today" is the one exception.
+        lock (_onceLock)
+            if (_onceApprovals.Contains(SessionKey + "|" + onceKey)) return true;
+        return DayApprovalStore.Contains(onceKey);
+    }
+
+    private Safety.DayApprovals? _dayApprovals;
+
+    /// <summary>"Allow for today": chat-scope keys remembered for every chat until local midnight (data root file).</summary>
+    public Safety.DayApprovals DayApprovalStore => _dayApprovals ??=
+        new Safety.DayApprovals(Path.Combine(_settingsService.DataRoot, Safety.DayApprovals.FileName));
+
+    /// <summary>A prompt answered "Allow in this chat" or "Allow for today": remember its chat-scope key.</summary>
+    private void RememberScopeApproval(PermissionRequestInfo info, string? scopeKey)
+    {
+        if (string.IsNullOrEmpty(scopeKey)) return;
+        if (info.AllowedForChat || info.AllowedForDay) RememberOnceApproval(scopeKey);
+        if (info.AllowedForDay) DayApprovalStore.Add(scopeKey);
     }
 
     private void RememberOnceApproval(string? onceKey)
@@ -402,7 +418,7 @@ public class AgentToolService : IDisposable
         bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
         if (!allowed) return Fail(call, $"User denied permission for {scope}: {resource}");
         if (!perm.AlwaysAsk) RememberOnceApproval(perm.OnceKey);
-        if (info.AllowedForChat && info.ChatScopeKey != null) RememberOnceApproval(info.ChatScopeKey);
+        RememberScopeApproval(info, info.ChatScopeKey);
         if (info.AllowedAlways)
         {
             try { perm.OnAllowedAlways?.Invoke(); }
@@ -479,8 +495,28 @@ public class AgentToolService : IDisposable
             ChatScopeKey = chatKey,
         };
         bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
-        if (allowed && info.AllowedForChat) RememberOnceApproval(chatKey);
+        if (allowed) RememberScopeApproval(info, chatKey);
         return allowed ? null : Fail(call, $"User denied permission for {call.ToolName}");
+    }
+
+    /// <summary>
+    /// The same gate for an MCP call a CLI agent (Claude Dev) is about to make with ITS OWN MCP client: the CLI asks
+    /// through its --permission-prompt-tool (Tools.ChatToolBridge "approve"), and the answer comes from here — the
+    /// user's rules, "Allow in this chat", or the permission row in the asking chat (the bridge runs this inside that
+    /// chat's AgentRunScope). Nothing is executed here: only (allowed, reason).
+    /// </summary>
+    public async Task<(bool Allow, string? Reason)> AuthorizeCliMcpCallAsync(string qualifiedName, Dictionary<string, string> args)
+    {
+        if (!IsToolAllowed(ToolType.McpTool))
+            return (false, "MCP tools are switched off in CluadeX (Features page).");
+        var call = new ToolCall { Type = ToolType.McpTool, ToolName = qualifiedName, Arguments = args };
+        if (_mcpManager.ToolRegistry.ResolveTool(qualifiedName) is { } known)
+        {
+            call.McpServerName = known.ServerName;
+            call.McpToolName = known.Name;
+        }
+        var refused = await CheckMcpPermissionAsync(call);
+        return refused == null ? (true, null) : (false, refused.Error ?? $"Permission denied for {qualifiedName}");
     }
 
     private static bool McpPolicyHides(IMcpToolPolicy policy, McpToolKey key)

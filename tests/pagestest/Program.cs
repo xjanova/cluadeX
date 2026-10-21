@@ -230,6 +230,25 @@ internal static partial class Program
         MainWin.Show();
         Check("setup: chat VM finished its startup load", await WaitUntil(() => MainVm.ChatVM.CurrentSession != null));
 
+        // The activity bar answers UI Automation's Select like a click (screen readers, test and filming tools): it used
+        // to move the highlight and leave the page as it was.
+        var rail = Find<System.Windows.Controls.RadioButton>(MainWin).Where(r => r.GroupName == "Activity").ToList();
+        var models = rail.FirstOrDefault(r => r.CommandParameter?.ToString() == "Models");
+        var chatBtn = rail.FirstOrDefault(r => r.CommandParameter?.ToString() == "Chat");
+        if (models != null && chatBtn != null)
+        {
+            var sel = (System.Windows.Automation.Provider.ISelectionItemProvider)new System.Windows.Automation.Peers.RadioButtonAutomationPeer(models)
+                .GetPattern(System.Windows.Automation.Peers.PatternInterface.SelectionItem);
+            sel.Select();
+            await Idle(200);
+            Check("activity bar: UIA Select on Models opens the Models page", MainVm.SelectedNavItem == "Models", MainVm.SelectedNavItem);
+            ((System.Windows.Automation.Provider.ISelectionItemProvider)new System.Windows.Automation.Peers.RadioButtonAutomationPeer(chatBtn)
+                .GetPattern(System.Windows.Automation.Peers.PatternInterface.SelectionItem)).Select();
+            await Idle(200);
+            Check("activity bar: …and Select on Chat goes back", MainVm.SelectedNavItem == "Chat", MainVm.SelectedNavItem);
+        }
+        else Check("activity bar: the Models and Chat buttons exist", false, string.Join(",", rail.Select(r => r.CommandParameter)));
+
         Invoke(MainVm, "NavigateTo", "UiStudio");
         await Idle(300);
         var view = await WaitFor(() => Find<UiStudioView>(MainWin).FirstOrDefault(v => v.IsVisible));

@@ -2579,6 +2579,31 @@ internal static partial class Program
             Check("U10 narrow toast: the reason gets the toast's width and \"Compact now\" stays a button, not a tall block",
                 compactBtn.ActualHeight < 40 && reasonText.ActualWidth > 250, $"button {compactBtn.ActualHeight:F0}px high, reason {reasonText.ActualWidth:F0}px wide");
             Vm.ShowCompactionToast = false;
+            // A permission row with every allow choice, in the same narrow chat (owner 2026-10-20: "ปุ่มอนุมัติ ถ้าเป็นแบบแคบ
+            // มันมองไม่เห็น"): the buttons wrap onto a second line instead of running off the edge — Deny included.
+            var wide = new ChatMessage { Role = MessageRole.PermissionRequest, Content = "Allow mcp__brainx-brain__chrome__navigate?",
+                PermissionCanAllowForChat = true, PermissionCallback = _ => { } };
+            Vm.Messages.Add(wide);
+            await Task.Delay(150); await Render();
+            ChatList.ScrollIntoView(wide);
+            await Render();
+            SaveShot(Path.Combine(AppContext.BaseDirectory, "permission-narrow-th.png"));
+            var row = Container(wide);
+            double right = ChatList.ActualWidth;
+            var cut = new List<string>();
+            int shown = 0;
+            foreach (var id in new[] { "CxGuard.PermissionAllow", "CxGuard.PermissionAllowChat", "CxGuard.PermissionAllowDay", "CxGuard.PermissionDeny" })
+            {
+                var b = row == null ? null : Find<Button>(row).FirstOrDefault(e => System.Windows.Automation.AutomationProperties.GetAutomationId(e) == id);
+                if (b == null || !b.IsVisible) { cut.Add(id + " (missing)"); continue; }
+                shown++;
+                double r = b.TranslatePoint(new Point(b.ActualWidth, 0), ChatList).X;
+                if (r > right + 0.5) cut.Add($"{id} ends at {r:F0} > {right:F0}");
+            }
+            Check("U10 narrow permission row: Allow / Allow in this chat / Allow for today / Deny are all on screen (they wrap)",
+                shown == 4 && cut.Count == 0, string.Join("; ", cut));
+            wide.ResolvePermission(PermissionOutcome.Denied);
+            Vm.Messages.Remove(wide);
             Win.Width = 1100;
             await Task.Delay(150); await Render();
             Check("U10 wide: the buttons go back beside the options and the words come back",

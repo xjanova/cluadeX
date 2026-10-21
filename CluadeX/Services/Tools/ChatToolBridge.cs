@@ -34,6 +34,19 @@ public static class ChatToolBridge
         $"mcp__{ServerName}__{ProjectToolModule.CloseChatToolName}",
     };
 
+    /// <summary>
+    /// The CLI's permission prompt (<c>--permission-prompt-tool mcp__cluadex__approve</c>). A headless Claude Code run has
+    /// no one to ask, so an MCP tool it was not given up front (the Chrome connector, ssh_run…) was refused silently and
+    /// nothing showed in CluadeX (owner 2026-10-20: "มันต้องกดผ่าน CluadeX"). The CLI now calls this tool instead —
+    /// <c>{tool_name, input, tool_use_id}</c> — and CluadeX answers from the user's rules or its permission row in the
+    /// asking chat: <c>{"behavior":"allow","updatedInput":…}</c> / <c>{"behavior":"deny","message":…}</c>. Only MCP tools
+    /// are put to the user; the CLI's own tools stay exactly as the grant decided (refused here).
+    /// </summary>
+    public const string ApproveToolName = "approve";
+
+    /// <summary>The prompt tool as the CLI names it.</summary>
+    public static string ApproveToolQualified => $"mcp__{ServerName}__{ApproveToolName}";
+
     private const string TokenEnv = "CLUADEX_TOOLS_TOKEN";
     private const string PipeEnv = "CLUADEX_TOOLS_PIPE";
 
@@ -46,8 +59,11 @@ public static class ChatToolBridge
 
     private const int MaxLine = 1 << 20;
 
+    /// <summary>Decides one MCP call for the CLI's permission prompt: (qualified tool name, arguments) → (allow, reason).</summary>
+    public delegate Task<(bool Allow, string? Reason)> McpApprover(string qualifiedName, Dictionary<string, string> args);
+
     private sealed record Registration(AgentRunScope? Scope, Func<ToolCall, CancellationToken, Task<ToolResult>> Execute,
-        CancellationTokenSource Cts, string? Cwd);
+        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve);
 
     private static readonly ConcurrentDictionary<string, Registration> Turns = new(StringComparer.Ordinal);
 
@@ -70,10 +86,11 @@ public static class ChatToolBridge
     /// <summary>
     /// Let the Claude Dev turn in flight call the chat tools: <paramref name="execute"/> runs a call (the agent's own
     /// ExecuteToolAsync — permission gate included) inside <paramref name="scope"/>. Null when the config file cannot
-    /// be written (the turn then runs without these tools).
+    /// be written (the turn then runs without these tools). <paramref name="approve"/> answers the CLI's permission
+    /// prompt (<see cref="ApproveToolName"/>); without it every such question is refused, as before.
     /// </summary>
     public static Ticket? Register(AgentRunScope? scope, Func<ToolCall, CancellationToken, Task<ToolResult>> execute,
-        string? cwd, CancellationToken turn)
+        string? cwd, CancellationToken turn, McpApprover? approve = null)
     {
         try
         {
@@ -83,7 +100,7 @@ public static class ChatToolBridge
             SweepStale(dir);
             string file = Path.Combine(dir, $"claude-dev-tools-{token[..12]}.json");
             File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName), new UTF8Encoding(false));
-            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd);
+            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve);
             return new Ticket(token, file);
         }
         catch { return null; }
@@ -177,7 +194,14 @@ public static class ChatToolBridge
         string Str(string p) => root.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
         string token = Str("token"), tool = Str("tool");
         if (token.Length == 0 || !Turns.TryGetValue(token, out var reg))
-            return (false, "CluadeX: this Claude Dev turn is over (or the call did not come from it) — nothing was done.");
+        {
+            // The CLI reads a refusal from the verdict text: an error result would not be a "deny" it understands.
+            return tool == ApproveToolName
+                ? (true, Verdict(false, default, "CluadeX: this Claude Dev turn is over (or the question did not come from it)."))
+                : (false, "CluadeX: this Claude Dev turn is over (or the call did not come from it) — nothing was done.");
+        }
+        if (tool == ApproveToolName)
+            return (true, await ApproveAsync(root, reg).ConfigureAwait(false));
         var type = new ProjectToolModule().ResolveToolType(tool);
         if (type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat))
             return (false, $"CluadeX: '{tool}' is not one of its chat tools (open_project, new_chat, close_chat).");
@@ -196,6 +220,48 @@ public static class ChatToolBridge
         if (result.Success && type == ToolType.OpenProject) text += "\n\n" + OpenProjectNote(reg.Cwd);
         return (result.Success, text);
     }
+
+    /// <summary>The CLI's permission question → the verdict JSON it expects as the tool's text.</summary>
+    private static async Task<string> ApproveAsync(JsonElement request, Registration reg)
+    {
+        var args = request.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : default;
+        string name = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("tool_name", out var n)
+            && n.ValueKind == JsonValueKind.String ? n.GetString() ?? "" : "";
+        var input = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("input", out var i) && i.ValueKind == JsonValueKind.Object
+            ? i : default;
+        if (RefusalFor(name, reg.Approve != null) is { } refusal) return Verdict(false, input, refusal);
+        if (reg.Cts.Token.IsCancellationRequested) return Verdict(false, input, "CluadeX: this Claude Dev turn is over.");
+        var callArgs = new Dictionary<string, string>();
+        if (input.ValueKind == JsonValueKind.Object)
+            foreach (var p in input.EnumerateObject())
+                callArgs[p.Name] = p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? "" : p.Value.GetRawText();
+        // Asked inside the chat's run: the permission row lands in the chat that is running this turn.
+        AgentRunScope.Enter(reg.Scope);
+        var (allow, reason) = await reg.Approve!(name, callArgs).ConfigureAwait(false);
+        return Verdict(allow, input, allow ? null : reason ?? $"The user did not allow {name} in CluadeX.");
+    }
+
+    /// <summary>Why a permission question is refused without asking anyone (null = put it to CluadeX's gate).
+    /// Pure: the harness checks it.</summary>
+    public static string? RefusalFor(string toolName, bool canAsk)
+    {
+        if (!canAsk) return "CluadeX: this turn has no permission prompt — only the tools CluadeX gave it can run.";
+        if (!toolName.StartsWith("mcp__", StringComparison.Ordinal) || toolName.Length <= 5)
+            return $"CluadeX: '{toolName}' is not open in this turn. CluadeX gives the CLI's own tools (edit, shell, web) from "
+                 + "your rules and Accept edits for the folder; only MCP tools are asked about here.";
+        if (toolName.StartsWith($"mcp__{ServerName}__", StringComparison.Ordinal))
+            return $"CluadeX: '{toolName}' is not one of its chat tools for this turn.";
+        return null;
+    }
+
+    /// <summary>The verdict text the Claude Code CLI reads from its --permission-prompt-tool. Pure.</summary>
+    public static string Verdict(bool allow, JsonElement input, string? message) => allow
+        ? JsonSerializer.Serialize(new
+        {
+            behavior = "allow",
+            updatedInput = input.ValueKind == JsonValueKind.Object ? input : JsonDocument.Parse("{}").RootElement,
+        }, Json)
+        : JsonSerializer.Serialize(new { behavior = "deny", message = message ?? "Denied by CluadeX." }, Json);
 
     /// <summary>What open_project means for a CLI that keeps the folder it started in.</summary>
     public static string OpenProjectNote(string? cwd) =>
@@ -297,6 +363,22 @@ public static class ChatToolBridge
               + "with its path. Never answer that you cannot open a folder."
             : s.Description,
         inputSchema = s.InputSchema,
+    }).Append(new
+    {
+        name = ApproveToolName,
+        description = "CluadeX's permission prompt for the Claude Code CLI (--permission-prompt-tool): the CLI calls it before "
+            + "an MCP tool it was not given up front, and CluadeX asks the user. Do not call it yourself.",
+        inputSchema = (object)new
+        {
+            type = "object",
+            properties = new
+            {
+                tool_name = new { type = "string" },
+                input = new { type = "object" },
+                tool_use_id = new { type = "string" },
+            },
+            required = new[] { "tool_name", "input" },
+        },
     }).ToArray();
 
     /// <summary>The request id echoed exactly: a string stays a string, a number a number.</summary>

@@ -1240,6 +1240,7 @@ public partial class ChatViewModel : ViewModelBase
             prompt.PermissionCallback = allow =>
             {
                 if (allow && prompt.PermissionAllowedForChat) info.AllowedForChat = true;   // read by the asking tool
+                if (allow && prompt.PermissionAllowedForDay) info.AllowedForDay = true;
                 if (allow && prompt.PermissionAllowedAlways) info.AllowedAlways = true;
                 tcs.TrySetResult(allow);
                 reg.Dispose();
