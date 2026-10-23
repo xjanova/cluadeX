@@ -354,6 +354,8 @@ public class AppSettings
     public DateTime? CreditBalanceSetAt { get; set; }
     /// <summary>Today's spend at the moment the balance was entered (what that day spent before it is not subtracted).</summary>
     public decimal CreditBalanceSpentThatDay { get; set; }
+    /// <summary>Independent API credit anchors and package prices; legacy unassigned credit stays separate.</summary>
+    public Dictionary<string, ProviderSpendSettings> ProviderSpending { get; set; } = new();
 
     // Model Catalog view preference — list (default) vs grid (2-column tiles).
     public bool ModelCatalogGridView { get; set; } = false;

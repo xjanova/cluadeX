@@ -404,6 +404,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             {
                 foreach (var claudeLine in translator.Translate(line))
                 {
+                    DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
                     try { sink?.Invoke(claudeLine); } catch { }
                 }
                 if (sink == null && translator.TakeText() is { Length: > 0 } text)
@@ -420,7 +421,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             }
             foreach (var claudeLine in translator.Flush())
             {
-                try { sink?.Invoke(claudeLine); } catch { }
+                DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
+                    try { sink?.Invoke(claudeLine); } catch { }
             }
             if (sink == null && translator.TakeText() is { Length: > 0 } rest) { any = true; yield return rest; }
             await proc.WaitForExitAsync(timeout.Token);
@@ -753,6 +755,7 @@ public sealed class GeminiStreamTranslator
                 var result = new JsonObject { ["type"] = "result", ["is_error"] = ResultIsError };
                 if (ResultText != null) result["result"] = ResultText;
                 if (ev["stats"] is JsonObject stats && stats["tool_calls"] is JsonValue calls) result["num_turns"] = calls.DeepClone();
+                result["usage"] = DelegatedUsageEstimate.NormalizeUsage(ev["stats"] as JsonObject, inputIncludesCache: true);
                 output.Add(Json(result));
                 break;
             }

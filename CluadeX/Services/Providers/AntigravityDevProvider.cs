@@ -424,6 +424,7 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
                 }
                 foreach (var claudeLine in claudeLines)
                 {
+                    DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
                     try { sink?.Invoke(claudeLine); } catch { }
                 }
                 if (sink == null && translator.TakeText() is { Length: > 0 } text)
@@ -449,7 +450,8 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
             }
             foreach (var claudeLine in translator.Flush())
             {
-                try { sink?.Invoke(claudeLine); } catch { }
+                DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
+                    try { sink?.Invoke(claudeLine); } catch { }
             }
             if (sink == null && translator.TakeText() is { Length: > 0 } rest) { any = true; yield return rest; }
             await proc.WaitForExitAsync(timeout.Token);
@@ -738,6 +740,7 @@ public sealed class AntigravityStreamTranslator
                 var result = new JsonObject { ["type"] = "result", ["is_error"] = ResultIsError };
                 if (ResultText != null) result["result"] = ResultText;
                 if (r?["num_turns"] is JsonValue turns) result["num_turns"] = turns.DeepClone();
+                result["usage"] = DelegatedUsageEstimate.NormalizeUsage(r?["usage"] as JsonObject);
                 output.Add(Json(result));
                 break;
             }

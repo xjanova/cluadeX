@@ -602,6 +602,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                     ReadEffortReport();
                     // The structured events (rows, plan, steps) — the agent loop renders them. A UI handler that throws
                     // must not end a half-hour task.
+                    DelegatedUsageEstimate.Current.Value?.Feed(line);
                     try { sink?.Invoke(line); } catch { }
                     if (failed)
                     {

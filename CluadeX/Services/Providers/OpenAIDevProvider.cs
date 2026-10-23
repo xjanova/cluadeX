@@ -315,6 +315,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             {
                 foreach (var claudeLine in translator.Translate(line))
                 {
+                    DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
                     try { sink?.Invoke(claudeLine); } catch { }
                 }
                 if (sink == null && translator.TakeText() is { Length: > 0 } text)
@@ -546,7 +547,8 @@ public sealed class CodexStreamTranslator
                 break;
             case "turn.completed":
                 Done = true;
-                output.Add(Json(new JsonObject { ["type"] = "result", ["is_error"] = false }));
+                output.Add(Json(new JsonObject { ["type"] = "result", ["is_error"] = false,
+                    ["usage"] = DelegatedUsageEstimate.NormalizeUsage(ev["usage"] as JsonObject, inputIncludesCache: true) }));
                 break;
             case "turn.failed":
                 Done = true;

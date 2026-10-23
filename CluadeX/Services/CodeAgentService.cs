@@ -2099,6 +2099,16 @@ public partial class CodeAgentService
             + (cliAgent ? $" · edit={grant?.Edit == true} run={grant?.Run == true}" : ""));
         var cdResult = new AgentLoopResult { TurnCount = 1 };
         var cdText = new StringBuilder();
+        var usageEstimate = new Providers.DelegatedUsageEstimate(_settingsService.Settings.ProviderConfigs.GetValueOrDefault(delegated.ToString())?.EffectiveModelId);
+        bool packageUsageRecorded = false;
+        void RecordPackageUsage(string text)
+        {
+            if (!cliAgent || packageUsageRecorded) return;
+            packageUsageRecorded = true;
+            string context = string.Join("\n", sendHistory.Select(m => m.Content)) + "\n" + sendMessage;
+            var usage = usageEstimate.Estimate(delegated.ToString(), context, text);
+            _costTrackingService?.RecordPackageUsage(delegated.ToString(), usage.EquivalentUsd, usage.Input, usage.Output, usage.Method, usageEstimate.CacheReadTokens);
+        }
         // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
         var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
         // CluadeX's chat tools for the CLI (open_project / new_chat / close_chat, run here through the same gate inside
@@ -2120,6 +2130,8 @@ public partial class CodeAgentService
         }
         Providers.ClaudeDevProvider.Grant.Value = grant;
         Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
+        var previousUsageEstimate = Providers.DelegatedUsageEstimate.Current.Value;
+        if (cliAgent) Providers.DelegatedUsageEstimate.Current.Value = usageEstimate;
         // The cowork room's agents work in the project too: the request tells them what the owner's rules allow (the same
         // grant Claude Dev gets), instead of always "you may edit files there directly".
         if (delegated == AiProviderType.BrainX) Providers.BrainXRoomProvider.Grant.Value = WorkerGrantFor(folder);
@@ -2133,6 +2145,7 @@ public partial class CodeAgentService
         }
         catch (OperationCanceledException) when (turn != null)
         {
+            if (usageEstimate.HasReportedUsage || turn.HasOutput) RecordPackageUsage(turn.Answer);
             // Stopped mid-task: what it did so far still goes to the brain, as for the native loop.
             SaveRunToBrain(userMessage, new AgentLoopResult
             {
@@ -2143,6 +2156,7 @@ public partial class CodeAgentService
         finally
         {
             Providers.ClaudeDevProvider.Grant.Value = null;
+            Providers.DelegatedUsageEstimate.Current.Value = previousUsageEstimate;
             Providers.ClaudeDevProvider.StreamSink.Value = null;
             Providers.ClaudeDevProvider.Extras.Value = null;
             Providers.BrainXRoomProvider.Grant.Value = null;
@@ -2183,12 +2197,14 @@ public partial class CodeAgentService
             _debugLog?.Info("Agent", $"{delegated} worker turn done · steps={turn.Steps.Count} tools={cdResult.TotalToolCalls}"
                 + $" plan={turn.Plan.Count} error={turn.ResultIsError} textLen={text.Length}"
                 + (turn.CostUsd is { } usd ? $" · CLI-reported ${usd:0.000}" : ""));
+            if (!cdResult.AuthRefused && (usageEstimate.HasReportedUsage || turn.HasOutput)) RecordPackageUsage(text);
             if (!cdResult.AuthRefused) SaveRunToBrain(userMessage, cdResult);   // a sign-in refusal is not a lesson
             return cdResult;
         }
         cdResult.FinalResponse = cdText.ToString().Trim();
         cdResult.AuthRefused = provider is Providers.IDelegatedCliProvider { LastTurnAuthRefused: true };
         cdResult.Success = cdResult.FinalResponse.Length > 0 && !cdResult.AuthRefused;
+        if (cdResult.Success) RecordPackageUsage(cdResult.FinalResponse);
         cdResult.StopReason = cdResult.Success ? "end_turn" : "error";
         cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = cdResult.FinalResponse });
         _debugLog?.Info("Agent", $"{delegated} passthrough done · textLen={cdResult.FinalResponse.Length}");

@@ -236,6 +236,18 @@ internal static partial class Program
         LocalizedResources.Instance.Initialize(LocSvc);
         LocSvc.SetLanguage("en");
 
+        if (Environment.GetEnvironmentVariable("CHATTEST_ONLY") == "USAGE")
+        {
+            await TestUsageWindow();
+            await TestUsageFilters();
+            var changedProfile = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var at) && at != kv.Value).Select(kv => kv.Key).ToList();
+            Check("usage tests leave the real profile unchanged", changedProfile.Count == 0, string.Join(", ", changedProfile));
+            Log($"\n## Result (CHATTEST_ONLY=USAGE): {Pass} pass / {Fail} FAIL");
+            foreach (var f in Failures) Log("  - " + f);
+            sp.Dispose();
+            return Fail == 0 ? 0 : 1;
+        }
+
         Db = sp.GetRequiredService<DatabaseService>();
         Persist = sp.GetRequiredService<ChatPersistenceService>();
         Providers = sp.GetRequiredService<AiProviderManager>();
@@ -296,6 +308,7 @@ internal static partial class Program
         await TestAskUserAndPinnedFolder();   // Q + S
         await TestControlStrip();             // U7: model / approvals / budget / spend under the input box
         await TestUsageWindow();              // U8: the spend window — paid vs without savings, credit left
+        await TestUsageFilters();             // provider colours, multi-select, dates, viewport sizing
         TestAutoCompact();                    // U9: the compaction toast's "compact by itself" tick
         await TestNarrowComposer();           // U10: the composer docked beside the editor
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
@@ -2250,6 +2263,8 @@ internal static partial class Program
         string ledger = Path.Combine(Settings.DataRoot, "usage-daily.json");
         string? ledgerBefore = File.Exists(ledger) ? File.ReadAllText(ledger) : null;
         var s0 = Settings.Settings;
+        var billingBefore = s0.ProviderSpending;
+        s0.ProviderSpending = new();
         (decimal? bal, DateTime? at, decimal spentThatDay) balanceBefore = (s0.CreditBalanceUsd, s0.CreditBalanceSetAt, s0.CreditBalanceSpentThatDay);
         UsageWindow? win = null;
         try
@@ -2277,11 +2292,7 @@ internal static partial class Program
             double tallest = vm.Bars.Max(b => b.PaidHeight + b.SavedHeight);
             Check("U8 bars: the tallest bar (paid + saved = without savings) fills the chart; a day with no use is empty",
                 Math.Abs(tallest - UsageViewModel.ChartHeight) < 0.01 && vm.Bars.Any(b => b.PaidHeight == 0 && b.SavedHeight == 0), $"tallest {tallest:F2}");
-            var inv = System.Globalization.CultureInfo.InvariantCulture;   // ledger keys are Gregorian (a Thai UI culture is Buddhist-era)
-            decimal spent = days.Where(kv => DateTime.ParseExact(kv.Key, "yyyy-MM-dd", inv) > anchor.Date).Sum(kv => kv.Value.Usd)
-                            + Math.Max(0, days[anchor.Date.ToString("yyyy-MM-dd", inv)].Usd - 0.25m);
-            Check("U8 credit: entered $50 six days ago, minus what was spent after it (that morning's $0.25 not counted)",
-                vm.HasBalance && vm.BalanceText.Contains(UsageViewModel.Usd(50m - spent)), $"{vm.BalanceText} expected {UsageViewModel.Usd(50m - spent)}");
+            Check("U8 old shared credit is preserved without silently assigning it to a provider", !vm.HasBalance && vm.HasLegacyCredit && Settings.Settings.CreditBalanceUsd == 50m);
             Check("U8 credit input: '$12.50', '12,50' and '25' parse; 'abc' and '-3' don't",
                 UsageViewModel.TryParseUsd("$12.50", out var a1) && a1 == 12.5m && UsageViewModel.TryParseUsd("12,50", out var a2) && a2 == 12.5m
                 && UsageViewModel.TryParseUsd("25", out var a3) && a3 == 25m && !UsageViewModel.TryParseUsd("abc", out _) && !UsageViewModel.TryParseUsd("-3", out _));
@@ -2311,15 +2322,16 @@ internal static partial class Program
             bool refused = vm.BalanceError.Length > 0 && Settings.Settings.CreditBalanceUsd == 50m;
             vm.BalanceInput = "20";
             vm.SetBalanceCommand.Execute(null);
-            Check("U8 credit: a bad entry is refused with a message; '20' sets the balance now and counts from here",
-                refused && Settings.Settings.CreditBalanceUsd == 20m && vm.BalanceError.Length == 0 && vm.BalanceText.Contains("$20.00"), vm.BalanceText);
+            Check("U8 credit: a bad entry is refused; '20' anchors only this provider and leaves legacy credit intact",
+                refused && Settings.Settings.ProviderSpending["Anthropic"].CreditBalanceUsd == 20m && Settings.Settings.CreditBalanceUsd == 50m
+                && vm.BalanceError.Length == 0 && vm.BalanceText.Contains("$20.00"), vm.BalanceText);
             LocSvc.SetLanguage("en");
         }
         finally
         {
             win?.Close();
             if (ledgerBefore != null) File.WriteAllText(ledger, ledgerBefore); else File.Delete(ledger);
-            Settings.UpdateSettings(s => { s.CreditBalanceUsd = balanceBefore.bal; s.CreditBalanceSetAt = balanceBefore.at; s.CreditBalanceSpentThatDay = balanceBefore.spentThatDay; });
+            Settings.UpdateSettings(s => { s.ProviderSpending = billingBefore; s.CreditBalanceUsd = balanceBefore.bal; s.CreditBalanceSetAt = balanceBefore.at; s.CreditBalanceSpentThatDay = balanceBefore.spentThatDay; });
         }
     }
 

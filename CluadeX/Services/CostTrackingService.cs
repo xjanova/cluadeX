@@ -33,7 +33,8 @@ public class CostTrackingService
     private readonly Dictionary<string, DailyUsage> _days = new();
     private DateTime _lastLedgerSave = DateTime.MinValue;
     private bool _ledgerDirty;
-    private const int LedgerKeepDays = 90;
+    // Monthly comparisons and long-lived credit anchors must survive beyond the old three-month window.
+    private const int LedgerKeepDays = 3660;
 
     public CostTrackingService() { }
 
@@ -90,16 +91,68 @@ public class CostTrackingService
     /// <summary>The last <paramref name="days"/> local days, oldest first, today last; with <paramref name="provider"/>
     /// only that provider's share (days recorded before the split count as none).</summary>
     public IReadOnlyList<UsageDay> LastDays(int days, string? provider)
+        => days <= 0 ? Array.Empty<UsageDay>() : Between(DateTime.Today.AddDays(1 - days), DateTime.Today, provider);
+
+    public const string UnattributedProvider = "__unattributed";
+
+    /// <summary>Old ledger rows have totals without provider attribution. Keep them visible exactly once.</summary>
+    private static DailyUsage Unattributed(DailyUsage all)
     {
-        var list = new List<UsageDay>(Math.Max(0, days));
+        var parts = all.ByProvider?.Values.ToList() ?? new List<DailyUsage>();
+        return new DailyUsage
+        {
+            Usd = Math.Max(0, all.Usd - parts.Sum(p => p.Usd)),
+            BaselineUsd = Math.Max(0, Math.Max(all.BaselineUsd, all.Usd) - parts.Sum(p => Math.Max(p.BaselineUsd, p.Usd))),
+            Requests = Math.Max(0, all.Requests - parts.Sum(p => p.Requests)),
+            InputTokens = Math.Max(0, all.InputTokens - parts.Sum(p => p.InputTokens)),
+            CacheReadTokens = Math.Max(0, all.CacheReadTokens - parts.Sum(p => p.CacheReadTokens)),
+            OutputTokens = Math.Max(0, all.OutputTokens - parts.Sum(p => p.OutputTokens)),
+            SavedCacheUsd = all.SavedCacheUsd - parts.Sum(p => p.SavedCacheUsd),
+            SavedToolSearchUsd = all.SavedToolSearchUsd - parts.Sum(p => p.SavedToolSearchUsd),
+            SavedCompactionUsd = all.SavedCompactionUsd - parts.Sum(p => p.SavedCompactionUsd),
+            SavedBatchUsd = all.SavedBatchUsd - parts.Sum(p => p.SavedBatchUsd),
+        };
+    }
+
+    public DateTime FirstUsageDay
+    {
+        get
+        {
+            lock (_lock) return _days.Keys.Select(k => DateTime.TryParseExact(k, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var d) ? d : DateTime.Today).DefaultIfEmpty(DateTime.Today).Min();
+        }
+    }
+
+    public IReadOnlyList<string> RecordedProviders
+    {
+        get
+        {
+            lock (_lock)
+            {
+                var keys = _days.Values.SelectMany(d => d.ByProvider?.Keys.AsEnumerable() ?? Enumerable.Empty<string>()).ToHashSet(StringComparer.Ordinal);
+                if (_days.Values.Any(d => { var u = Unattributed(d); return u.Usd != 0 || u.Requests != 0 || u.InputTokens != 0 || u.OutputTokens != 0; }))
+                    keys.Add(UnattributedProvider);
+                return keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            }
+        }
+    }
+
+    /// <summary>Inclusive local dates, zero-filled, without changing the ledger or its historical provider split.</summary>
+    public IReadOnlyList<UsageDay> Between(DateTime start, DateTime end, string? provider = null)
+    {
+        start = start.Date; end = end.Date;
+        if (end < start) return Array.Empty<UsageDay>();
+        int days = (end - start).Days + 1;
+        if (days > 3660) throw new ArgumentOutOfRangeException(nameof(start), "Choose at most ten years.");
+        var list = new List<UsageDay>(days);
         lock (_lock)
         {
-            for (int i = days - 1; i >= 0; i--)
+            for (int i = 0; i < days; i++)
             {
-                var d = DateTime.Today.AddDays(-i);
+                var d = start.AddDays(i);
                 DailyUsage? u = null;
                 if (_days.TryGetValue(DayKey(d), out var all))
-                    u = provider == null ? all : all.ByProvider?.GetValueOrDefault(provider);
+                    u = provider == null ? all : provider == UnattributedProvider ? Unattributed(all) : all.ByProvider?.GetValueOrDefault(provider);
                 list.Add(u != null
                     ? new UsageDay(d, u.Usd, Math.Max(u.BaselineUsd, u.Usd), u.Requests, u.SavedCacheUsd, u.SavedToolSearchUsd,
                         u.SavedCompactionUsd, u.SavedBatchUsd, u.InputTokens, u.CacheReadTokens, u.OutputTokens)
@@ -114,7 +167,7 @@ public class CostTrackingService
 
     /// <summary>Spent since a moment: the days after <paramref name="anchor"/>'s day, plus what its day spent after it
     /// (<paramref name="spentOnAnchorDayAtAnchor"/> = that day's total at the moment). Days older than the ledger keeps are gone.</summary>
-    public decimal SpentSince(DateTime anchor, decimal spentOnAnchorDayAtAnchor)
+    public decimal SpentSince(DateTime anchor, decimal spentOnAnchorDayAtAnchor, string? provider = null)
     {
         lock (_lock)
         {
@@ -123,11 +176,36 @@ public class CostTrackingService
             {
                 if (!DateTime.TryParseExact(key, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
                         System.Globalization.DateTimeStyles.None, out var day)) continue;
-                if (day.Date > anchor.Date) sum += u.Usd;
-                else if (day.Date == anchor.Date) sum += Math.Max(0, u.Usd - spentOnAnchorDayAtAnchor);
+                var part = provider == null ? u : provider == UnattributedProvider ? Unattributed(u) : u.ByProvider?.GetValueOrDefault(provider);
+                if (part == null) continue;
+                if (day.Date > anchor.Date) sum += part.Usd;
+                else if (day.Date == anchor.Date) sum += Math.Max(0, part.Usd - spentOnAnchorDayAtAnchor);
             }
             return sum;
         }
+    }
+
+    /// <summary>CLI usage is an estimated API-equivalent value, never an extra API charge or a budget deduction.</summary>
+    public void RecordPackageUsage(string provider, decimal equivalentUsd, int inputTokens, int outputTokens, string method, int cacheReadTokens = 0)
+    {
+        if (!ProviderCostProjection.IsPackage(provider)) return;
+        lock (_lock)
+        {
+            string day = DayKey(DateTime.Now);
+            if (!_days.TryGetValue(day, out var all)) _days[day] = all = new DailyUsage();
+            all.ByProvider ??= new();
+            if (!all.ByProvider.TryGetValue(provider, out var part)) all.ByProvider[provider] = part = new DailyUsage();
+            foreach (var u in new[] { all, part })
+            {
+                u.BaselineUsd += Math.Max(0, equivalentUsd);
+                u.InputTokens += Math.Max(0, inputTokens); u.OutputTokens += Math.Max(0, outputTokens); u.Requests++;
+                u.CacheReadTokens += Math.Max(0, cacheReadTokens);
+            }
+            part.EstimateMethod = method;
+            _ledgerDirty = true;
+        }
+        FlushLedger();
+        OnCostUpdated?.Invoke(GetSummary());
     }
 
     /// <summary>Write the ledger now (app exit; otherwise it is written at most every few seconds).</summary>
@@ -317,11 +395,15 @@ public class CostTrackingService
     /// <summary>Every strategy with a run in the last <paramref name="days"/> local days (today included), in
     /// <see cref="Agents.DispatchPolicy.AllTags"/> order, then any other tag.</summary>
     public IReadOnlyList<StrategyRow> StrategyBreakdown(int days)
+        => days <= 0 ? Array.Empty<StrategyRow>() : StrategyBreakdown(DateTime.Today.AddDays(1 - days), DateTime.Today);
+
+    public IReadOnlyList<StrategyRow> StrategyBreakdown(DateTime start, DateTime end)
     {
         var sum = new Dictionary<string, StrategyUsage>(StringComparer.Ordinal);
         lock (_lock)
-            for (int i = 0; i < days; i++)
-                if (_days.TryGetValue(DayKey(DateTime.Today.AddDays(-i)), out var u) && u.ByStrategy != null)
+            foreach (var (key, u) in _days)
+                if (DateTime.TryParseExact(key, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var day) && day >= start.Date && day <= end.Date && u.ByStrategy != null)
                     foreach (var (k, v) in u.ByStrategy)
                     {
                         if (!sum.TryGetValue(k, out var t)) sum[k] = t = new StrategyUsage();
@@ -497,6 +579,7 @@ public record ModelPricing(decimal InputPerMToken, decimal OutputPerMToken,
 /// <summary>One day of the ledger. The baseline and the saved-by parts are 0 on days recorded before they existed.</summary>
 public class DailyUsage
 {
+    public string? EstimateMethod { get; set; }
     public decimal Usd { get; set; }
     public int Requests { get; set; }
     /// <summary>What the same work would have cost with no saving (<see cref="CostTrackingService.Price"/>).</summary>
