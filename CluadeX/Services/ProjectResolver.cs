@@ -1,5 +1,7 @@
 using System.IO;
 using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace CluadeX.Services;
 
@@ -12,7 +14,8 @@ namespace CluadeX.Services;
 /// Matching, best first: the same name ignoring case and separators ("cluadex academic" = CluadeX-Academic), then one
 /// name containing the other, then a typo (edit distance ≤ 2 for names of 5+ letters). Candidates are the projects
 /// opened before and the folders one level under the project roots (the folders that hold several known projects, and
-/// the user's own default root). Ties go to the project opened more often. Pure apart from the two folder functions.
+/// the user's own default root). Product aliases from README/.csproj also match; an exact folder name wins first.
+/// Ties go to the project opened more often. I/O is supplied by the folder and alias functions.
 /// </summary>
 public static class ProjectResolver
 {
@@ -23,7 +26,8 @@ public static class ProjectResolver
     public sealed record Result(string? Found, IReadOnlyList<string> Matches, string NewPath);
 
     public static Result Resolve(string name, IReadOnlyList<Candidate> known, IEnumerable<string> roots,
-        Func<string, IEnumerable<string>> listDirs, string defaultRoot)
+        Func<string, IEnumerable<string>> listDirs, string defaultRoot,
+        Func<string, IEnumerable<string>>? readAliases = null)
     {
         string want = Norm(name);
         var pool = new Dictionary<string, Candidate>(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +43,24 @@ public static class ProjectResolver
         string newPath = System.IO.Path.Combine(defaultRoot, FolderName(name));
         if (want.Length == 0) return new Result(null, Array.Empty<string>(), newPath);
 
+        Result? Match(Func<Candidate, bool> matches)
+        {
+            var hits = pool.Values.Where(matches)
+                .OrderByDescending(c => c.Opens).ThenByDescending(c => c.LastOpened).ThenBy(c => c.Path.Length).ToList();
+            if (hits.Count == 0) return null;
+            bool clear = hits.Count == 1 || hits[0].Opens >= 3 && hits[0].Opens >= 2 * Math.Max(1, hits[1].Opens);
+            return new Result(clear ? hits[0].Path : null, hits.Select(h => h.Path).ToList(), newPath);
+        }
+
+        // An exact folder/registry name is authoritative and needs no metadata scan.
+        if (Match(c => Norm(c.Name) == want) is { } exact) return exact;
+        var aliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in pool.Values)
+        {
+            try { aliases[c.Path] = readAliases?.Invoke(c.Path).Select(Norm).Where(n => n.Length > 0).Distinct().ToArray() ?? Array.Empty<string>(); }
+            catch { aliases[c.Path] = Array.Empty<string>(); }
+        }
+
         foreach (var tier in new Func<string, bool>[]
                  {
                      n => n == want,
@@ -46,14 +68,79 @@ public static class ProjectResolver
                      n => want.Length >= 5 && n.Length >= 5 && Distance(n, want) <= 2,
                  })
         {
-            var hits = pool.Values.Where(c => tier(Norm(c.Name)))
-                .OrderByDescending(c => c.Opens).ThenByDescending(c => c.LastOpened).ThenBy(c => c.Path.Length).ToList();
-            if (hits.Count == 0) continue;
-            // One clear winner: the only match, or the one opened clearly more often than the next.
-            bool clear = hits.Count == 1 || hits[0].Opens >= 3 && hits[0].Opens >= 2 * Math.Max(1, hits[1].Opens);
-            return new Result(clear ? hits[0].Path : null, hits.Select(h => h.Path).ToList(), newPath);
+            if (Match(c => tier(Norm(c.Name)) || aliases[c.Path].Any(tier)) is { } hit) return hit;
         }
         return new Result(null, Array.Empty<string>(), newPath);
+    }
+
+    /// <summary>Product names are data, never executable project evaluation. Bounded to shallow source folders;
+    /// skip junctions/build/vendor folders and ignore unreadable or malformed metadata.</summary>
+    public static IEnumerable<string> ReadAliases(string path)
+    {
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? Read(string file)
+        {
+            try
+            {
+                var info = new FileInfo(file);
+                if (!info.Exists || info.Length > 65536 || (info.Attributes & FileAttributes.ReparsePoint) != 0) return null;
+                using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                var buffer = new char[65537];
+                int count = reader.ReadBlock(buffer, 0, buffer.Length);
+                return count <= 65536 ? new string(buffer, 0, count) : null;
+            }
+            catch { return null; }
+        }
+        try
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return aliases;
+            if (Read(Path.Combine(path, "README.md")) is { } readme)
+            {
+                var heading = readme.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("# "));
+                if (heading != null)
+                {
+                    string title = heading[2..].Split(new[] { " - ", " — ", " – ", ": " }, StringSplitOptions.None)[0].Trim(' ', '*', '`');
+                    if (title.Length is > 0 and <= 100) aliases.Add(title);
+                }
+            }
+            var folders = new Queue<(string Path, int Depth)>();
+            folders.Enqueue((path, 0));
+            int visited = 0, files = 0;
+            while (folders.Count > 0 && visited++ < 32 && files < 16)
+            {
+                var (dir, depth) = folders.Dequeue();
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(dir, "*.csproj").Take(16 - files))
+                    {
+                        files++;
+                        if (Read(file) is not { } xml) continue;
+                        try
+                        {
+                            using var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+                            foreach (var node in XDocument.Load(reader).Descendants().Where(e => e.Name.LocalName is "Product" or "AssemblyName" or "Title"))
+                            {
+                                string value = node.Value.Trim();
+                                if (value.Length is > 0 and <= 100 && !value.Contains("$(")) aliases.Add(value);
+                            }
+                        }
+                        catch { /* invalid XML is not a project name */ }
+                    }
+                    if (depth >= 2) continue;
+                    var children = Directory.EnumerateDirectories(dir).Where(d =>
+                    {
+                        string leaf = Path.GetFileName(d);
+                        return !leaf.StartsWith('.') && leaf.ToLowerInvariant() is not ("bin" or "obj" or "node_modules" or "vendor" or "packages")
+                            && (File.GetAttributes(d) & FileAttributes.ReparsePoint) == 0;
+                    }).Take(32).OrderByDescending(d => Path.GetFileName(d).Equals("src", StringComparison.OrdinalIgnoreCase));
+                    foreach (var child in children.Take(Math.Max(0, 32 - visited - folders.Count))) folders.Enqueue((child, depth + 1));
+                }
+                catch { /* missing or inaccessible folder */ }
+            }
+        }
+        catch { /* missing or inaccessible project */ }
+        return aliases;
     }
 
     /// <summary>

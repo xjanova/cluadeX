@@ -74,7 +74,7 @@ public sealed class ProjectToolModule : IAgentToolModule
                     ["type"] = "string",
                     ["description"] = "The project folder: its absolute path (e.g. D:\\Code\\Atmos) or just the project's name "
                         + "(e.g. \"atmos\") — CluadeX finds the folder among the projects on this PC (case, spaces and dashes "
-                        + "do not matter; small typos are forgiven).",
+                        + "do not matter; small typos are forgiven). Product names from README headings and .csproj metadata work too.",
                 },
                 ["add"] = new Dictionary<string, string>
                 {
@@ -391,7 +391,7 @@ public sealed class ProjectToolModule : IAgentToolModule
 
         string name = full != null ? Path.GetFileName(full) : raw;
         var (known, roots, defaultRoot) = Knowledge();
-        var found = ProjectResolver.Resolve(name, known, roots, SafeDirs, defaultRoot);
+        var found = ProjectResolver.Resolve(name, known, roots, SafeDirs, defaultRoot, ProjectResolver.ReadAliases);
         if (found.Found != null)
             return new Resolved(found.Found, false, full != null
                 ? $"(There is no folder at {full}; the project \"{name}\" is at {found.Found} — opened that.)"
@@ -404,7 +404,7 @@ public sealed class ProjectToolModule : IAgentToolModule
             string target = full ?? found.NewPath;
             return new Resolved(target, true, $"(Created the new project folder {target}.)", null);
         }
-        return new Resolved(null, false, null, (full != null ? $"No folder at {full}, and no project named \"{name}\" on this PC. " : $"No project named \"{name}\" on this PC. ")
+        return new Resolved(null, false, null, (full != null ? $"No folder at {full}, and no project named \"{name}\" in the known project folders. " : $"No project named \"{name}\" in the known project folders. ")
             + $"If the user wants a NEW project, call open_project again with create=\"true\" (it will be made at {found.NewPath}, "
             + "beside the user's other projects — or pass a full path to put it elsewhere). If it should exist, search for it (brain_search) or ask the user where it is.");
     }

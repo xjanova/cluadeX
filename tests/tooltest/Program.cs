@@ -295,6 +295,7 @@ internal static partial class Program
                     var twice = await T("open_project", ("path", "coffee shop site"), ("create", "true"));
                     Check("OP14", "asking to create it again opens the one that exists — no duplicate folder",
                         twice.Success && scope.WorkingDirectory == expected && Directory.GetDirectories(newRoot).Length == 1, Seen(twice));
+                    await ProjectAliases(newRoot, scope);
                 }
                 finally
                 {
