@@ -177,6 +177,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
               $"Project working directory: {cwd}. " +
               "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += "\n\n" + AgentPersona.Section(AiProviderType.GeminiDev, false);
         // The user's AI-comment instruction (CodeCommentPolicy); ArgumentList carries the line breaks as they are.
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
 

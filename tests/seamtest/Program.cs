@@ -513,6 +513,49 @@ internal static class Program
                 agent.InvalidateSystemPromptCache();
             }
         });
+        await Case("C2", async () =>
+        {
+            var agent = provider.GetRequiredService<CodeAgentService>();
+            var loc = provider.GetRequiredService<LocalizationService>();
+            var oldProvider = settings.Settings.ActiveProvider;
+            string oldLanguage = loc.CurrentLanguage;
+            string? oldVault = Environment.GetEnvironmentVariable("BRAINX_VAULT");
+            string vault = Path.Combine(Path.GetTempPath(), "cx-persona-cache-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(vault);
+            Environment.SetEnvironmentVariable("BRAINX_VAULT", vault);
+            try
+            {
+                settings.Settings.ActiveProvider = AiProviderType.OpenAI;
+                loc.SetLanguage("en");
+                agent.InvalidateSystemPromptCache();
+                string first = await agent.GetSystemPromptAsync();
+                Check("C2", "unchanged persona reuses the cached prompt", ReferenceEquals(first, await agent.GetSystemPromptAsync()));
+                string path = Path.Combine(vault, ".obsidianx", "agent-bus", "cowork", "personas.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, """{"codex":{"name":"CacheTestCodex","persona":"CACHE_PERSONA_OVERRIDE"}}""");
+                string edited = await agent.GetSystemPromptAsync();
+                Check("C2b", "new override reaches the next native prompt inside the cache window",
+                    edited.Contains("# Who you are: CacheTestCodex") && edited.Contains("CACHE_PERSONA_OVERRIDE") && !ReferenceEquals(first, edited));
+                loc.SetLanguage("th");
+                string thai = await agent.GetSystemPromptAsync();
+                Check("C2c", "language change immediately rebuilds the persona section", thai.Contains("# ตัวตนของคุณ: CacheTestCodex"));
+                settings.Settings.ActiveProvider = AiProviderType.Anthropic;
+                string switched = await agent.GetSystemPromptAsync();
+                Check("C2d", "provider change does not keep the previous character", switched.Contains("# ตัวตนของคุณ: Claude") && !switched.Contains("CacheTestCodex"));
+                settings.Settings.ActiveProvider = AiProviderType.OpenAI;
+                File.Delete(path);
+                string removed = await agent.GetSystemPromptAsync();
+                Check("C2e", "deleted override removes cached custom identity immediately", removed.Contains("# ตัวตนของคุณ: Codex") && !removed.Contains("CACHE_PERSONA_OVERRIDE"));
+            }
+            finally
+            {
+                settings.Settings.ActiveProvider = oldProvider;
+                loc.SetLanguage(oldLanguage);
+                Environment.SetEnvironmentVariable("BRAINX_VAULT", oldVault);
+                agent.InvalidateSystemPromptCache();
+                Directory.Delete(vault, true);
+            }
+        });
         await Case("S2", () =>
         {
             var fit = typeof(CodeAgentService).GetMethod("FitLocalToolSchemas", BindingFlags.NonPublic | BindingFlags.Static)!;

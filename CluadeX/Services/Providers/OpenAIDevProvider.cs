@@ -227,6 +227,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
               $"Project working directory: {cwd}. " +
               "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += "\n\n" + AgentPersona.Section(AiProviderType.OpenAIDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
         sb.Append("[CluadeX] ").Append(wrapper).Append("\n\n");

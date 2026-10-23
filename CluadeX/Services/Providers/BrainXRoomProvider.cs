@@ -439,6 +439,10 @@ public sealed class BrainXRoomProvider : IAiProvider
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine(RelayFooter + " (the owner is waiting there for your answer). Do not hand this back to cluadex.");
+        sb.AppendLine("Each responder must keep her OWN current cowork-room persona and answer style, including the owner's "
+            + "personas.json overrides. Do not adopt the relay's CluadeX persona or the previous model's identity. "
+            + "Reply in the owner's language; in Thai use feminine endings ค่ะ/คะ and ฉัน, never ผม/ครับ. "
+            + "Keep facts, code, paths and tool arguments exact; the character changes wording only.");
         if (folders.Count > 0)
         {
             // What the owner's own CluadeX rules allow in this project — the same rule Claude Dev runs under.

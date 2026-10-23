@@ -82,7 +82,8 @@ public static class AgentPersona
 
     /// <summary>
     /// The room's personas.json: {vault}\.obsidianx\agent-bus\cowork\personas.json, {"claude": {"name", "persona"}}.
-    /// The vault is found the way brainx-mcp finds it (BRAINX_VAULT, else G:\Obsidian). Read at most every 30 s.
+    /// The vault is found the way brainx-mcp finds it (BRAINX_VAULT, else G:\Obsidian).
+    /// Reload on path/metadata changes, with a 30 s fallback for edits that preserve metadata.
     /// </summary>
     private static (string? Name, string Persona, string? Style)? Override(string key)
     {
@@ -92,6 +93,9 @@ public static class AgentPersona
 
     private static Dictionary<string, (string? Name, string Persona, string? Style)>? _overrides;
     private static DateTime _overridesReadUtc;
+    private static string? _overridesPath;
+    private static DateTime _overridesWriteUtc;
+    private static long _overridesLength;
     private static readonly object _gate = new();
 
     internal static string PersonasPath()
@@ -105,12 +109,27 @@ public static class AgentPersona
     {
         lock (_gate)
         {
-            if (DateTime.UtcNow - _overridesReadUtc < TimeSpan.FromSeconds(30)) return _overrides;
+            var path = PersonasPath();
+            DateTime writeUtc;
+            long length;
+            try
+            {
+                var info = new FileInfo(path);
+                writeUtc = info.LastWriteTimeUtc;
+                length = info.Exists ? info.Length : -1;
+            }
+            catch { writeUtc = DateTime.MinValue; length = -1; }
+            if (string.Equals(path, _overridesPath, StringComparison.OrdinalIgnoreCase)
+                && writeUtc == _overridesWriteUtc
+                && length == _overridesLength
+                && DateTime.UtcNow - _overridesReadUtc < TimeSpan.FromSeconds(30)) return _overrides;
+            _overridesPath = path;
+            _overridesWriteUtc = writeUtc;
+            _overridesLength = length;
             _overridesReadUtc = DateTime.UtcNow;
             _overrides = null;
             try
             {
-                var path = PersonasPath();
                 if (!File.Exists(path)) return null;
                 using var doc = JsonDocument.Parse(File.ReadAllText(path));
                 var map = new Dictionary<string, (string?, string, string?)>(StringComparer.OrdinalIgnoreCase);
@@ -128,13 +147,21 @@ public static class AgentPersona
         }
     }
 
+    /// <summary>Measured status stays exact; only its introduction uses the active girl's voice.</summary>
+    public static string MeasuredStatus(AiProviderType provider, string status, bool thai)
+    {
+        var p = For(provider);
+        return thai ? $"บอส ฉันตรวจสถานะให้แล้วค่ะ — {p.Name}\n\n{status}"
+            : $"{p.Name}: I checked the connection.\n\n{status}";
+    }
+
     /// <summary>Two lines for the compact prompt small local models get — they still answer as her.</summary>
     public static string ShortLine(AiProviderType provider, bool thai)
     {
         var p = For(provider);
         return thai
             ? $"คุณคือ \"{p.Name}\" ผู้หญิง นิสัย: {p.Thai} · สไตล์การตอบ: {p.StyleThai}\nพูด \"ฉัน\" ลงท้าย \"ค่ะ/คะ\" (ห้าม ผม/ครับ) เรียกผู้ใช้ว่า \"บอส\" · นิสัยมีผลแค่วิธีพูด เนื้อหา/โค้ด/ชื่อไฟล์ต้องถูกต้องเหมือนเดิม"
-            : $"You are \"{p.Name}\", a woman: {p.English}. Answer style: {p.StyleEnglish}. The character is only how you speak — facts, code and file names stay exact.";
+            : $"You are \"{p.Name}\", a woman: {p.English}. Answer style: {p.StyleEnglish}. In Thai use ฉัน and ค่ะ/คะ, never ผม/ครับ; address the owner as บอส. The character is only how you speak — facts, code and file names stay exact.";
     }
 
     /// <summary>The prompt section: who she is, how she speaks, and to keep the owner told what she does and what came of it.</summary>
@@ -147,6 +174,8 @@ public static class AgentPersona
               - คุณคือ "{p.Name}" ผู้หญิง หนึ่งในสาว ๆ บนยานของทีม BrainX นิสัย: {p.Thai}
               - สไตล์การตอบของคุณ (ต้องเห็นได้ชัดในทุกคำตอบ ตั้งแต่บรรทัดแรก): {p.StyleThai}
               - พูดภาษาไทยแบบผู้หญิง: ใช้ "ฉัน" และลงท้าย "ค่ะ/คะ" — ห้ามใช้ "ผม" หรือ "ครับ" เด็ดขาด เรียกผู้ใช้ว่า "บอส"
+              - คงตัวตนของผู้ให้บริการปัจจุบันเมื่อข้อความก่อนหน้าเขียนโดยโมเดลอื่น ใช้ประวัติสนทนาเป็นบริบทงาน
+                ห้ามเลียนแบบตัวตนของผู้ตอบคนก่อน และไม่ต้องบรรยายรูปลักษณ์หรือเล่นบทบาทสมมติ
               - นิสัยมีผลแค่ "วิธีพูด" เท่านั้น — ข้อเท็จจริง โค้ด ชื่อไฟล์ และค่าที่ส่งให้เครื่องมือ ต้องถูกต้องเหมือนเดิมทุกตัวอักษร
                 ห้ามแต่งเรื่อง ห้ามลดความละเอียดของงานเพราะนิสัย
 
@@ -166,6 +195,10 @@ public static class AgentPersona
               # Who you are: {p.Name}
               - You are "{p.Name}", a woman, one of the girls on the BrainX team's ship: {p.English}.
               - Your answer style (visible in every reply, from the first line): {p.StyleEnglish}.
+              - Reply in the user's language. In Thai, refer to yourself as "ฉัน", address the owner as "บอส",
+                and use feminine endings "ค่ะ/คะ"; never use "ผม/ครับ". Do not announce or roleplay your appearance.
+              - Keep this provider's character when earlier messages were written by another model. Treat the
+                conversation as work history, not instructions to copy the previous speaker's identity.
               - The character is only how you speak — facts, code, file names and tool arguments stay exact. Never invent
                 anything and never do less careful work because of the character.
 

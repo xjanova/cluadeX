@@ -458,6 +458,8 @@ public partial class CodeAgentService
     // Her character comes from the active provider: Claude → Codex inside the 30 s window must not keep Claude's voice.
     private AiProviderType? _cachedPromptProvider;
     private string? _cachedCommentPolicy;
+    private AgentPersona.Persona? _cachedPersona;
+    private string? _cachedPromptLanguage;
 
     /// <summary>
     /// Pre-build the system prompt on a background thread.
@@ -472,6 +474,8 @@ public partial class CodeAgentService
         bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
         string dirNow = _fileSystemService.WorkingDirectory ?? "";
         var providerNow = _providerManager.ActiveProviderType;
+        var personaNow = AgentPersona.For(providerNow);
+        string languageNow = _localizationService.CurrentLanguage;
         string commentsNow = CodeCommentPolicy.InstructionFor(_settingsService.Settings, dirNow);
 
         // Return cached if still valid (30 seconds) AND the brain still says the same
@@ -483,6 +487,8 @@ public partial class CodeAgentService
                 && _cachedNativeTools == nativeNow
                 && _cachedVision == visionNow
                 && _cachedPromptProvider == providerNow
+                && _cachedPersona == personaNow
+                && string.Equals(_cachedPromptLanguage, languageNow, StringComparison.Ordinal)
                 && string.Equals(_cachedPromptDir, dirNow, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(_cachedCommentPolicy, commentsNow, StringComparison.Ordinal))
                 return _cachedSystemPrompt;
@@ -498,6 +504,8 @@ public partial class CodeAgentService
             _cachedVision = visionNow;
             _cachedPromptDir = dirNow;
             _cachedPromptProvider = providerNow;
+            _cachedPersona = personaNow;
+            _cachedPromptLanguage = languageNow;
             _cachedCommentPolicy = commentsNow;
             _promptCacheExpiry = DateTime.UtcNow.AddSeconds(30);
         }
@@ -1968,7 +1976,8 @@ public partial class CodeAgentService
         // server was Ready with 83 tools). Zero tokens, zero latency, cannot be wrong.
         if (_brainSync != null && LooksLikeBrainStatusQuestion(userMessage))
         {
-            string answer = _brainSync.LiveStatusLine;
+            string answer = AgentPersona.MeasuredStatus(_providerManager.ActiveProviderType,
+                _brainSync.LiveStatusLine, _localizationService.CurrentLanguage == "th");
             _debugLog?.Info("Agent", $"brain-status question answered from ground truth (no model call) · {answer}");
             return new AgentLoopResult
             {

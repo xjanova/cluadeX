@@ -200,6 +200,9 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               "You have READ-ONLY tools plus the BrainX brain recall tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " +
               folders + reach +
               "Reply in the language the user writes in.";
+        // Keep the CLI's agent instructions; append the shared character and reporting rules.
+        wrapper += " " + string.Join(" ", AgentPersona.Section(AiProviderType.ClaudeDev, false)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         // One line: the CLI may be a .cmd shim, and cmd.exe ends an argument at a line break.
         if (!string.IsNullOrWhiteSpace(codeComments))
             wrapper += " " + string.Join(" ", codeComments.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
