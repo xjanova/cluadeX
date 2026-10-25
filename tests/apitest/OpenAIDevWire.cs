@@ -133,8 +133,26 @@ internal static class OpenAIDevWire
         // ─── CluadeX's chat tools as Codex MCP servers (-c overrides in TOML) ───
         string bridge = J(new { mcpServers = new { cluadex = new { command = @"C:\x\CluadeX.exe", args = new[] { "--cx-tools" }, env = new { CLUADEX_TOOLS_TOKEN = "t" } } } });
         var mcpArgs = OpenAIDevProvider.McpOverrides(bridge);
-        check("od-mcp", "the chat tools become mcp_servers.cluadex with the Windows path as a TOML literal string",
-            mcpArgs.Count == 1 && mcpArgs[0] == @"mcp_servers.cluadex={command='C:\x\CluadeX.exe', args=['--cx-tools'], env={CLUADEX_TOOLS_TOKEN='t'}}", mcpArgs.FirstOrDefault() ?? "");
+        check("od-mcp", "the chat tools become mcp_servers.cluadex with the Windows path as a TOML literal string, each tool approved (the app asks itself)",
+            mcpArgs.Count == 1 && mcpArgs[0] == @"mcp_servers.cluadex={command='C:\x\CluadeX.exe', args=['--cx-tools'], env={CLUADEX_TOOLS_TOKEN='t'}, "
+                + "tools={new_chat={approval_mode='approve'}, open_project={approval_mode='approve'}, close_chat={approval_mode='approve'}}}", mcpArgs.FirstOrDefault() ?? "");
+
+        // ─── the brain under approval_policy=never: the same tools Claude Dev may call unasked, nothing more ───
+        static List<string> Approved(List<string> a) => a.Select((x, i) => (x, i)).Where(p => p.x == "-c" && p.i + 1 < a.Count
+            && a[p.i + 1].StartsWith("mcp_servers.brainx-brain.tools.")).Select(p => a[p.i + 1]["mcp_servers.brainx-brain.tools.".Length..].Split('.')[0]).ToList();
+        var readBrain = Approved(OpenAIDevProvider.BuildArgs(Folder, null, "default", "auto", null, null, brainInCodexConfig: true));
+        var editBrain = Approved(OpenAIDevProvider.BuildArgs(Folder, new ClaudeDevProvider.WorkerGrant(true, false), "default", "auto", null, null, brainInCodexConfig: true));
+        check("od-brain", "read-only turn: recall + agent bus approved; no brain writes, no ssh_run / chrome",
+            readBrain.Contains("brain_search") && readBrain.Contains("task_queue") && !readBrain.Contains("brain_remember")
+            && !readBrain.Any(t => t.StartsWith("ssh") || t.StartsWith("chrome")), string.Join(",", readBrain));
+        check("od-brain", "edit grant adds the brain's write tools (brain_remember…)", editBrain.Contains("brain_remember") && editBrain.Contains("brain_append_note"), string.Join(",", editBrain));
+        check("od-brain", "brain not in Codex's config → no override at all (a key under an undefined server breaks config loading)",
+            Approved(OpenAIDevProvider.BuildArgs(Folder, null, "default", "auto", null)).Count == 0, "");
+        check("od-brain", "config.toml check: [mcp_servers.brainx-brain] yes, its .env sub-table alone no, another server no",
+            OpenAIDevProvider.CodexConfigHasServer("brainx-brain", "model = 'x'\n[mcp_servers.brainx-brain]\ncommand = 'b.exe'\n")
+            && OpenAIDevProvider.CodexConfigHasServer("brainx-brain", "[mcp_servers.\"brainx-brain\"]\n")
+            && !OpenAIDevProvider.CodexConfigHasServer("brainx-brain", "[mcp_servers.brainx-brain.env]\nA='1'\n")
+            && !OpenAIDevProvider.CodexConfigHasServer("brainx-brain", "[mcp_servers.node_repl]\n"), "");
         check("od-mcp", "a quote inside a value switches to an escaped basic string", OpenAIDevProvider.Toml("it's") == "\"it's\"", OpenAIDevProvider.Toml("it's"));
 
         // ─── the prompt on stdin ───
