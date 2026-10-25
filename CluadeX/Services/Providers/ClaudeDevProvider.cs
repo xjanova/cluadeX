@@ -107,6 +107,16 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         "mcp__brainx-brain__cowork_join,mcp__brainx-brain__cowork_leave,mcp__brainx-brain__cowork_read," +
         "mcp__brainx-brain__cowork_say,mcp__brainx-brain__cowork_task,mcp__brainx-brain__cowork_who";
 
+    /// <summary>The brain tools a headless turn may call without asking, as bare names (brain_search…): exactly the brain
+    /// part of what --allowedTools gives Claude Dev — recall and the agent bus always, the brain's write tools with the
+    /// edit grant. OpenAI Dev hands the same set to Codex (OpenAIDevProvider.BuildArgs).</summary>
+    public static List<string> BrainToolsFor(WorkerGrant? grant)
+    {
+        const string prefix = "mcp__brainx-brain__";
+        string all = AllowedTools + "," + AgentTools + (grant is { Edit: true } ? "," + EditTools : "");
+        return all.Split(',').Where(t => t.StartsWith(prefix)).Select(t => t[prefix.Length..]).ToList();
+    }
+
     /// <summary>Extra folders a turn may add with --add-dir.</summary>
     public const int MaxAddDirs = 16;
 

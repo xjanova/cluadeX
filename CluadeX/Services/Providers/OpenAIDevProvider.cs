@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CluadeX.Models;
 
 namespace CluadeX.Services.Providers;
@@ -141,7 +142,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     /// class summary); the chat tools ride along as MCP servers through -c overrides; "-" reads the prompt from stdin.
     /// </summary>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, string effort,
-        IReadOnlyList<string>? addDirs, string? chatToolsConfigJson = null)
+        IReadOnlyList<string>? addDirs, string? chatToolsConfigJson = null, bool brainInCodexConfig = false)
     {
         bool write = grant is { Edit: true } || grant is { Run: true };
         var args = new List<string>
@@ -172,8 +173,32 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             args.Add("-c");
             args.Add(o);
         }
+        // `codex exec` runs with approval_policy=never, so every MCP call Codex would ask about is refused ("MCP tool call
+        // requires approval, but approval policy is never" — every brain call of the 2026-10-25 AntiX turn). The brain
+        // tools Claude Dev may call unasked are approved one by one; the rest of the brain (ssh_run, chrome…) stays
+        // refused. Only when Codex's own config defines the server: a key under an undefined server fails config loading.
+        if (brainInCodexConfig)
+            foreach (var tool in ClaudeDevProvider.BrainToolsFor(grant))
+            {
+                args.Add("-c");
+                args.Add($"mcp_servers.{GeminiDevProvider.BrainServerName}.tools.{tool}.approval_mode=\"approve\"");
+            }
         args.Add("-");
         return args;
+    }
+
+    /// <summary>Does Codex's config.toml (CODEX_HOME or ~/.codex) define this MCP server? Pure apart from the read.</summary>
+    public static bool CodexConfigHasServer(string name, string? configToml = null)
+    {
+        if (configToml == null)
+        {
+            string home = Environment.GetEnvironmentVariable("CODEX_HOME") is { Length: > 0 } h
+                ? h : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+            try { configToml = File.ReadAllText(Path.Combine(home, "config.toml")); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        string key = Regex.Escape(name);
+        return Regex.IsMatch(configToml, $@"^\s*\[\s*mcp_servers\.(?:{key}|""{key}""|'{key}')\s*\]", RegexOptions.Multiline);
     }
 
     /// <summary>The ChatToolBridge's mcpServers as Codex config overrides: mcp_servers.&lt;name&gt;={command=…, args=[…], env={…}}.</summary>
@@ -192,6 +217,11 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                     parts.Add("args=[" + string.Join(", ", a.Select(x => Toml(x?.GetValue<string>() ?? ""))) + "]");
                 if (s["env"] is JsonObject env && env.Count > 0)
                     parts.Add("env={" + string.Join(", ", env.Select(kv => TomlKey(kv.Key) + "=" + Toml(kv.Value?.GetValue<string>() ?? ""))) + "}");
+                // CluadeX's chat tools ask the user in the app themselves (open_project's permission gate), so Codex runs
+                // them unasked — under approval_policy=never it would refuse them otherwise.
+                if (name == Tools.ChatToolBridge.ServerName)
+                    parts.Add("tools={" + string.Join(", ", Tools.ChatToolBridge.QualifiedToolNames
+                        .Select(q => q[$"mcp__{name}__".Length..] + "={approval_mode='approve'}")) + "}");
                 list.Add($"mcp_servers.{TomlKey(name)}={{{string.Join(", ", parts)}}}");
             }
         }
@@ -284,7 +314,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, chatToolsJson)) psi.ArgumentList.Add(a);
+        foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, chatToolsJson,
+                     CodexConfigHasServer(GeminiDevProvider.BrainServerName))) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
 
         string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : "";
