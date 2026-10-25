@@ -83,6 +83,20 @@ internal static class OpenAIDevWire
         check("od-stream", "a read-only turn's plain text is every agent message, once",
             sb.ToString().StartsWith("1. Read `src/App.cs`.") && sb.ToString().EndsWith("(tests/A.cs:3)."), sb.ToString());
 
+        // A repeated key (Codex sent "id" twice, 2026-10-23/25) used to throw ArgumentException on first read and fail the turn.
+        var dup = new CodexStreamTranslator(Folder);
+        var dturn = new ClaudeDevStreamTurn(Folder);
+        var drows = new List<ToolResult>();
+        dturn.ToolExecuted += drows.Add;
+        string dupCmd = "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"id\":\"item_9\",\"command\":\"Get-Content README.md\",\"aggregated_output\":\"# AntiX\",\"exit_code\":0,\"status\":\"completed\"}}";
+        string dupMsg = "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"done\"}}";
+        Exception? thrown = null;
+        try { foreach (var l in new[] { dupCmd, dupMsg, J(new { type = "turn.completed", usage = new { input_tokens = 10, output_tokens = 2 } }) }) foreach (var c in dup.Translate(l)) dturn.Feed(c); }
+        catch (Exception ex) { thrown = ex; }
+        check("od-stream", "a duplicate key in an item does not fail the turn: last value wins, the row and the reply still land",
+            thrown == null && drows.Count == 1 && drows[0].Success && drows[0].Output.Contains("# AntiX") && dturn.Answer == "done" && dturn.Done && !dturn.ResultIsError,
+            thrown?.Message ?? $"{drows.Count} rows · {dturn.Answer}");
+
         // ─── refusals ───
         var failed = new CodexStreamTranslator(Folder);
         var fturn = new ClaudeDevStreamTurn(Folder);

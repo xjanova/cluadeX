@@ -527,10 +527,10 @@ public sealed class CodexStreamTranslator
     {
         var output = new List<string>();
         if (string.IsNullOrWhiteSpace(line) || line.TrimStart()[0] != '{') return output;
-        JsonNode? node;
-        try { node = JsonNode.Parse(line); }
+        JsonObject? ev;
+        try { ev = ParseLine(line); }
         catch (JsonException) { return output; }
-        if (node is not JsonObject ev) return output;
+        if (ev == null) return output;
         switch (Str(ev, "type"))
         {
             case "thread.started":
@@ -558,6 +558,32 @@ public sealed class CodexStreamTranslator
                 break;
         }
         return output;
+    }
+
+    /// <summary>One event line as a JsonObject, a repeated key keeping its last value. Codex has sent items with "id" twice
+    /// (2026-10-23); JsonNode.Parse accepts that and only throws ArgumentException on the first read, deep in OnItem, which
+    /// failed the whole turn. JsonDocument tolerates duplicates, so the tree is built from it instead.</summary>
+    public static JsonObject? ParseLine(string line)
+    {
+        using var doc = JsonDocument.Parse(line);
+        return Node(doc.RootElement) as JsonObject;
+    }
+
+    private static JsonNode? Node(JsonElement e)
+    {
+        switch (e.ValueKind)
+        {
+            case JsonValueKind.Object:
+                var o = new JsonObject();
+                foreach (var p in e.EnumerateObject()) o[p.Name] = Node(p.Value);
+                return o;
+            case JsonValueKind.Array:
+                var a = new JsonArray();
+                foreach (var x in e.EnumerateArray()) a.Add(Node(x));
+                return a;
+            case JsonValueKind.Null or JsonValueKind.Undefined: return null;
+            default: return JsonValue.Create(e.Clone());   // element-backed, as JsonNode.Parse makes it: TryGetValue<int|string|bool> work
+        }
     }
 
     /// <summary>Codex wraps an API error as JSON text in "message": the inner error's own message, else the text.</summary>
