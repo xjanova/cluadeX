@@ -55,8 +55,8 @@ static partial class Program
     static async Task ConnectionTests()
     {
         Console.WriteLine("── connections: the catalog ──");
-        Check("C1", "three services, each with an id BrainX accepts as a bridge id ([a-z0-9.-], ≤16, no __)",
-            ConnectorCatalog.All.Count == 3 && ConnectorCatalog.All.All(c => c.Id.Length <= 16 && c.Id.All(ch => ch is >= 'a' and <= 'z' or >= '0' and <= '9' or '-' or '.') && !c.Id.Contains("__")));
+        Check("C1", "four services, each with an id BrainX accepts as a bridge id ([a-z0-9.-], ≤16, no __)",
+            ConnectorCatalog.All.Count == 4 && ConnectorCatalog.All.All(c => c.Id.Length <= 16 && c.Id.All(ch => ch is >= 'a' and <= 'z' or >= '0' and <= '9' or '-' or '.') && !c.Id.Contains("__")));
         var stripe = Def("stripe");
         Check("C2", "a Stripe key is checked before it is saved (prefix, length, no spaces)",
             ConnectorCatalog.LooksLikeKey(stripe, "rk_test_" + new string('a', 24)) && !ConnectorCatalog.LooksLikeKey(stripe, "pk_live_" + new string('a', 24))
@@ -69,6 +69,8 @@ static partial class Program
             && ConnectorCatalog.Recognises(Def("github"), "npx", new[] { "mcp-remote", "https://api.githubcopilot.com/mcp/" })
             && ConnectorCatalog.Recognises(stripe, "npx", new[] { "-y", "@stripe/mcp", "--api-key=x" })
             && ConnectorCatalog.Recognises(Def("canva"), null, null, "https://mcp.canva.com/mcp")
+            && ConnectorCatalog.Recognises(Def("xdreamer"), null, null, "https://ai.xman4289.com/api/mcp")
+            && ConnectorCatalog.Recognises(Def("xdreamer"), "npx", new[] { "-y", "mcp-remote", "https://ai.xman4289.com/api/mcp" })
             && ConnectorCatalog.Recognises(stripe, @"C:\x\CluadeX.exe", new[] { "--connector", "stripe" })
             && !ConnectorCatalog.Recognises(stripe, @"C:\x\CluadeX.exe", new[] { "--connector", "canva" })
             && !ConnectorCatalog.Recognises(Def("github"), "uvx", new[] { "mcp-for-unity" }));
@@ -88,6 +90,13 @@ static partial class Program
         var cv = ConnectorLauncher.Plan(Def("canva"), new LaunchFacts(@"C:\node\npx.cmd", null, null, null));
         Check("C8", "Canva: mcp-remote (pinned) to Canva's official server, no secret at all",
             cv.Plan is { } c && c.Args.SequenceEqual(new[] { "-y", ConnectorCatalog.McpRemotePackage, "https://mcp.canva.com/mcp" }) && c.Env.Count == 0);
+        var xd = ConnectorLauncher.Plan(Def("xdreamer"), new LaunchFacts(null, null, null, " axm-" + new string('k', 40) + " "));
+        Check("C9b", "XDREAMER: CluadeX's own HTTP relay to the official endpoint (no Node, no process), the key only in its Authorization header",
+            xd.Plan is { IsRemote: true } x && x.Url == "https://ai.xman4289.com/api/mcp" && x.Exe == "" && x.Args.Count == 0 && x.Env.Count == 0
+            && x.Headers!["Authorization"] == "Bearer axm-" + new string('k', 40) && Def("xdreamer").Needs == ConnectorNeed.None);
+        Check("C9c", "XDREAMER: no key → named, not started; only axm- keys are taken",
+            ConnectorLauncher.Plan(Def("xdreamer"), new LaunchFacts(null, null, null, null)).Error == "connect.err.noKey"
+            && ConnectorCatalog.LooksLikeKey(Def("xdreamer"), "axm-" + new string('a', 40)) && !ConnectorCatalog.LooksLikeKey(Def("xdreamer"), "sk-" + new string('a', 40)));
         Check("C9", "what is missing is named, not started half-way (no server · signed out · no Node · no key)",
             ConnectorLauncher.Plan(Def("github"), new LaunchFacts(null, null, "t", null)).Error == "connect.err.noServer"
             && ConnectorLauncher.Plan(Def("github"), new LaunchFacts(null, "x.exe", null, null)).Error == "connect.err.signIn"

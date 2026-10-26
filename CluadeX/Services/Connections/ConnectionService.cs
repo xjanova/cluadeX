@@ -102,7 +102,7 @@ public sealed class ConnectionService
         foreach (var (name, cfg) in _mcp.Configs)
         {
             if (cfg.ManagedBy == ManagedBy && (name == c.Id || name == "cx-" + c.Id)) return (name, true);
-            if (cfg.Enabled && cfg.ManagedBy == null && ConnectorCatalog.Recognises(c, cfg.Command, cfg.Args)) return (name, false);
+            if (cfg.Enabled && cfg.ManagedBy == null && ConnectorCatalog.Recognises(c, cfg.Command, cfg.Args, cfg.Url)) return (name, false);
         }
         return (null, false);
     }

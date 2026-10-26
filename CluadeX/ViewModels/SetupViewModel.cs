@@ -330,7 +330,7 @@ public sealed class SetupViewModel : ViewModelBase
                 break;
 
             case ConnectorAuth.ApiKey:
-                if (f.Node == null)
+                if (c.Needs == ConnectorNeed.Node && f.Node == null)
                 {
                     if (!await RunStepAsync(row, "Node.js", new[] { SystemSetupService.WingetInstall("OpenJS.NodeJS.LTS") }, "connect.note.nodeInstall")) return;
                     if (ConnectorLauncher.FindNpx() == null) { row.Note = L("connect.note.stillNoNode"); return; }

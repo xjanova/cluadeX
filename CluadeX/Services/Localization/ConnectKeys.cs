@@ -1,6 +1,6 @@
 namespace CluadeX.Services.Localization;
 
-/// <summary>Localized strings for the Setup page's "Connections" group (GitHub, Stripe, Canva) and the one-click
+/// <summary>Localized strings for the Setup page's "Connections" group (GitHub, Stripe, Canva, XDREAMER) and the one-click
 /// BrainX install. Every key needs both "en" and "th". Guides are plain steps a non-programmer can follow.</summary>
 internal static class ConnectKeys
 {
@@ -23,6 +23,11 @@ internal static class ConnectKeys
         ["setup.why.conn-canva"] = E(
             "The AI finds, creates and exports your Canva designs. You sign in to Canva in the browser the first time it is used.",
             "AI ค้นหา สร้าง และส่งออกงานออกแบบใน Canva ได้ ครั้งแรกที่ใช้จะให้ล็อกอิน Canva ในเบราว์เซอร์"),
+
+        ["setup.item.conn-xdreamer"] = E("XDREAMER", "XDREAMER"),
+        ["setup.why.conn-xdreamer"] = E(
+            "The AI makes images, videos and music on XDREAMER (ai.xman4289.com) and can ask its language models — paid from your XDREAMER credits. Needs one key (axm-…) from the Developer page.",
+            "AI สร้างภาพ วิดีโอ และเพลงบน XDREAMER (ai.xman4289.com) และเรียกโมเดลภาษาของที่นั่นได้ — ตัดจากเครดิต XDREAMER ของคุณ ใช้คีย์หนึ่งตัว (axm-…) จากหน้า Developer"),
 
         ["connect.state.connected"] = E("Connected", "เชื่อมแล้ว"),
         ["connect.place.brainx"] = E("Through BrainX — shared by every agent on this PC", "ผ่าน BrainX — ทุกเอเจนต์ในเครื่องนี้ใช้ร่วมกัน"),
@@ -49,6 +54,9 @@ internal static class ConnectKeys
         ["connect.guide.canva"] = E(
             "1. Press Connect (CluadeX installs Node.js first if it's missing or too old).\n2. The first time the AI uses Canva, your browser opens Canva's sign-in — sign in and press Allow.\n3. That's all: no key to copy. Canva remembers the permission.\n\nThen ask, e.g. \"find my 'Grand opening' poster in Canva and export it as PNG\".",
             "1. กด เชื่อมต่อ (ถ้ายังไม่มี Node.js หรือรุ่นเก่าไป โปรแกรมจะติดตั้งให้ก่อน)\n2. ครั้งแรกที่ AI ใช้ Canva เบราว์เซอร์จะเปิดหน้าล็อกอิน Canva — ล็อกอินแล้วกด Allow\n3. แค่นั้น ไม่ต้องก๊อปปี้คีย์ Canva จะจำสิทธิ์ไว้ให้\n\nจากนั้นสั่งได้เลย เช่น \"หาโปสเตอร์ 'เปิดร้าน' ใน Canva แล้ว export เป็น PNG\""),
+        ["connect.guide.xdreamer"] = E(
+            "1. Sign in at ai.xman4289.com ▸ Developer (the button opens it) and press Create key. Copy the key (axm-…) — it is shown only once.\n2. Optional: give the key a daily or monthly credit limit on the same page, so an agent can never spend more than you meant.\n3. Press Connect and paste the key. It is stored encrypted on this PC only — never in a file that syncs. Nothing else to install.\n\nThen ask, e.g. \"make a 16:9 picture of a night market in Bangkok\" or \"turn this picture into a 5-second video\". Each generation uses your XDREAMER credits; the AI can check the balance first (get_credits).",
+            "1. ล็อกอินที่ ai.xman4289.com ▸ Developer (กดปุ่มเพื่อเปิดหน้านั้น) แล้วกด สร้างคีย์ ก๊อปปี้คีย์ (axm-…) ไว้ — คีย์จะแสดงครั้งเดียว\n2. แนะนำ: ตั้งเพดานเครดิตต่อวัน/ต่อเดือนให้คีย์ในหน้าเดียวกัน เอเจนต์จะใช้เกินที่ตั้งไม่ได้\n3. กด เชื่อมต่อ แล้ววางคีย์ คีย์ถูกเข้ารหัสเก็บในเครื่องนี้เท่านั้น ไม่ลงไฟล์ที่ sync ไม่ต้องติดตั้งอะไรเพิ่ม\n\nจากนั้นสั่งได้เลย เช่น \"สร้างภาพตลาดนัดกลางคืนกรุงเทพ 16:9\" หรือ \"ทำภาพนี้เป็นวิดีโอ 5 วินาที\" ทุกงานตัดเครดิต XDREAMER ของคุณ AI เช็คยอดก่อนได้ (get_credits)"),
         ["connect.guide.title"] = E("Connect {0}", "เชื่อมต่อ {0}"),
         ["connect.guide.ok"] = E("Got it", "เข้าใจแล้ว"),
         ["connect.guide.open"] = E("Open the page", "เปิดหน้าเว็บ"),

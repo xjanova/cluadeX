@@ -343,6 +343,8 @@ CluadeX รองรับ MCP 2.0 สำหรับเชื่อมต่อ
 |---------|-------------|----------|
 | **MCP Server Manager** | Manage MCP servers with JSON-RPC 2.0 lifecycle control. | จัดการ MCP server ด้วย JSON-RPC 2.0 |
 | **Stdio Transport** | Communicate with MCP servers via stdin/stdout. | สื่อสารกับ MCP server ผ่าน stdin/stdout |
+| **HTTP Transport** | Servers on the network over MCP Streamable HTTP: an entry with `"type": "http"`, `"url"` and `"headers"` (`${VAR}` read from `env` / Windows' environment), or type the url in the Add box. https anywhere, http only to localhost. | MCP server บนเครือข่ายผ่าน Streamable HTTP: ใส่ `"type": "http"`, `"url"`, `"headers"` หรือพิมพ์ url ในช่องเพิ่ม server |
+| **XDREAMER connection** | Setup ▸ Connections ▸ XDREAMER: paste an `axm-` key from ai.xman4289.com/developer and the AI can make images, videos and music. The key stays DPAPI-encrypted; no Node.js — CluadeX relays itself (`CluadeX.exe --connector xdreamer`), which also serves BrainX's bridge. | ตั้งค่า ▸ การเชื่อมต่อ ▸ XDREAMER: วางคีย์ `axm-` แล้ว AI สร้างภาพ วิดีโอ เพลงได้ |
 | **Dynamic Tool Discovery** | Auto-discovers tools from connected MCP servers and registers them as agent tools. | ค้นพบเครื่องมือจาก MCP server อัตโนมัติและลงทะเบียนเป็น agent tool |
 | **Qualified Tool Names** | MCP tools use `server::tool` naming to avoid conflicts. | MCP tool ใช้ชื่อแบบ `server::tool` ป้องกันชื่อซ้ำ |
 | **MCP Servers UI** | Dedicated management page to add, configure, and monitor MCP servers. | หน้า UI เฉพาะสำหรับเพิ่ม ตั้งค่า และติดตาม MCP server |

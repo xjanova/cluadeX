@@ -385,14 +385,26 @@ public class McpServersViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        var config = new McpServerConfig
-        {
-            Name = name,
-            Command = command,
-            // The Add box is one line: split like a command line, "quotes" keep an argument with spaces whole.
-            Args = McpServerDisplayItem.ParseArgsLine(NewServerArgs),
-            Enabled = true,
-        };
+        // A url is a server on the network (Streamable HTTP); its "arguments" box takes one "Name: value" header.
+        var config = McpServerConfig.LooksLikeUrl(command)
+            ? new McpServerConfig
+            {
+                Name = name,
+                Type = "http",
+                Url = command,
+                Headers = McpServerConfig.ParseHeaderLine(NewServerArgs) is { } header
+                    ? new Dictionary<string, string> { [header.Key] = header.Value }
+                    : null,
+                Enabled = true,
+            }
+            : new McpServerConfig
+            {
+                Name = name,
+                Command = command,
+                // The Add box is one line: split like a command line, "quotes" keep an argument with spaces whole.
+                Args = McpServerDisplayItem.ParseArgsLine(NewServerArgs),
+                Enabled = true,
+            };
 
         _mcpManager.SetConfig(name, config);
         // Only this server: the other entries on disk stay exactly as they are now, outside edits included.
@@ -478,7 +490,7 @@ public class McpServersViewModel : ViewModelBase, IDisposable
         if (item == null) return;
         if (RefuseWhileConfigUnreadable()) return;
         var config = item.ToConfig();
-        if (string.IsNullOrWhiteSpace(config.Command))
+        if (string.IsNullOrWhiteSpace(config.Command) && !config.IsRemote)
         {
             StatusText = _loc.T("mcpm.commandRequired");
             return;

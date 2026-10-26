@@ -10,7 +10,7 @@ namespace CluadeX.Services.Mcp;
 /// JSON-RPC 2.0 transport over stdio (newline-delimited JSON).
 /// Manages a subprocess that speaks the MCP protocol.
 /// </summary>
-public sealed class McpStdioTransport : IDisposable
+public sealed class McpStdioTransport : IMcpTransport
 {
     private Process? _process;
     private StreamWriter? _writer;

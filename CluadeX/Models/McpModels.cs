@@ -46,6 +46,45 @@ public class McpServerConfig
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public int? StartupTimeoutSeconds { get; set; }
 
+    /// <summary>"http" (Streamable HTTP) for a server on the network, the way Claude Code / Cursor write it; null for a
+    /// command. Omitted when null.</summary>
+    [JsonPropertyName("type")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Type { get; set; }
+
+    /// <summary>A server on the network (MCP Streamable HTTP) instead of a command to start: https anywhere, http only to
+    /// this PC. Omitted when null.</summary>
+    [JsonPropertyName("url")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Url { get; set; }
+
+    /// <summary>Headers for every request to <see cref="Url"/> (e.g. "Authorization": "Bearer ${MY_KEY}" — ${NAME} is
+    /// read from "env", then from Windows' environment, so the key can stay out of this file). Omitted when null.</summary>
+    [JsonPropertyName("headers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? Headers { get; set; }
+
+    /// <summary>Reached over HTTP: a url and no command.</summary>
+    [JsonIgnore]
+    public bool IsRemote => !string.IsNullOrWhiteSpace(Url) && string.IsNullOrWhiteSpace(Command);
+
+    /// <summary>Does this text look like a server address rather than a program?</summary>
+    public static bool LooksLikeUrl(string? text) =>
+        text != null && (text.TrimStart().StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                         || text.TrimStart().StartsWith("http://", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>"Authorization: Bearer abc" → ("Authorization", "Bearer abc"); null when it isn't "Name: value".</summary>
+    public static KeyValuePair<string, string>? ParseHeaderLine(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return null;
+        int colon = line.IndexOf(':');
+        if (colon <= 0) return null;
+        string name = line[..colon].Trim();
+        string value = line[(colon + 1)..].Trim();
+        if (name.Length == 0 || value.Length == 0 || name.Any(c => char.IsWhiteSpace(c) || c is '/' or '"')) return null;
+        return KeyValuePair.Create(name, value);
+    }
+
     /// <summary>Runtime: server name (key from config).</summary>
     [JsonIgnore]
     public string Name { get; set; } = "";
@@ -434,7 +473,8 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
         Original = config;
         _loadedArgsText = FormatArgsOnePerLine(config.Args);
         _loadedEnvString = FormatEnv(config.Env);
-        Command = config.Command;
+        // A server on the network shows (and edits) its url in the command box.
+        Command = config.IsRemote ? config.Url!.Trim() : config.Command;
         ArgsText = _loadedArgsText;
         EnvString = _loadedEnvString;
         Enabled = config.Enabled;
@@ -445,7 +485,17 @@ public class McpServerDisplayItem : System.ComponentModel.INotifyPropertyChanged
     /// <summary>Convert back to McpServerConfig for persistence. Untouched args/env are copied verbatim, and the
     /// fields the page doesn't edit (ManagedBy, StartupTimeoutSeconds) are carried over — a Toggle on the MCP page
     /// must not turn a CluadeX-managed entry into an ordinary one.</summary>
-    public McpServerConfig ToConfig() => new()
+    public McpServerConfig ToConfig() => McpServerConfig.LooksLikeUrl(Command) ? new()
+    {
+        Name = Name,
+        Type = Original.Type ?? "http",
+        Url = Command.Trim(),
+        Headers = Original.Headers == null ? null : new Dictionary<string, string>(Original.Headers),
+        Env = EnvFromText(EnvString, _loadedEnvString, Original.Env),
+        Enabled = Enabled,
+        ManagedBy = Original.ManagedBy,
+        StartupTimeoutSeconds = Original.StartupTimeoutSeconds,
+    } : new()
     {
         Name = Name,
         Command = Command.Trim(),

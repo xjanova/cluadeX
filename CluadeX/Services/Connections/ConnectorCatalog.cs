@@ -60,6 +60,9 @@ public static class ConnectorCatalog
     public const string StripePackage = "@stripe/mcp@0.3.3";
     public const string McpRemotePackage = "mcp-remote@0.15.1";
     public const string CanvaUrl = "https://mcp.canva.com/mcp";
+    /// <summary>XDREAMER (ai.xman4289.com): image / video / music generation and language models, Streamable HTTP with
+    /// an "axm-" key. Reached by CluadeX's own HTTP relay — no Node.js, no package download.</summary>
+    public const string XDreamerUrl = "https://ai.xman4289.com/api/mcp";
 
     /// <summary>Canva's setup page asks for Node 22.16 or later (mcp-remote).</summary>
     public static readonly Version CanvaMinNode = new(22, 16);
@@ -83,6 +86,12 @@ public static class ConnectorCatalog
             KeyPrefixes: Array.Empty<string>(),
             Signatures: new[] { "mcp.canva.com" },
             StartupTimeoutSeconds: 300),   // the first start waits for the browser sign-in
+        new ConnectorDef("xdreamer", "XDREAMER", "\uE8B9", ConnectorAuth.ApiKey, ConnectorNeed.None,
+            KeyEnv: null, KeyPage: "https://ai.xman4289.com/developer",
+            Docs: "https://ai.xman4289.com/docs/mcp",
+            KeyPrefixes: new[] { "axm-" },
+            Signatures: new[] { "ai.xman4289.com/api/mcp" },
+            StartupTimeoutSeconds: 60),
     };
 
     public static ConnectorDef? Find(string? id) =>
