@@ -299,7 +299,7 @@ public sealed class BrowserToolModule : IAgentToolModule
         string chat = context.SessionKey;
         if (call.Type is not (ToolType.BrowserOpen or ToolType.BrowserClose))
         {
-            var judged = UrlPolicy.Classify(current, context.WorkingDirectory);
+            var judged = UrlPolicy.Classify(current, context.WorkingDirectory, ExtraRoots());
             _gated.AddOrUpdate(call, new GatedPage(current, judged.Kind == UrlKind.External ? judged.Origin : null));
         }
         switch (call.Type)
@@ -307,7 +307,7 @@ public sealed class BrowserToolModule : IAgentToolModule
             case ToolType.BrowserOpen:
             {
                 if (!TryResolveUrl(call.GetArg("url"), context, out var url, out _)) return ToolPermission.Free("browse", call.GetArg("url"));
-                var v = UrlPolicy.Classify(url, context.WorkingDirectory);
+                var v = UrlPolicy.Classify(url, context.WorkingDirectory, ExtraRoots());
                 // Sites the page needs besides itself (allow=…), and the page itself when it is external — the ones
                 // this chat has not approved yet are asked about together, once.
                 var ask = AllowOrigins(call, context, out _).Where(o => !_browser.IsApprovedForChat(chat, o)).ToList();
@@ -329,7 +329,7 @@ public sealed class BrowserToolModule : IAgentToolModule
                 // Reading a page outside this PC (its text, a screenshot saved to disk, its console) is the user's
                 // data: free only where this chat already approved that site — a site another chat opened, or one
                 // the user typed into the pane (possibly logged in), asks once in this chat.
-                var v = UrlPolicy.Classify(current, context.WorkingDirectory);
+                var v = UrlPolicy.Classify(current, context.WorkingDirectory, ExtraRoots());
                 if (v.Kind != UrlKind.External || ExternalMode() == "allow" || _browser.IsApprovedForChat(chat, v.Origin))
                     return ToolPermission.Free("read", current);
                 return ToolPermission.Ask("browse", current, string.Format(L("browser.perm.read"), v.Origin), onceKey: "read:" + v.Origin);
@@ -337,7 +337,7 @@ public sealed class BrowserToolModule : IAgentToolModule
             default:
             {
                 // Acting on the page: free on this PC, once per site anywhere else.
-                var v = UrlPolicy.Classify(current, context.WorkingDirectory);
+                var v = UrlPolicy.Classify(current, context.WorkingDirectory, ExtraRoots());
                 if (v.Kind != UrlKind.External) return ToolPermission.Free("browse", current);
                 string? detail = call.Type == ToolType.BrowserEval ? Trunc(call.GetArg("expression"), 400)
                                : call.Type == ToolType.BrowserType ? Trunc(call.GetArg("text"), 120) : null;
@@ -360,7 +360,7 @@ public sealed class BrowserToolModule : IAgentToolModule
             string item = raw.Trim().Trim('"', '\'');
             if (item.Length == 0) continue;
             if (!item.Contains("://", StringComparison.Ordinal)) item = "https://" + item;
-            var v = UrlPolicy.ClassifyRequest(item, context.WorkingDirectory);
+            var v = UrlPolicy.ClassifyRequest(item, context.WorkingDirectory, ExtraRoots());
             if (v.Kind == UrlKind.External) list.Add(v.Origin);
             else if (v.Kind != UrlKind.Local) invalid.Add(raw.Trim());
         }
@@ -391,11 +391,12 @@ public sealed class BrowserToolModule : IAgentToolModule
             var session = _browser.Session;
             if (session == null) return Fail(call, L("browser.err.noPage"));
             session.ProjectRoot = context.WorkingDirectory;
+            session.ExtraRoots = ExtraRoots();
             // The permission gate let this call through on the page it judged: if that page is external, this chat
             // has now approved it (asked once, or a rule / an earlier approval decided). If the page moved to another
             // site since (it navigated while the user answered), the call neither acts on it nor approves it — unless
             // this chat had already approved that site, or every site is allowed.
-            var here = UrlPolicy.Classify(session.CurrentUrl, context.WorkingDirectory);
+            var here = UrlPolicy.Classify(session.CurrentUrl, context.WorkingDirectory, ExtraRoots());
             if (here.Kind == UrlKind.External)
             {
                 if (!_gated.TryGetValue(call, out var gated)
@@ -441,6 +442,10 @@ public sealed class BrowserToolModule : IAgentToolModule
     /// <summary>A page named in one short piece: its origin, else (file://, about:) the address cut short.</summary>
     private static string ShortPage(string url) => UrlPolicy.OriginOf(url) ?? Trunc(url, 120);
 
+    /// <summary>The folders this run opened beside the project (open_project): the file tools reach them, so the
+    /// browser opens their files too.</summary>
+    private static IReadOnlyList<string> ExtraRoots() => AgentRunScope.Current?.ExtraFolders ?? Array.Empty<string>();
+
     private string ArgumentMessage(string code, ToolCall call) => code switch
     {
         "stale_ref" => string.Format(L("browser.err.staleRef"), call.GetArg("ref")),
@@ -458,7 +463,7 @@ public sealed class BrowserToolModule : IAgentToolModule
         string raw = call.GetArg("url").Trim();
         if (!TryResolveUrl(raw, context, out var url, out var resolveError)) return Fail(call, resolveError!);
 
-        var verdict = UrlPolicy.Classify(url, context.WorkingDirectory);
+        var verdict = UrlPolicy.Classify(url, context.WorkingDirectory, ExtraRoots());
         if (verdict.Kind == UrlKind.Refused)
             return Fail(call, string.Format(L(verdict.RefusalKey ?? "browser.url.invalid"), verdict.RefusalArg ?? url));
         var allow = AllowOrigins(call, context, out var invalidAllow);
@@ -469,6 +474,7 @@ public sealed class BrowserToolModule : IAgentToolModule
 
         var session = await _browser.GetSessionAsync(ct, forNavigation: true);
         session.ProjectRoot = context.WorkingDirectory;
+        session.ExtraRoots = ExtraRoots();
         // The permission gate (scope "browse") already asked for the external site(s): approve them for this chat,
         // so the engine lets the page go there (and the page's own requests to the allow=… sites through).
         if (verdict.Kind == UrlKind.External) _browser.ApproveForChat(context.SessionKey, verdict.Origin);
@@ -792,7 +798,7 @@ public sealed class BrowserToolModule : IAgentToolModule
             if (field.ValueKind != JsonValueKind.Object || !(field.TryGetProperty("editable", out var ed) && ed.ValueKind == JsonValueKind.True))
                 return Fail(call, L("browser.type.noField"));
 
-            var verdict = UrlPolicy.Classify(session.CurrentUrl, context.WorkingDirectory);
+            var verdict = UrlPolicy.Classify(session.CurrentUrl, context.WorkingDirectory, ExtraRoots());
             bool sensitive = UrlPolicy.IsSensitiveField(ConsoleBuffer.Str(field, "type"), ConsoleBuffer.Str(field, "autocomplete"), ConsoleBuffer.Str(field, "name"));
             if (sensitive && !verdict.IsLocal)
                 return Fail(call, string.Format(L("browser.type.sensitive"), verdict.Origin));
@@ -841,7 +847,7 @@ public sealed class BrowserToolModule : IAgentToolModule
             // The no-credentials rule of browser_type holds for keys too: on a page outside this PC, a key that
             // would put text into a password / card / one-time-code field (a printable key, or a paste) is refused —
             // checked before EVERY such key, since Tab can move the focus into that field mid-sequence.
-            var verdict = UrlPolicy.Classify(session.CurrentUrl, context.WorkingDirectory);
+            var verdict = UrlPolicy.Classify(session.CurrentUrl, context.WorkingDirectory, ExtraRoots());
             Func<KeyChord, CancellationToken, Task>? guard = verdict.IsLocal ? null : async (chord, t) =>
             {
                 if (!PutsText(chord)) return;

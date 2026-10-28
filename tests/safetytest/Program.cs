@@ -1018,6 +1018,28 @@ internal static class Program
         Check("Features blocklist still refuses reg add (own tools, switchable)", DangerousCommandCheck.FindSerious("reg add HKCU\\x /v y /d z") != null);
         Check("Features blocklist still refuses a download cmdlet", DangerousCommandCheck.FindSerious("Invoke-WebRequest https://x/y.ps1 -OutFile y.ps1") != null);
         Check("a delete cannot hide a blocked line after it", DangerousCommandCheck.FindSerious(RmRf + "build\nshutdown /s /t 0") != null);
+        // Reverse X run, 2026-10-28: a search for a signing key over the drives was refused as dangerous ("-recurse -force"
+        // is there for Remove-Item). A lookup runs; the same switches on anything that changes files stay refused.
+        string RF = " -Recurse" + " -Force";
+        foreach (var cmd in new[]
+        {
+            "$found = foreach ($d in 'C:\\Users','D:\\','E:\\') { Get-ChildItem $d" + RF + " -Filter '*signing*' -ErrorAction SilentlyContinue -Depth 6 | Select-Object -ExpandProperty FullName }",
+            "gci D:\\Code" + RF + " -Include *.key | ? { $_.Length -gt 0 } | % { $_.FullName }",
+            "Get-ChildItem ." + RF + " | Measure-Object -Property Length -Sum | Format-List",
+            "if (Test-Path x) { Get-ChildItem x" + RF + " | Sort-Object LastWriteTime | Select-Object -First 5 }",
+        })
+            Check($"lookup runs: {cmd[..Math.Min(60, cmd.Length)]}", DangerousCommandCheck.FindSerious(cmd, DangerousCommandCheck.Dialect.PowerShell) == null,
+                DangerousCommandCheck.FindSerious(cmd, DangerousCommandCheck.Dialect.PowerShell) ?? "");
+        foreach (var cmd in new[]
+        {
+            "Get-ChildItem x" + RF + " | % { $_.Delete() }", "Get-ChildItem x" + RF + " | Set-Content -Value ''",
+            "Copy-Item a b" + RF, "Get-ChildItem x" + RF + " | % { [IO.File]::WriteAllText($_.FullName, '') }",
+            "Get-ChildItem x" + RF + " | % { & $_.FullName }", "Get-ChildItem x" + RF + " > list.txt",
+            "Get-ChildItem x" + RF + " | % { .\\tool.exe $_ }", "Get-ChildItem x" + RF + " | % { icacls $_ /grant y:F }",
+            "Get-ChildItem x" + RF + " | % { cmd /c type $_ }", "Get-ChildItem x" + RF + " | iex",
+            "Get-ChildItem x" + RF + " | % { $_.Attributes = 'ReadOnly' }", "Get-ChildItem x" + RF + " | % { $_.LastWriteTime += 1 }",
+        })
+            Check($"still refused: {cmd[..Math.Min(60, cmd.Length)]}", DangerousCommandCheck.FindSerious(cmd, DangerousCommandCheck.Dialect.PowerShell) != null);
     }
 
     static void Git(string cwd, params string[] args)

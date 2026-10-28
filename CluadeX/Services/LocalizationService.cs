@@ -214,7 +214,7 @@ public class LocalizationService
         ["settings.brainRecallDesc"] = new() { ["en"] = "Searches the BrainX knowledge base and puts relevant notes in front of the model.", ["th"] = "ค้นคลังความรู้ BrainX แล้วแนบโน้ตที่เกี่ยวข้องให้โมเดล" },
         ["settings.learnInstinctsDesc"] = new() { ["en"] = "Saves short lessons from finished sessions for later tasks.", ["th"] = "เก็บบทเรียนสั้นๆ จากแชทที่จบแล้วไว้ใช้กับงานถัดไป" },
         ["settings.liveEditFollow"] = new() { ["en"] = "Follow the agent's edits in the editor", ["th"] = "เลื่อนตามจุดที่เอเจนต์กำลังแก้ในตัวแก้ไข" },
-        ["settings.autoOpenEditor"] = new() { ["en"] = "Open the editor when the agent edits a file", ["th"] = "เปิดตัวแก้ไขอัตโนมัติเมื่อเอเจนต์แก้ไฟล์" },
+        ["settings.autoOpenEditor"] = new() { ["en"] = "Switch to the editor when the agent edits a file (the default of each chat's \"Follow edits\" tick)", ["th"] = "สลับไปหน้าตัวแก้ไขเมื่อเอเจนต์แก้ไฟล์ (ค่าเริ่มต้นของติ๊ก \"ตามดูโค้ด\" ในแต่ละแชท)" },
         ["settings.liveCodingAnimation"] = new() { ["en"] = "Live typing animation for agent edits", ["th"] = "แสดงแอนิเมชันการพิมพ์ขณะเอเจนต์แก้โค้ด" },
         ["settings.compactionToast"] = new() { ["en"] = "Suggest compacting when the chat gets long", ["th"] = "แนะนำให้บีบอัดเมื่อแชทยาวมาก" },
         ["settings.autoCompact"] = new() { ["en"] = "Compact by itself instead of asking", ["th"] = "บีบอัดอัตโนมัติแทนการถาม" },

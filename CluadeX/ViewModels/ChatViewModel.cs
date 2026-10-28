@@ -1092,7 +1092,8 @@ public partial class ChatViewModel : ViewModelBase
         UsageMeter.Updated += _ => App.Current?.Dispatcher.BeginInvoke(RefreshUsageStrip);
         // A provider/model change changes the context window: re-measure now, not on the next 5-s tick.
         _providerManager.OnProviderChanged += _ => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); });
-        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); RefreshVoiceButtons(); });
+        // AutoOpenEditorOnAgentEdit is the "ตามดูโค้ด" tick of every chat nobody ticked: show the new default at once.
+        _settingsService.SettingsChanged += () => App.Current?.Dispatcher.BeginInvoke(() => { RefreshUsageStrip(); UpdateContextInfo(); RefreshVoiceButtons(); OnPropertyChanged(nameof(FollowEditsHere)); });
         RefreshUsageStrip();
         InitBatch(batchService);
 
@@ -4281,14 +4282,19 @@ public partial class ChatViewModel : ViewModelBase
             if (run != null) DropDraft(run);
 
             // Live-follow: open/refresh the changed file in the Code Editor and scroll to the edit — for the chat on
-            // screen with its "ตามดูโค้ด" tick on, in the window's project. Other chats keep working off screen.
+            // screen, in the window's project; with its "ตามดูโค้ด" tick on the Code page also comes forward. Other chats
+            // keep working off screen.
             string? runFolder = run?.Scope?.WorkingDirectory;
+            string windowFolder = _fileSystemService.AppWorkingDirectory;
+            bool ticked = FollowsEdits(target ?? CurrentSession);
             if (toolResult.Success
                 && !string.IsNullOrEmpty(toolResult.FilePath)
-                && ShouldFollowEdit(IsOnScreen(target), FollowsEdits(target ?? CurrentSession), runFolder, _fileSystemService.AppWorkingDirectory))
+                && ShouldFollowEdit(IsOnScreen(target), ticked || _settingsService.Settings.LiveEditFollow, runFolder, windowFolder))
             {
-                string full = Path.GetFullPath(Path.Combine(runFolder ?? _fileSystemService.AppWorkingDirectory, toolResult.FilePath!));
+                string full = Path.GetFullPath(Path.Combine(runFolder ?? windowFolder, toolResult.FilePath!));
                 FileMutatedByAgent?.Invoke(full, toolResult.Diff?.FirstChangedLine ?? 1, toolResult.Diff);
+                // Only a file the editor can show (the window's project) is worth leaving the page for.
+                if (ticked && IsInsideFolder(full, windowFolder)) ShowEditorRequested?.Invoke();
             }
 
             // Format arguments for display
@@ -4313,9 +4319,10 @@ public partial class ChatViewModel : ViewModelBase
                 inputSummary = primaryArg;
             }
 
-            int outputLines = string.IsNullOrEmpty(toolResult.Output)
+            string rowOutput = RowOutput(toolResult);
+            int outputLines = string.IsNullOrEmpty(rowOutput)
                 ? 0
-                : toolResult.Output.Split('\n').Length;
+                : rowOutput.Split('\n').Length;
             string? toolElapsed = null;
             if (run != null && run.ToolStarts.TryDequeue(out long started))
             {
@@ -4410,7 +4417,7 @@ public partial class ChatViewModel : ViewModelBase
                 Content = !string.IsNullOrEmpty(toolResult.Summary) ? toolResult.Summary : displayName,
                 ToolName = displayName,
                 ToolSummary = !string.IsNullOrEmpty(toolResult.Summary) ? toolResult.Summary : displayName,
-                ToolOutput = toolResult.Output,
+                ToolOutput = rowOutput,
                 ToolSuccess = toolResult.Success,
                 HasError = !toolResult.Success,
                 ToolArguments = argsDisplay,
@@ -4425,6 +4432,17 @@ public partial class ChatViewModel : ViewModelBase
             PostTurnMessage(target, msg);
             ScrollToBottom?.Invoke();
         });
+    }
+
+    /// <summary>What a tool's row shows: its output, and for a failure the reason too. Browser, desktop and MCP tools
+    /// put the reason only in Error, so their failed rows were empty (Reverse X run, 2026-10-28: browser_open failed
+    /// twice with nothing to say why, while the agent read "outside the open project").</summary>
+    internal static string RowOutput(ToolResult result)
+    {
+        string output = result.Output ?? "";
+        string error = (result.Error ?? "").Trim();
+        if (result.Success || error.Length == 0 || output.Contains(error, StringComparison.Ordinal)) return output;
+        return string.IsNullOrWhiteSpace(output) ? error : output.TrimEnd() + "\n" + error;
     }
 
     /// <summary>The first image a tool saved to disk, if any (a JPEG/PNG that exists) — what its row shows.</summary>

@@ -74,8 +74,10 @@ public static class UrlPolicy
     }
 
     /// <summary>Classify <paramref name="url"/>. <paramref name="projectRoot"/> = the open project (null = none,
-    /// so every file:// is refused).</summary>
-    public static UrlVerdict Classify(string? url, string? projectRoot)
+    /// so every file:// is refused); <paramref name="extraRoots"/> = the folders the chat opened beside it
+    /// (open_project), whose files are as much the chat's as the project's (Reverse X run, 2026-10-28: the agent opened
+    /// a folder beside the project, was told to reach it by absolute path, and browser_open still refused its picture).</summary>
+    public static UrlVerdict Classify(string? url, string? projectRoot, IReadOnlyList<string>? extraRoots = null)
     {
         url = (url ?? "").Trim();
         if (url.Length == 0) return new UrlVerdict(UrlKind.Refused, url, "", "browser.url.empty");
@@ -104,7 +106,8 @@ public static class UrlPolicy
                 string path;
                 try { path = Path.GetFullPath(uri.LocalPath); }
                 catch { return new UrlVerdict(UrlKind.Refused, uri.AbsoluteUri, "file://", "browser.url.invalid", url); }
-                if (string.IsNullOrEmpty(projectRoot) || !IsUnder(projectRoot, path))
+                if (string.IsNullOrEmpty(projectRoot)
+                    || !IsUnder(projectRoot, path) && (extraRoots == null || !extraRoots.Any(r => !string.IsNullOrEmpty(r) && IsUnder(r, path))))
                     return new UrlVerdict(UrlKind.Refused, uri.AbsoluteUri, "file://", "browser.url.fileOutside", path);
                 return new UrlVerdict(UrlKind.ProjectFile, uri.AbsoluteUri, "file://");
             }
@@ -118,12 +121,12 @@ public static class UrlPolicy
 
     /// <summary>Classify a request the PAGE makes (not a navigation): ws:// and wss:// are judged as the http:// /
     /// https:// origin they connect to — a WebSocket to a site is a request to that site.</summary>
-    public static UrlVerdict ClassifyRequest(string? url, string? projectRoot)
+    public static UrlVerdict ClassifyRequest(string? url, string? projectRoot, IReadOnlyList<string>? extraRoots = null)
     {
         url = (url ?? "").Trim();
         if (url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)) url = "http://" + url[5..];
         else if (url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)) url = "https://" + url[6..];
-        return Classify(url, projectRoot);
+        return Classify(url, projectRoot, extraRoots);
     }
 
     /// <summary>"scheme://ascii-host[:port]" exactly as the engine reports it (IDN hosts in punycode, lower case,
