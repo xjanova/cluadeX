@@ -12,10 +12,13 @@ namespace CluadeX.Services.Safety;
 /// a yes lets it run (exit 0); a no, no answer or no running app blocks it (exit 2, reason on stderr — shown to the
 /// agent). The calls:
 /// <list type="bullet">
-/// <item>a shell command is on the dangerous list (always on, whatever the Features switch says);</item>
-/// <item>a Write / Edit puts a delete aimed at a drive, a home or a system folder into a file;</item>
-/// <item>a command runs code (a test, a build, a script) while code changed in the project holds such a delete.</item>
+/// <item>a shell command wipes a whole drive, deletes the root or a home folder, deletes Windows' backups or wipes a
+/// database (owner 2026-10-28: nothing else);</item>
+/// <item>a command runs code (a test, a build, a script) while code changed in the project, or a script it names, holds
+/// such a line.</item>
 /// </list>
+/// A Write / Edit asks only for a file that runs by itself (a git hook, a .bashrc, a PowerShell profile): writing code is
+/// not running it (owner 2026-10-28) — the code is read when something runs it.
 /// Headless: it runs before any WPF or Velopack start-up and never shows a window.
 /// </summary>
 public static class GuardHook
@@ -250,45 +253,46 @@ public static class GuardHook
             case "run_shell_command":   // Gemini Dev
             {
                 string command = Str("command");
-                var dialect = tool == "PowerShell" ? DangerousCommandCheck.Dialect.PowerShell : DangerousCommandCheck.Dialect.Unknown;
-                if (DangerousCommandCheck.FindSerious(command, dialect) is { } line)
-                    return "CluadeX safety: " + DangerousCommandCheck.BlockedMessage(line);
-                if (DestructiveCodeScan.JudgeLine(command) is { } direct)
+                // Only what the red prompt is for (DestructiveCodeScan, owner 2026-10-28) — the old blocklist (registry,
+                // accounts, ACLs, downloads, shutdown) no longer puts a Claude Dev command to the red prompt.
+                if (DestructiveCodeScan.JudgeCommand(command) is { } direct)
                     return "CluadeX safety: refused — this command " + direct + ".";
-                if (DestructiveCodeScan.RunsProjectCode(command) && cwd.Length > 0)
+                if (DestructiveCodeScan.RunsProjectCode(command))
                 {
-                    var findings = DestructiveCodeScan.ScanChanged(cwd);
+                    var findings = cwd.Length > 0 ? DestructiveCodeScan.ScanChanged(cwd) : new List<DestructiveFinding>();
+                    if (findings.Count == 0) findings = DestructiveCodeScan.ScanScriptsNamed(command, cwd);
                     if (findings.Count > 0) return DestructiveCodeScan.BlockMessage(findings);
                 }
                 return null;
             }
+            // Write / Edit / MultiEdit: writing code is not running it (owner 2026-10-28: "แยกให้ออกว่าเป็นเพียงโค๊ดใน
+            // โปรแกรม หรือเป็นการรันเพื่อใช้คำสั่งจริงๆ"). The code is read when something runs it — the project's changed
+            // files and any script the command names, above — except a file that runs by itself (a git hook, a .bashrc,
+            // a PowerShell profile), which no command names.
             case "Write":
             case "write_file":   // Gemini Dev
-                return CheckWritten(Str("file_path"), Str("content"));
+                return CheckAutoRun(Str("file_path"), Str("content"));
             case "Edit":
             case "replace":      // Gemini Dev
-                return CheckWritten(Str("file_path"), Str("new_string"));
+                return CheckAutoRun(Str("file_path"), Str("new_string"));
             case "MultiEdit":
                 if (ti.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
                     foreach (var e in edits.EnumerateArray())
-                        if (e.TryGetProperty("new_string", out var ns) && CheckWritten(Str("file_path"), ns.GetString() ?? "") is { } why)
+                        if (e.TryGetProperty("new_string", out var ns) && CheckAutoRun(Str("file_path"), ns.GetString() ?? "") is { } why)
                             return why;
                 return null;
-            case "NotebookEdit":
-                return CheckWritten(Str("notebook_path"), Str("new_source"));
             default:
                 return null;
         }
     }
 
-    private static string? CheckWritten(string file, string text)
+    private static string? CheckAutoRun(string file, string text)
     {
-        if (text.Length == 0) return null;
-        var findings = DestructiveCodeScan.ScanText(text, string.IsNullOrEmpty(file) ? "(new text)" : Path.GetFileName(file));
+        var findings = DestructiveCodeScan.ScanAutoRunWrite(file, text);
         return findings.Count == 0 ? null
-            : "CluadeX safety: refused to write this — it would put a delete aimed at a drive, a home or a system folder into the project:\n"
-              + string.Join("\n", findings.Take(5).Select(f => "  " + f))
-              + "\nA test of a safety check must use an inert sentinel (for example `echo CX-SENTINEL rd /s /q Z:\\cx-sentinel-nonexistent`) and assert on the check's decision, never run the real command.";
+            : "CluadeX safety: refused to write this — " + Path.GetFileName(file) + " runs by itself (a git hook, a shell start-up "
+              + "file or a profile), and what it would run would wipe a drive, delete the root or a home folder, delete "
+              + "Windows' backups or wipe a database:\n" + string.Join("\n", findings.Take(5).Select(f => "  " + f));
     }
 
     /// <summary>

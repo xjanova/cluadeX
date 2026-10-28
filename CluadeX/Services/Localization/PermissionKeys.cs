@@ -108,7 +108,7 @@ internal static class PermissionKeys
         ["perm.effect.unknown"] = new() { ["en"] = "CluadeX cannot read all of this command — look at the technical details before you allow it.", ["th"] = "CluadeX อ่านคำสั่งนี้ได้ไม่ครบ — ดูรายละเอียดทางเทคนิคก่อนกดอนุญาต" },
 
         // ─── Warnings: the dangerous parts, said plainly ───
-        ["perm.warn.danger"] = new() { ["en"] = "CluadeX found that this deletes a drive, a user folder or a system folder.", ["th"] = "CluadeX ตรวจพบว่าคำสั่งนี้จะลบไดรฟ์ โฟลเดอร์ผู้ใช้ หรือโฟลเดอร์ระบบ" },
+        ["perm.warn.danger"] = new() { ["en"] = "CluadeX found that this wipes a drive, deletes the root or a home folder, or wipes a database or backups.", ["th"] = "CluadeX ตรวจพบว่าคำสั่งนี้จะล้างทั้งไดรฟ์ ลบ root หรือโฟลเดอร์ผู้ใช้ (home) หรือลบฐานข้อมูล/แบ็กอัป" },
         ["perm.warn.deleteAll"] = new() { ["en"] = "Deletes a whole folder and everything inside it: {0}", ["th"] = "ลบทั้งโฟลเดอร์และทุกอย่างข้างใน: {0}" },
         ["perm.warn.outside"] = new() { ["en"] = "Touches files outside the project: {0}", ["th"] = "แตะไฟล์ที่อยู่นอกโปรเจกต์: {0}" },
         ["perm.warn.protected"] = new() { ["en"] = "This is an important folder of the computer (a drive, a user folder or a system folder): {0}", ["th"] = "นี่คือโฟลเดอร์สำคัญของเครื่อง (ไดรฟ์ โฟลเดอร์ผู้ใช้ หรือโฟลเดอร์ระบบ): {0}" },

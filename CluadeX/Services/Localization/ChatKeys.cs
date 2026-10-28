@@ -113,7 +113,7 @@ internal static class ChatKeys
         ["chat.ctx.fullWarning"] = new() { ["en"] = "🔴 Context almost full — the AI is losing earlier messages. Compact now or start a New Chat.", ["th"] = "🔴 context เกือบเต็ม — AI เริ่มลืมข้อความก่อนหน้า บีบอัดตอนนี้หรือเริ่มแชทใหม่" },
 
         // ─── Permission prompts ───
-        ["chat.perm.danger.title"] = new() { ["en"] = "⚠ DANGER — this deletes a drive, a home or a system folder", ["th"] = "⚠ อันตราย — คำสั่งนี้จะลบไดรฟ์ โฟลเดอร์ผู้ใช้ หรือโฟลเดอร์ระบบ" },
+        ["chat.perm.danger.title"] = new() { ["en"] = "⚠ DANGER — this wipes a drive, deletes the root or a home folder, or wipes a database or backups", ["th"] = "⚠ อันตราย — คำสั่งนี้จะล้างทั้งไดรฟ์ ลบ root หรือโฟลเดอร์ผู้ใช้ (home) หรือลบฐานข้อมูล/แบ็กอัป" },
         ["chat.perm.danger.body"] = new() { ["en"] = "Nothing runs unless you say yes here. No rule, no \"allow everything\" and no agent can answer this. Read what it would delete:", ["th"] = "จะไม่มีอะไรรันจนกว่าคุณจะกดอนุญาตที่นี่ ไม่มีกฎ โหมดอนุญาตทั้งหมด หรือ agent ตัวไหนตอบแทนได้ อ่านก่อนว่าจะลบอะไร:" },
         ["chat.perm.danger.allow"] = new() { ["en"] = "Yes, run this delete", ["th"] = "อนุญาตให้รันคำสั่งลบนี้" },
         // Split chats (new_chat / close_chat, the sidebar's tree)

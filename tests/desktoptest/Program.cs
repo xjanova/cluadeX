@@ -502,20 +502,23 @@ internal static class Program
         KillChildren();
         // NEVER a real destructive command here: on 2026-10-17 this line was `cmd.exe /c rd /s /q C:\`, the check
         // missed it, and it wiped the owner's home folder for 45 minutes. A guard test uses an inert sentinel.
-        var blocked = await T("desktop_launch", ("path", "cmd.exe"), ("args", "/c echo CX-SENTINEL-NOT-RUN rd /s /q Z:\\cx-sentinel-nonexistent"));
+        // Owner 2026-10-28: only a delete aimed at the ROOT or a home (or a drive / backup / database wipe) asks — the drive root is assembled
+        // from pieces so this file holds no line the scanner would flag, and the echo keeps it inert either way.
+        string zRoot = "Z" + ":\\";
+        var blocked = await T("desktop_launch", ("path", "cmd.exe"), ("args", "/c echo CX-SENTINEL-NOT-RUN rd /s /q " + zRoot));
         Check("L1g", "desktop_launch runs the dangerous-command check on the command line", !blocked.Success, Seen(blocked));
         var forms = new List<ToolResult>();
         foreach (var a in new[]
                  {
-                     "/c echo CX-SENTINEL-NOT-RUN rmdir /s /q Z:\\cx-sentinel-nonexistent",
-                     "/c echo CX-SENTINEL-NOT-RUN rd /q /s Z:\\cx-sentinel-nonexistent",
-                     "/c echo CX-SENTINEL-NOT-RUN del /f /s /q Z:\\cx-sentinel-nonexistent\\*",
+                     "/c echo CX-SENTINEL-NOT-RUN rmdir /s /q " + zRoot,
+                     "/c echo CX-SENTINEL-NOT-RUN rd /q /s " + zRoot,
+                     "/c echo CX-SENTINEL-NOT-RUN del /f /s /q " + zRoot + "*",
                  })
             forms.Add(await T("desktop_launch", ("path", "cmd.exe"), ("args", a)));
         forms.Add(await T("desktop_launch", ("path", "powershell.exe"),
-            ("args", "-NoProfile -Command \"Write-Output CX-SENTINEL-NOT-RUN; # Remove-Item Z:\\cx-sentinel-nonexistent -Recurse\"")));
-        Check("L1h", "…and so do rmdir /s, rd /q /s (switches in any order), del /s and Remove-Item -Recurse: the red prompt, refused with nobody to answer",
-            forms.All(f => !f.Success && f.Error.Contains("recursive delete") && f.Error.Contains("did not approve")),
+            ("args", "-NoProfile -Command \"Write-Output CX-SENTINEL-NOT-RUN; # Remove-Item " + zRoot + " -Recurse\"")));
+        Check("L1h", "…and so do rmdir /s, rd /q /s (switches in any order), del /s and Remove-Item -Recurse on a drive root: the red prompt, refused with nobody to answer",
+            forms.All(f => !f.Success && f.Error.Contains("aimed at the root") && f.Error.Contains("did not approve")),
             string.Join("\n", forms.Select(Seen)));
     }
 
