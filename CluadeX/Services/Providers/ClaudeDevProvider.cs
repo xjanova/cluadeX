@@ -86,7 +86,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
 
     /// <summary>Commands the CLI is never let run headless, whatever the rules say: rewriting git history and shutting
     /// the machine down. Recursive deletes are NOT here any more (owner, 2026-10-18): `rm -rf build` must just run, and a
-    /// delete aimed at a drive / home / system folder is caught by the --cx-guard hook and put to the user on CluadeX's
+    /// delete aimed at a drive, the root or a home folder is caught by the --cx-guard hook and put to the user on CluadeX's
     /// red prompt (Safety.DangerApproval) — it runs only on their yes.</summary>
     private const string NeverTools =
         "Bash(git push --force:*),Bash(git push -f:*),Bash(git reset --hard:*),Bash(git clean:*),Bash(shutdown:*)";

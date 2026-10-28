@@ -9,10 +9,11 @@ namespace CluadeX.Services.Safety;
 public sealed record DangerRequest(string Tool, string Action, string Reason);
 
 /// <summary>
-/// The owner's rule (2026-10-18): a command or code that deletes a drive, a home or a system folder MAY run — but only
-/// after the user says yes to a red, explicit prompt, every time. No rule, no "allow everything" chat, no switched-off
-/// permission system and no agent answers it ("ห้ามทำพละการ"). Where nobody can answer (a test harness, a headless
-/// run, the app closed) the answer is no.
+/// The owner's rule (2026-10-18, narrowed 2026-10-28 to wiping a whole drive, deleting the root or a home folder,
+/// deleting Windows' backups and wiping a database — see DestructiveCodeScan): a command or code that does one of
+/// those MAY run — but only after the user says yes to a red, explicit prompt, every time. No rule, no "allow
+/// everything" chat, no switched-off permission system and no agent answers it ("ห้ามทำพละการ"). Where nobody can
+/// answer (a test harness, a headless run, the app closed) the answer is no.
 ///
 /// The app sets <see cref="Handler"/> (ChatViewModel: a red permission row in the chat). Claude Dev's own shell reaches
 /// it through <see cref="DangerApprovalPipe"/> from the <c>--cx-guard</c> hook.

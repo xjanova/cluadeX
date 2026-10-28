@@ -29,6 +29,7 @@ internal static class Program
     static readonly string Root = "C" + ":" + "\\";
     static readonly string RdSQ = "rd" + " /s /q ";
     static readonly string RmRf = "rm" + " -rf ";
+    static readonly string Tilde = "~";
 
     [STAThread]
     static int Main()
@@ -95,29 +96,51 @@ internal static class Program
             ("the 2026-10-17 test line", $"var r = await Launch({q}cmd.exe{q}, {q}/c {RdSQ}{Root.Replace("\\", "\\\\")}{q});"),
             ("rd on a drive root", $"{RdSQ}{Root}"),
             ("rd on C: without slash", $"{RdSQ}C:"),
-            ("rm -rf /", $"{RmRf}/"),
-            ("rm -rf ~", $"{RmRf}~"),
-            ("rm -rf ~/.ssh", $"{RmRf}~/.ssh"),
-            ("rm -rf $HOME", $"{RmRf}$HOME"),
-            ("Remove-Item USERPROFILE", "Remove-Item -Recurse -Force $env:USERPROFILE"),
-            ("del /s on a profile", "del /s /q " + Root + "Users\\xman\\"),
-            // A profile's vital folders spelled out, not only by variable (after 374b331 these ran unasked)
-            ("rd on a spelled-out AppData", RdSQ + Root + "Users\\xman\\AppData"),
-            ("rd on a spelled-out AppData\\Roaming", RdSQ + Root + "Users\\xman\\AppData\\Roaming\\"),
-            ("rd on a spelled-out .cluadex", RdSQ + Root + "Users\\xman\\.cluadex"),
-            ("Remove-Item on a spelled-out Desktop", "Remove-Item -Recurse -Force \"" + Root + "Users\\xman\\Desktop\""),
-            ("rm -rf on a Git Bash .cluadex", RmRf + "/c/Users/xman/.cluadex"),
-            ("rm -rf ~/AppData/Roaming", RmRf + "~/AppData/Roaming"),
-            ("Directory.Delete(home)", "Directory.Delete(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), true);"),
-            ("shutil.rmtree(~)", "shutil.rmtree(os.path.expanduser('~'))"),
-            ("fs.rmSync(homedir)", "fs.rmSync(os.homedir(), { recursive: true })"),
+            ("recursive rm of the POSIX root", $"{RmRf}/"),
+            ("recursive rm of everything in the POSIX root", RmRf + "/" + "*"),
+            ("del /s on everything in a drive root", "del /s /q " + Root + "*.*"),
+            ("recursive rm of a Git Bash drive", RmRf + "/c" + "/"),
+            ("rm -rf on a WSL drive", RmRf + "/mnt" + "/c"),
+            ("Remove-Item on the system drive by variable", "Remove-Item -Recurse -Force $env:" + "SystemDrive\\"),
+            ("a delete API on Path.GetPathRoot", "Directory.Delete(Path." + "GetPathRoot(Environment.CurrentDirectory), true);"),
             ("format a drive", "format " + "D:" + " /q"),
-            ("diskpart", "diskpart /s wipe.txt"),
-            ("cipher /w", "cipher /w:" + Root),
+            ("the disk-part tool", "disk" + "part /s wipe.txt"),
+            ("the Clear Disk cmdlet", "Clear-" + "Disk -Number 1 -RemoveData"),
+            // Owner 2026-10-28: a database wipe is the third thing the red prompt is for.
+            ("SQL drop database", "psql -c \"" + "DROP" + " DATABASE shop\""),
+            ("SQL drop of a schema, if-exists form", "DROP" + " SCHEMA IF EXISTS public CASCADE;"),
+            ("Postgres drop-db", "drop" + "db -U postgres shop"),
+            ("Mongo dropDatabase", "mongosh shop --eval \"db.drop" + "Database()\""),
+            ("Redis flush all", "redis-cli " + "FLUSH" + "ALL"),
+            ("Laravel migrate fresh", "php artisan migrate:" + "fresh --seed"),
+            ("Laravel db wipe", "php artisan db:" + "wipe"),
+            ("Rails db drop", "bin/rails db:" + "drop"),
+            ("Prisma migrate-reset", "npx prisma migrate" + " reset --force"),
+            ("EF Core database drop", "dotnet ef database" + " drop --force"),
+            ("Django flush", "python manage.py" + " flush --noinput"),
+            // Owner 2026-10-28 ("ใส่ home กลับ"): a home folder, the Users folder and Windows' backups ask again.
+            ("recursive rm of ~", $"{RmRf}~"),
+            ("recursive rm of ~/.ssh", $"{RmRf}~/.ssh"),
+            ("recursive rm of $HOME", $"{RmRf}$HOME"),
+            ("recursive rm of a quoted $HOME/", RmRf + "\"$HOME\"/"),
+            ("Remove-Item USERPROFILE", "Remove-" + "Item -Recurse -Force $env:" + "USERPROFILE"),
+            ("rd on %USERPROFILE%", RdSQ + "%USER" + "PROFILE%"),
+            ("del /s on a profile", "del /s /q " + Root + "Users\\xman\\"),
+            ("rd on the Users folder", RdSQ + Root + "Users"),
+            ("rd on a spelled-out AppData", RdSQ + Root + "Users\\xman\\AppData"),
+            ("recursive rm of a Git Bash .cluadex", RmRf + "/c/Users/xman/.cluadex"),
+            ("recursive rm of a WSL profile", RmRf + "/mnt/c/Users/xman"),
+            ("Directory.Delete(home)", "Directory.Delete(Environment.GetFolderPath(Environment.SpecialFolder." + "UserProfile), true);"),
+            ("shutil rmtree of the home", "shutil.rmtree(os.path.expanduser('" + Tilde + "'))"),
+            ("fs.rmSync(homedir)", "fs.rmSync(os." + "homedir(), { recursive: true })"),
+            ("vss admin deleting the shadow copies", "vss" + "admin delete shadows /all /quiet"),
+            ("wmic deleting the shadow copies", "wmic shadow" + "copy delete"),
+            ("wb admin deleting the backup catalog", "wb" + "admin delete catalog -quiet"),
+            ("bcd edit setting a boot value", "bcd" + "edit /set {default} recoveryenabled No"),
             // Comments are set aside only for a delete API — a shell delete on the same line is still read strictly.
             ("a delete API and an rm of the root in a string", "Directory.Delete(x, true); Run(\"" + RmRf + "/* \");"),
             ("a delete API on a quoted root", "fs.rmSync(\"/\", { recursive: true });"),
-            ("a delete API on a drive root after a comment", "/* tidy */ Directory.Delete(\"" + "C:" + "\\\\\", true);"),
+            ("a delete API on a drive root after a comment", "/* tidy */ Directory.Delete(\"" + "C" + ":" + "\\\\\", true);"),
         })
             Check($"flags: {label}", DestructiveCodeScan.JudgeLine(line) != null, line);
 
@@ -125,9 +148,25 @@ internal static class Program
         {
             ("rm -rf dist", RmRf + "dist"),
             ("rm -rf ./build/*", RmRf + "./build/*"),
+            // Owner 2026-10-28: a system folder or "everything here" no longer goes to the red prompt (a home does again).
+            ("rd on Windows", RdSQ + Root + "Windows"),
+            ("rm -rf on Git Bash Windows", RmRf + "/c/Windows"),
+            ("rm -rf a project in the home", RmRf + "~/projects/old-app"),
+            ("rd on a project under a spelled-out profile", RdSQ + Root + "Users\\xman\\Code\\old-app"),
+            ("Remove-Item of a folder in the profile", "Remove-" + "Item -Recurse -Force $env:" + "USERPROFILE\\Code\\old-app"),
+            ("bcdedit /enum (reading)", "bcd" + "edit /enum"),
+            ("vssadmin list shadows (reading)", "vss" + "admin list shadows"),
+            ("rm -rf .", RmRf + "."),
+            ("rm -rf *", RmRf + "*"),
+            ("cipher /w", "cipher /w:" + Root),
+            ("SQL drop of one table", "DROP TABLE users;"),
+            ("SQL delete of rows", "DELETE FROM users WHERE id = 1;"),
+            ("Laravel migrate (no wipe)", "php artisan migrate --force"),
+            ("EF Core database update", "dotnet ef database update"),
+            ("a sentence naming the words without a name after them", "Refuses rm -rf, drop database, and the like."),
             ("rm -rf ~/tmp/cache", RmRf + "~/tmp/cache"),
             ("rd in a spelled-out AppData\\Local\\Temp", RdSQ + Root + "Users\\xman\\AppData\\Local\\Temp\\cx-x"),
-            ("rm -rf a folder inside ~/.cluadex", RmRf + "~/.cluadex/projects/cx-x"),
+            ("recursive rm of a folder inside the home's .cluadex", RmRf + "~/.cluadex/projects/cx-x"),
             ("Directory.Delete(tempDir)", "Directory.Delete(tempDir, true);"),
             ("rmdir on a project folder", "rmdir /s /q node_modules"),
             ("the recommended inert sentinel", "echo CX-SENTINEL " + RdSQ + "Z:\\cx-sentinel-nonexistent"),
@@ -139,7 +178,7 @@ internal static class Program
             ("a delete API with a // comment naming C:", "Directory.Delete(cache, true); // never " + "C:" + " itself"),
             ("a delete API next to a division", "Directory.Delete(Path.Combine(root, (n / 2).ToString()), true);"),
             ("a delete API next to a multiplication", "fs.rmSync(dir, { recursive: true, maxRetries: tries * 2 });"),
-            ("a commented-out delete", "// Directory.Delete(" + "C:" + "\\\\, true);"),
+            ("a commented-out delete", "// Directory.Delete(" + "C" + ":" + "\\\\, true);"),
         })
             Check($"passes: {label}", DestructiveCodeScan.JudgeLine(line) == null, line + " → " + DestructiveCodeScan.JudgeLine(line));
 
@@ -149,6 +188,72 @@ internal static class Program
         Check("runs code: a .bat", DestructiveCodeScan.RunsProjectCode("build.bat"));
         Check("does not run code: git status", !DestructiveCodeScan.RunsProjectCode("git status"));
         Check("does not run code: ls", !DestructiveCodeScan.RunsProjectCode("ls -la src"));
+
+        // A command is judged statement by statement, and text that is only printed, searched or recorded is not run
+        // (owner 2026-10-28: "แยกให้ออกว่าเป็นเพียงโค๊ดในโปรแกรม หรือเป็นการรันเพื่อใช้คำสั่งจริงๆ").
+        foreach (var (label, cmd) in new[]
+        {
+            ("2026-10-21: a clean-up in one statement, a lone / in another", RmRf + "build\nawk '{ print $1 / 2 }' sizes.txt"),
+            ("a clean-up; then ls of the root", RmRf + "build; ls /"),
+            ("a git commit message naming a home delete", "git commit -m \"guard: ask before " + RmRf + "~\""),
+            ("git -C dir log --grep naming it", "git -C E:/Code/x log --grep \"" + RmRf + "~\""),
+            ("echo of a home delete", "echo " + RmRf + "~"),
+            ("grep for a root delete", "grep -rn \"" + RdSQ + Root + "\" src"),
+            ("Select-String for it", "Select-String -Pattern '" + RdSQ + Root + "' -Path *.log"),
+        })
+            Check($"command passes: {label}", DestructiveCodeScan.JudgeCommand(cmd) == null, cmd + " → " + DestructiveCodeScan.JudgeCommand(cmd));
+        foreach (var (label, cmd) in new[]
+        {
+            ("a home delete after a harmless statement", "cd src && " + RmRf + "~"),
+            ("echo piped to a shell", "echo " + RmRf + "~ | sh"),
+            ("echo piped into the delete itself", "echo y | " + RmRf + "~"),
+            ("echo written to a script", "echo " + RmRf + "~ > wipe.sh"),
+            ("echo of a command substitution", "echo $(" + RmRf + "~)"),
+            ("echo of backticks", "echo `" + RmRf + "~`"),
+            ("Write-Host of a PowerShell expression", "Write-Host (Remove-" + "Item -Recurse -Force $env:" + "USERPROFILE)"),
+            ("rg with a preprocessor", "rg --pre '" + RmRf + "~' x"),
+            ("git grep with a pager", "git grep -O'" + RmRf + "~' x"),
+            ("git with a config pager is not text-only", "git -c core.pager='" + RmRf + "~' log"),
+            ("cmd /c then an echo", "cmd /c " + RdSQ + Root + " & echo done"),
+            ("a semicolon inside a commit message splits (asks, never misses)", "git commit -m \"a; " + RmRf + "~\""),
+        })
+            Check($"command flags: {label}", DestructiveCodeScan.JudgeCommand(cmd) != null, cmd);
+
+        // Code files: how the line is read follows the language. Text in a print, a regex, a check or a comment is data;
+        // the same text handed to a process — or a delete API beside a print — is not.
+        string homeDel = RmRf + "~", rootDel = RdSQ + Root.Replace("\\", "\\\\");
+        foreach (var (label, file, text) in new[]
+        {
+            (".cs: printed", "a.cs", "Console.WriteLine(\"never run " + homeDel + "\");"),
+            (".cs: a regex", "a.cs", "static readonly Regex R = new(@\"" + homeDel + "\");"),
+            (".cs: a check in a test", "a.cs", "Check(\"x\", DestructiveCodeScan.JudgeLine(\"" + homeDel + "\") != null);"),
+            (".cs: a full-line comment", "a.cs", "// e.g. " + homeDel),
+            (".cs: a block comment", "a.cs", "/* the 2026-10-17 line:\n   var r = Launch(\"cmd.exe\", \"/c " + rootDel + "\");\n*/\nclass A { }"),
+            (".py: printed", "a.py", "print('" + homeDel + "')"),
+            (".py: a comment", "a.py", "# " + homeDel),
+            (".js: logged", "a.js", "console.log('" + homeDel + "');"),
+            (".bat: echo", "a.bat", "@echo off\r\necho " + RdSQ + Root + "\r\n"),
+            (".bat: REM", "a.bat", "REM " + RdSQ + Root),
+            (".sh: a comment", "a.sh", "# " + homeDel),
+            (".ps1: a block comment", "a.ps1", "<#\n" + RdSQ + Root + "\n#>\nWrite-Output hi"),
+        })
+            Check($"code passes: {label}", DestructiveCodeScan.ScanText(text, file).Count == 0, string.Join("; ", DestructiveCodeScan.ScanText(text, file).Select(f => f.Line + ": " + f.Why)));
+        foreach (var (label, file, text) in new[]
+        {
+            (".cs: handed to Process.Start", "a.cs", "Process.Start(\"bash\", \"-c '" + homeDel + "'\");"),
+            (".cs: a plain assignment", "a.cs", "var cmd = \"" + homeDel + "\";"),
+            (".cs: a print beside a delete API", "a.cs", "Console.WriteLine(\"bye\"); Directory.Delete(Environment.GetFolderPath(Environment.SpecialFolder." + "UserProfile), true);"),
+            (".cs: after a closed block comment", "a.cs", "/* x */ var r = Launch(\"cmd.exe\", \"/c " + rootDel + "\");"),
+            (".py: os.system", "a.py", "os.system('" + homeDel + "')"),
+            (".py: a print beside rmtree", "a.py", "print('bye'); shutil.rmtree(os.path.expanduser('" + Tilde + "'))"),
+            (".js: execSync in a log", "a.js", "console.log(execSync('" + homeDel + "'));"),
+            (".bat: the real rd", "a.bat", "@echo off\r\n" + RdSQ + Root + "\r\n"),
+            (".bat: echo piped to cmd", "a.bat", "echo " + RdSQ + Root + " | cmd"),
+            (".sh: the real rm", "a.sh", "#!/bin/sh\n" + homeDel),
+            (".ps1: the real Remove-Item", "a.ps1", "Remove-" + "Item -Recurse -Force $env:" + "USERPROFILE"),
+            ("a code block (no extension)", "(code)", homeDel),
+        })
+            Check($"code flags: {label}", DestructiveCodeScan.ScanText(text, file).Count > 0, text);
     }
 
     static void Deletes(string work)
@@ -187,14 +292,41 @@ internal static class Program
         File.WriteAllText(Path.Combine(repo, "app.cs"), "class A { }\n");
         Check("Bash: a plain command is allowed", GuardHook.Decide(HookJson("Bash", new { command = "git status" }, repo)) == null);
         Check("Bash: rd on a drive root is refused", GuardHook.Decide(HookJson("Bash", new { command = RdSQ + Root }, repo)) != null);
-        Check("Bash: rm -rf ~ is refused", GuardHook.Decide(HookJson("Bash", new { command = RmRf + "~" }, repo)) != null);
+        Check("Bash: a recursive rm of ~ is refused again (owner 2026-10-28: \"ใส่ home กลับ\")", GuardHook.Decide(HookJson("Bash", new { command = RmRf + "~" }, repo)) != null);
+        Check("Bash: a commit message naming it is not a run", GuardHook.Decide(HookJson("Bash", new { command = "git commit -m \"ask before " + RmRf + "~\"" }, repo)) == null);
+        Check("Bash: a database wipe is refused", GuardHook.Decide(HookJson("Bash", new { command = "php artisan migrate:" + "fresh" }, repo)) != null);
         Check("Bash: dotnet run on clean code is allowed", GuardHook.Decide(HookJson("Bash", new { command = "dotnet run" }, repo)) == null);
 
         string bad = "var r = Launch(\"cmd.exe\", \"/c " + RdSQ + Root.Replace("\\", "\\\\") + "\");";
-        Check("Write: putting the incident line in a file is refused",
-            GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(repo, "tests", "t.cs"), content = "// test\n" + bad + "\n" }, repo)) is { } w && w.Contains("refused to write"));
-        Check("Edit: same through an edit", GuardHook.Decide(HookJson("Edit", new { file_path = Path.Combine(repo, "app.cs"), old_string = "x", new_string = bad }, repo)) != null);
+        // Owner 2026-10-28: writing code is not running it — the run is where it is caught.
+        Check("Write: putting the incident line in a file is not asked (writing is not running)",
+            GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(repo, "tests", "t.cs"), content = "// test\n" + bad + "\n" }, repo)) == null);
+        Check("Edit: same through an edit", GuardHook.Decide(HookJson("Edit", new { file_path = Path.Combine(repo, "app.cs"), old_string = "x", new_string = bad }, repo)) == null);
         Check("Write: an ordinary file is allowed", GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(repo, "b.cs"), content = "class B { }" }, repo)) == null);
+
+        // …except into a file that runs by itself, which no command names.
+        Check("Write: a git hook that deletes the home is refused",
+            GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(repo, ".git", "hooks", "pre-commit"), content = "#!/bin/sh\n" + RmRf + "$HOME\n" }, repo)) is { } hk && hk.Contains("runs by itself"));
+        Check("Edit: a PowerShell profile that deletes the home is refused",
+            GuardHook.Decide(HookJson("Edit", new { file_path = Path.Combine(work, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1"), old_string = "x", new_string = "Remove-" + "Item -Recurse -Force $env:" + "USERPROFILE" }, repo)) != null);
+        Check("Write: a .bashrc with a git pager that deletes the home is refused",
+            GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(work, ".bashrc"), content = "export GIT_PAGER='" + RmRf + "$HOME'\n" }, repo)) != null);
+        Check("Write: an ordinary git hook is allowed", GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(repo, ".git", "hooks", "pre-commit"), content = "#!/bin/sh\ndotnet build\n" }, repo)) == null);
+        Check("Write: the same delete in a test file is allowed (not run by itself)",
+            GuardHook.Decide(HookJson("Write", new { file_path = Path.Combine(repo, "tests", "x.sh"), content = RmRf + "$HOME\n" }, repo)) == null);
+
+        // …and a script written outside the project is read before it runs (it is not among the project's changes).
+        string outside = Path.Combine(work, "outside");
+        Directory.CreateDirectory(outside);
+        string wipeHome = Path.Combine(outside, "tidy.ps1");
+        File.WriteAllText(wipeHome, "Write-Output tidy\r\nRemove-" + "Item -Recurse -Force $env:" + "USERPROFILE\r\n");
+        string runIt = "powershell -NoProfile -ExecutionPolicy Bypass -File \"" + wipeHome + "\"";
+        Check("Bash: running a script outside the project that deletes the home is refused, naming it",
+            GuardHook.Decide(HookJson("Bash", new { command = runIt }, repo)) is { } so && so.Contains("tidy.ps1:2"), GuardHook.Decide(HookJson("Bash", new { command = runIt }, repo)) ?? "allowed");
+        Check("CodeRunGuard says the same for CluadeX's own run_command", CodeRunGuard.Check(runIt, repo) != null);
+        Check("…and with no project folder at all (desktop_launch)", CodeRunGuard.Check(runIt, null) != null);
+        File.WriteAllText(wipeHome, "Write-Output tidy\r\n");
+        Check("…and runs it once the line is gone", GuardHook.Decide(HookJson("Bash", new { command = runIt }, repo)) == null);
 
         // The code is on disk already (written by hand / another tool): running it is refused until it is gone.
         File.WriteAllText(Path.Combine(repo, "tests", "t.cs"), bad + "\n");
@@ -204,7 +336,8 @@ internal static class Program
         Check("CodeRunGuard says the same for CluadeX's own run_tests", CodeRunGuard.Check("dotnet test", repo) != null);
         File.WriteAllText(Path.Combine(repo, "tests", "t.cs"), "// fixed\n");
         Check("…and allows it once the line is gone", GuardHook.Decide(HookJson("Bash", new { command = "dotnet run --project tests" }, repo)) == null);
-        Check("CodeRunGuard.CheckCode refuses a code block that would wipe home", CodeRunGuard.CheckCode("import shutil, os\nshutil.rmtree(os.path.expanduser('~'))") != null);
+        Check("CodeRunGuard.CheckCode refuses a code block that deletes the home", CodeRunGuard.CheckCode("import shutil, os\nshutil.rmtree(os.path.expanduser('" + Tilde + "'))") != null);
+        Check("CodeRunGuard.CheckCode refuses a code block that drops a database", CodeRunGuard.CheckCode("cur.execute('" + "DROP" + " DATABASE shop')") != null);
     }
 
     /// <summary>The CluadeX.exe to start with --cx-guard / --cx-tools: one whose version is the linked DLL's. An older exe
@@ -267,9 +400,10 @@ internal static class Program
         Check("run_shell_command: a plain command is allowed", GuardHook.Decide(HookJson("run_shell_command", new { command = "git status" }, cwd)) == null);
         Check("run_shell_command: rd on a drive root is refused", GuardHook.Decide(HookJson("run_shell_command", new { command = RdSQ + Root }, cwd)) != null);
         string bad = "var r = Launch(\"cmd.exe\", \"/c " + RdSQ + Root.Replace("\\", "\\\\") + "\");";
-        Check("write_file: putting the incident line in a file is refused",
-            GuardHook.Decide(HookJson("write_file", new { file_path = Path.Combine(cwd, "t.cs"), content = bad }, cwd)) is { } w && w.Contains("refused to write"));
-        Check("replace: same through an edit", GuardHook.Decide(HookJson("replace", new { file_path = Path.Combine(cwd, "a.cs"), old_string = "x", new_string = bad }, cwd)) != null);
+        Check("write_file: putting the incident line in a file is not asked (writing is not running)",
+            GuardHook.Decide(HookJson("write_file", new { file_path = Path.Combine(cwd, "t.cs"), content = bad }, cwd)) == null);
+        Check("replace: same through an edit", GuardHook.Decide(HookJson("replace", new { file_path = Path.Combine(cwd, "a.cs"), old_string = "x", new_string = bad }, cwd)) == null);
+        Check("run_shell_command: rm -rf ~ is refused", GuardHook.Decide(HookJson("run_shell_command", new { command = RmRf + "~" }, cwd)) != null);
         Check("write_file: an ordinary file is allowed", GuardHook.Decide(HookJson("write_file", new { file_path = Path.Combine(cwd, "b.cs"), content = "class B { }" }, cwd)) == null);
 
         string push = "git push" + " --force origin main", reset = "npm test && git reset" + " --hard";
@@ -361,8 +495,11 @@ internal static class Program
         Check("rd on a drive root → the red prompt (AskUser), not a silent pass",
             V(Agy("run_command", new { CommandLine = RdSQ + Root }), full) == AskUser);
         string bad = "var r = Launch(\"cmd.exe\", \"/c " + RdSQ + Root.Replace("\\", "\\\\") + "\");";
-        Check("write_to_file putting the incident line in a file → the red prompt, whatever the content argument is called",
-            V(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "t.cs"), SomeFutureContentArg = bad }), full) == AskUser);
+        // Owner 2026-10-28: writing code is not running it — the run_command that runs it is where it is caught.
+        Check("write_to_file putting the incident line in a file is allowed (writing is not running)",
+            V(Agy("write_to_file", new { TargetFile = Path.Combine(cwd, "t.cs"), SomeFutureContentArg = bad }), full) == Allow);
+        Check("a recursive rm of ~ through run_command → the red prompt",
+            V(Agy("run_command", new { CommandLine = RmRf + "~" }), full) == AskUser);
         Check("nothing may write into the guard's own folder (or its turn folder), even with the full grant",
             V(Agy("write_to_file", new { TargetFile = Path.Combine(plugin, "guard.json"), CodeContent = "{}" }), full) == Deny
             && V(Agy("write_to_file", new { TargetFile = Path.Combine(work, "agy-turn", "x.txt"), CodeContent = "{}" }), full) == Deny
@@ -647,23 +784,28 @@ internal static class Program
         Check("desktop_launch: a script that wipes a drive is refused", CodeRunGuard.CheckScriptFile(bad) != null);
         Check("desktop_launch: a clean script is allowed", CodeRunGuard.CheckScriptFile(clean) == null);
         Check("desktop_launch: an app is not read as a script", CodeRunGuard.CheckScriptFile(Environment.ProcessPath) == null);
-        // desktop_launch starts programs: any recursive delete in its command line asks, whatever the target (3.0.166 let
-        // `cmd.exe /c … rd /s /q <folder>` through — FindSerious sets deletes aside and the folder was not a drive).
+        // desktop_launch is judged like run_command (owner 2026-10-28): a recursive delete of a folder runs; only a drive
+        // root, a home folder, Windows' backups or a drive / database wipe asks.
         foreach (var (label, line) in new[]
         {
             ("rd /s /q after an echo", "cmd.exe /c echo CX-SENTINEL " + RdSQ + "Z:\\cx-sentinel-nonexistent"),
-            ("rmdir /s", "cmd.exe /c rmdir /s Z:\\cx-sentinel-nonexistent"),
-            ("rd /q /s (switches in any order)", "cmd.exe /c rd /q /s Z:\\cx-sentinel-nonexistent"),
             ("del /f /s /q", "cmd.exe /c del /f /s /q Z:\\cx-sentinel-nonexistent\\*"),
-            ("erase /s", "cmd /c erase /s Z:\\cx-sentinel-nonexistent\\*.*"),
             ("Remove-Item -Recurse", "powershell -c Remove-Item Z:\\cx-sentinel-nonexistent -Recurse -Force"),
             ("rm -rf in bash -c", "bash.exe -c \"" + RmRf + "/z/cx-sentinel-nonexistent\""),
+            ("an app", "notepad.exe C:\\notes\\rd.txt"),
         })
-            Check($"desktop_launch asks: {label}", CodeRunGuard.CheckLaunchCommandLine(line) is { } why && why.Contains("recursive delete"), line);
-        foreach (var line in new[] { "notepad.exe C:\\notes\\rd.txt", "code.exe --folder-uri /c/proj", "cmd.exe /c del notes.tmp", "explorer.exe /select,C:\\x\\rmdir.log", Environment.ProcessPath! })
-            Check($"desktop_launch does not ask: {line}", CodeRunGuard.CheckLaunchCommandLine(line) == null, line + " → " + CodeRunGuard.CheckLaunchCommandLine(line));
+            Check($"desktop_launch does not ask: {label}", CodeRunGuard.Check(line, null) == null, line + " → " + CodeRunGuard.Check(line, null));
+        foreach (var (label, line) in new[]
+        {
+            ("rd /s /q on a drive root", "cmd.exe /c " + RdSQ + "Z" + ":\\"),
+            ("rd /q /s on a drive root (switches in any order)", "cmd.exe /c rd /q /s " + "Z" + ":\\"),
+            ("a database wipe", "cmd.exe /c php artisan db:" + "wipe"),
+            ("rd /s /q on the home", "cmd.exe /c " + RdSQ + "%USER" + "PROFILE%"),
+            ("deleting the shadow copies", "cmd.exe /c vss" + "admin delete shadows /all /quiet"),
+        })
+            Check($"desktop_launch asks: {label}", CodeRunGuard.Check(line, null) != null, line);
         Check("JudgeLine reads rd /q /s like rd /s /q (a drive root asks either way)", DestructiveCodeScan.JudgeLine("rd /q /s " + Root) != null);
-        Check("repl: code that wipes home is refused", CodeRunGuard.CheckCode("import shutil\nshutil.rmtree(\"" + Root.Replace("\\", "/") + "\")") != null);
+        Check("repl: code that wipes a drive root is refused", CodeRunGuard.CheckCode("import shutil\nshutil.rm" + "tree(\"" + Root.Replace("\\", "/") + "\")") != null);
 
         Check("dry-run is on by default in a harness", ProcessLaunchPolicy.DryRun);
         Check("dry-run blocks a program that is not allowed", ProcessLaunchPolicy.Blocks("cmd.exe"));
@@ -844,7 +986,7 @@ internal static class Program
 
     static void Cleanup(string work)
     {
-        Console.WriteLine("Cleanup deletes run; root / home / system / everything-here deletes ask (owner, 2026-10-18)");
+        Console.WriteLine("Only a drive wipe, a root or home delete, a backup wipe or a database wipe asks (owner, 2026-10-28); everything else runs");
         string D = "C" + ":";
         string? Hook(string tool, string cmd) => GuardHook.Decide(HookJson(tool, new { command = cmd }, work));
         foreach (var (tool, cmd) in new[]
@@ -854,19 +996,28 @@ internal static class Program
             ("Bash", "del /s /q *.tmp"), ("Bash", RmRf + "~/.cache/pip"), ("Bash", RmRf + "node_modules dist"),
             ("Bash", "rm tools/_tmp.gd"), ("Bash", "cmd /c " + "rd /s /q build"), ("Bash", "git rm -r --cached ."),
             ("Bash", RmRf + "build/*"), ("Bash", "flutter clean && " + RmRf + "build"),
+            // Owner 2026-10-28: a system folder, "everything here" and the old blocklist no longer ask.
+            ("Bash", RmRf + "/c/Windows"), ("Bash", RmRf + "."), ("Bash", RmRf + "*"), ("Bash", RmRf + "~/projects/old-app"),
+            ("Bash", RmRf + "./*"), ("PowerShell", "reg add HKCU\\x /v y /d z"), ("PowerShell", "Invoke-WebRequest https://x/y.zip -OutFile y.zip"),
+            ("Bash", "icacls build /grant Everyone:F"),
         })
             Check($"runs: {cmd}", Hook(tool, cmd) == null, Hook(tool, cmd) ?? "");
         foreach (var (tool, cmd) in new[]
         {
-            ("Bash", RmRf + "~"), ("Bash", RmRf + "$HOME"), ("Bash", "cmd /c " + RdSQ + D + "\\"),
-            ("PowerShell", "Remove-Item " + D + "\\Users -Recurse -Force"), ("Bash", RmRf + "/c/Windows"), ("Bash", RmRf + "/c/"),
-            ("Bash", RmRf + "/c"), ("Bash", RmRf + "/mnt/c"), ("Bash", RmRf + "/c/Users/xman"), ("Bash", RmRf + "."),
-            ("Bash", RmRf + "*"), ("Bash", RmRf + "./*"),
+            ("Bash", "cmd /c " + RdSQ + D + "\\"), ("Bash", RmRf + "/c/"), ("Bash", RmRf + "/c"), ("Bash", RmRf + "/mnt/c"),
+            ("Bash", RmRf + "/"), ("Bash", "format " + "D:" + " /q"), ("Bash", "psql -c \"" + "DROP" + " DATABASE shop\""),
+            ("Bash", "redis-cli " + "FLUSH" + "ALL"), ("Bash", "php artisan migrate:" + "fresh"),
+            // Owner 2026-10-28 ("ใส่ home กลับ"): the home asks again, and so does deleting Windows' backups.
+            ("Bash", RmRf + "~"), ("Bash", RmRf + "$HOME"), ("PowerShell", "Remove-" + "Item " + D + "\\Users -Recurse -Force"),
+            ("Bash", RmRf + "/c/Users/xman"), ("PowerShell", "Remove-" + "Item -Recurse -Force $env:" + "APPDATA"),
+            ("Bash", "vss" + "admin delete shadows /all /quiet"), ("Bash", "bcd" + "edit /deletevalue {default} safeboot"),
         })
             Check($"asks: {cmd}", Hook(tool, cmd) != null);
-        Check("not a delete, still serious: reg add", DangerousCommandCheck.FindSerious("reg add HKCU\\x /v y /d z") != null);
-        Check("not a delete, still serious: a download cmdlet", DangerousCommandCheck.FindSerious("Invoke-WebRequest https://x/y.ps1 -OutFile y.ps1") != null);
-        Check("a delete cannot hide a serious line after it", DangerousCommandCheck.FindSerious(RmRf + "build\nshutdown /s /t 0") != null);
+        // The Features "dangerous command blocking" list (CluadeX's own shell tools, switchable) is a separate refusal,
+        // not the red prompt — unchanged.
+        Check("Features blocklist still refuses reg add (own tools, switchable)", DangerousCommandCheck.FindSerious("reg add HKCU\\x /v y /d z") != null);
+        Check("Features blocklist still refuses a download cmdlet", DangerousCommandCheck.FindSerious("Invoke-WebRequest https://x/y.ps1 -OutFile y.ps1") != null);
+        Check("a delete cannot hide a blocked line after it", DangerousCommandCheck.FindSerious(RmRf + "build\nshutdown /s /t 0") != null);
     }
 
     static void Git(string cwd, params string[] args)

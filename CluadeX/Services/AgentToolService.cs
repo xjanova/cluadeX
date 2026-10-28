@@ -2989,7 +2989,7 @@ public class AgentToolService : IDisposable
         string cwd = root;
         if (useSessionCwd && _shellCwd is { } sc && Directory.Exists(sc) && IsUnder(root, sc)) cwd = sc;
 
-        // Always on (run_command, run_build, run_tests, the verify build): a delete aimed at a drive / home / system
+        // Always on (run_command, run_build, run_tests, the verify build): a delete aimed at a drive, the root or a home
         // folder, or running code that was just changed to hold one, runs only after the user's yes on the red prompt
         // (Safety.CodeRunGuard finds it, Safety.DangerApproval asks; 2026-10-17 incident, owner's rule 2026-10-18).
         if (!alreadyGated

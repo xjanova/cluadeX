@@ -342,14 +342,26 @@ public partial class ChatViewModel
     private readonly HashSet<string> _allowAllChats = new();
     private readonly object _allowAllLock = new();
 
+    /// <summary>The chat allows everything — itself, or a chat it was split off (new_chat): the owner's "allow everything"
+    /// covers the whole conversation, the work it hands to split chats included.</summary>
     private bool AllowsAll(ChatSession? s)
     {
         if (s == null) return false;
-        lock (_allowAllLock) return _allowAllChats.Contains(s.Id);
+        string? id = s.Id;
+        lock (_allowAllLock)
+        {
+            if (_allowAllChats.Count == 0) return false;
+            for (int hop = 0; id != null && hop < 32; hop++)
+            {
+                if (_allowAllChats.Contains(id)) return true;
+                id = Services.ChatLinkStore.Current?.Get(id)?.ParentId;
+            }
+        }
+        return false;
     }
 
     /// <summary>"ask" — every action that isn't free asks; "edits" — file edits in the project run without a prompt
-    /// (Accept edits); "all" — nothing asks in this chat except the user's own Ask rules and code run in their browser
+    /// (Accept edits); "all" — nothing asks in this chat (and the chats it splits off) except the red danger prompt
     /// (Deny rules still deny).</summary>
     public string ApprovalMode
     {
@@ -374,6 +386,8 @@ public partial class ChatViewModel
                         SetAllowAll(session, true);
                         Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "🔓 " + Loc("chat.approval.allOn") });
                         ApprovePendingPrompts(RunOf(session)?.Messages ?? Messages);
+                        foreach (var r in _runs.Where(r => !ReferenceEquals(r.Session, session) && AllowsAll(r.Session)).ToList())
+                            ApprovePendingPrompts(r.Messages);
                         ScrollToBottom?.Invoke();
                     }
                     break;
@@ -393,17 +407,20 @@ public partial class ChatViewModel
         }
     }
 
-    /// <summary>Switching to "allow everything" answers the prompts already waiting in that chat — except the ones that
-    /// always ask.</summary>
+    /// <summary>Switching to "allow everything" answers the prompts already waiting in that chat — except the red danger
+    /// prompt.</summary>
     private static void ApprovePendingPrompts(IEnumerable<ChatMessage> messages)
     {
-        foreach (var m in messages.Where(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered && !m.PermissionAlwaysAsk).ToList())
+        foreach (var m in messages.Where(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered
+                                              && string.IsNullOrEmpty(m.PermissionDanger)).ToList())
             m.ResolvePermission(PermissionOutcome.Allowed);
     }
 
-    /// <summary>The permission handler's shortcut: true when the asking run's chat allows everything and this request
-    /// is not one that always asks.</summary>
-    private bool AutoApproves(PermissionRequestInfo info, ChatSession? askSession) => !info.AlwaysAsk && AllowsAll(askSession);
+    /// <summary>The permission handler's shortcut: true when the asking run's chat allows everything. Only the red danger
+    /// prompt (a delete aimed at a drive, the root or a home folder, DangerApproval) still asks — owner 2026-10-28: "allow
+    /// everything" means no prompt for the rest of the conversation, Chrome and AlwaysAsk tools included.</summary>
+    private bool AutoApproves(PermissionRequestInfo info, ChatSession? askSession) =>
+        string.IsNullOrEmpty(info.Danger) && AllowsAll(askSession);
 
     // ─── Spend ───
 

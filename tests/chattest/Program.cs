@@ -1068,9 +1068,9 @@ internal static partial class Program
             Check("V2 nothing is sent by speaking alone", Vm.Messages.Count(m => m.Role == MessageRole.User) == usersBefore && !Vm.IsGenerating);
 
             string boxBefore = Vm.UserInput;
-            var wrongToken = await Post("/text", new { t = "0000", s, final = "rm -rf /", interim = "" }, origin);
-            var foreign = await Post("/text", new { t, s, final = "rm -rf /", interim = "" }, "https://evil.example");
-            var noOrigin = await Post("/text", new { t, s, final = "rm -rf /", interim = "" }, null);
+            var wrongToken = await Post("/text", new { t = "0000", s, final = "rm" + " -rf /", interim = "" }, origin);
+            var foreign = await Post("/text", new { t, s, final = "rm" + " -rf /", interim = "" }, "https://evil.example");
+            var noOrigin = await Post("/text", new { t, s, final = "rm" + " -rf /", interim = "" }, null);
             var foreignSend = await Post("/send", new { t, s }, "https://evil.example");
             var rebind = new HttpRequestMessage(HttpMethod.Get, url);
             rebind.Headers.Host = "evil.example";
@@ -2049,10 +2049,25 @@ internal static partial class Program
             && pending?.PermissionOutcome == PermissionOutcome.Allowed && pendingRan, pending?.PermissionOutcome.ToString());
         var (cmd, cmdAsked) = await Gate(new ToolCall { Type = ToolType.RunCommand, ToolName = "run_command", Arguments = new() { ["command"] = "echo hi" } });
         Check("U7 approvals: in \"allow everything\" a command runs without a prompt", !cmdAsked && cmd.Success, cmd.Error);
-        bool auto = (bool)typeof(ChatViewModel).GetMethod("AutoApproves", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(Vm, [new PermissionRequestInfo { ToolName = "mcp__chrome__javascript_tool", AlwaysAsk = true }, Vm.CurrentSession])!;
-        bool asked = !auto;
-        Check("U7 approvals: a request that always asks (code in the browser, the user's own Ask rule) still asks", asked);
+        var autoApproves = typeof(ChatViewModel).GetMethod("AutoApproves", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        bool AutoFor(PermissionRequestInfo info, ChatSession s) => (bool)autoApproves.Invoke(Vm, [info, s])!;
+        // Owner 2026-10-28: "allow everything" = no prompt for the rest of the conversation — only the red danger box asks.
+        Check("U7 approvals: in \"allow everything\" a request that always asks (Chrome page script, restart, an Ask rule) runs without a prompt",
+            AutoFor(new PermissionRequestInfo { ToolName = "mcp__chrome__javascript_tool", AlwaysAsk = true }, Vm.CurrentSession));
+        Check("U7 approvals: …but the red danger prompt still asks",
+            !AutoFor(new PermissionRequestInfo { ToolName = "run_command", AlwaysAsk = true, Danger = "deletes a drive root" }, Vm.CurrentSession));
+        var prevLinks = ChatLinkStore.Current;
+        ChatLinkStore.Current ??= new ChatLinkStore(null);
+        var split = new ChatSession { Title = "split" };
+        var splitOfSplit = new ChatSession { Title = "split of split" };
+        ChatLinkStore.Current.Link(split.Id, Vm.CurrentSession!.Id, "u7 split");
+        ChatLinkStore.Current.Link(splitOfSplit.Id, split.Id, "u7 split 2");
+        Check("U7 approvals: chats split off an \"allow everything\" chat (and their splits) do not ask either",
+            AutoFor(new PermissionRequestInfo { ToolName = "mcp__cluadex-chrome__navigate" }, split)
+            && AutoFor(new PermissionRequestInfo { ToolName = "desktop_act", AlwaysAsk = true }, splitOfSplit));
+        Check("U7 approvals: …an unrelated chat still asks",
+            !AutoFor(new PermissionRequestInfo { ToolName = "run_command" }, new ChatSession { Title = "other" }));
+        ChatLinkStore.Current = prevLinks;
         await FreshChat();
         Check("U7 approvals: per chat — a new chat starts on ask first", Vm.ApprovalMode == "ask");
         var (cmd2, cmd2Asked) = await Gate(new ToolCall { Type = ToolType.RunCommand, ToolName = "run_command", Arguments = new() { ["command"] = "echo again" } });

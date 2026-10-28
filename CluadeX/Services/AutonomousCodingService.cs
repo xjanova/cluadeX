@@ -223,7 +223,7 @@ public class AutonomousCodingService
     {
         if (string.IsNullOrWhiteSpace(verifyCmd)) return null;
         // Always on (Safety.CodeRunGuard): not switched off with the Features list below.
-        if (Safety.DestructiveCodeScan.JudgeLine(verifyCmd) is { } direct) return "CluadeX safety: refused — this command " + direct + ".";
+        if (Safety.DestructiveCodeScan.JudgeCommand(verifyCmd) is { } direct) return "CluadeX safety: refused — this command " + direct + ".";
         if (!_settings.Settings.Features.DangerousCommandBlocking) return null;
         // RunCommandAsync runs it with cmd.exe /c on Windows, bash elsewhere.
         var dialect = OperatingSystem.IsWindows() ? DangerousCommandCheck.Dialect.Cmd : DangerousCommandCheck.Dialect.Posix;

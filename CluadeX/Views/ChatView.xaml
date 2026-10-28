@@ -629,7 +629,7 @@
                                                     <Setter Property="BorderBrush" Value="{Binding Character.AccentBrush}"/>
                                                     <Setter Property="BorderThickness" Value="4,1.5,1.5,1.5"/>
                                                 </DataTrigger>
-                                                <!-- The red prompt: a delete aimed at a drive / home / system folder (Safety.DangerApproval).
+                                                <!-- The red prompt: a delete aimed at a drive, the root or a home folder (Safety.DangerApproval).
                                                      Last, so it wins over her look: it stays red whoever asks. -->
                                                 <DataTrigger Binding="{Binding IsPermissionDanger}" Value="True">
                                                     <Setter Property="CornerRadius" Value="0,6,6,0"/>

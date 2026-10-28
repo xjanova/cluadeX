@@ -1268,7 +1268,7 @@ public partial class ChatViewModel : ViewModelBase
         };
         _agentToolService.OnPermissionRequired += askPermission;
 
-        // A delete aimed at a drive / home / system folder runs only after the user's yes on a red prompt — from
+        // A delete aimed at a drive, the root or a home folder runs only after the user's yes on a red prompt — from
         // CluadeX's own tools and, through the pipe, from Claude Dev's shell (the --cx-guard hook).
         Services.Safety.DangerApproval.Handler = req => askPermission(new PermissionRequestInfo
         {
