@@ -32,7 +32,7 @@ The Claude Code source is at `E:\Code\src\src` (TypeScript/Node.js) — use it a
 | MemoryService | 4-type persistent memory (user/feedback/project/reference) |
 | HookService | PreToolUse/PostToolUse shell hooks |
 | PermissionService | Wildcard + tool-scoped permission patterns |
-| McpServerManager | MCP 2.0 stdio transport, tool registry |
+| McpServerManager | MCP 2.0 stdio + Streamable HTTP transports (`IMcpTransport`), tool registry |
 | CodeIntelligenceService | Search across files, go-to-definition, find-references, rename, autocomplete |
 | DiffService | Side-by-side diff (Myers) + merge-conflict parse/resolve |
 | DebugAdapterService | DAP client — debugpy / netcoredbg, breakpoints, stack, variables |
@@ -119,6 +119,16 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - [x] **"Read more" HF link** — `ModelInfo.HuggingFaceUrl` computed property; each search-result card has a link button to the HF model page.
 - [x] **Auto-load routes through LocalGgufProvider** — ChatViewModel's startup auto-load now uses arch-aware router so Gemma 4/Llama 4/Qwen 3 models resume on restart (previously would silently fail with `UnsupportedModelArchitectureException`).
 - [x] **README overhaul** — added Sidebar & UX section, Advanced Model Loading section, Session Memory to memory table, GPU live monitor to core features.
+
+## MCP over HTTP + the XDREAMER connection (3.0.189)
+- `McpHttpClient` (Streamable HTTP: JSON or SSE answers, Mcp-Session-Id, MCP-Protocol-Version, 404 = session gone,
+  401/403 = key refused, 32 MB cap, never retries a POST) is shared by two users: `McpHttpTransport` (an
+  mcp_servers.json entry with `url` and no `command`; `${VAR}` in headers from `env`, then Windows' environment) and
+  `ConnectorLauncher.RelayHttpAsync` (stdio ↔ HTTP, what `CluadeX.exe --connector xdreamer` runs — BrainX's bridge
+  and CluadeX's own list both start that, so the key never leaves the DPAPI store).
+- https anywhere, plain http only to loopback (`McpHttpClient.IsAllowedEndpoint`).
+- XDREAMER = ai.xman4289.com (`ConnectorCatalog.XDreamerUrl`), keys `axm-…` from /developer, `ConnectorNeed.None`.
+- Proven offline by `tests/mcptest` N1–N8 (in-process fake server) and `tests/setuptest` C1, C9b, C9c.
 
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).

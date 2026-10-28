@@ -27,7 +27,7 @@ namespace McpTest;
 ///   powershell … locked.ps1 &lt;CluadeX dir&gt; dotnet build CluadeX.csproj -p:OutDir=&lt;bin&gt;\
 ///   powershell … locked.ps1 tests\mcptest dotnet run -p:CluadeXBin=&lt;bin&gt;\
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     static int Pass, Fail;
     static readonly List<string> Problems = new();
@@ -1203,6 +1203,8 @@ internal static class Program
             DeleteTree(tmp);
             return Task.CompletedTask;
         });
+
+        await HttpTransportTests();
 
         await mcp.StopServerAsync("stub");
         mcp.RemoveConfig("stub");

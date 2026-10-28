@@ -59,7 +59,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     private readonly McpToolRegistry _toolRegistry;
     // Concurrent: touched by the UI thread (start/stop), the agent thread (CallTool reads), and the
     // server read-loop/notification callback thread — plain Dictionary structural writes raced reads.
-    private readonly ConcurrentDictionary<string, McpStdioTransport> _transports = new();
+    private readonly ConcurrentDictionary<string, IMcpTransport> _transports = new();
     private readonly ConcurrentDictionary<string, McpServerConfig> _configs = new();
     private readonly ConcurrentDictionary<string, McpServerState> _states = new();
     // Only servers that finished a full successful start are supervised. A start
@@ -1063,8 +1063,23 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                     SetKnown(entry, key, value);
                 }
                 var args = cfg.Args ?? new List<string>();
-                Put("command", JsonValue.Create(cfg.Command ?? ""), string.IsNullOrEmpty(cfg.Command));
-                Put("args", new JsonArray(args.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray()), args.Count == 0);
+                if (cfg.IsRemote)
+                {
+                    // A server on the network: type / url / headers, and never an empty "command" or "args" beside them.
+                    SetKnown(entry, "type", JsonValue.Create(string.IsNullOrWhiteSpace(cfg.Type) ? "http" : cfg.Type));
+                    SetKnown(entry, "url", JsonValue.Create(cfg.Url!.Trim()));
+                    if (cfg.Headers is { Count: > 0 } headers)
+                        SetKnown(entry, "headers", new JsonObject(headers.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)JsonValue.Create(kv.Value)))));
+                    else
+                        RemoveCaseInsensitive(entry, "headers");
+                    if (FindCaseInsensitive(entry, "command") is { Value: JsonValue c } && string.IsNullOrEmpty(c.ToString()))
+                        RemoveCaseInsensitive(entry, "command");
+                }
+                else
+                {
+                    Put("command", JsonValue.Create(cfg.Command ?? ""), string.IsNullOrEmpty(cfg.Command));
+                    Put("args", new JsonArray(args.Select(a => (JsonNode?)JsonValue.Create(a)).ToArray()), args.Count == 0);
+                }
                 if (cfg.Env is { } env)
                     Put("env", new JsonObject(env.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)JsonValue.Create(kv.Value)))), env.Count == 0);
                 else
@@ -1472,9 +1487,10 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
         try
         {
-            Log(name, $"Starting: {config.Command} {string.Join(' ', config.Args)}");
+            Log(name, config.IsRemote ? $"Connecting: {config.Url}" : $"Starting: {config.Command} {string.Join(' ', config.Args)}");
 
-            var transport = new McpStdioTransport();
+            // A url entry is a server on the network (Streamable HTTP); everything else is a process on stdio.
+            IMcpTransport transport = config.IsRemote ? new McpHttpTransport() : new McpStdioTransport();
             transport.OnServerError += msg => LogStderr(name, msg);
             transport.OnUnexpectedExit += () => HandleTransportExit(name, transport);
             transport.OnNotification += notif =>
@@ -1486,7 +1502,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             // Start process and wait for read loop to be ready (prevents race condition)
             await transport.StartAsync(config);
             _transports[name] = transport;
-            Log(name, "Process started. Sending initialize handshake...");
+            Log(name, config.IsRemote ? "Sending initialize handshake..." : "Process started. Sending initialize handshake...");
 
             // Initialize handshake — 15 s by default, longer for a package runner's first start or when the entry
             // sets startupTimeoutSeconds (StartupTimeoutFor).
@@ -1612,7 +1628,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     /// — leaving them in the registry is what let the local model keep picking
     /// brain_search out of a dead server's catalogue — then respawn with backoff.
     /// </summary>
-    private void HandleTransportExit(string name, McpStdioTransport dead)
+    private void HandleTransportExit(string name, IMcpTransport dead)
     {
         if (_disposed) return;
         // Not supervised (start never completed), or already replaced — either way
