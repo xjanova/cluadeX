@@ -451,27 +451,19 @@ public class MainViewModel : ViewModelBase
         // Opening/cloning a project lands the user in the workbench (Code page) — the IDE moment.
         chatVM.NavigateToEditorRequested += () => NavigateTo("Code");
 
-        // Cowork follow: the agent just mutated a file — bring the Code page forward so the
-        // live edit is visible (the editor embeds the same chat docked right, so the
-        // conversation stays on screen). Raised on the UI thread.
-        //
-        // This used to also require ReferenceEquals(CurrentView, ChatVM), i.e. it only
-        // followed when the user happened to be sitting on the Chat page. Anywhere else —
-        // Home, Models, Tasks, Settings, or a session driven from BrainX over the MCP host
-        // pipe, where the user never opened Chat at all — the agent wrote files and the UI
-        // just sat there. AutoOpenEditorOnAgentEdit is already the user's switch for this
-        // behaviour; gating it a second time on the current page made the setting a lie.
         // The chat's project panel: a double-clicked file opens in the code editor.
         chatVM.OpenFileRequested += path =>
         {
             NavigateTo("Code");
             _ = CodeEditorVM.OpenPathAsync(path);
         };
-        chatVM.FileMutatedByAgent += (_, _, _) =>
-        {
-            if (_settingsService.Settings.AutoOpenEditorOnAgentEdit)
-                NavigateTo("Code");
-        };
+        // Cowork follow: the chat's "ตามดูโค้ด" tick is on and its agent just changed a file —
+        // bring the Code page forward so the live edit is visible (the editor embeds the same
+        // chat docked right, so the conversation stays on screen). Raised on the UI thread,
+        // after FileMutatedByAgent has opened the file. Not gated on the current page: from
+        // Home, Tasks or Settings the edit should come forward just the same. Settings'
+        // AutoOpenEditorOnAgentEdit is the tick's default for chats nobody ticked.
+        chatVM.ShowEditorRequested += () => NavigateTo("Code");
 
         NavigateToCommand = new RelayCommand<string>(NavigateTo);
 

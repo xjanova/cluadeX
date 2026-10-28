@@ -160,9 +160,68 @@ public static class DangerousCommandCheck
         return DeleteWord.IsMatch(blockedLine);
     }
 
-    /// <summary><see cref="FindBlocked"/> without the delete-only lines (<see cref="IsDeleteOnly"/>): the first line that
-    /// is still serious, or null. Each delete line is set aside and the rest read again, so it cannot hide a serious one
-    /// after it.</summary>
+    /// <summary>A PowerShell command word: what follows the start of a line, | ; { ( = or &amp;.</summary>
+    private static readonly System.Text.RegularExpressions.Regex PsCommandWord = new(
+        @"(?:^|[|;{(=&])\s*([^\s|;{}()=&,]*)",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>Verbs of cmdlets that only read or shape what they are given.</summary>
+    private static readonly HashSet<string> ReadVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "get", "select", "where", "sort", "measure", "format", "test", "resolve", "split", "join", "group", "compare",
+        "convertto", "convertfrom", "foreach", "write",
+    };
+
+    /// <summary>Command words that read: aliases of the verbs above and the keywords around them.</summary>
+    private static readonly HashSet<string> ReadWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "gci", "ls", "dir", "gi", "gp", "gc", "cat", "type", "select", "sls", "where", "?", "%", "foreach", "sort",
+        "measure", "ft", "fl", "fw", "group", "echo", "write", "pwd", "gl", "rvpa", "if", "elseif", "else", "try",
+        "catch", "finally", "for", "return", "out-string", "out-host", "out-null",
+    };
+
+    /// <summary>A .NET call that changes files or starts something: $_.Delete(), [IO.File]::Move(…).</summary>
+    private static readonly System.Text.RegularExpressions.Regex MutatingCall = new(
+        @"(\.|::)\s*(Delete|Remove\w*|Move\w*|Copy\w*|Create\w*|Write\w*|Append\w*|Set\w*|Clear|Replace|Encrypt|Decrypt|Kill|Start|Invoke\w*|Open\w*)\s*\(",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>A property set on what was found: $_.Attributes = 'ReadOnly', $f.LastWriteTime += …</summary>
+    private static readonly System.Text.RegularExpressions.Regex PropertySet = new(
+        @"\.\w+\s*[-+*/]?=(?!=)",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A blocked line that only looks things up — <c>Get-ChildItem C:\Users -Recurse -Force -Filter '*key*' | Select-Object
+    /// FullName</c> tripped "-recurse -force", which is there for Remove-Item (Reverse X run, 2026-10-28: a search for a
+    /// signing key was refused as dangerous). Every command word must read (Get-/Select-/Where-/ForEach-/Sort-…, their
+    /// aliases, keywords, values); no delete, no other listed mark, no call operator, no redirection, no .NET call or
+    /// property set that changes files. Anything else stays refused.
+    /// </summary>
+    public static bool IsReadOnlyLookup(string blockedLine)
+    {
+        if (string.IsNullOrWhiteSpace(blockedLine)) return false;
+        string l = blockedLine.ToLowerInvariant();
+        foreach (var m in NonDeleteMarks)
+            if (l.Contains(m, StringComparison.Ordinal)) return false;
+        if (DeleteWord.IsMatch(blockedLine) || MutatingCall.IsMatch(blockedLine) || PropertySet.IsMatch(blockedLine)) return false;
+        if (blockedLine.Contains('>') || blockedLine.Contains('`')) return false;   // redirection, escaped line breaks
+        if (blockedLine.Replace("&&", "").Contains('&')) return false;              // & 'tool.exe' runs whatever it names
+        foreach (System.Text.RegularExpressions.Match m in PsCommandWord.Matches(blockedLine))
+        {
+            string w = m.Groups[1].Value;
+            if (w.Length == 0 || w[0] is '$' or '\'' or '"' or '[' or '@' or '-' or '!' || char.IsDigit(w[0]))
+                continue;   // a value, a variable, a type, an operator — not a command (.\x.ps1 and "." are commands)
+            if (ReadWords.Contains(w)) continue;
+            int dash = w.IndexOf('-');
+            if (dash > 0 && ReadVerbs.Contains(w[..dash])) continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary><see cref="FindBlocked"/> without the delete-only lines (<see cref="IsDeleteOnly"/>) and the read-only
+    /// lookups (<see cref="IsReadOnlyLookup"/>): the first line that is still serious, or null. Each such line is set
+    /// aside and the rest read again, so it cannot hide a serious one after it.</summary>
     public static string? FindSerious(string? command, Dialect dialect = Dialect.Unknown)
     {
         if (string.IsNullOrWhiteSpace(command)) return null;
@@ -171,7 +230,7 @@ public static class DangerousCommandCheck
         {
             string? hit = FindBlocked(rest, dialect);
             if (hit == null) return null;
-            if (!IsDeleteOnly(hit)) return hit;
+            if (!IsDeleteOnly(hit) && !IsReadOnlyLookup(hit)) return hit;
             int at = rest.IndexOf(hit, StringComparison.Ordinal);
             if (at < 0) return hit;   // cannot set it aside exactly: the strict answer
             rest = rest.Remove(at, hit.Length);

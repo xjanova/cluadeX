@@ -7,10 +7,13 @@ namespace CluadeX.ViewModels;
 /// <summary>
 /// What the window shows while several chats run at once.
 /// <list type="bullet">
-/// <item>"ตามดูโค้ด" — a tick per chat: when that chat's agent edits a file, the editor opens it (and the Code page
-/// comes forward when Settings asks for that). Only the chat on screen ever moves the editor, and only for files of the
-/// project the window has open; a chat without the tick keeps working without touching the screen. Owner 2026-10-17:
-/// "ถ้ามีหลายงานทำพร้อมกัน การสลับไปหน้า editor จะไว้และอาจมั่ว ให้มีการติ๊กในช่องแชทได้ว่าจะให้สลับหน้าต่างเองอัตโนมัติหรือไม่".</item>
+/// <item>"ตามดูโค้ด" — a tick per chat: when that chat's agent edits a file, the Code page comes forward with the file
+/// open at the edit (owner 2026-10-28: "การติ๊ก ตามดูโค๊ด เมื่อมีการแก้โค๊ด ควรเด้งไปหน้า editor"). Without the tick the
+/// editor still opens the file behind the page the user is on (Settings: LiveEditFollow) and the screen stays put — the
+/// default for a chat nobody ticked is Settings' AutoOpenEditorOnAgentEdit, off since 2026-10-20 ("ไม่จำเป็นต้องสลับไปดู
+/// แบบ real time อัตโนมัติแล้ว"). Only the chat on screen ever moves the editor, and only for files of the project the
+/// window has open. Owner 2026-10-17: "ถ้ามีหลายงานทำพร้อมกัน การสลับไปหน้า editor จะไว้และอาจมั่ว ให้มีการติ๊กในช่องแชทได้ว่า
+/// จะให้สลับหน้าต่างเองอัตโนมัติหรือไม่".</item>
 /// <item>The call being written: while the model streams a long tool input (a 300-line write_file takes a minute),
 /// the chat showed only the half sentence before it. A status row now says which tool, which file and how much is
 /// written, and gives way to the tool's own row when it runs.</item>
@@ -18,13 +21,18 @@ namespace CluadeX.ViewModels;
 /// </summary>
 public partial class ChatViewModel
 {
-    /// <summary>Chats whose tick the owner changed; the rest follow Settings (LiveEditFollow). Session-only, like Batch.</summary>
+    /// <summary>Chats whose tick the owner changed; the rest follow Settings (AutoOpenEditorOnAgentEdit). Session-only,
+    /// like Batch.</summary>
     private readonly Dictionary<string, bool> _followChoice = new();
 
     private bool FollowsEdits(ChatSession? s) =>
-        s != null && _followChoice.TryGetValue(s.Id, out bool v) ? v : _settingsService.Settings.LiveEditFollow;
+        s != null && _followChoice.TryGetValue(s.Id, out bool v) ? v : _settingsService.Settings.AutoOpenEditorOnAgentEdit;
 
-    /// <summary>The tick in the composer: this chat's edits open in the editor while it is on screen.</summary>
+    /// <summary>Raised (on the UI thread) after <see cref="FileMutatedByAgent"/> when the chat's "ตามดูโค้ด" tick is on:
+    /// bring the Code page forward.</summary>
+    public event Action? ShowEditorRequested;
+
+    /// <summary>The tick in the composer: this chat's edits bring the editor forward while it is on screen.</summary>
     public bool FollowEditsHere
     {
         get => FollowsEdits(CurrentSession);
@@ -36,8 +44,9 @@ public partial class ChatViewModel
         }
     }
 
-    /// <summary>Should an agent edit move the editor? Only for the chat on screen, with its tick on, and only when the
-    /// run works in the project the window has open (another project's file would sit under this one's title).</summary>
+    /// <summary>Should an agent edit move the editor? Only for the chat on screen, when it follows edits (its tick, or
+    /// Settings' LiveEditFollow for the editor behind the page), and only when the run works in the project the window
+    /// has open (another project's file would sit under this one's title).</summary>
     public static bool ShouldFollowEdit(bool chatOnScreen, bool ticked, string? runFolder, string? windowFolder) =>
         chatOnScreen && ticked
         && !string.IsNullOrWhiteSpace(windowFolder)

@@ -102,6 +102,9 @@ public sealed class BrowserSession : IDisposable
 
     /// <summary>The open project, for file:// rules — refreshed by every tool call.</summary>
     public string? ProjectRoot { get; set; }
+    /// <summary>The folders the chat opened beside the project (open_project): their files open like the project's.
+    /// Refreshed with <see cref="ProjectRoot"/>.</summary>
+    public IReadOnlyList<string> ExtraRoots { get; set; } = Array.Empty<string>();
     /// <summary>The "allow external pages" setting: "ask", "allow" or "deny".</summary>
     public Func<string> ExternalMode { get; set; } = () => "ask";
     /// <summary>May the page contact this external origin right now (the user's sites, the active chat's)?</summary>
@@ -485,7 +488,7 @@ public sealed class BrowserSession : IDisposable
     {
         string? from, userReload;
         lock (_stateLock) { from = _navChainOrigin; userReload = _userReloadOrigin; }
-        var v = UrlPolicy.Classify(url, ProjectRoot);
+        var v = UrlPolicy.Classify(url, ProjectRoot, ExtraRoots);
         string? reason = DecideNavigation(v, isRedirect ? from : null, userReload);
         if (reason == null)
         {
@@ -553,7 +556,7 @@ public sealed class BrowserSession : IDisposable
     private string? FilterRequest(string url, string context)
     {
         if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase) || url.StartsWith("blob:", StringComparison.OrdinalIgnoreCase)) return null;
-        var v = UrlPolicy.ClassifyRequest(url, ProjectRoot);
+        var v = UrlPolicy.ClassifyRequest(url, ProjectRoot, ExtraRoots);
         switch (v.Kind)
         {
             case UrlKind.Local:
@@ -596,7 +599,7 @@ public sealed class BrowserSession : IDisposable
             try
             {
                 await SendAsync("Network.clearBrowserCache", null, ct);
-                var origin = UrlPolicy.Classify(url, ProjectRoot).Origin;
+                var origin = UrlPolicy.Classify(url, ProjectRoot, ExtraRoots).Origin;
                 if (origin.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                     await SendAsync("Storage.clearDataForOrigin", new { origin, storageTypes = "all" }, ct);
             }
@@ -677,7 +680,7 @@ public sealed class BrowserSession : IDisposable
     {
         string url = CurrentUrl;
         if (string.IsNullOrEmpty(url) || url == "about:blank") return null;
-        var v = UrlPolicy.Classify(url, ProjectRoot);
+        var v = UrlPolicy.Classify(url, ProjectRoot, ExtraRoots);
         // Reload and the pane's Desktop/Mobile switch (which reloads) can overlap: the window closes with the last one.
         lock (_stateLock) { _userReloadOrigin = v.Kind == UrlKind.External ? v.Origin : null; _userReloads++; }
         try { return await NavigateAsync(url, "load", timeoutMs, false, ct); }

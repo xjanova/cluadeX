@@ -292,7 +292,7 @@ internal static class ChatKeys
         ["chat.tools.groupVerb"] = new() { ["en"] = "Used tools", ["th"] = "ใช้เครื่องมือ" },
         ["chat.tool.drafting"] = new() { ["en"] = "{0} — writing the call… {1} chars", ["th"] = "{0} — กำลังเขียนคำสั่ง… {1} ตัวอักษร" },
         ["chat.follow.label"] = new() { ["en"] = "Follow edits", ["th"] = "ตามดูโค้ด" },
-        ["chat.follow.tip"] = new() { ["en"] = "On: when this chat's agent edits a file of the open project, the editor opens it (only while this chat is on screen). Off: the agent keeps working, the screen stays where you are.", ["th"] = "ติ๊กไว้: เมื่อแชทนี้แก้ไฟล์ในโปรเจคที่เปิดอยู่ editor จะเปิดไฟล์นั้นให้ดู (เฉพาะตอนแชทนี้อยู่บนจอ) · เอาติ๊กออก: งานยังทำต่อตามปกติ แค่ไม่สลับหน้าจอ" },
+        ["chat.follow.tip"] = new() { ["en"] = "On: when this chat's agent edits a file of the open project, the window switches to the editor with that file open at the edit (only while this chat is on screen). Off: the editor still updates in the background, the screen stays where you are.", ["th"] = "ติ๊กไว้: เมื่อแชทนี้แก้ไฟล์ในโปรเจคที่เปิดอยู่ จะสลับไปหน้า editor และเปิดไฟล์นั้นตรงจุดที่แก้ (เฉพาะตอนแชทนี้อยู่บนจอ) · เอาติ๊กออก: editor ยังอัปเดตตามอยู่เบื้องหลัง แค่ไม่สลับหน้าจอ" },
         ["chat.skill.notInvocable"] = new() { ["en"] = "Skill '/{0}' can't be run directly.", ["th"] = "สกิล '/{0}' เรียกใช้โดยตรงไม่ได้" },
         ["chat.skill.unknown"] = new() { ["en"] = "Unknown skill '/{0}'. Available: {1}", ["th"] = "ไม่รู้จักสกิล '/{0}' — ที่ใช้ได้: {1}" },
         ["chat.skill.unknownNone"] = new() { ["en"] = "Unknown skill '/{0}'. No skills are available.", ["th"] = "ไม่รู้จักสกิล '/{0}' และยังไม่มีสกิลให้ใช้" },

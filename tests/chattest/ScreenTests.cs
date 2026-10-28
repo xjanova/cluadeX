@@ -57,14 +57,43 @@ internal static partial class Program
         Vm.SetWorkingDirectory(ProjA);
         await FreshChat();
         var first = Vm.CurrentSession!;
-        Vm.FollowEditsHere = false;
+        // Owner 2026-10-28: the tick brings the editor forward; a chat nobody ticked starts from Settings'
+        // AutoOpenEditorOnAgentEdit, off since 2026-10-20 (the editor still follows behind the page: LiveEditFollow).
+        Vm.FollowEditsHere = true;
         Vm.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "hello" });   // kept when the next chat opens
         await FreshChat();
         bool newDefault = Vm.FollowEditsHere;
         await Open(first.Id);
-        Check("S6 the tick is per chat: off in one chat, the next chat starts from Settings (on), back in the first it is still off",
-            newDefault && !Vm.FollowEditsHere, $"new={newDefault} first={Vm.FollowEditsHere}");
-        Vm.FollowEditsHere = true;
+        Check("S6 the tick is per chat: on in one chat, the next chat starts from Settings (off), back in the first it is still on",
+            !newDefault && Vm.FollowEditsHere, $"new={newDefault} first={Vm.FollowEditsHere}");
+
+        // S6b — owner 2026-10-28: "การติ๊ก ตามดูโค๊ด เมื่อมีการแก้โค๊ด ควรเด้งไปหน้า editor". Ticked: the editor opens the
+        // file AND the Code page comes forward. Not ticked: the editor still follows behind the page, the page stays.
+        var fire = typeof(ChatViewModel).GetMethod("OnToolExecuted", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        int mutated = 0, shown = 0;
+        Action<string, int, EditDiffResult?> onMutated = (_, _, _) => mutated++;
+        Action onShown = () => shown++;
+        Vm.FileMutatedByAgent += onMutated;
+        Vm.ShowEditorRequested += onShown;
+        async Task EditHere(string rel)
+        {
+            fire.Invoke(Vm, [new ToolResult { ToolName = "edit_file", Type = ToolType.EditFile, Success = true, Output = "edited", FilePath = rel, Arguments = new() { ["path"] = rel } }]);
+            await Render(); await Task.Delay(50); await Render();
+        }
+        await EditHere("a.txt");
+        Check("S6b ticked: an edit opens the file and brings the editor page forward", mutated == 1 && shown == 1, $"mutated={mutated} shown={shown}");
+        Vm.FollowEditsHere = false;
+        await EditHere("b.txt");
+        Check("S6b not ticked: the editor still follows the file behind the page, the page stays", mutated == 2 && shown == 1, $"mutated={mutated} shown={shown}");
+        Vm.FileMutatedByAgent -= onMutated;
+        Vm.ShowEditorRequested -= onShown;
+
+        // S6c — a failed tool's reason shows on its row (browser tools put it only in Error).
+        fire.Invoke(Vm, [new ToolResult { ToolName = "browser_open", Type = ToolType.BrowserOpen, Success = false, Output = "", Error = "outside the open project", Arguments = new() { ["url"] = "pic.webp" } }]);
+        await Render(); await Task.Delay(50); await Render();
+        var failedRow = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.ToolAction);
+        Check("S6c a failed tool row says why (its Error), not an empty box", failedRow is { ToolSuccess: false } && (failedRow.ToolOutput ?? "").Contains("outside the open project"),
+            failedRow?.ToolOutput ?? "(no row)");
 
         // S7 — a pipe task while the user is typing: its own chat, in the background; the window does not move.
         await FreshChat();

@@ -362,6 +362,16 @@ internal static partial class Program
             && UrlPolicy.Classify(traversal, Project).Kind == UrlKind.Refused
             && UrlPolicy.Classify("file://server/share/x.html", Project).Kind == UrlKind.Refused
             && UrlPolicy.Classify(inside, null).Kind == UrlKind.Refused, traversal);
+        // Reverse X run, 2026-10-28: a picture in a folder the chat opened beside the project (open_project) was refused.
+        string side = Path.Combine(Path.GetDirectoryName(Project.TrimEnd('\\', '/'))!, "side-folder");
+        string sidePic = new Uri(Path.Combine(side, "art", "pic.webp")).AbsoluteUri;
+        string sideTwin = new Uri(Path.Combine(side + "-twin", "pic.webp")).AbsoluteUri;
+        Check("P1c2", "file://: a folder opened beside the project is free; a look-alike name beside it and no extra folder are not",
+            UrlPolicy.Classify(sidePic, Project, new[] { side }).Kind == UrlKind.ProjectFile
+            && UrlPolicy.ClassifyRequest(sidePic, Project, new[] { side }).Kind == UrlKind.ProjectFile
+            && UrlPolicy.Classify(sideTwin, Project, new[] { side }).Kind == UrlKind.Refused
+            && UrlPolicy.Classify(sidePic, Project).Kind == UrlKind.Refused
+            && UrlPolicy.Classify(sidePic, null, new[] { side }).Kind == UrlKind.Refused, sidePic);
         Check("P1d", "script-capable / internal schemes refused: javascript:, data:, chrome:, edge:, view-source:",
             new[] { "javascript:alert(1)", "data:text/html,<b>x</b>", "chrome://settings", "edge://flags", "view-source:http://localhost/" }
                 .All(u => UrlPolicy.Classify(u, Project).Kind == UrlKind.Refused));
