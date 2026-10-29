@@ -60,10 +60,10 @@ public class RoleToBackgroundConverter : IValueConverter
     {
         return value switch
         {
-            // Only the user's own messages and run output sit on a surface. The assistant's reply is plain text on the
-            // page (a bubble around every answer made the transcript a stack of heavy cards), a tool call is a thin
-            // row on the sunken surface, a system line is muted text.
+            // The two who talk sit in speech bubbles (owner 2026-10-29: the AI's on the right pointing at her avatar,
+            // the user's on the left), a tool call is a thin row on the sunken surface, a system line is muted text.
             MessageRole.User => ThemeColors.Live("Role.User.Background", Color.FromRgb(0x2F, 0x3D, 0x5C)),
+            MessageRole.Assistant => ThemeColors.Live("Role.Assistant.Background", Color.FromRgb(0x31, 0x32, 0x44)),
             MessageRole.CodeExecution => ThemeColors.Live("Role.Exec.Background", Color.FromRgb(0x3A, 0x35, 0x30)),
             MessageRole.ToolAction => ThemeColors.Live("State.Fill.Faint", Color.FromArgb(0x11, 0xFF, 0xFF, 0xFF)),
             _ => Brushes.Transparent,
@@ -105,7 +105,8 @@ public class RoleToAlignmentConverter : IValueConverter
     {
         return value switch
         {
-            MessageRole.User => HorizontalAlignment.Right,
+            MessageRole.User => HorizontalAlignment.Left,        // the user on the left, the AI on the right by her avatar
+            MessageRole.Assistant => HorizontalAlignment.Right,
             MessageRole.ToolAction => HorizontalAlignment.Stretch,   // a list of equal rows, the time at the right edge
             _ => HorizontalAlignment.Left,
         };
@@ -121,10 +122,10 @@ public class RoleToMarginConverter : IValueConverter
     {
         return value switch
         {
-            // Inside the centred reading column: the user's message right-aligned, the reply full width, tool rows
-            // indented under the reply they belong to.
-            MessageRole.User => new Thickness(120, 8, 0, 4),
-            MessageRole.Assistant => new Thickness(0, 8, 0, 2),
+            // Inside the centred reading column: the user's message on the left, the reply on the right (room on the
+            // other side, so each reads as one person's bubble), tool rows indented under the reply they belong to.
+            MessageRole.User => new Thickness(0, 8, 120, 4),
+            MessageRole.Assistant => new Thickness(56, 8, 0, 2),
             MessageRole.ToolAction or MessageRole.AgentStatus or MessageRole.CodeExecution => new Thickness(20, 1, 0, 1),
             _ => new Thickness(0, 3, 0, 3),
         };
@@ -140,7 +141,8 @@ public class RoleToCornerRadiusConverter : IValueConverter
     {
         return value switch
         {
-            MessageRole.User => new CornerRadius(12, 12, 4, 12),    // tail bottom-right
+            MessageRole.User => new CornerRadius(4, 14, 14, 14),        // the tail at the top left, to the user's avatar
+            MessageRole.Assistant => new CornerRadius(14, 4, 14, 14),   // the tail at the top right, to hers
             MessageRole.ToolAction or MessageRole.CodeExecution => new CornerRadius(6),
             _ => new CornerRadius(0),
         };
@@ -160,12 +162,13 @@ public class EqualsMultiConverter : IMultiValueConverter
         => throw new NotImplementedException();
 }
 
-/// <summary>Message role → the padding inside its body: none around the plain-text reply, a slim row for a tool.</summary>
+/// <summary>Message role → the padding inside its body: room inside a speech bubble, a slim row for a tool.</summary>
 public class RoleToPaddingConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture) => value switch
     {
         MessageRole.User => new Thickness(12, 8, 12, 8),
+        MessageRole.Assistant => new Thickness(14, 10, 14, 10),
         MessageRole.ToolAction => new Thickness(10, 5, 8, 5),
         MessageRole.CodeExecution => new Thickness(10, 8, 10, 8),
         _ => new Thickness(0, 2, 0, 2),
