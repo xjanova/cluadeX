@@ -190,6 +190,8 @@ public partial class ChatView : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         _hostedInEditor = FindAncestor<CodeEditorView>(this) != null;
+        // A reply's relative link (`[app.js](src/app.js)`) is a file of the chat's project (Helpers/ChatLinks).
+        if (DataContext is ChatViewModel linkVm) Helpers.ChatLinks.ProjectFolder = () => linkVm.WorkingDirectory;
         // The desktop pet steps out of the box the user types in (Services/Pet/PetZones).
         CluadeX.Services.Pet.PetZones.Register(ComposerCard);
         UpdateSidePanelRoom();

@@ -539,10 +539,14 @@ internal static partial class Program
         // The chat list virtualizes (only rows on screen exist): bring the marker into view first.
         ChatList.ScrollIntoView(markers[0]);
         await Render();
+        // A jump made in the same pass as a re-measure at the end can be undone by the follow-the-end scroll that
+        // re-measure queued (ChatView.OnChatScrollChanged): jump again once the rows have settled, as a reader would.
+        if (Container(markers[0]) == null) { ChatList.ScrollIntoView(markers[0]); await Render(); }
         var markerContainer = Container(markers[0]);
         await Render();
         Check("C2 the marker renders as a visible divider", markerContainer?.Visibility == Visibility.Visible
-            && Find<TextBlock>(markerContainer).Any(t => t.IsVisible && t.Text == L("chat.compact.markerTitle")));
+            && Find<TextBlock>(markerContainer).Any(t => t.IsVisible && t.Text == L("chat.compact.markerTitle")),
+            markerContainer == null ? "its row was not realized" : markerContainer.Visibility.ToString());
 
         // Compacting again carries the first summary forward.
         for (int i = 16; i <= 30; i++)

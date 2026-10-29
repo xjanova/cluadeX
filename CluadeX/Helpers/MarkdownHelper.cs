@@ -1,9 +1,10 @@
-using System.Diagnostics;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Input;
 
 namespace CluadeX.Helpers;
@@ -11,7 +12,7 @@ namespace CluadeX.Helpers;
 /// <summary>
 /// Attached property that renders Markdown into a StackPanel.
 /// Supports: headers, bold, italic, inline code, code blocks (syntax highlighted),
-/// links, lists (ordered/unordered), blockquotes, tables, horizontal rules,
+/// links, pictures (local files), bare web addresses, lists (ordered/unordered), blockquotes, tables, horizontal rules,
 /// diff highlighting (+/-), and strikethrough.
 ///
 /// Uses stable-prefix incremental rendering during streaming:
@@ -70,7 +71,9 @@ public static class MarkdownHelper
         @"\*(.+?)\*|" +                    // *italic* (group 3)
         @"~~(.+?)~~|" +                    // ~~strikethrough~~ (group 4)
         @"`([^`\n]+?)`|" +                // `inline code` (group 5)
-        @"\[([^\]]+)\]\(([^)]+)\)",        // [text](url) (group 6=text, 7=url)
+        @"\[([^\]]+)\]\(([^)]+)\)|" +       // [text](url) (group 6=text, 7=url)
+        @"!\[([^\]]*)\]\(([^)]+)\)|" +      // ![alt](path) (group 8=alt, 9=path) — matched at the "!", before [text](url)
+        @"(?<![\w/@])(https?://[^\s<>""'`)\]]*[^\s<>""'`)\].,;:!?])",   // a bare web address (group 10), not its last full stop
         RegexOptions.Compiled);
 
     private static readonly Regex HeaderRegex = new(
@@ -375,7 +378,7 @@ public static class MarkdownHelper
 
         string fg = level <= 2 ? HeadingKey : level <= 4 ? HeadingMinorKey : TextKey;
 
-        var tb = Fg(Font(new TextBlock
+        var tb = Fg(Font(new SelectableTextBlock
         {
             TextWrapping = TextWrapping.Wrap,
             FontSize = fontSize,
@@ -412,7 +415,7 @@ public static class MarkdownHelper
         var who = Services.ChatCharacter.ForRoomAgent(agent);
         var grid = new Grid { Tag = "speaker:" + agent };
 
-        var plain = Fg(Font(new TextBlock
+        var plain = Fg(Font(new SelectableTextBlock
         {
             TextWrapping = TextWrapping.Wrap, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 6, 0, 4),
         }, mono: false), HeadingMinorKey);
@@ -470,7 +473,7 @@ public static class MarkdownHelper
 
     private static UIElement CreateBlockquote(string text)
     {
-        var tb = Fg(Font(new TextBlock
+        var tb = Fg(Font(new SelectableTextBlock
         {
             TextWrapping = TextWrapping.Wrap,
             FontSize = 13,
@@ -510,7 +513,7 @@ public static class MarkdownHelper
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Top,
             }, mono: true), HeadingKey));
-            var tb = Fg(Font(new TextBlock
+            var tb = Fg(Font(new SelectableTextBlock
             {
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 13,
@@ -550,7 +553,7 @@ public static class MarkdownHelper
                     Background = Brushes.Transparent,
                 }, Border.BorderBrushProperty, BorderKey);
                 if (isHeader) Tok(cell, Border.BackgroundProperty, CodeBgKey);
-                var tb = Fg(Font(new TextBlock
+                var tb = Fg(Font(new SelectableTextBlock
                 {
                     TextWrapping = TextWrapping.Wrap,
                     FontSize = isHeader ? 12 : 11.5,
@@ -614,7 +617,7 @@ public static class MarkdownHelper
         }
         else
         {
-            var codeBlock = Fg(Font(new TextBlock
+            var codeBlock = Fg(Font(new SelectableTextBlock
             {
                 FontSize = 12.5,
                 TextWrapping = TextWrapping.Wrap,
@@ -646,7 +649,7 @@ public static class MarkdownHelper
             else if (line.StartsWith("@@"))
             { fg = "Markdown.Diff.Hunk"; }
 
-            var tb = Fg(Font(new TextBlock
+            var tb = Fg(Font(new SelectableTextBlock
             {
                 Text = line,
                 FontSize = 12,
@@ -701,7 +704,7 @@ public static class MarkdownHelper
 
     private static TextBlock CreateFormattedTextBlock(string text)
     {
-        var tb = Fg(Font(new TextBlock
+        var tb = Fg(Font(new SelectableTextBlock
         {
             TextWrapping = TextWrapping.Wrap,
             LineHeight = 24,
@@ -765,23 +768,15 @@ public static class MarkdownHelper
             }
             else if (m.Groups[6].Success) // [text](url)
             {
-                string linkText = m.Groups[6].Value;
-                string url = m.Groups[7].Value;
-
-                var hyperlink = Fg(new Hyperlink(new Run(linkText))
-                {
-                    TextDecorations = null,
-                    Cursor = Cursors.Hand,
-                    ToolTip = url,
-                }, LinkKey);
-                hyperlink.MouseEnter += (_, _) => hyperlink.TextDecorations = TextDecorations.Underline;
-                hyperlink.MouseLeave += (_, _) => hyperlink.TextDecorations = null;
-                hyperlink.Click += (_, _) =>
-                {
-                    try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-                    catch { /* non-critical */ }
-                };
-                tb.Inlines.Add(hyperlink);
+                tb.Inlines.Add(CreateLink(m.Groups[6].Value, m.Groups[7].Value));
+            }
+            else if (m.Groups[8].Success) // ![alt](path)
+            {
+                tb.Inlines.Add(CreatePicture(m.Groups[8].Value, m.Groups[9].Value));
+            }
+            else if (m.Groups[10].Success) // https://…
+            {
+                tb.Inlines.Add(CreateLink(m.Groups[10].Value, m.Groups[10].Value));
             }
 
             pos = m.Index + m.Length;
@@ -789,6 +784,171 @@ public static class MarkdownHelper
 
         if (pos < text.Length)
             AddTextWithLineBreaks(tb, text[pos..]);
+    }
+
+    /// <summary>
+    /// A link. Its click goes through ChatLinks (owner 2026-10-29: links in the chat did nothing): the agents' local
+    /// paths (`/D:/x/a.png`, `&lt;…&gt;`, `app.js:12`) are read into real files, and a click that cannot open says why.
+    /// </summary>
+    private static Hyperlink CreateLink(string text, string url)
+    {
+        var target = new ChatLinkTarget(url);
+        var hyperlink = Fg(new Hyperlink(new Run(text))
+        {
+            TextDecorations = null,
+            Cursor = Cursors.Hand,
+            Tag = target,
+            ToolTip = Shown(url),
+        }, LinkKey);
+        // What it points at is read off the disk when its tip is about to show, not while the reply renders: a link to
+        // a network drive that dropped must not stall the chat.
+        hyperlink.ToolTipOpening += (_, _) => hyperlink.ToolTip = LinkTip(url);
+        hyperlink.MouseEnter += (_, _) => hyperlink.TextDecorations = TextDecorations.Underline;
+        hyperlink.MouseLeave += (_, _) => hyperlink.TextDecorations = null;
+        hyperlink.Click += (_, _) => target.Open(OwnerOf(hyperlink));
+        return hyperlink;
+    }
+
+    private static string Shown(string url) => url.Trim().Trim('<', '>');
+
+    private static string LinkTip(string url)
+    {
+        var link = ChatLinks.Resolve(url, ChatLinks.ProjectFolder?.Invoke());
+        string key = link.Kind switch
+        {
+            ChatLinkKind.RevealFile => "chat.link.revealTip",
+            ChatLinkKind.Missing => "chat.link.missing",
+            ChatLinkKind.Refused => "chat.link.refused",
+            _ => "",
+        };
+        return key.Length == 0 ? link.Target : string.Format(Services.LocalizedResources.Instance[key], link.Target);
+    }
+
+    private static FrameworkElement? OwnerOf(FrameworkContentElement element)
+    {
+        DependencyObject? d = element;
+        while (d is FrameworkContentElement fce) d = fce.Parent;
+        return d as FrameworkElement;
+    }
+
+    /// <summary>Pictures larger than this are not drawn in the chat (a click still opens them).</summary>
+    private const long MaxPictureBytes = 40L * 1024 * 1024;
+    private const int PictureDecodeWidth = 720;
+
+    /// <summary>
+    /// `![alt](path)`: a picture on this computer is drawn in the reply (the mockups and generated images the agents send),
+    /// and a click opens it full size. Until it is read — off the UI thread — and if it cannot be (missing, not a picture,
+    /// too big) the frame shows its alt text, and a click says why. A web picture is only a link: an address in a reply
+    /// must not make the app call out.
+    /// </summary>
+    private static Inline CreatePicture(string alt, string url)
+    {
+        string shown = Shown(url);
+        string label = "🖼 " + (alt.Trim().Length > 0 ? alt.Trim() : Path.GetFileName(shown.Replace('/', '\\')));
+        if (shown.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || shown.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return CreateLink(label, url);
+
+        var target = new ChatLinkTarget(url);
+        var placeholder = Fg(Font(new TextBlock { Text = label, FontSize = 12, Margin = new Thickness(6, 2, 6, 2) }, mono: false), MutedKey);
+        var frame = new Border
+        {
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(2),
+            Margin = new Thickness(0, 4, 0, 4),
+            Cursor = Cursors.Hand,
+            Tag = target,
+            ToolTip = shown,
+            Child = placeholder,
+        };
+        Tok(frame, Border.BorderBrushProperty, BorderKey);
+        System.Windows.Automation.AutomationProperties.SetName(frame, label);
+        frame.ToolTipOpening += (_, _) => frame.ToolTip = LinkTip(url);
+        frame.MouseLeftButtonUp += (_, _) => target.Open(frame);
+        ShowPicture(frame, placeholder, url, ChatLinks.ProjectFolder?.Invoke());
+        return new InlineUIContainer(frame) { BaselineAlignment = BaselineAlignment.Bottom };
+    }
+
+    /// <summary>Decoded pictures by file + size + time written (a picture the agent writes again is read again).</summary>
+    private static readonly Dictionary<string, Task<BitmapSource?>> Pictures = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The picture each link showed last: a streamed reply re-renders per token, and must not blink to its alt text.</summary>
+    private static readonly Dictionary<string, BitmapSource> LastPictures = new(StringComparer.OrdinalIgnoreCase);
+
+    private static void ShowPicture(Border frame, UIElement placeholder, string url, string? folder)
+    {
+        string linkKey = folder + "|" + url;
+        BitmapSource? before;
+        lock (Pictures) LastPictures.TryGetValue(linkKey, out before);
+        if (before != null) frame.Child = PictureOf(before);
+        Task.Run(() => LoadPictureAsync(url, folder)).ContinueWith(t =>
+        {
+            var picture = t.Result;   // never throws: an unreadable picture is null
+            if (ReferenceEquals(picture, before)) return;
+            lock (Pictures)
+            {
+                if (picture == null) LastPictures.Remove(linkKey);
+                else
+                {
+                    if (LastPictures.Count >= 64) LastPictures.Clear();
+                    LastPictures[linkKey] = picture;
+                }
+            }
+            frame.Dispatcher.BeginInvoke(() => frame.Child = picture == null ? placeholder : PictureOf(picture));
+        }, TaskScheduler.Default);
+    }
+
+    private static Image PictureOf(BitmapSource picture) => new()
+    {
+        Source = picture,
+        Stretch = Stretch.Uniform,
+        StretchDirection = StretchDirection.DownOnly,
+        MaxWidth = 360,
+        MaxHeight = 260,
+    };
+
+    private static async Task<BitmapSource?> LoadPictureAsync(string url, string? folder)
+    {
+        try
+        {
+            var link = ChatLinks.Resolve(url, folder);
+            if (link.Kind != ChatLinkKind.ViewFile || !ChatLinks.IsImagePath(link.Target)) return null;
+            var file = new FileInfo(link.Target);
+            if (file.Length > MaxPictureBytes) return null;
+            string key = $"{file.FullName}|{file.Length}|{file.LastWriteTimeUtc.Ticks}";
+            Task<BitmapSource?> decode;
+            lock (Pictures)
+            {
+                if (!Pictures.TryGetValue(key, out decode!))
+                {
+                    if (Pictures.Count >= 32) Pictures.Clear();   // a long chat of pictures: drop the lot rather than grow
+                    decode = Task.Run(() => DecodePicture(file.FullName));
+                    Pictures[key] = decode;
+                }
+            }
+            return await decode.ConfigureAwait(false);
+        }
+        catch (Exception) { return null; }
+    }
+
+    private static BitmapSource? DecodePicture(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            int width = BitmapFrame.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).PixelWidth;
+            stream.Position = 0;
+            var picture = new BitmapImage();
+            picture.BeginInit();
+            picture.CacheOption = BitmapCacheOption.OnLoad;   // read now: the file is not held open
+            picture.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            picture.DecodePixelWidth = Math.Clamp(width, 1, PictureDecodeWidth);
+            picture.StreamSource = stream;
+            picture.EndInit();
+            picture.Freeze();
+            return picture;
+        }
+        catch (Exception) { return null; }
     }
 
     private static void AddTextWithLineBreaks(TextBlock tb, string text)
