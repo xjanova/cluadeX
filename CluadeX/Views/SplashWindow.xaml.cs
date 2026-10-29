@@ -115,8 +115,19 @@ public partial class SplashWindow : Window
         var brainTask = Task.Run(async () =>
         {
             var mcp = _sp.GetRequiredService<McpServerManager>();
-            if (mcp.BrainServerName == null) return (false, T("ยังไม่ได้ตั้งค่า", "not configured"));
-            for (int i = 0; i < 40 && !mcp.IsBrainConnected; i++) await Task.Delay(250);
+            // The MCP list (mcp_servers.json) is read by the app's startup task, which may not have got to it when the
+            // splash opens: it said "not configured" on every start while BrainX connected two seconds later (owner
+            // 2026-10-29). "Not configured" is said only once that work (the load, an installed BrainX registered) is
+            // done and found none; otherwise this waits for the connection, within the time this row always had.
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            var startup = mcp.WaitForStartupAsync(TimeSpan.FromSeconds(10));
+            bool StartupDone() => startup.IsCompletedSuccessfully && startup.Result;   // false: still running when the wait ended
+            while (!mcp.IsBrainConnected && DateTime.UtcNow < deadline)
+            {
+                if (StartupDone() && mcp.BrainServerName == null) break;
+                await Task.Delay(250);
+            }
+            if (mcp.BrainServerName == null && StartupDone()) return (false, T("ยังไม่ได้ตั้งค่า", "not configured"));
             return (mcp.IsBrainConnected, mcp.IsBrainConnected ? T($"เชื่อมต่อแล้ว · {mcp.BrainToolCount} เครื่องมือ", $"connected · {mcp.BrainToolCount} tools")
                                                              : T("กำลังเชื่อมต่อ…", "connecting…") + " " + mcp.BrainStatusText);
         });
