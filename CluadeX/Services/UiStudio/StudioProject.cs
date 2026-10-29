@@ -105,10 +105,25 @@ public static class StudioProject
         try
         {
             return Directory.EnumerateFiles(root, "*.html", SearchOption.TopDirectoryOnly)
-                .Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+                       .Select(Path.GetFileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).FirstOrDefault()
+                   ?? SubfolderIndex(root);
         }
         catch { return null; }
     }
+
+    /// <summary>Folders one level down never taken for the site (installed packages, build output, assets).</summary>
+    private static readonly HashSet<string> NotSiteDirs = new(StringComparer.OrdinalIgnoreCase)
+        { "node_modules", "bin", "obj", "vendor", "storage", "build", "coverage", "target", "__pycache__", "assets", "images", "img" };
+
+    /// <summary>An AI that writes the site into a folder of its own (site/, web/, landing/) left the Studio on
+    /// "Unsupported" for good (owner 2026-10-29): take an index.html one folder down, the first by name.</summary>
+    private static string? SubfolderIndex(string root) =>
+        Directory.EnumerateDirectories(root)
+            .Select(Path.GetFileName)
+            .Where(d => d is { Length: > 0 } && !d.StartsWith('.') && !NotSiteDirs.Contains(d))
+            .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
+            .Select(d => d + "/index.html")
+            .FirstOrDefault(rel => File.Exists(Path.Combine(root, rel)));
 
     private static (HashSet<string> Scripts, HashSet<string> Deps) ReadPackage(string path)
     {

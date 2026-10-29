@@ -197,6 +197,9 @@
                     <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding StartCommand}" Visibility="{Binding ShowStartButton, Converter={StaticResource BoolVis}}">
                         <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE768;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.start}"/></StackPanel>
                     </Button>
+                    <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding RedetectCommand}" Visibility="{Binding IsUnsupported, Converter={StaticResource BoolVis}}" ToolTip="{services:Loc studio.redetectTip}">
+                        <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" Margin="0,1,6,0"/><TextBlock Text="{services:Loc studio.redetect}"/></StackPanel>
+                    </Button>
                     <Button Style="{StaticResource StudioToolBtn}" Command="{Binding StopCommand}" Visibility="{Binding IsServing, Converter={StaticResource BoolVis}}" ToolTip="{services:Loc studio.stopTip}">
                         <TextBlock Text="&#xE71A;" FontFamily="Segoe MDL2 Assets"/>
                     </Button>
@@ -633,6 +636,20 @@
                             </Button>
                         </UniformGrid>
                         <TextBlock Text="{services:Loc studio.empty.how}" FontSize="11.5" Foreground="{DynamicResource Text.Faint}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,22,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- a folder with nothing to show yet (opened empty, or the AI is still writing it) -->
+                <Border Grid.Row="0" Grid.RowSpan="2" Background="{DynamicResource Page.Background}"
+                        Visibility="{Binding IsUnsupported, Converter={StaticResource BoolVis}}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="560" Margin="24">
+                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="40" Foreground="{DynamicResource Accent.1}" HorizontalAlignment="Center"/>
+                        <TextBlock Text="{services:Loc studio.waiting.title}" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" HorizontalAlignment="Center" Margin="0,14,0,6"/>
+                        <TextBlock Text="{Binding UnsupportedText}" FontSize="12.5" Foreground="{DynamicResource Text.Secondary}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,8"/>
+                        <TextBlock Text="{services:Loc studio.waiting.body}" FontSize="12" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,20"/>
+                        <Button Style="{StaticResource StudioAccentBtn}" Command="{Binding RedetectCommand}" HorizontalAlignment="Center" Padding="16,8" ToolTip="{services:Loc studio.redetectTip}">
+                            <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" Margin="0,1,8,0"/><TextBlock Text="{services:Loc studio.redetect}"/></StackPanel>
+                        </Button>
                     </StackPanel>
                 </Border>
 

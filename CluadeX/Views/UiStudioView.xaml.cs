@@ -159,7 +159,7 @@ public partial class UiStudioView : UserControl
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName is nameof(UiStudioViewModel.HasProject) or nameof(UiStudioViewModel.NoProject) or nameof(UiStudioViewModel.ShowGallery)
-                or nameof(UiStudioViewModel.ShowPages) or nameof(UiStudioViewModel.IsSimulated))
+                or nameof(UiStudioViewModel.ShowPages) or nameof(UiStudioViewModel.IsSimulated) or nameof(UiStudioViewModel.IsUnsupported))
                 UpdateWebVisibility();
             if (e.PropertyName is nameof(UiStudioViewModel.ShowPages) && vm.ShowPages) { UpdateColumns(); QueueVisible(); }
             if (e.PropertyName is nameof(UiStudioViewModel.CardWidth)) UpdateColumns();
@@ -221,7 +221,7 @@ public partial class UiStudioView : UserControl
     /// <summary>The page shows only when nothing WPF draws should be on top of it.</summary>
     private void UpdateWebVisibility()
     {
-        bool show = _vm is { HasProject: true, ShowGallery: false, ShowPages: false, IsSimulated: false } && !_covered;
+        bool show = _vm is { HasProject: true, ShowGallery: false, ShowPages: false, IsSimulated: false, IsUnsupported: false } && !_covered;
         Frame.Visibility = show ? Visibility.Visible : Visibility.Hidden;   // Hidden keeps the page alive and laid out
     }
 

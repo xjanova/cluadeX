@@ -192,6 +192,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         });
         CreateFromTemplateCommand = new RelayCommand(CreateFromTemplate, () => SelectedTemplate != null && !string.IsNullOrWhiteSpace(NewProjectName));
         StartCommand = new AsyncRelayCommand(StartAsync, () => _studio.HasProject && !_studio.IsStarting);
+        RedetectCommand = new RelayCommand(RedetectAndStart, () => _studio.HasProject && !_studio.IsStarting && _session == null && !IsChecking);
         StopCommand = new RelayCommand(() => { _studio.StopServing(); Status(T("studio.stopped")); });
         ReloadCommand = new RelayCommand(() => _studio.RunScript("location.reload()"));
         NavigateCommand = new RelayCommand(() =>
@@ -297,6 +298,20 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         if (_studio.Project.Kind == StudioProjectKind.Simulated) { ShowPages = true; return; }   // a native app: its screens are the view
         if (autoStart && !IsUnsupported) _ = StartAsync();
         else if (IsUnsupported) Status(UnsupportedText, error: true);
+    }
+
+    /// <summary>The "look again and run" button of a folder the Studio found nothing to show in (it was opened empty,
+    /// or the AI is still writing it): detect it again and start whatever it now is. A click is the user's go-ahead,
+    /// like Start, so a dev server starts here too. (Owner 2026-10-29: "ถ้ามันไม่รันเอง เราควรมีปุ่ม บังคับ รัน")</summary>
+    internal void RedetectAndStart()
+    {
+        if (!_studio.HasProject || _session != null || IsChecking) return;
+        _studio.OpenProject(_studio.Root);   // the same root: detected again
+        _log?.Info("UiStudio", $"detected again by hand: {_studio.Root} → {_studio.Project.Kind}");
+        if (IsUnsupported) { Status(UnsupportedText, error: true); return; }
+        _startOnShow = _pagesOnShow = false;
+        if (IsSimulated) { ShowPages = true; return; }
+        if (!_studio.IsServing && !_studio.IsStarting) _ = StartAsync();
     }
 
     private async Task StartAsync()
@@ -939,6 +954,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     public ICommand BrowseParentCommand { get; }
     public ICommand CreateFromTemplateCommand { get; }
     public ICommand StartCommand { get; }
+    public ICommand RedetectCommand { get; }
     public ICommand StopCommand { get; }
     public ICommand ReloadCommand { get; }
     public ICommand NavigateCommand { get; }
