@@ -31,6 +31,36 @@ internal static partial class Program
             !CluadeX.ViewModels.UiStudioViewModel.IsLocalUrl("https://example.com/") && !CluadeX.ViewModels.UiStudioViewModel.IsLocalUrl("https://localhost.example.com/")
             && !CluadeX.ViewModels.UiStudioViewModel.IsLocalUrl("file:///C:/x.html") && !CluadeX.ViewModels.UiStudioViewModel.IsLocalUrl("not a url"));
 
+        // A chat that opens an empty folder and has the AI write the site into it (naruay999, 2026-10-29)
+        string grow = Path.Combine(Path.GetTempPath(), "cx-live-grow-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            string G(string rel) => Path.Combine(grow, rel.Replace('/', Path.DirectorySeparatorChar));
+            void Put(string rel, string text = "<!doctype html><title>x</title>")
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(G(rel))!);
+                File.WriteAllText(G(rel), text);
+            }
+            Directory.CreateDirectory(grow);
+            Check("grow: an empty folder has nothing to show", StudioProject.Detect(grow).Kind == StudioProjectKind.Unsupported);
+            Put("assets/hero.png", "png");
+            Put("assets/index.html");   // an icon set's demo page, not the site
+            Check("grow: images (and a page inside assets/) are not the site yet", StudioProject.Detect(grow).Kind == StudioProjectKind.Unsupported,
+                StudioProject.Detect(grow).EntryHtml ?? "");
+            Put("node_modules/pkg/index.html");
+            Put(".cache/index.html");
+            Check("grow: packages and hidden folders are not the site", StudioProject.Detect(grow).Kind == StudioProjectKind.Unsupported,
+                StudioProject.Detect(grow).EntryHtml ?? "");
+            Put("site/index.html");
+            var sub = StudioProject.Detect(grow);
+            Check("grow: an index.html one folder down is the site", sub.Kind == StudioProjectKind.Static && sub.EntryHtml == "site/index.html",
+                $"{sub.Kind} {sub.EntryHtml}");
+            Put("index.html");
+            Check("grow: a page at the top wins over one folder down", StudioProject.Detect(grow).EntryHtml == "index.html",
+                StudioProject.Detect(grow).EntryHtml ?? "");
+        }
+        finally { try { Directory.Delete(grow, true); } catch { } }
+
         var kinds = Enum.GetValues<GraphEdgeKind>();
         var colours = kinds.Select(CluadeX.Views.UiStudio.NodeGraphCanvas.EdgeColor).ToList();
         Check("wires: every kind of connection has its own colour", colours.Distinct().Count() == kinds.Length && !colours.Contains(System.Windows.Media.Colors.Gray),

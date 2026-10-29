@@ -42,6 +42,11 @@ internal static class StudioKeys
         ["studio.unsupported.flutter"] = E("Flutter UIs are not rendered in a web view, so the Studio can't map them to source yet. Use the Code editor and the AI for this project.", "UI ของ Flutter ไม่ได้แสดงผลในเว็บวิว Studio จึงยังชี้กลับไปที่ซอร์สไม่ได้ ใช้ Code editor และ AI กับโปรเจกต์นี้ก่อน"),
         ["studio.unsupported.wpf"] = E("WPF/XAML windows can't be shown in the Studio yet. Use the Code editor and the AI for this project.", "หน้าต่าง WPF/XAML ยังแสดงใน Studio ไม่ได้ ใช้ Code editor และ AI กับโปรเจกต์นี้ก่อน"),
         ["studio.unsupported.none"] = E("No web page found here — no index.html and no package.json with a dev script.", "ไม่พบหน้าเว็บในโฟลเดอร์นี้ — ไม่มี index.html และไม่มี package.json ที่มีสคริปต์ dev"),
+        ["studio.waiting.title"] = E("Nothing to show yet", "ยังไม่มีหน้าให้แสดง"),
+        ["studio.waiting.body"] = E("The Studio opens the page by itself as soon as one appears here (an index.html, or a package.json with a dev script) — while the AI is still writing the project, give it a moment. Or look again now.",
+                                    "Studio จะเปิดหน้าให้เองทันทีที่มีหน้าเว็บในโฟลเดอร์นี้ (index.html หรือ package.json ที่มีสคริปต์ dev) — ถ้า AI ยังเขียนโปรเจกต์อยู่ รอสักครู่ หรือกดตรวจใหม่ได้เลย"),
+        ["studio.redetect"] = E("Look again and run", "ตรวจใหม่และรัน"),
+        ["studio.redetectTip"] = E("Detect what this folder is now and start its preview", "ตรวจชนิดโปรเจกต์ในโฟลเดอร์นี้ใหม่ แล้วเริ่มแสดงผลทันที"),
         ["studio.approxBanner"] = E("This framework has no CluadeX locator: React 18 apps still map exactly; other elements show likely source places and can be changed through the AI.", "เฟรมเวิร์กนี้ยังไม่มี CluadeX locator: แอป React 18 ยังชี้ซอร์สได้แม่นยำ ส่วน element อื่นจะแสดงตำแหน่งที่น่าจะใช่ และแก้ผ่าน AI ได้"),
         ["studio.remoteBanner"] = E("A page from the internet: you can inspect it and tweak it live, but nothing is written anywhere. Export your tweaks as CSS.", "หน้าเว็บจากอินเทอร์เน็ต: ตรวจและปรับสดได้ แต่จะไม่เขียนลงไฟล์ใด ๆ ส่งออกสิ่งที่ปรับเป็น CSS ได้"),
 

@@ -413,5 +413,12 @@ internal static class ChatKeys
             ["en"] = "The server did not answer the initialize handshake within {0} s. Its last error output:\n{1}",
             ["th"] = "เซิร์ฟเวอร์ไม่ตอบการเริ่มต้นเชื่อมต่อ (initialize) ภายใน {0} วินาที ข้อความผิดพลาดล่าสุดของเซิร์ฟเวอร์:\n{1}",
         },
+        // ─── Links and pictures in a reply (Helpers/ChatLinks) ───
+        ["chat.link.missing"] = new() { ["en"] = "That file is not there (any more): {0}", ["th"] = "ไม่พบไฟล์นี้ (อาจถูกย้ายหรือลบไปแล้ว): {0}" },
+        ["chat.link.refused"] = new() { ["en"] = "Not opened from the chat — only web addresses and files on this computer are: {0}", ["th"] = "ไม่เปิดลิงก์นี้จากแชท — เปิดได้เฉพาะเว็บและไฟล์ในเครื่องนี้: {0}" },
+        ["chat.link.failed"] = new() { ["en"] = "Windows could not open it: {0}", ["th"] = "Windows เปิดไม่ได้: {0}" },
+        ["chat.link.revealTip"] = new() { ["en"] = "Click to show it in its folder (it is not run): {0}", ["th"] = "คลิกเพื่อเปิดโฟลเดอร์ของไฟล์ (ไม่รันไฟล์): {0}" },
+        ["chat.copy"] = new() { ["en"] = "Copy", ["th"] = "คัดลอก" },
+        ["chat.selectAll"] = new() { ["en"] = "Select all", ["th"] = "เลือกทั้งหมด" },
     };
 }
