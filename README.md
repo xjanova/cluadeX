@@ -447,6 +447,34 @@ Enable or disable optional features from the **Features** page in the sidebar. T
 - Markdown Rendering
 - Permission System, Dangerous Command Blocking
 
+### Your own Chrome / Chrome ของคุณ
+
+The browser tools can work in your real Chrome, with your logins, in a window of their own. This needs no Claude account and no `claude.exe`, and it works with any model, local ones included. It is under the same Dev Preview gate as the built-in browser.
+
+1. In **Settings > Agent > Your Chrome**, turn on **Control Chrome with CluadeX's own extension**.
+2. Press **Add the extension to Chrome**. Chrome opens its extensions page, and the folder's path is on your clipboard.
+3. Turn on **Developer mode**, press **Load unpacked**, paste the path and press **Select Folder**.
+
+That is the one step Chrome keeps for you: it does not let a program install an extension by itself. After that, CluadeX and Chrome find each other whenever both are open. Leave Developer mode on, because Chrome turns the extension off without it.
+
+- Your own tabs are never attached to. The agent gets its own window, which opens without taking the focus.
+- Sites still ask once per chat, as in the built-in browser.
+- To stop the agent, click the CluadeX icon in Chrome's toolbar. It stays paused until you click again.
+- The extension refuses to read cookies or clear site data, and `fresh=true` does nothing here, so the agent cannot sign you out of a site that way.
+
+เครื่องมือเบราว์เซอร์ทำงานใน Chrome จริงของคุณได้ พร้อมการล็อกอินของคุณ ในหน้าต่างแยก ไม่ต้องใช้บัญชี Claude และไม่ต้องมี `claude.exe` ใช้ได้กับทุกโมเดลรวมถึงโมเดลบนเครื่อง และอยู่ภายใต้ Dev Preview เหมือนเบราว์เซอร์ในตัว
+
+1. ที่ **ตั้งค่า > เอเจนต์ > Chrome ของคุณ** เปิด **ควบคุม Chrome ด้วย extension ของ CluadeX เอง**
+2. กด **เพิ่ม extension เข้า Chrome** Chrome จะเปิดหน้า extensions และคัดลอก path ของโฟลเดอร์ไว้ให้แล้ว
+3. เปิด **Developer mode** กด **Load unpacked** วาง path แล้วกด **Select Folder**
+
+ขั้นตอนนี้ต้องทำเองครั้งเดียว เพราะ Chrome ไม่ยอมให้โปรแกรมติดตั้ง extension เอง หลังจากนั้น CluadeX กับ Chrome จะหากันเองทุกครั้งที่เปิดทั้งคู่ และต้องเปิด Developer mode ค้างไว้ ถ้าปิด Chrome จะปิด extension นี้ด้วย
+
+- เอเจนต์ไม่แตะแท็บของคุณ และทำงานในหน้าต่างของตัวเองที่เปิดโดยไม่แย่งโฟกัส
+- แต่ละเว็บยังถามก่อนหนึ่งครั้งต่อแชต เหมือนเบราว์เซอร์ในตัว
+- ถ้าจะหยุดเอเจนต์ ให้กดไอคอน CluadeX บนแถบเครื่องมือของ Chrome ระบบจะหยุดจนกว่าจะกดอีกครั้ง
+- extension ไม่ยอมอ่านคุกกี้หรือล้างข้อมูลเว็บ และ `fresh=true` ไม่มีผลที่นี่ เอเจนต์จึงทำให้คุณหลุดจากระบบด้วยวิธีนี้ไม่ได้
+
 ### Activation Key
 
 Advanced features (cloud providers, Git/GitHub, web fetch, etc.) require an activation key. Enter in the **Features** page. Free tier includes: local inference, Ollama, chat persistence, buddy companion, GPU detection, and more.
@@ -579,6 +607,7 @@ Stated plainly so nothing above reads as a promise it can't keep.
 | **Weak local models** | The harness (constrained decoding, tool-call salvage, auto-verify, false-finish guard) makes small GGUF models finish real edits, but it cannot add reasoning the weights lack — a 7B model still hallucinates when summarising unfamiliar code. Connect an API provider for hard tasks. / โมเดลเล็กยังมโนได้ในงานที่ต้องคิดเยอะ |
 | **Embedded terminal** | A real persistent PowerShell for running commands — not a full PTY. Cursor-driven TUIs (vim, htop) will not render. / ไม่ใช่ PTY เต็มรูปแบบ |
 | **git push / GitHub** | Local Git (commit, branch, merge, diff, stash) is free. Pushing to a remote and GitHub PR tools require activation. / push ขึ้น remote ต้อง activate |
+| **Your own Chrome** | Chrome shows its "started debugging" bar while the agent works. The extension must be added by hand once, and Developer mode must stay on. Downloads are left to Chrome, which may ask where to save. A page's own service worker cannot be seen from an extension, so its requests are not filtered. Any program running as your Windows user could re-point the native host, as with every native-messaging host. / Chrome แสดงแถบ "started debugging" ขณะเอเจนต์ทำงาน ต้องเพิ่ม extension เองหนึ่งครั้งและเปิด Developer mode ค้างไว้ การดาวน์โหลดเป็นหน้าที่ของ Chrome ซึ่งอาจถามที่บันทึก request ของ service worker ของหน้าเว็บไม่ถูกกรอง และโปรแกรมใดก็ตามที่รันในบัญชี Windows เดียวกันแก้ native host ได้ เหมือน native-messaging host ทุกตัว |
 
 ---
 

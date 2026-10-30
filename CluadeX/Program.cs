@@ -49,8 +49,19 @@ public static class Program
             Environment.Exit(Services.Tools.ChatToolBridge.RunStdioServer());
             return;
         }
+        // Chrome started this as the CluadeX Bridge extension's native host: relays to the running app — headless too.
+        if (Services.Chrome.ChromeNativeHost.IsHostCall(args))
+        {
+            Environment.Exit(Services.Chrome.ChromeNativeHost.Run(args));
+            return;
+        }
 
-        try { Velopack.VelopackApp.Build().Run(); }
+        try
+        {
+            Velopack.VelopackApp.Build()
+                .OnBeforeUninstallFastCallback(_ => Services.Chrome.ChromeBridgeInstall.Unregister())
+                .Run();
+        }
         catch (Exception ex) { Debug.WriteLine($"Velopack init: {ex.Message}"); }
 
         var app = new App();

@@ -603,10 +603,22 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Your own Chrome for the agent, through the Claude in Chrome extension -->
+                        <!-- Your own Chrome for the agent: CluadeX's own extension, or the Claude in Chrome extension -->
                         <Border Style="{StaticResource Card}" Visibility="{Binding HasChromeConnector, Converter={StaticResource BoolVis}}">
                             <StackPanel>
                                 <TextBlock Text="{services:Loc settings.card.chrome}" Style="{StaticResource CardTitle}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.chromeBridge}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.chromeBridgeDesc}" Style="{StaticResource SettingDesc}"/>
+                                        <TextBlock Text="{Binding ChromeBridgeStatus}" Style="{StaticResource SettingDesc}" Margin="0,4,0,0"/>
+                                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding AddChromeExtensionCommand}" Padding="10,5" Margin="0,8,0,0"
+                                                HorizontalAlignment="Left" Content="{services:Loc settings.chromeBridgeAdd}"
+                                                Visibility="{Binding ChromeBridgeNeedsExtension, Converter={StaticResource BoolVis}}"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ChromeBridgeOn}" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                </Grid>
                                 <Grid Style="{StaticResource Row}" Margin="0">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>

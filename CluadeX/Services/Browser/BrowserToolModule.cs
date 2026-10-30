@@ -110,8 +110,9 @@ public sealed class BrowserToolModule : IAgentToolModule
 
     public IReadOnlyCollection<ToolType> ToolTypes => Names.Keys;
 
-    /// <summary>Kept out of plain chats (14 schemas cost tokens on every request); a project is open in a web task.</summary>
-    public bool WorksWithoutProject => false;
+    /// <summary>Kept out of plain chats (14 schemas cost tokens on every request); a project is open in a web task.
+    /// The user's own Chrome is the exception: work in their logged-in sites has no project.</summary>
+    public bool WorksWithoutProject => _browser.UsesChrome;
 
     public ToolType? ResolveToolType(string toolName) =>
         !string.IsNullOrWhiteSpace(toolName) && ByName.TryGetValue(toolName.Trim(), out var t) ? t : null;
@@ -128,7 +129,7 @@ public sealed class BrowserToolModule : IAgentToolModule
             : _activation != null ? DevPreviewGate.Refusal(_settings, _activation, name) : L("devPreview.off");
         if (gate != null) return gate;
         // No engine = no tool that pretends to work: the reason carries the one command that fixes it.
-        if (type != ToolType.BrowserClose && !BrowserEngineProbe.Probe().HasWebView2)
+        if (type != ToolType.BrowserClose && !_browser.UsesChrome && !BrowserEngineProbe.Probe().HasWebView2)
             return string.Format(L("browser.engine.missing"), BrowserEngineProbe.InstallCommand);
         return null;
     }
@@ -144,7 +145,7 @@ public sealed class BrowserToolModule : IAgentToolModule
         get
         {
             string? dir = _fileSystem is { HasWorkingDirectory: true } fs ? fs.WorkingDirectory : null;
-            if (_browser.Session == null && (dir == null || !IsWebProject(dir))) return Array.Empty<string>();
+            if (_browser.Session == null && !_browser.UsesChrome && (dir == null || !IsWebProject(dir))) return Array.Empty<string>();
             return new[] { "browser_open", "browser_console", "browser_read", "browser_click", "browser_eval", "browser_screenshot" };
         }
     }
@@ -504,6 +505,7 @@ public sealed class BrowserToolModule : IAgentToolModule
         sb.Append($"Opened {nav.Url}");
         if (nav.Status is int st) sb.Append($" — HTTP {st}");
         sb.Append($" · title \"{Trunc(nav.Title, 120)}\" · {nav.ElapsedMs} ms · engine {session.Engine}{(_browser.IsSoftwareRendering ? " (software rendering: a local model holds the GPU)" : "")} · viewport {viewport}");
+        if (session.Engine == ChromeExtensionChannel.EngineName) sb.Append('\n').Append(L("browser.open.realChrome"));
         if (nav.StillLoading) sb.Append($"\n(still loading after {timeout} ms — '{waitUntil}' did not fire yet)");
         if (nav.FrameLoopKicked) sb.Append("\n(the hidden page had stopped drawing frames; it was woken up)");
         if (allow.Count > 0) sb.Append("\nThe page may also contact: ").Append(string.Join(", ", allow));
@@ -532,7 +534,8 @@ public sealed class BrowserToolModule : IAgentToolModule
 
         var result = Ok(call, "");
         await AttachScreenshotAsync(result, sb, session, context, "viewport", null, null, MaxEdge(call), ct);
-        if (_presenter != null && !_presenter.EnsureVisible(context.SessionKey))
+        // The user's Chrome is on screen by itself: a preview pane would stay empty.
+        if (_presenter != null && session.Channel is WebView2Channel && !_presenter.EnsureVisible(context.SessionKey))
             sb.Append(L("browser.open.windowClosed")).Append('\n');
         result.Output = sb.ToString().TrimEnd();
         result.Summary = $"{nav.Url} — {(nav.Status is int s2 ? "HTTP " + s2 + ", " : "")}{errors} console error(s)";

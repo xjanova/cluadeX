@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("browsertest")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("chrometest")]
 
 namespace CluadeX.Services.Browser;
 
@@ -27,6 +28,7 @@ public static class BrowserRegistration
                 var server = sp.GetService<Providers.LlamaServerProvider>();
                 return llama is { IsModelLoaded: true } or { IsLoading: true } || server is { IsServerRunning: true };
             },
+            ChromeBridge = sp.GetService<Chrome.ChromeBridgeServer>(),
         });
         services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<BrowserService>());
 

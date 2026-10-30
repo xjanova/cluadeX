@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.195</Version>
+    <Version>3.0.196</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -59,6 +59,13 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\UiStudio\**\*" LogicalName="UiStudio/%(RecursiveDir)%(Filename)%(Extension)" />
     <None Remove="Resources\UiStudio\**\*" />
+  </ItemGroup>
+
+  <!-- The CluadeX Bridge extension for Chrome, written to <data root>\chrome\extension by
+       Services/Chrome/ChromeBridgeInstall.cs as "ChromeExtension/<file>". -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\ChromeExtension\*" LogicalName="ChromeExtension/%(Filename)%(Extension)" />
+    <None Remove="Resources\ChromeExtension\*" />
   </ItemGroup>
 
   <!-- Embed the git commit hash into AssemblyInformationalVersion (read at runtime for the

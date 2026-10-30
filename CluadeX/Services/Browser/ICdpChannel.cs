@@ -12,7 +12,7 @@ namespace CluadeX.Services.Browser;
 /// </summary>
 public interface ICdpChannel : IDisposable
 {
-    /// <summary>"webview2" or "edge-cdp" — shown in tool output and the harness report.</summary>
+    /// <summary>"webview2" or "chrome-extension" — shown in tool output and the harness report.</summary>
     string Engine { get; }
 
     /// <summary>False once the engine is gone (browser process exited, disposed). A crashed renderer is still
@@ -46,6 +46,10 @@ public interface ICdpChannel : IDisposable
     /// allow everything.</summary>
     Func<string, bool, string?>? NavigationFilter { get; set; }
 
+    /// <summary>Close the page and whatever exists only for it, waiting at most <paramref name="waitForExit"/>. Safe to
+    /// call more than once; never throws.</summary>
+    Task CloseAsync(TimeSpan waitForExit);
+
     /// <summary>Asked before every network request the page, its workers, shared workers and service workers make:
     /// (url, resource kind — "Fetch", "XmlHttpRequest", "Image", "Script", …) → null to allow, or the reason it is
     /// blocked (answered locally with a CORS-correct 403, never sent). WebSocket handshakes never reach it (measured
@@ -72,7 +76,7 @@ public sealed record BrowserNotice(BrowserNoticeKind Kind, string Text, string? 
 public enum BrowserNoticeKind
 {
     Dialog,             // alert / confirm / prompt / beforeunload — auto-dismissed
-    Download,           // cancelled
+    Download,           // cancelled (WebView2), left to Chrome (the user's Chrome)
     PopupBlocked,       // window.open / target=_blank
     NavigationBlocked,  // UrlPolicy refused a navigation
     RequestBlocked,     // a fetch / XHR / WebSocket / beacon to a site this chat has not allowed

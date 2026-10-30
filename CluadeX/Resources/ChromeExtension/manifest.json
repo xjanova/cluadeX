@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "CluadeX Bridge",
+  "version": "1.0.0",
+  "description": "Connects this Chrome to the CluadeX app on this PC, so its agent can work in a window of its own.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkiErigjTofxHMAmf/DnqwjkQeatZ7EEnvZ9++XrJT5oTXqOSX/7z4SSoSQTeNQ4op2DEmhbMZS3plR9uY8AZnoL5BoGZIbqBjoilqNFBuwDFLg2M7hWQJfqrMTnoICGMtPsSh5ENMN5pf2YPONM+M/ttaPxYAP5CNax5zbFqAQpWJ45o4vOm+1u6OXxtJ7x8RB/q5/YqG2D2+2l8tU/qU+vqL/RV45c8DWBqOFWH7DNSJ0u264t8yny+RHbEWrgdIM2qjgbXwd9PcPCEpc8u4c7EX+N0b4imw6/gyA4/jSWscOx88ZyOQKts4TD20xoT/CZaOt6dPQFMOHdUmdiihwIDAQAB",
+  "minimum_chrome_version": "125",
+  "permissions": ["debugger", "declarativeNetRequestWithHostAccess", "nativeMessaging", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "CluadeX Bridge",
+    "default_icon": { "16": "icon-16.png", "32": "icon-32.png", "48": "icon-48.png" }
+  },
+  "icons": { "16": "icon-16.png", "48": "icon-48.png", "128": "icon-128.png" }
+}

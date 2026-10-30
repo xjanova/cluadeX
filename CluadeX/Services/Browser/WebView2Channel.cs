@@ -278,6 +278,14 @@ public sealed class WebView2Channel : ICdpChannel, IOffScreenEngine
         try { method = request.Method ?? "GET"; } catch { }
         try { if (request.Headers.Contains("Origin")) origin = request.Headers.GetHeader("Origin"); } catch { }
         try { if (request.Headers.Contains("Access-Control-Request-Headers")) requestHeaders = request.Headers.GetHeader("Access-Control-Request-Headers"); } catch { }
+        var answer = BlockedAnswer(method, origin, requestHeaders);
+        var body = answer.Body == null ? null : new MemoryStream(System.Text.Encoding.UTF8.GetBytes(answer.Body));
+        return _environment!.CreateWebResourceResponse(body, answer.Status, answer.Phrase, answer.Headers);
+    }
+
+    /// <summary>The answer to a refused request (see <see cref="BlockedResponse"/>); every engine sends this one.</summary>
+    internal static (int Status, string Phrase, string Headers, string? Body) BlockedAnswer(string method, string origin, string requestHeaders)
+    {
         // Header values must stay single-line (a page could send anything in its own headers).
         origin = SingleLine(origin);
         requestHeaders = SingleLine(requestHeaders);
@@ -286,14 +294,14 @@ public sealed class WebView2Channel : ICdpChannel, IOffScreenEngine
             : "Access-Control-Allow-Origin: *";
         if (method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase))
         {
-            return _environment!.CreateWebResourceResponse(null, 204, "No Content",
+            return (204, "No Content",
                 cors + "\r\nAccess-Control-Allow-Methods: GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS"
                      + "\r\nAccess-Control-Allow-Headers: " + (requestHeaders.Length > 0 ? requestHeaders : "*")
-                     + "\r\nAccess-Control-Max-Age: 0");
+                     + "\r\nAccess-Control-Max-Age: 0", null);
         }
-        var body = new MemoryStream(System.Text.Encoding.UTF8.GetBytes("Blocked by CluadeX: this site is not approved for the built-in browser."));
-        return _environment!.CreateWebResourceResponse(body, 403, "Blocked by CluadeX",
-            "Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n" + cors + "\r\nAccess-Control-Expose-Headers: *");
+        return (403, "Blocked by CluadeX",
+            "Content-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n" + cors + "\r\nAccess-Control-Expose-Headers: *",
+            "Blocked by CluadeX: this site is not approved for the built-in browser.");
     }
 
     private static string SingleLine(string s)

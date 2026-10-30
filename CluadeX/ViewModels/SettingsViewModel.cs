@@ -434,7 +434,8 @@ public partial class SettingsViewModel : ViewModelBase
         DebugLogService? log = null,
         ThemeService? themes = null,
         Services.Batch.BatchService? batchService = null,
-        Services.Chrome.ClaudeInChromeConnector? chrome = null)
+        Services.Chrome.ClaudeInChromeConnector? chrome = null,
+        Services.Chrome.ChromeBridgeConnector? chromeBridge = null)
     {
         _settingsService = settingsService;
         _gpuDetectionService = gpuDetectionService;
@@ -511,6 +512,7 @@ public partial class SettingsViewModel : ViewModelBase
         RefreshMemories();
         InitBatchJobs(batchService);
         InitChrome(chrome);
+        InitChromeBridge(chromeBridge);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════

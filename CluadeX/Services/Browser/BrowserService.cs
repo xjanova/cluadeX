@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using CluadeX.Models;
+using CluadeX.Services.Chrome;
 using Microsoft.Web.WebView2.Core;
 
 namespace CluadeX.Services.Browser;
@@ -31,7 +32,8 @@ public sealed class BrowserUnavailableException : Exception
 
 /// <summary>
 /// The built-in browser: one page (like Claude Code's preview), created on the first browser_open and kept until
-/// browser_close or exit. Owns the engine thread, the WebView2 profile folder and the page's off-screen host; a
+/// browser_close or exit. The page lives in WebView2, or in the user's real Chrome when <c>BrowserEngine</c> is
+/// "chrome" (<see cref="ChromeExtensionChannel"/>). Owns the engine thread, the WebView2 profile folder and the page's off-screen host; a
 /// preview pane borrows the page with <see cref="AttachHost"/> and returns it with <see cref="ParkHost"/>, so the
 /// page (and a game's state) survives CluadeX page switches.
 ///
@@ -52,7 +54,7 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
     private readonly SemaphoreSlim _createLock = new(1, 1);
     private Dispatcher? _dispatcher;
     private Thread? _ownThread;
-    private WebView2Channel? _channel;
+    private ICdpChannel? _channel;
     private BrowserSession? _session;
     private bool _channelGpuOff;
     private IntPtr _wantedHost;
@@ -63,6 +65,17 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
     private readonly ConcurrentDictionary<string, bool> _userOrigins = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, bool>> _chatOrigins = new(StringComparer.Ordinal);
     private volatile string _activeChat = "";
+
+    /// <summary>The value of <c>BrowserEngine</c> that puts the page in the user's real Chrome.</summary>
+    public const string ChromeEngine = "chrome";
+
+    public static bool IsChromeEngine(string? engine) => string.Equals(engine?.Trim(), ChromeEngine, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The page goes to the user's real Chrome, through CluadeX's own extension.</summary>
+    public bool UsesChrome => IsChromeEngine(_settings?.Settings.BrowserEngine);
+
+    /// <summary>The connection to the extension. Wired by DI; null = no Chrome engine.</summary>
+    public ChromeBridgeServer? ChromeBridge { get; set; }
 
     /// <summary>The DI constructor (the app).</summary>
     public BrowserService(SettingsService settings) : this(settings, new BrowserServiceOptions()) { }
@@ -79,7 +92,8 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
     public event Action? StateChanged;
 
     public BrowserSession? Session => _session is { IsAlive: true } s ? s : null;
-    public WebView2Channel? Channel => _channel is { IsAlive: true } c ? c : null;
+    /// <summary>The WebView2 engine, when the page lives in it and it is alive.</summary>
+    public WebView2Channel? Channel => _channel is WebView2Channel { IsAlive: true } c ? c : null;
     public bool IsAgentDriving => Volatile.Read(ref _agentCalls) > 0;
     public string UserDataFolder => _options.UserDataFolder
         ?? Path.Combine(_settings?.DataRoot ?? Path.Combine(AppContext.BaseDirectory, "Data"), "WebView2");
@@ -225,15 +239,15 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
     {
         if (_disposed) throw new ObjectDisposedException(nameof(BrowserService));
         if (AgentRunScope.Current?.SessionKey is { Length: > 0 } owner) OwnerSessionKey = owner;
-        if (Session is { } live && _channel is { IsAlive: true } && !(forNavigation && NeedsSoftwareSwap())) return live;
+        if (Session is { } live && _channel is { IsAlive: true } && !NeedsNewEngine(forNavigation)) return live;
 
         await _createLock.WaitAsync(ct);
         try
         {
             if (Session is { } again && _channel is { IsAlive: true })
             {
-                if (!(forNavigation && NeedsSoftwareSwap())) return again;
-                Debug.WriteLine("[browser] a local model now holds the GPU — restarting the page engine in software rendering");
+                if (!NeedsNewEngine(forNavigation)) return again;
+                Debug.WriteLine("[browser] the engine is not the one wanted any more (a local model holds the GPU, or the setting changed) — restarting the page");
             }
             await DisposeEngineAsync(TimeSpan.FromSeconds(3));   // a dead engine (browser process exited) is replaced
 
@@ -241,28 +255,13 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
             if (engine == "cdp")
                 throw new BrowserUnavailableException(L("browser.engine.cdpUnavailable"));
 
-            var info = BrowserEngineProbe.Probe(refresh: true);
-            if (!info.HasWebView2)
-                throw new BrowserUnavailableException(string.Format(L("browser.engine.missing"), BrowserEngineProbe.InstallCommand));
-
-            bool disableGpu = _options.DisableGpu ?? LocalModelHoldsGpu();
-            WebView2Channel channel;
-            try
+            bool disableGpu = false;
+            ICdpChannel channel;
+            if (engine == ChromeEngine) channel = await OpenChromeAsync(ct);
+            else
             {
-                channel = await WebView2Channel.CreateAsync(Dispatcher, new WebView2ChannelOptions
-                {
-                    UserDataFolder = UserDataFolder, Width = _options.Width, Height = _options.Height, DisableGpu = disableGpu,
-                    ExtraArguments = _options.ExtraArguments,
-                }, ct);
-            }
-            catch (WebView2RuntimeNotFoundException ex)
-            {
-                throw new BrowserUnavailableException(string.Format(L("browser.engine.missing"), BrowserEngineProbe.InstallCommand), ex);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Debug.WriteLine($"[browser] engine start failed: {ex}");
-                throw new BrowserUnavailableException(L("browser.engine.startFailed"), ex);
+                disableGpu = _options.DisableGpu ?? LocalModelHoldsGpu();
+                channel = await CreateWebView2Async(disableGpu, ct);
             }
 
             var session = new BrowserSession(channel)
@@ -282,21 +281,61 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
             }
             session.Changed += RaiseStateChanged;
             session.NoticeRaised += RaiseNotice;
-            channel.SourceChanged += _ => RaiseStateChanged();
+            if (channel is WebView2Channel webView) webView.SourceChanged += _ => RaiseStateChanged();
             _channel = channel;
             _channelGpuOff = disableGpu;
             _session = session;
 
             // A pane that was waiting for the page gets it now.
-            if (_wantedHost != IntPtr.Zero)
+            if (_wantedHost != IntPtr.Zero && channel is WebView2Channel shown)
             {
                 var host = _wantedHost; var size = _wantedHostSize;
-                await Dispatcher.InvokeAsync(() => { try { channel.AttachTo(host, size.W, size.H, size.Scale); } catch (Exception ex) { Debug.WriteLine($"[browser] attach failed: {ex.Message}"); } }).Task;
+                await Dispatcher.InvokeAsync(() => { try { shown.AttachTo(host, size.W, size.H, size.Scale); } catch (Exception ex) { Debug.WriteLine($"[browser] attach failed: {ex.Message}"); } }).Task;
             }
             RaiseStateChanged();
             return session;
         }
         finally { _createLock.Release(); }
+    }
+
+    private async Task<WebView2Channel> CreateWebView2Async(bool disableGpu, CancellationToken ct)
+    {
+        var info = BrowserEngineProbe.Probe(refresh: true);
+        if (!info.HasWebView2)
+            throw new BrowserUnavailableException(string.Format(L("browser.engine.missing"), BrowserEngineProbe.InstallCommand));
+        try
+        {
+            return await WebView2Channel.CreateAsync(Dispatcher, new WebView2ChannelOptions
+            {
+                UserDataFolder = UserDataFolder, Width = _options.Width, Height = _options.Height, DisableGpu = disableGpu,
+                ExtraArguments = _options.ExtraArguments,
+            }, ct);
+        }
+        catch (WebView2RuntimeNotFoundException ex)
+        {
+            throw new BrowserUnavailableException(string.Format(L("browser.engine.missing"), BrowserEngineProbe.InstallCommand), ex);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Debug.WriteLine($"[browser] engine start failed: {ex}");
+            throw new BrowserUnavailableException(L("browser.engine.startFailed"), ex);
+        }
+    }
+
+    /// <summary>A window in the user's Chrome. A moment's grace for a worker Chrome is just waking; never a silent
+    /// fall back to WebView2, which has none of the user's logins.</summary>
+    private async Task<ChromeExtensionChannel> OpenChromeAsync(CancellationToken ct)
+    {
+        var bridge = ChromeBridge;
+        if (bridge == null || !await bridge.WaitForConnectionAsync(TimeSpan.FromSeconds(3), ct))
+            throw new BrowserUnavailableException(L("browser.chrome.notConnected"));
+        if (bridge.Paused) throw new BrowserUnavailableException(L("browser.chrome.paused"));
+        try { return await ChromeExtensionChannel.OpenAsync(bridge, _options.Width, _options.Height, ct); }
+        catch (Exception ex) when (ex is CdpException or TimeoutException)
+        {
+            Debug.WriteLine($"[browser] Chrome window failed: {ex}");
+            throw new BrowserUnavailableException(string.Format(L("browser.chrome.openFailed"), ex.Message), ex);
+        }
     }
 
     /// <summary>A same-site redirect of an approved page (http → https, example.com → www.example.com) carries the
@@ -307,7 +346,13 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
         if (IsApprovedForChat(_activeChat, fromOrigin)) ApproveForChat(_activeChat, toOrigin);
     }
 
-    private bool NeedsSoftwareSwap() => _options.DisableGpu == null && !_channelGpuOff && LocalModelHoldsGpu();
+    private bool NeedsSoftwareSwap() =>
+        _channel is WebView2Channel && _options.DisableGpu == null && !_channelGpuOff && LocalModelHoldsGpu();
+
+    /// <summary>The live engine is not the one to use now: the Chrome switch moved, or (before a load, when the page is
+    /// being replaced anyway) a local model started holding the GPU.</summary>
+    private bool NeedsNewEngine(bool forNavigation) =>
+        UsesChrome != _channel is ChromeExtensionChannel || (forNavigation && NeedsSoftwareSwap());
 
     /// <summary>Close the page and the engine (browser_close, the pane's Close button, Dev Preview switched off).
     /// The next browser_open starts a fresh one.</summary>
@@ -355,12 +400,12 @@ public sealed class BrowserService : IAppShutdownHook, IDisposable
     public void ParkHost(IntPtr hwnd)
     {
         if (_wantedHost == hwnd) _wantedHost = IntPtr.Zero;
-        try { _channel?.Park(hwnd); } catch { }
+        try { (_channel as WebView2Channel)?.Park(hwnd); } catch { }
         RaiseStateChanged();
     }
 
     /// <summary>Which pane window shows the page now (IntPtr.Zero = none — off-screen).</summary>
-    public IntPtr ActiveHost => _channel is { IsParked: false } c ? c.HostWindow : IntPtr.Zero;
+    public IntPtr ActiveHost => _channel is WebView2Channel { IsParked: false } c ? c.HostWindow : IntPtr.Zero;
 
     // ─────────────────────────── GPU ───────────────────────────
 
