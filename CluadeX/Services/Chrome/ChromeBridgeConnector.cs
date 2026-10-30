@@ -26,12 +26,13 @@ public sealed class ChromeBridgeConnector : IAppShutdownHook
     public bool ChromeFound => BrowserEngineProbe.Probe().ChromePath != null;
 
     /// <summary>On: install and open the pipe, and only then send the tools to Chrome. Off: back to the built-in
-    /// browser, with the host removed.</summary>
+    /// browser, with the agent's window closed and the host removed.</summary>
     public void SetEnabled(bool on)
     {
         if (on) Open();
         _settings.UpdateSettings(s => s.BrowserEngine = on ? BrowserService.ChromeEngine : "auto");
         if (on) return;
+        _bridge.Post("close");   // a lost connection only detaches: the extension keeps the window for the user
         _bridge.Stop();
         ChromeBridgeInstall.Uninstall(_settings.DataRoot);
     }

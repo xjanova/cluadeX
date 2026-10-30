@@ -261,7 +261,7 @@ internal static class Program
                 await Case("L3", L3);
                 await Case("L4", L4);
                 await Case("L5", L5);
-                await Case("L6", L6);
+                await Case("L6", () => L6(provider));
 
                 await Case("Z1", Z1);
                 await Case("Z0", Z0);
@@ -778,18 +778,23 @@ internal static class Program
         Check("L5c", "and the sandbox rule", rules.GetInt32() == 0, rules.ToString());
     }
 
-    /// <summary>The switch in Settings, with Chrome already open and the extension already in it.</summary>
-    static async Task L6()
+    /// <summary>The switch in Settings, with Chrome already open, the extension already in it and a page on screen.</summary>
+    static async Task L6(IServiceProvider provider)
     {
-        Bridge.Stop();
-        ChromeBridgeInstall.Uninstall(Settings.DataRoot);
-        Check("L6a", "switching off leaves no relay behind", await WaitUntil(() => RelayProcesses().Count == 0, 5000), string.Join(" | ", RelayProcesses()));
+        var opened = await T("browser_open", ("url", BaseUrl + "/index.html"));
+        int windows = await WindowCount();
+        provider.GetRequiredService<ChromeBridgeConnector>().SetEnabled(false);
+        Check("L6a", "switching off closes the agent's window in Chrome", opened.Success && await WaitUntilAsync(async () => await WindowCount() == windows - 1, 3000), $"{windows} → {await WindowCount()}");
+        Check("L6b", "and leaves no relay behind", await WaitUntil(() => RelayProcesses().Count == 0, 5000), string.Join(" | ", RelayProcesses()));
+
+        // Back on by hand: the connector would name this harness as the host.
+        Settings.UpdateSettings(s => s.BrowserEngine = BrowserService.ChromeEngine);
         var refused = await T("browser_open", ("url", BaseUrl + "/index.html"));
-        Check("L6b", "and the tools refuse in words", !refused.Success && Seen(refused).Contains(LocalizedResources.Instance["browser.chrome.notConnected"]), Seen(refused));
+        Check("L6c", "with the host gone the tools refuse in words", !refused.Success && Seen(refused).Contains(LocalizedResources.Instance["browser.chrome.notConnected"]), Seen(refused));
 
         ChromeBridgeInstall.Install(Settings.DataRoot, HostExe);
         Bridge.Start();
-        Check("L6c", "switching on again finds the extension within its next try, a minute at most", await Bridge.WaitForConnectionAsync(TimeSpan.FromSeconds(70), CancellationToken.None));
+        Check("L6d", "switching on again finds the extension within its next try, a minute at most", await Bridge.WaitForConnectionAsync(TimeSpan.FromSeconds(70), CancellationToken.None));
     }
 
     /// <summary>The hooks of the app's exit, in the order the app runs them.</summary>
