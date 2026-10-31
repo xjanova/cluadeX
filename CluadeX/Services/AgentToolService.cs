@@ -5093,16 +5093,31 @@ public class AgentToolService : IDisposable
         catch (OperationCanceledException) { return null; }
     }
 
+    /// <summary>ask_user's options: comma-separated text, or the JSON array many models send whatever the schema says
+    /// (split on commas it became buttons reading <c>["a"</c> and <c>"b"]</c>).</summary>
+    public static List<string> ParseAskOptions(string options)
+    {
+        string text = options?.Trim() ?? "";
+        if (text.StartsWith('['))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(text);
+                return doc.RootElement.EnumerateArray().Where(e => e.ValueKind == System.Text.Json.JsonValueKind.String)
+                    .Select(e => e.GetString()!.Trim()).Where(o => o.Length > 0).ToList();
+            }
+            catch (System.Text.Json.JsonException) { }
+        }
+        return text.Split(',').Select(o => o.Trim()).Where(o => o.Length > 0).ToList();
+    }
+
     private async Task<ToolResult> ExecuteAskUserAsync(ToolCall call)
     {
         string question = call.GetArg("question", call.GetArg("q"));
         if (string.IsNullOrEmpty(question))
             return Fail(call, "Missing 'question' argument");
 
-        string optionsStr = call.GetArg("options", "");
-        var options = string.IsNullOrWhiteSpace(optionsStr)
-            ? new List<string>()
-            : optionsStr.Split(',').Select(o => o.Trim()).Where(o => !string.IsNullOrEmpty(o)).ToList();
+        var options = ParseAskOptions(call.GetArg("options", ""));
 
         if (OnAskUserQuestion == null)
             return Fail(call, "AskUser not available — no UI handler connected");

@@ -50,6 +50,8 @@ public partial class CodeAgentService
         "read_file", "list_files", "search_content", "search_files", "codebase_search",
         "find_symbol", "list_symbols", "edit_file", "multi_edit", "write_file",
         "run_command", "run_build", "run_tests",
+        // The system prompt tells every model to ask with ask_user: trimmed away, a small-ctx model could not reach the card.
+        "ask_user",
         // Git finishing tools — small-ctx local models otherwise only have run_command for git, and
         // weak models tend to shell-chain `git add && git commit && git merge` with POSIX quoting that
         // breaks on Windows. The dedicated tools are reliable (temp-file commit msg, validated branch).
@@ -2117,7 +2119,9 @@ public partial class CodeAgentService
             ? Tools.ChatToolBridge.Register(AgentRunScope.Current, (call, c) => _agentToolService.ExecuteToolAsync(call, c), folder, ct,
                 // Claude Dev asks before an MCP tool it was not given (its --permission-prompt-tool): CluadeX's MCP gate
                 // answers — the user's rules, "Allow in this chat", or the permission row in this chat.
-                delegated == AiProviderType.ClaudeDev ? _agentToolService.AuthorizeCliMcpCallAsync : null)
+                delegated == AiProviderType.ClaudeDev ? _agentToolService.AuthorizeCliMcpCallAsync : null,
+                // A question from any CLI opens the same card as ask_user on the native loop.
+                _agentToolService.AskUserAsync)
             : null;
         if (cliAgent)
         {

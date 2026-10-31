@@ -213,6 +213,7 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
               "This chat is read-only: you may read files and search, but CluadeX's safety hook refuses writes and commands — " +
               "propose file edits as diffs/snippets for the app to apply. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
+        wrapper += " " + Tools.ChatToolBridge.AskHint;
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.AntigravityDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
 
