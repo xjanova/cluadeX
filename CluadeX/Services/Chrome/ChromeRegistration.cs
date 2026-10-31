@@ -17,6 +17,11 @@ public static class ChromeRegistration
         services.AddSingleton<ClaudeInChromeLauncher>();
         services.AddSingleton<Mcp.IMcpLaunchResolver>(sp => sp.GetRequiredService<ClaudeInChromeLauncher>());
         services.AddSingleton<ClaudeInChromeConnector>();
+
+        // CluadeX's own connection to Chrome: its extension and pipe, for the browser_* tools.
+        services.AddSingleton(_ => new ChromeBridgeServer(ChromeBridgeInstall.PipeName));
+        services.AddSingleton<ChromeBridgeConnector>();
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<ChromeBridgeConnector>());
         return services;
     }
 }

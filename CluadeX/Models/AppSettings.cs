@@ -78,7 +78,8 @@ public class AppSettings
     public List<string> AllowedProjectFolders { get; set; } = new();
 
     // ─── Dev Preview: background processes + built-in browser (feature.devPreview) ───
-    /// <summary>Built-in browser engine: "auto" (WebView2, else an installed Edge/Chrome over CDP), "webview2" or "cdp".</summary>
+    /// <summary>Browser engine of the browser_* tools: "auto" or "webview2" (the built-in browser), or "chrome" (the
+    /// user's real Chrome through CluadeX's own extension, Settings ▸ Agent ▸ Your Chrome).</summary>
     public string BrowserEngine { get; set; } = "auto";
     /// <summary>Longest edge, in pixels, of a screenshot sent to a model (also capped at ~1.15 MP).</summary>
     public int BrowserScreenshotMaxEdge { get; set; } = 1568;

@@ -62,18 +62,43 @@ internal static partial class Program
         }]);
         int before = Vm.Messages.Count(m => m.Role == MessageRole.ToolAction);
         Edit("Services/Cloud/CloudSyncEngine.cs", 10, 0); Edit("Services/Cloud/CloudSyncEngine.cs", 10, 2); Edit("Services/Cloud/CloudSyncEngine.cs", 8, 5);
-        Edit("Services/Cloud/CloudSyncTypes.cs", 13, 0);
-        Edit("Services/Cloud/CloudSyncTypes.cs", 1, 0, ok: false);
         await Settle();
         var edits = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).Skip(before).ToList();
         Check("G3b three edits to one file are ONE row: +28 −7, every change in its diff, '×3' on the target",
-            edits.Count == 3 && edits[0].EditCount == 3 && edits[0].DiffAdded == 28 && edits[0].DiffRemoved == 7
+            edits.Count == 1 && edits[0].EditCount == 3 && edits[0].DiffAdded == 28 && edits[0].DiffRemoved == 7
             && edits[0].DiffLines!.Count(l => l.Kind != EditDiffKind.Hunk) == 35 && edits[0].DiffLines!.Count(l => l.Kind == EditDiffKind.Hunk) == 2
-            && edits[0].ToolTarget!.EndsWith("×3") && edits[0].DiffPairs!.Count > 0,
+            && edits[0].ToolTarget!.EndsWith("×3") && edits[0].DiffPairs!.Count > 0 && edits[0].ToolVerb != L("chat.tools.editGroupVerb").Replace("{0}", "1"),
             string.Join(" | ", edits.Select(r => $"{r.ToolTarget}:{r.EditCount}:+{r.DiffAdded}-{r.DiffRemoved}:{r.DiffLines?.Count}")));
-        Check("G3c an edit to another file starts its own row; a failed edit stays on its own",
-            edits.Count == 3 && edits[1].EditCount == 1 && edits[1].DiffAdded == 13 && !edits[2].ToolSuccess,
-            string.Join(" | ", edits.Select(r => $"{r.ToolTarget}:{r.ToolSuccess}")));
+        // G3c — edits to other files join the same row (owner 2026-10-31: "การแก้ไฟล์ก็ควรรวบเป็นหมวดไว้ด้วย"): it says how many
+        // files, the +/− add up, each change in its diff is headed by its file, and opened, each edit is a box.
+        Edit("Services/Cloud/CloudSyncTypes.cs", 13, 0);
+        var sayRow = new ChatMessage { Role = MessageRole.Assistant, Content = "Now the wiring." };
+        Vm.Messages.Add(sayRow);
+        Edit("Services/Cloud/CloudSyncWire.cs", 2, 1);
+        await Settle();
+        edits = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).Skip(before).ToList();
+        Check("G3c edits to several files in a row are ONE row that says how many files",
+            edits.Count == 1 && edits[0].EditCount == 5 && edits[0].DiffAdded == 43 && edits[0].DiffRemoved == 8
+            && edits[0].ToolVerb == string.Format(L("chat.tools.editGroupVerb"), 3),
+            string.Join(" | ", edits.Select(r => $"{r.ToolVerb}:{r.ToolTarget}:{r.EditCount}:+{r.DiffAdded}-{r.DiffRemoved}")));
+        Check("G3c its target lists the files, a repeated one counted",
+            edits.Count == 1 && edits[0].ToolTarget!.Contains(", ") && edits[0].ToolTarget!.Contains("×3"), edits[0].ToolTarget);
+        Check("G3c its diff heads every other file's change with that file",
+            edits.Count == 1 && edits[0].DiffLines![0].Text == "── #1 · Services/Cloud/CloudSyncEngine.cs ──"
+            && edits[0].DiffLines!.Any(l => l.Kind == EditDiffKind.Hunk && l.Text.Contains("CloudSyncTypes.cs"))
+            && edits[0].DiffLines!.Any(l => l.Kind == EditDiffKind.Hunk && l.Text.Contains("CloudSyncWire.cs")),
+            string.Join(" | ", edits[0].DiffLines!.Where(l => l.Kind == EditDiffKind.Hunk).Select(l => l.Text)));
+        Check("G3c opened, each edit is a box and a short line between them is folded in with them",
+            edits.Count == 1 && edits[0].GroupSteps.Count(s => s.Kind == "edit_file") == 5 && edits[0].GroupSteps.Any(s => s.Kind == "narration") && sayRow.FoldedIntoBalloon,
+            string.Join(" | ", edits[0].GroupSteps.Select(s => $"{s.Kind}:{s.Target}")));
+        edits[0].IsExpanded = true;
+        await Settle();
+        SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-edit-group-open.png"));
+        edits[0].IsExpanded = false;
+        Edit("Services/Cloud/CloudSyncTypes.cs", 1, 0, ok: false);
+        await Settle();
+        edits = Vm.Messages.Where(m => m.Role == MessageRole.ToolAction).Skip(before).ToList();
+        Check("G3c a failed edit stays on its own", edits.Count == 2 && !edits[1].ToolSuccess, string.Join(" | ", edits.Select(r => $"{r.ToolTarget}:{r.ToolSuccess}")));
         Check("G3d folded times add up: 1.5s + 1.7s = 3.2s, 6.0s + 7.0s = 13s, an unreadable one is dropped",
             ChatMessage.SumElapsed("1.5s", "1.7s") == "3.2s" && ChatMessage.SumElapsed("6.0s", "7.0s") == "13s" && ChatMessage.SumElapsed("1.5s", null) == "1.5s",
             $"{ChatMessage.SumElapsed("1.5s", "1.7s")} {ChatMessage.SumElapsed("6.0s", "7.0s")}");

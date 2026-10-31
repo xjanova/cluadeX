@@ -468,7 +468,7 @@
                                     <!-- The girl: bottom-aligned with the card, leaning in over its left edge (not in a theme
                                          whose Fx.Flourish is Collapsed — Classic) -->
                                     <Grid Visibility="{DynamicResource Fx.Flourish}" Panel.ZIndex="2" VerticalAlignment="Bottom">
-                                    <Image Source="{Binding QuestionGirlImage}" Height="210" VerticalAlignment="Bottom" Margin="0,-18,-16,-6"
+                                    <Image views:AmbientAnimation.WhileVisible="True" Source="{Binding QuestionGirlImage}" Height="210" VerticalAlignment="Bottom" Margin="0,-18,-16,-6"
                                            RenderOptions.BitmapScalingMode="HighQuality" IsHitTestVisible="False" Panel.ZIndex="2"
                                            RenderTransformOrigin="0.5,1">
                                         <Image.Style>
@@ -492,8 +492,8 @@
                                         </Image.RenderTransform>
                                         <Image.Triggers>
                                             <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                <BeginStoryboard>
-                                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                <BeginStoryboard x:Name="AmbientChat1">
+                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30" AutoReverse="True">
                                                         <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(RotateTransform.Angle)"
                                                                          From="-1.2" To="1.2" Duration="0:0:2.6">
                                                             <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
@@ -1094,7 +1094,7 @@
                                     <Grid>
                                         <!-- the sweep: a soft band of light gliding left → right over the live pill -->
                                         <Grid Visibility="{DynamicResource Fx.Flourish}" IsHitTestVisible="False">
-                                        <Rectangle IsHitTestVisible="False" Margin="-10,-4,-12,-4"
+                                        <Rectangle views:AmbientAnimation.WhileVisible="True" IsHitTestVisible="False" Margin="-10,-4,-12,-4"
                                                    Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                             <Rectangle.Fill>
                                                 <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
@@ -1108,8 +1108,8 @@
                                             </Rectangle.Fill>
                                             <Rectangle.Triggers>
                                                 <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                    <BeginStoryboard>
-                                                        <Storyboard RepeatBehavior="Forever">
+                                                    <BeginStoryboard x:Name="AmbientChat2">
+                                                        <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
                                                             <DoubleAnimation Storyboard.TargetProperty="Fill.RelativeTransform.(TranslateTransform.X)"
                                                                              From="-1" To="1" Duration="0:0:1.8">
                                                                 <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
@@ -1122,7 +1122,7 @@
                                         </Grid>
                                         <StackPanel Orientation="Horizontal">
                                             <!-- live: three dots bouncing one after another -->
-                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0"
+                                            <StackPanel views:AmbientAnimation.WhileVisible="True" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0"
                                                         Visibility="{Binding IsStreaming, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                                 <StackPanel.Resources>
                                                     <Style TargetType="Ellipse">
@@ -1138,8 +1138,8 @@
                                                 <Ellipse x:Name="Dot3"/>
                                                 <StackPanel.Triggers>
                                                     <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                        <BeginStoryboard>
-                                                            <Storyboard RepeatBehavior="Forever" Duration="0:0:1.1">
+                                                        <BeginStoryboard x:Name="AmbientChat3">
+                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30" Duration="0:0:1.1">
                                                                 <DoubleAnimation Storyboard.TargetName="Dot1" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
                                                                                  From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0">
                                                                     <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
@@ -1498,7 +1498,7 @@
                                                 Visibility="{Binding IsLive, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}">
                                             <Grid>
                                                 <Grid Visibility="{DynamicResource Fx.Flourish}" IsHitTestVisible="False" Margin="-10,-5">
-                                                    <Rectangle>
+                                                    <Rectangle views:AmbientAnimation.WhileVisible="True">
                                                         <Rectangle.Fill>
                                                             <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
                                                                 <LinearGradientBrush.RelativeTransform><TranslateTransform X="-1"/></LinearGradientBrush.RelativeTransform>
@@ -1509,8 +1509,8 @@
                                                         </Rectangle.Fill>
                                                         <Rectangle.Triggers>
                                                             <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard RepeatBehavior="Forever">
+                                                                <BeginStoryboard x:Name="AmbientChat4">
+                                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
                                                                         <DoubleAnimation Storyboard.TargetProperty="Fill.RelativeTransform.(TranslateTransform.X)"
                                                                                          From="-1" To="1" Duration="0:0:1.8">
                                                                             <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
@@ -1522,7 +1522,7 @@
                                                     </Rectangle>
                                                 </Grid>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0">
+                                                    <StackPanel views:AmbientAnimation.WhileVisible="True" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0">
                                                         <StackPanel.Resources>
                                                             <Style TargetType="Ellipse">
                                                                 <Setter Property="Width" Value="5"/>
@@ -1537,8 +1537,8 @@
                                                         <Ellipse x:Name="LiveDot3"/>
                                                         <StackPanel.Triggers>
                                                             <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard RepeatBehavior="Forever" Duration="0:0:1.1">
+                                                                <BeginStoryboard x:Name="AmbientChat5">
+                                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30" Duration="0:0:1.1">
                                                                         <DoubleAnimation Storyboard.TargetName="LiveDot1" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
                                                                                          From="0" To="-4" Duration="0:0:0.28" AutoReverse="True" BeginTime="0:0:0"/>
                                                                         <DoubleAnimation Storyboard.TargetName="LiveDot2" Storyboard.TargetProperty="RenderTransform.(TranslateTransform.Y)"
@@ -1743,6 +1743,19 @@
                                                         ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
+                                                <!-- Go back to this point of the chat, here or in a new chat -->
+                                                <Button Content="{services:Loc chat.rewindHere}"
+                                                        Style="{StaticResource IconButton}"
+                                                        FontSize="11" Padding="6,2" Margin="2,0"
+                                                        ToolTip="{services:Loc chat.rewindHereTip}"
+                                                        Click="RewindMessage_Click"
+                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <Button Content="{services:Loc chat.forkHere}"
+                                                        Style="{StaticResource IconButton}"
+                                                        FontSize="11" Padding="6,2" Margin="2,0"
+                                                        ToolTip="{services:Loc chat.forkHereTip}"
+                                                        Click="ForkMessage_Click"
+                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                                 <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
                                                      retrying one re-ran the whole agent turn. -->
                                                 <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
@@ -2164,11 +2177,13 @@
                 </ListBox>
 
                 <!-- ═══ The plan, pinned to the top while the chat scrolls; branch chips jump between related chats ═══ -->
-                <Border x:Name="StickyPlanBar" VerticalAlignment="Top" Margin="22,8,30,0" Padding="14,9,12,9" CornerRadius="12"
-                        BorderThickness="1" BorderBrush="{DynamicResource Border.Subtle}"
+                <Border x:Name="StickyPlanBar" VerticalAlignment="Top" Margin="22,8,30,0" CornerRadius="12"
+                        BorderThickness="2" BorderBrush="{Binding StickyPlanCharacter.AccentBrush}"
                         Background="{DynamicResource Dialog.Background}" Effect="{DynamicResource Shadow.Dialog}"
                         MaxWidth="900" HorizontalAlignment="Stretch"
                         Visibility="{Binding HasStickyBar, Converter={StaticResource BoolVis}}">
+                    <!-- her colour washed over the theme's own surface, so the text stays the theme's to keep readable -->
+                    <Border Padding="12,9,12,9" CornerRadius="10" Background="{Binding StickyPlanCharacter.WashBrush}">
                     <StackPanel>
                         <Grid Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
                             <Grid.ColumnDefinitions>
@@ -2182,12 +2197,13 @@
                             <Button Grid.Column="4" Content="&#xE711;" FontFamily="Segoe MDL2 Assets" FontSize="10" Padding="6,3" Margin="4,0,0,0"
                                     Style="{StaticResource IconButton}" Command="{Binding DismissStickyPlanCommand}"
                                     ToolTip="{services:Loc chat.plan.closeTip}"/>
-                            <TextBlock Text="&#xE9D5;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{DynamicResource Status.Success}"
-                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="12.5">
+                            <!-- who is writing this plan: her portrait and name, the colour of the whole bar -->
+                            <ContentControl Content="{Binding StickyPlanCharacter}" ContentTemplate="{StaticResource CxCharTag}" Focusable="False"
+                                            VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="13">
                                 <Run Text="{Binding StickyPlanHeader, Mode=OneWay}" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}"/>
                                 <Run Text="  ·  " Foreground="{DynamicResource Text.Faint}"/>
-                                <Run Text="{Binding StickyPlanNow, Mode=OneWay}" Foreground="{DynamicResource Text.Secondary}"/>
+                                <Run Text="{Binding StickyPlanNow, Mode=OneWay}" Foreground="{DynamicResource Text.Primary}"/>
                             </TextBlock>
                             <Button Grid.Column="2" Content="&#xE8A7;" FontFamily="Segoe MDL2 Assets" FontSize="11" Padding="6,3" Margin="8,0,0,0"
                                     Style="{StaticResource IconButton}" Command="{Binding OpenPlanWindowCommand}"
@@ -2216,10 +2232,10 @@
                             </ToggleButton>
                         </Grid>
                         <!-- progress line -->
-                        <Grid Height="3" Margin="0,7,0,0" Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
-                            <Border CornerRadius="1.5" Background="{DynamicResource State.Fill.Faint}"/>
-                            <ProgressBar Minimum="0" Maximum="1" Value="{Binding StickyPlanProgress, Mode=OneWay}" Height="3"
-                                         BorderThickness="0" Background="Transparent" Foreground="{DynamicResource Status.Success}"/>
+                        <Grid Height="5" Margin="0,8,0,0" Visibility="{Binding HasStickyPlan, Converter={StaticResource BoolVis}}">
+                            <Border CornerRadius="2.5" Background="{DynamicResource State.Fill.Faint}"/>
+                            <ProgressBar Minimum="0" Maximum="1" Value="{Binding StickyPlanProgress, Mode=OneWay}" Height="5"
+                                         BorderThickness="0" Background="Transparent" Foreground="{Binding StickyPlanCharacter.AccentBrush}"/>
                         </Grid>
                         <!-- the whole plan, when expanded -->
                         <ItemsControl ItemsSource="{Binding StickyPlanItems}" Margin="2,8,0,0"
@@ -2240,7 +2256,7 @@
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsActive}" Value="True">
                                             <Setter TargetName="M" Property="Text" Value="&#xE768;"/>
-                                            <Setter TargetName="M" Property="Foreground" Value="{DynamicResource Accent.1}"/>
+                                            <Setter TargetName="M" Property="Foreground" Value="{Binding DataContext.StickyPlanCharacter.AccentBrush, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
                                             <Setter TargetName="T" Property="Foreground" Value="{DynamicResource Text.Primary}"/>
                                             <Setter TargetName="T" Property="FontWeight" Value="SemiBold"/>
                                         </DataTrigger>
@@ -2279,6 +2295,7 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </StackPanel>
+                    </Border>
                 </Border>
         </Grid>
 

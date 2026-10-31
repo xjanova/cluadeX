@@ -381,6 +381,18 @@ public partial class ChatView : UserControl
     // ─── Retry — re-run the question THIS failed reply answered ───
     // (It used to resend the latest user message whatever bubble was hovered, as a duplicate.)
 
+    private void RewindMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm && sender is FrameworkElement { DataContext: ChatMessage at })
+            vm.RewindToMessageCommand.Execute(at);
+    }
+
+    private void ForkMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is ChatViewModel vm && sender is FrameworkElement { DataContext: ChatMessage at })
+            vm.ForkFromMessageCommand.Execute(at);
+    }
+
     private void RetryMessage_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is ChatViewModel vm && sender is FrameworkElement fe && fe.DataContext is ChatMessage failed

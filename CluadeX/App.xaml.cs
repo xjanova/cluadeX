@@ -184,6 +184,9 @@ public partial class App : Application
                     // Claude in Chrome switched on earlier but its entry is gone (a fresh mcp_servers.json): put it back.
                     try { await _serviceProvider.GetRequiredService<Services.Chrome.ClaudeInChromeConnector>().EnsureAsync(); }
                     catch (Exception ex) { dbg?.Warn("Chrome", "Claude in Chrome could not be restored", ex); }
+                    // CluadeX's own Chrome connection: files and host written again, pipe open.
+                    try { _serviceProvider.GetRequiredService<Services.Chrome.ChromeBridgeConnector>().Ensure(); }
+                    catch (Exception ex) { dbg?.Warn("Chrome", "the Chrome connection could not start", ex); }
                     dbg?.Info("MCP", $"McpServerManager initialised · brain={mcpManager.BrainStatusText}");
 
                     if (mcpManager.ConfigLoadFailed)

@@ -21,6 +21,26 @@ internal static class PreviewKeys
             ["en"] = "The built-in browser could not start. Details are in the Debug Log.",
             ["th"] = "เปิดเบราว์เซอร์ในตัวไม่สำเร็จ ดูรายละเอียดใน Debug Log",
         },
+        ["browser.chrome.notConnected"] = new()
+        {
+            ["en"] = "Your Chrome is not connected. Open Chrome. If the CluadeX Bridge extension is not in it yet, add it from Settings ▸ Agent ▸ Your Chrome.",
+            ["th"] = "Chrome ของคุณยังไม่ได้เชื่อมต่อ เปิด Chrome ก่อน ถ้ายังไม่ได้ลง extension CluadeX Bridge ให้เพิ่มจาก การตั้งค่า ▸ เอเจนต์ ▸ Chrome ของคุณ",
+        },
+        ["browser.chrome.paused"] = new()
+        {
+            ["en"] = "CluadeX is paused in Chrome. Ask the user to click the CluadeX icon in Chrome's toolbar when it may work there again.",
+            ["th"] = "CluadeX ถูกหยุดไว้ใน Chrome ให้ขอผู้ใช้กดไอคอน CluadeX บนแถบเครื่องมือของ Chrome เมื่ออนุญาตให้ทำงานต่อ",
+        },
+        ["browser.chrome.openFailed"] = new()
+        {
+            ["en"] = "Chrome could not open a window for CluadeX: {0}",
+            ["th"] = "Chrome เปิดหน้าต่างให้ CluadeX ไม่สำเร็จ: {0}",
+        },
+        ["browser.open.realChrome"] = new()
+        {
+            ["en"] = "This is the user's real Chrome, in a window of its own, with their logins. Do only what they asked here.",
+            ["th"] = "นี่คือ Chrome จริงของผู้ใช้ เปิดในหน้าต่างแยก และใช้การล็อกอินของผู้ใช้ ทำเฉพาะสิ่งที่ผู้ใช้สั่งเท่านั้น",
+        },
         // ═══════ Addresses ═══════
         ["browser.url.empty"] = new() { ["en"] = "No address given — pass url.", ["th"] = "ไม่ได้ระบุที่อยู่ — ใส่ url" },
         ["browser.url.invalid"] = new() { ["en"] = "\"{0}\" is not a valid address.", ["th"] = "\"{0}\" ไม่ใช่ที่อยู่ที่ถูกต้อง" },

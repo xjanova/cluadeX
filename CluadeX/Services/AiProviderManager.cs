@@ -21,8 +21,12 @@ public class AiProviderManager : IDisposable
     private readonly DebugLogService? _log;
     private Task? _startupInit;
 
-    public IAiProvider ActiveProvider => _activeProvider;
-    public AiProviderType ActiveProviderType => _settingsService.Settings.ActiveProvider;
+    /// <summary>What answers the code asking: a run keeps the provider it started on (AgentRunScope.Provider), whatever
+    /// the owner picks for the chat on screen meanwhile; everywhere else, the provider picked.</summary>
+    public IAiProvider ActiveProvider => AgentRunScope.Current?.Provider ?? _activeProvider;
+    public AiProviderType ActiveProviderType => AgentRunScope.Current?.ProviderType ?? _settingsService.Settings.ActiveProvider;
+    /// <summary>The provider picked, also from inside a run: what the model box and the usage strip show.</summary>
+    public AiProviderType PickedProviderType => _settingsService.Settings.ActiveProvider;
 
     public event Action<IAiProvider>? OnProviderChanged;
     public event Action<string>? OnStatusChanged;
