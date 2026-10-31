@@ -128,8 +128,10 @@ public sealed class PlanWindowViewModel : ViewModelBase
 
         int done = rows.Count(r => r.IsDone);
         var active = rows.FirstOrDefault(r => r.IsActive);
+        // The step the plan is on; the agent's own step count only when it has no plan.
+        int onStep = (active ?? rows.FirstOrDefault(r => r.IsPending))?.Number ?? snap.Step;
         Status = snap.Running
-            ? string.Format(Loc("plan.status.running"), snap.Step, done, rows.Count(r => !r.IsQueued)) + (active != null ? " — " + active.Text : "")
+            ? string.Format(Loc("plan.status.running"), onStep, done, rows.Count(r => !r.IsQueued)) + (active != null ? " — " + active.Text : "")
             : rows.Count == 0 ? Loc("plan.status.empty") : string.Format(Loc("plan.status.idle"), done, rows.Count(r => !r.IsQueued));
 
         string sig = string.Join("|", rows.Select(r => r.State + r.Text)) + "#" + string.Join("|", steps.Select(s => s.Id + s.Files.Count));
