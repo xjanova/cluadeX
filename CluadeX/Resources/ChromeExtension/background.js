@@ -5,6 +5,7 @@
 
 const HOST = 'com.xmanstudio.cluadex_chrome';
 const PAUSED_TEXT = 'Paused from the CluadeX icon in Chrome.';
+const AGENT_LABEL = 'CluadeX agent';
 
 // Exactly what CluadeX's browser tools send. This is the user's real profile: reading cookies and clearing a site's
 // data are left out on purpose, so a bug or a hijacked host still cannot reach them.
@@ -43,13 +44,22 @@ function send(message) {
 }
 
 function refreshBadge() {
-  chrome.action.setBadgeText({ text: paused ? 'II' : linked ? 'ON' : '' });
-  chrome.action.setBadgeBackgroundColor({ color: paused ? '#8a8a8a' : '#1f9d55' });
+  chrome.action.setBadgeText({ text: paused ? 'II' : linked ? 'CX' : '' });
+  chrome.action.setBadgeBackgroundColor({ color: paused ? '#8a8a8a' : '#7c3aed' });
   chrome.action.setTitle({
-    title: paused ? 'CluadeX is paused. Click to let it work again.'
-      : linked ? 'CluadeX is connected. Click to pause it.'
-        : 'CluadeX Bridge: waiting for the CluadeX app',
+    title: paused ? 'CluadeX (xmanstudio, not Claude in Chrome) is paused. Click to let it work again.'
+      : linked ? 'CluadeX (xmanstudio, not Claude in Chrome) is connected. Click to pause it.'
+        : 'CluadeX Bridge by xmanstudio: waiting for the CluadeX app',
   });
+}
+
+// The label the user sees on the agent's window. Claude in Chrome also runs in a tab group, so the two must not look
+// alike. A label is a nicety: a tab that cannot be grouped still works.
+async function labelAgentTab(tabId, windowId) {
+  try {
+    const groupId = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId } });
+    await chrome.tabGroups.update(groupId, { title: AGENT_LABEL, color: 'purple' });
+  } catch { /* the user dragged or closed it first */ }
 }
 
 async function connect() {
@@ -92,6 +102,8 @@ async function detachAgent() {
   await Promise.all([chrome.storage.session.remove('agent'), refusePopups(null)]);
   if (left) {
     try { await chrome.debugger.detach({ tabId: left.tabId }); } catch { /* already gone */ }
+    // The window can stay open for the user (a pause); the label must not go on saying the agent is in it.
+    await chrome.tabs.ungroup(left.tabId).catch(() => {});
   }
   return left;
 }
@@ -123,7 +135,7 @@ const COMMANDS = {
       throw e;
     }
     agent = { tabId, windowId: win.id };
-    await Promise.all([chrome.storage.session.set({ agent }), refusePopups(tabId)]);
+    await Promise.all([chrome.storage.session.set({ agent }), refusePopups(tabId), labelAgentTab(tabId, win.id)]);
     return agent;
   },
 

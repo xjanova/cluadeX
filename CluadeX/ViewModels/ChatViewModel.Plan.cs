@@ -14,6 +14,9 @@ public partial class ChatViewModel
 {
     /// <summary>The last plan each chat's agent wrote (a finished run's plan stays readable). UI thread only.</summary>
     private readonly Dictionary<string, List<TodoItem>> _lastPlans = new();
+    /// <summary>Who last wrote each chat's plan. Not the chat's model now: a provider switched after the plan was written
+    /// must not repaint it as the new model's work (owner 2026-10-31: the bar has the colour of the model writing it).</summary>
+    private readonly Dictionary<string, ChatCharacter> _planAuthors = new();
     private readonly Dictionary<string, Views.PlanWindow> _planWindows = new();
 
     /// <summary>A chat's plan changed (session id). Raised on the UI thread.</summary>
@@ -27,6 +30,7 @@ public partial class ChatViewModel
         string? id = run?.Session.Id ?? CurrentSession?.Id;
         if (id == null) return;
         _lastPlans[id] = items.Select(t => new TodoItem { Content = t.Content, Status = t.Status, CreatedAt = t.CreatedAt }).ToList();
+        _planAuthors[id] = CharacterForBox(run);
         PlanChanged?.Invoke(id);
         if (id == CurrentSession?.Id) RefreshStickyPlan();
     }
@@ -78,6 +82,10 @@ public partial class ChatViewModel
     private double _stickyPlanProgress;
     /// <summary>0..1, for the bar's progress line.</summary>
     public double StickyPlanProgress { get => _stickyPlanProgress; private set => SetProperty(ref _stickyPlanProgress, value); }
+
+    /// <summary>The model writing the plan on screen, whose colour and name the bar wears; the chat's model until one has.</summary>
+    public ChatCharacter StickyPlanCharacter =>
+        CurrentSession != null && _planAuthors.TryGetValue(CurrentSession.Id, out var who) ? who : ActiveCharacter;
 
     /// <summary>Shown while the plan has work left and the owner has not closed it: it goes by itself once every item is
     /// done, and ✕ closes it mid-way until the agent writes a different plan (owner 2026-10-17).</summary>
@@ -155,6 +163,7 @@ public partial class ChatViewModel
                 links.Add(new BranchLink(b.Child, LocF("chat.plan.branchChild", b.Step), TitleOf(b.Child), false));
             StickyBranches = links;
         }
+        OnPropertyChanged(nameof(StickyPlanCharacter));
         OnPropertyChanged(nameof(HasStickyPlan));
         OnPropertyChanged(nameof(HasStickyBranches));
         OnPropertyChanged(nameof(HasStickyBar));

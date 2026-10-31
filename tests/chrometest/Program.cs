@@ -29,6 +29,9 @@ namespace ChromeTest;
 /// </summary>
 internal static class Program
 {
+    /// <summary>The Settings row, kept from S1 for what it must do once Chrome has connected.</summary>
+    static CluadeX.ViewModels.SettingsViewModel? SettingsVm;
+
     const string HostRules = "MAP *.ext.test 127.0.0.1";
 
     static int Pass, Fail;
@@ -333,11 +336,14 @@ internal static class Program
 
         vm.ChromeBridgeOn = false;
         Check("S1a", "off: the tools go back to the built-in browser and the host is gone",
-            !connector.Enabled && !ChromeBridgeInstall.IsRegistered && !Browser.UsesChrome && !vm.ChromeBridgeNeedsExtension && vm.ChromeBridgeStatus == Text("chrome.status.off"), vm.ChromeBridgeStatus);
+            !connector.Enabled && !ChromeBridgeInstall.IsRegistered && !Browser.UsesChrome && vm.ChromeBridgeNeedsExtension && !vm.ChromeBridgeGuideVisible && vm.ChromeBridgeStatus == Text("chrome.status.off"), vm.ChromeBridgeStatus);
         vm.ChromeBridgeOn = true;
         Check("S1b", "on: the host is registered and the setting holds",
             connector.Enabled && ChromeBridgeInstall.IsRegistered && Browser.UsesChrome && Directory.Exists(connector.ExtensionFolder), connector.ExtensionFolder);
         Check("S1c", "and with nothing connected the row says so and offers the one step left", vm.ChromeBridgeNeedsExtension && vm.ChromeBridgeStatus == Text("chromeBridge.status.waiting"), vm.ChromeBridgeStatus);
+        vm.ChromeBridgeGuideOpen = true;
+        Check("S1c2", "the steps stay up through a status change, with the folder to paste", vm.ChromeBridgeGuideVisible && vm.ChromeBridgeExtensionFolder == connector.ExtensionFolder, vm.ChromeBridgeExtensionFolder);
+        SettingsVm = vm;
         vm.ChromeBridgeOn = true;
         Check("S1d", "pressing it twice changes nothing", connector.Enabled && ChromeBridgeInstall.IsRegistered);
         vm.ChromeBridgeOn = false;
@@ -346,9 +352,9 @@ internal static class Program
         Bridge.Stop();
 
         string xaml = File.ReadAllText(FindUp("CluadeX", "Views", "SettingsView.xaml"));
-        foreach (string name in new[] { "ChromeBridgeOn", "ChromeBridgeStatus", "ChromeBridgeNeedsExtension", "AddChromeExtensionCommand" })
+        foreach (string name in new[] { "ChromeBridgeOn", "ChromeBridgeStatus", "ChromeBridgeNeedsExtension", "AddChromeExtensionCommand", "ChromeBridgeGuideVisible", "ChromeBridgeExtensionFolder", "CopyChromeExtensionFolderCommand" })
             Check("S1f." + name, "the row binds to what the view model has", xaml.Contains("{Binding " + name) && typeof(CluadeX.ViewModels.SettingsViewModel).GetProperty(name) != null);
-        foreach (string key in new[] { "settings.chromeBridge", "settings.chromeBridgeDesc", "settings.chromeBridgeAdd", "chromeBridge.status.waiting", "chromeBridge.status.connected", "chromeBridge.status.paused", "chromeBridge.status.noChrome", "chromeBridge.status.steps", "browser.chrome.notConnected", "browser.chrome.paused", "browser.chrome.openFailed", "browser.open.realChrome" })
+        foreach (string key in new[] { "chromeBridge.guide.title", "chromeBridge.guide.step1", "chromeBridge.guide.step2", "chromeBridge.guide.step3", "chromeBridge.guide.copy", "chromeBridge.guide.keep", "settings.chromeBridge", "settings.chromeBridgeDesc", "settings.chromeBridgeAdd", "chromeBridge.status.waiting", "chromeBridge.status.connected", "chromeBridge.status.paused", "chromeBridge.status.noChrome", "browser.chrome.notConnected", "browser.chrome.paused", "browser.chrome.openFailed", "browser.open.realChrome" })
             Check("S1g." + key, "text exists", Text(key) != key);
         await Task.CompletedTask;
     }
@@ -384,6 +390,7 @@ internal static class Program
         bool up = await Bridge.WaitForConnectionAsync(TimeSpan.FromSeconds(20), CancellationToken.None);
         Check("C1b", "the extension reached CluadeX through the native host, by itself", up, "last error: " + Bridge.LastError);
         if (!up) throw new InvalidOperationException("no connection: nothing further can run");
+        Check("C1b2", "the steps close by themselves once Chrome has connected", SettingsVm is { ChromeBridgeGuideVisible: false, ChromeBridgeNeedsExtension: false }, $"{SettingsVm?.ChromeBridgeGuideVisible}");
         Check("C1c", "hello carries the version and Chrome's user agent",
             Bridge.ExtensionVersion == ChromeBridgeInstall.BundledVersion && Bridge.UserAgent?.Contains("Chrome/") == true, $"{Bridge.ExtensionVersion} / {Bridge.UserAgent}");
         Check("C1d", "CluadeX.exe is the relay", RelayProcesses().Count == 1, string.Join(" | ", RelayProcesses()));
@@ -411,6 +418,10 @@ internal static class Program
         var win = (await Windows()).EnumerateArray().First(w => w.GetProperty("id").GetInt32() == agent.GetProperty("windowId").GetInt32());
         Check("T1e", "and left it unfocused: the user keeps typing where they were", !win.GetProperty("focused").GetBoolean(), win.ToString());
         Check("T1f", "the debugger is on the agent's tab and no other", (await AttachedTabs()).SequenceEqual(new[] { agent.GetProperty("tabId").GetInt32() }), string.Join(",", await AttachedTabs()));
+        var group = await Driver.EvalAsync("chrome.tabs.get(agent.tabId).then(t => chrome.tabGroups.get(t.groupId)).then(g => ({title: g.title, color: g.color}))");
+        Check("T1g", "the window says whose it is: a tab group labelled CluadeX, not Claude's", group.GetProperty("title").GetString() == "CluadeX agent" && group.GetProperty("color").GetString() == "purple", group.ToString());
+        string name = (await Driver.EvalAsync("chrome.runtime.getManifest().name")).GetString() ?? "";
+        Check("T1h", "and Chrome's debugging bar names xmanstudio's extension", name.Contains("CluadeX") && name.Contains("xmanstudio"), name);
     }
 
     static async Task T2()
@@ -669,6 +680,8 @@ internal static class Program
         Check("R1a", "the icon pauses CluadeX, and the app hears of it", paused);
         Check("R1b", "the debugger lets go at once", await WaitUntilAsync(async () => (await AttachedTabs()).Length == 0, 2000), string.Join(",", await AttachedTabs()));
         Check("R1c", "what the agent was showing stays open", await WindowCount() == windows);
+        var labelled = await Driver.EvalAsync("chrome.tabGroups.query({title: 'CluadeX agent'}).then(l => l.length)");
+        Check("R1c2", "and the CluadeX label goes: the agent is no longer in that window", labelled.GetInt32() == 0, labelled.ToString());
         bool told = await WaitUntil(() => { lock (Notices) return Notices.Any(n => n.Kind == BrowserNoticeKind.BrowserExited); }, 3000);
         Check("R1d", "the agent is told who stopped it", told);
         var r = await T("browser_open", ("url", BaseUrl + "/index.html"));

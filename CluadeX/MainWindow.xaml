@@ -537,14 +537,14 @@
                             <StackPanel Grid.Row="0" Margin="0,12,0,8" HorizontalAlignment="Center">
                                 <Grid Width="36" Height="36">
                                     <!-- Halo with conic-gradient feel via radial -->
-                                    <Ellipse Width="48" Height="48" Margin="-6" Opacity="0.55"
+                                    <Ellipse views:AmbientAnimation.WhileActive="True" Width="48" Height="48" Margin="-6" Opacity="0.55"
                                              Fill="{DynamicResource ActivityBar.Logo.Halo}">
                                         <Ellipse.Effect><BlurEffect Radius="8"/></Ellipse.Effect>
                                         <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
                                         <Ellipse.RenderTransform><RotateTransform x:Name="LogoHalo"/></Ellipse.RenderTransform>
                                         <Ellipse.Triggers>
                                             <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                                <BeginStoryboard>
+                                                <BeginStoryboard x:Name="AmbientLogoHalo">
                                                     <!-- 15 fps: a blurred ellipse redrawn at 60 fps kept the render thread
                                                          at ~30% of a core with the app idle (2026-10-14). -->
                                                     <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
@@ -961,7 +961,7 @@
                                                             <TextBlock Text="&#xE8BD;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{DynamicResource Text.Muted}"
                                                                        Visibility="{Binding HasRunStatus, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                                                             <!-- working -->
-                                                            <Path Stroke="{DynamicResource Accent.1}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                            <Path views:AmbientAnimation.WhileVisible="True" Stroke="{DynamicResource Accent.1}" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                                                   Data="M7,1 A6,6 0 1 1 1,7" RenderTransformOrigin="0.5,0.5">
                                                                 <Path.RenderTransform><RotateTransform/></Path.RenderTransform>
                                                                 <Path.Style>
@@ -976,8 +976,8 @@
                                                                 </Path.Style>
                                                                 <Path.Triggers>
                                                                     <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard RepeatBehavior="Forever">
+                                                                        <BeginStoryboard x:Name="AmbientMain1">
+                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
                                                                                 <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1.1"/>
                                                                             </Storyboard>
                                                                         </BeginStoryboard>
@@ -985,7 +985,7 @@
                                                                 </Path.Triggers>
                                                             </Path>
                                                             <!-- waiting -->
-                                                            <Grid>
+                                                            <Grid views:AmbientAnimation.WhileVisible="True">
                                                                 <Grid.Style>
                                                                     <Style TargetType="Grid">
                                                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -1003,8 +1003,8 @@
                                                                 <Ellipse Width="7" Height="7" Fill="{DynamicResource Status.Warning}"/>
                                                                 <Grid.Triggers>
                                                                     <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard RepeatBehavior="Forever">
+                                                                        <BeginStoryboard x:Name="AmbientMain2">
+                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
                                                                                 <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" From="0.4" To="1.1" Duration="0:0:1.2"/>
                                                                                 <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" From="0.4" To="1.1" Duration="0:0:1.2"/>
                                                                                 <DoubleAnimation Storyboard.TargetName="Ripple" Storyboard.TargetProperty="Opacity" From="1" To="0" Duration="0:0:1.2"/>
@@ -1074,13 +1074,13 @@
                                                                        Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis"
                                                                        Visibility="{Binding ShowProjectLine, Converter={StaticResource BoolVis}}"/>
                                                             <!-- what the run is doing now, breathing softly while it works -->
-                                                            <TextBlock Text="{Binding RunStep}" FontSize="10.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" MaxWidth="150"
+                                                            <TextBlock views:AmbientAnimation.WhileVisible="True" Text="{Binding RunStep}" FontSize="10.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" MaxWidth="150"
                                                                        Foreground="{DynamicResource Accent.1}"
                                                                        Visibility="{Binding RunStep, Converter={StaticResource BoolVis}}">
                                                                 <TextBlock.Triggers>
                                                                     <EventTrigger RoutedEvent="FrameworkElement.Loaded">
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                                                        <BeginStoryboard x:Name="AmbientMain3">
+                                                                            <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30" AutoReverse="True">
                                                                                 <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.55" Duration="0:0:1.1">
                                                                                     <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
                                                                                 </DoubleAnimation>

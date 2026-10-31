@@ -180,7 +180,7 @@
                                              Effect="{DynamicResource Glow.TimeMachine.Head}">
                                         <Ellipse.Triggers>
                                             <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                                <BeginStoryboard>
+                                                <BeginStoryboard x:Name="AmbientTm1">
                                                     <Storyboard RepeatBehavior="Forever" AutoReverse="True">
                                                         <DoubleAnimation Storyboard.TargetProperty="Opacity"
                                                                          From="0.3" To="0.95" Duration="0:0:1.2"/>
@@ -356,7 +356,7 @@
                 <Ellipse.RenderTransform><TranslateTransform x:Name="orb1Tr"/></Ellipse.RenderTransform>
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
-                        <BeginStoryboard>
+                        <BeginStoryboard x:Name="AmbientTm2">
                             <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb1Tr"
                                                  Storyboard.TargetProperty="Y"
@@ -373,7 +373,7 @@
                 <Ellipse.RenderTransform><TranslateTransform x:Name="orb2Tr"/></Ellipse.RenderTransform>
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
-                        <BeginStoryboard>
+                        <BeginStoryboard x:Name="AmbientTm3">
                             <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb2Tr"
                                                  Storyboard.TargetProperty="Y"
@@ -390,7 +390,7 @@
                 <Ellipse.RenderTransform><TranslateTransform x:Name="orb3Tr"/></Ellipse.RenderTransform>
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
-                        <BeginStoryboard>
+                        <BeginStoryboard x:Name="AmbientTm4">
                             <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb3Tr"
                                                  Storyboard.TargetProperty="Y"
@@ -407,7 +407,7 @@
                 <Ellipse.RenderTransform><TranslateTransform x:Name="orb4Tr"/></Ellipse.RenderTransform>
                 <Ellipse.Triggers>
                     <EventTrigger RoutedEvent="Ellipse.Loaded">
-                        <BeginStoryboard>
+                        <BeginStoryboard x:Name="AmbientTm5">
                             <Storyboard RepeatBehavior="Forever" AutoReverse="True" Timeline.DesiredFrameRate="15">
                                 <DoubleAnimation Storyboard.TargetName="orb4Tr"
                                                  Storyboard.TargetProperty="Y"
@@ -448,7 +448,7 @@
                             <Ellipse.RenderTransform><RotateTransform x:Name="haloRotate"/></Ellipse.RenderTransform>
                             <Ellipse.Triggers>
                                 <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                    <BeginStoryboard>
+                                    <BeginStoryboard x:Name="AmbientTm6">
                                         <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="15">
                                             <DoubleAnimation Storyboard.TargetName="haloRotate"
                                                              Storyboard.TargetProperty="Angle"
@@ -990,7 +990,7 @@
                         <Ellipse.RenderTransform><ScaleTransform x:Name="ring1Scale" ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
                         <Ellipse.Triggers>
                             <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                <BeginStoryboard>
+                                <BeginStoryboard x:Name="AmbientTm7">
                                     <Storyboard RepeatBehavior="Forever">
                                         <DoubleAnimation Storyboard.TargetName="ring1Scale" Storyboard.TargetProperty="ScaleX"
                                                          From="0.4" To="1.6" Duration="0:0:2.2"/>
@@ -1008,7 +1008,7 @@
                         <Ellipse.RenderTransform><ScaleTransform x:Name="ring2Scale" ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
                         <Ellipse.Triggers>
                             <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                <BeginStoryboard>
+                                <BeginStoryboard x:Name="AmbientTm8">
                                     <Storyboard RepeatBehavior="Forever" BeginTime="0:0:0.55">
                                         <DoubleAnimation Storyboard.TargetName="ring2Scale" Storyboard.TargetProperty="ScaleX"
                                                          From="0.4" To="1.6" Duration="0:0:2.2"/>
@@ -1026,7 +1026,7 @@
                         <Ellipse.RenderTransform><ScaleTransform x:Name="ring3Scale" ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
                         <Ellipse.Triggers>
                             <EventTrigger RoutedEvent="Ellipse.Loaded">
-                                <BeginStoryboard>
+                                <BeginStoryboard x:Name="AmbientTm9">
                                     <Storyboard RepeatBehavior="Forever" BeginTime="0:0:1.1">
                                         <DoubleAnimation Storyboard.TargetName="ring3Scale" Storyboard.TargetProperty="ScaleX"
                                                          From="0.4" To="1.6" Duration="0:0:2.2"/>
@@ -1053,7 +1053,7 @@
                             </TextBlock.RenderTransform>
                             <TextBlock.Triggers>
                                 <EventTrigger RoutedEvent="TextBlock.Loaded">
-                                    <BeginStoryboard>
+                                    <BeginStoryboard x:Name="AmbientTm10">
                                         <Storyboard RepeatBehavior="Forever">
                                             <DoubleAnimation Storyboard.TargetName="rewindIconRotate"
                                                              Storyboard.TargetProperty="Angle"

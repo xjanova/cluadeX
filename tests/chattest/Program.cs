@@ -2507,6 +2507,15 @@ internal static partial class Program
             Check("U13 the plan bar shows over the chat with 1/3 and the item in progress",
                 bar is { IsVisible: true } && Vm.StickyPlanHeader.EndsWith("1/3") && Vm.StickyPlanNow == "Port the fix" && Math.Abs(Vm.StickyPlanProgress - 1.0 / 3) < 0.01,
                 $"{Vm.StickyPlanHeader} · {Vm.StickyPlanNow} · visible={bar?.IsVisible}");
+            Check("U13 with no author yet the bar wears the chat's model", ReferenceEquals(Vm.StickyPlanCharacter, Vm.ActiveCharacter), Vm.StickyPlanCharacter.ToString());
+            var authors = (System.Collections.IDictionary)typeof(ChatViewModel).GetField("_planAuthors", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Vm)!;
+            var author = ReferenceEquals(Vm.ActiveCharacter, ChatCharacter.Codex) ? ChatCharacter.Claude : ChatCharacter.Codex;
+            authors[branchChat.Id] = author;
+            Vm.RefreshStickyPlan();
+            await Render();
+            Check("U13 and the model that wrote the plan keeps its colour after the chat's model changed",
+                ReferenceEquals(Vm.StickyPlanCharacter, author) && ReferenceEquals(bar?.BorderBrush, author.AccentBrush),
+                $"{Vm.StickyPlanCharacter} · {bar?.BorderBrush}");
             Check("U13 the branch has a chip back to the chat it came from", Vm.StickyBranches.Count == 1 && Vm.StickyBranches[0].IsParent && Vm.StickyBranches[0].SessionId == session.Id,
                 string.Join(" | ", Vm.StickyBranches.Select(b => b.Label + " " + b.Title)));
             Vm.IsStickyPlanExpanded = true;

@@ -35,22 +35,57 @@ public partial class SettingsViewModel
     private string _chromeBridgeStatus = "";
     public string ChromeBridgeStatus { get => _chromeBridgeStatus; set => SetProperty(ref _chromeBridgeStatus, value); }
 
-    /// <summary>Only while the extension is not in Chrome yet: once it has connected there is nothing left to add.</summary>
-    public bool ChromeBridgeNeedsExtension => _chromeBridge is { Enabled: true } b && !b.Bridge.IsConnected;
+    /// <summary>Until the extension has connected: the button is the way in, so it also works with the switch still off.</summary>
+    public bool ChromeBridgeNeedsExtension => _chromeBridge is { } b && !b.Bridge.IsConnected;
+
+    private bool _chromeBridgeGuideOpen;
+    /// <summary>The user pressed the button. The steps stay up through every status change until Chrome connects.</summary>
+    public bool ChromeBridgeGuideOpen
+    {
+        get => _chromeBridgeGuideOpen;
+        set
+        {
+            if (SetProperty(ref _chromeBridgeGuideOpen, value)) OnPropertyChanged(nameof(ChromeBridgeGuideVisible));
+        }
+    }
+
+    public bool ChromeBridgeGuideVisible => _chromeBridgeGuideOpen && ChromeBridgeNeedsExtension;
+
+    /// <summary>What "Load unpacked" asks for, shown as well as copied: the clipboard can be overwritten before Chrome is reached.</summary>
+    public string ChromeBridgeExtensionFolder => _chromeBridge?.ExtensionFolder ?? "";
 
     private ICommand? _addChromeExtension;
     public ICommand AddChromeExtensionCommand => _addChromeExtension ??= new RelayCommand(AddChromeExtension);
 
-    /// <summary>The one step Chrome keeps for the user: the page opens, the folder is on the clipboard for "Load unpacked".</summary>
+    private ICommand? _copyChromeExtensionFolder;
+    public ICommand CopyChromeExtensionFolderCommand => _copyChromeExtensionFolder ??= new RelayCommand(() => CopyChromeExtensionFolder());
+
+    private bool CopyChromeExtensionFolder()
+    {
+        try { Clipboard.SetText(ChromeBridgeExtensionFolder); return true; }
+        catch (System.Runtime.InteropServices.ExternalException ex)
+        {
+            // Another app holding the clipboard is no reason to stop: the path is on screen.
+            _log?.Warn("Chrome", "copying the extension folder failed", ex);
+            return false;
+        }
+    }
+
+    /// <summary>Everything an app may do of the one step Chrome keeps for the user: switch on, copy the folder, open the
+    /// page, then stay beside them with the steps until the extension connects.</summary>
     private void AddChromeExtension()
     {
         if (_chromeBridge == null) return;
+        ChromeBridgeOn = true;
+        if (!_chromeBridge.Enabled) return;   // the setter has said why
+        CopyChromeExtensionFolder();
+        OnPropertyChanged(nameof(ChromeBridgeExtensionFolder));
         try
         {
-            Clipboard.SetText(_chromeBridge.ExtensionFolder);
-            ChromeBridgeStatus = _chromeBridge.OpenExtensionsPage() ? T("chromeBridge.status.steps") : T("chromeBridge.status.noChrome");
+            if (!_chromeBridge.OpenExtensionsPage()) { ChromeBridgeStatus = T("chromeBridge.status.noChrome"); return; }
+            ChromeBridgeGuideOpen = true;
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or System.Runtime.InteropServices.ExternalException)
+        catch (System.ComponentModel.Win32Exception ex)
         {
             _log?.Warn("Chrome", "opening Chrome's extensions page failed", ex);
             ChromeBridgeStatus = $"{T("settings.failedPrefix")}: {DescribeFailure(ex)}";
@@ -77,6 +112,7 @@ public partial class SettingsViewModel
             : T("chromeBridge.status.connected");
         OnPropertyChanged(nameof(ChromeBridgeOn));
         OnPropertyChanged(nameof(ChromeBridgeNeedsExtension));
+        OnPropertyChanged(nameof(ChromeBridgeGuideVisible));
     }
 
     public bool ChromeConnectorOn
