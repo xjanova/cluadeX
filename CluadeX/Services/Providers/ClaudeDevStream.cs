@@ -18,6 +18,11 @@ public static class ClaudeDevToolMap
     /// <summary>Longest value one argument keeps (a Write's whole file content is not row material).</summary>
     private const int MaxArgChars = 2000;
 
+    private static string FirstQuestion(JsonElement input) =>
+        input.ValueKind == JsonValueKind.Object && input.TryGetProperty("questions", out var qs) && qs.ValueKind == JsonValueKind.Array
+        && qs.GetArrayLength() > 0 && qs[0].ValueKind == JsonValueKind.Object && qs[0].TryGetProperty("question", out var q)
+        && q.ValueKind == JsonValueKind.String ? q.GetString() ?? "" : "";
+
     public static ClaudeDevMappedTool Map(string cliName, JsonElement input, string? runFolder)
     {
         var a = new Dictionary<string, string>();
@@ -91,6 +96,10 @@ public static class ClaudeDevToolMap
                 Put("skill", S("skill") is { Length: > 0 } sk ? sk : S("command"));
                 return new("skill_invoke", ToolType.SkillInvoke, a, null);
             case "AskUserQuestion":
+                // Claude Code sends {questions:[{question}]}; Gemini's and Antigravity's translators a plain question.
+                Put("question", S("question") is { Length: > 0 } one ? one : FirstQuestion(input));
+                return new("ask_user", ToolType.AskUser, a, null);
+            case "mcp__" + Tools.ChatToolBridge.ServerName + "__" + Tools.ChatToolBridge.AskToolName:
                 Put("question", S("question"));
                 return new("ask_user", ToolType.AskUser, a, null);
             case "ToolSearch":

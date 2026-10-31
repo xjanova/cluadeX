@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CluadeX.Models;
 
 namespace CluadeX.Services.Tools;
@@ -32,7 +33,23 @@ public static class ChatToolBridge
         $"mcp__{ServerName}__{ProjectToolModule.NewChatToolName}",
         $"mcp__{ServerName}__{ProjectToolModule.ToolName}",
         $"mcp__{ServerName}__{ProjectToolModule.CloseChatToolName}",
+        $"mcp__{ServerName}__{AskToolName}",
     };
+
+    /// <summary>
+    /// The question card for every CLI agent: a headless CLI has no one to ask, so its own question tool never reached the
+    /// card with the girl beside it (owner 2026-10-31: "กล่องเลือกตอบ... ใช้ไม่ได้แล้ว"; Claude Dev's AskUserQuestion was
+    /// refused at the permission prompt, Codex has no such tool). This MCP tool is the same card for Codex, Gemini and
+    /// Antigravity; Claude Code's own AskUserQuestion lands on it too (<see cref="CliAskToolName"/>).
+    /// </summary>
+    public const string AskToolName = "ask_user";
+
+    /// <summary>Claude Code's built-in question tool, which it puts to the permission prompt.</summary>
+    public const string CliAskToolName = "AskUserQuestion";
+
+    /// <summary>The line for each CLI's wrapper: it says which tool reaches the user's card.</summary>
+    public const string AskHint = "When you need the user's answer or choice, call CluadeX's ask_user tool (MCP server cluadex) "
+        + "if you have it: it shows a question card in the chat and waits for the answer.";
 
     /// <summary>
     /// The CLI's permission prompt (<c>--permission-prompt-tool mcp__cluadex__approve</c>). A headless Claude Code run has
@@ -54,16 +71,23 @@ public static class ChatToolBridge
     public static string PipeName =>
         Environment.GetEnvironmentVariable(PipeEnv) is { Length: > 0 } n ? n : "cluadex-chat-tools";
 
-    /// <summary>How long one relayed call may take: open_project may wait for the user's answer on its card.</summary>
-    public static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(15);
+    /// <summary>How long one relayed call may take: a card waits for the user, who may be away for a while (a closed app
+    /// or a finished turn ends the wait at once, so this only guards a wedged pipe).</summary>
+    public static readonly TimeSpan CallTimeout = TimeSpan.FromHours(4);
 
     private const int MaxLine = 1 << 20;
 
     /// <summary>Decides one MCP call for the CLI's permission prompt: (qualified tool name, arguments) → (allow, reason).</summary>
     public delegate Task<(bool Allow, string? Reason)> McpApprover(string qualifiedName, Dictionary<string, string> args);
 
+    /// <summary>Opens the question card in the asking chat: the answer, or null when nobody answered.</summary>
+    public delegate Task<string?> QuestionAsker(string question, List<string> options);
+
+    /// <summary>One question of Claude Code's AskUserQuestion.</summary>
+    public sealed record CliQuestion(string Text, List<string> Options, List<string> Notes, bool Multi);
+
     private sealed record Registration(AgentRunScope? Scope, Func<ToolCall, CancellationToken, Task<ToolResult>> Execute,
-        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve);
+        CancellationTokenSource Cts, string? Cwd, McpApprover? Approve, QuestionAsker? Ask);
 
     private static readonly ConcurrentDictionary<string, Registration> Turns = new(StringComparer.Ordinal);
 
@@ -88,9 +112,10 @@ public static class ChatToolBridge
     /// ExecuteToolAsync — permission gate included) inside <paramref name="scope"/>. Null when the config file cannot
     /// be written (the turn then runs without these tools). <paramref name="approve"/> answers the CLI's permission
     /// prompt (<see cref="ApproveToolName"/>); without it every such question is refused, as before.
+    /// <paramref name="ask"/> opens the question card (<see cref="AskToolName"/>, Claude Code's AskUserQuestion).
     /// </summary>
     public static Ticket? Register(AgentRunScope? scope, Func<ToolCall, CancellationToken, Task<ToolResult>> execute,
-        string? cwd, CancellationToken turn, McpApprover? approve = null)
+        string? cwd, CancellationToken turn, McpApprover? approve = null, QuestionAsker? ask = null)
     {
         try
         {
@@ -100,7 +125,7 @@ public static class ChatToolBridge
             SweepStale(dir);
             string file = Path.Combine(dir, $"claude-dev-tools-{token[..12]}.json");
             File.WriteAllText(file, ConfigJson(Safety.GuardHook.ExePath(), token, PipeName), new UTF8Encoding(false));
-            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve);
+            Turns[token] = new Registration(scope, execute, CancellationTokenSource.CreateLinkedTokenSource(turn), cwd, approve, ask);
             return new Ticket(token, file);
         }
         catch { return null; }
@@ -202,9 +227,11 @@ public static class ChatToolBridge
         }
         if (tool == ApproveToolName)
             return (true, await ApproveAsync(root, reg).ConfigureAwait(false));
+        if (tool == AskToolName)
+            return await AskFromToolAsync(root, reg).ConfigureAwait(false);
         var type = new ProjectToolModule().ResolveToolType(tool);
         if (type is not (ToolType.OpenProject or ToolType.NewChat or ToolType.CloseChat))
-            return (false, $"CluadeX: '{tool}' is not one of its chat tools (open_project, new_chat, close_chat).");
+            return (false, $"CluadeX: '{tool}' is not one of its chat tools (open_project, new_chat, close_chat, ask_user).");
 
         var call = new ToolCall { Type = type.Value, ToolName = tool };
         if (root.TryGetProperty("args", out var args) && args.ValueKind == JsonValueKind.Object)
@@ -229,6 +256,7 @@ public static class ChatToolBridge
             && n.ValueKind == JsonValueKind.String ? n.GetString() ?? "" : "";
         var input = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("input", out var i) && i.ValueKind == JsonValueKind.Object
             ? i : default;
+        if (name == CliAskToolName && reg.Ask != null) return await AnswerCliQuestionsAsync(input, reg).ConfigureAwait(false);
         if (RefusalFor(name, reg.Approve != null) is { } refusal) return Verdict(false, input, refusal);
         if (reg.Cts.Token.IsCancellationRequested) return Verdict(false, input, "CluadeX: this Claude Dev turn is over.");
         var callArgs = new Dictionary<string, string>();
@@ -239,6 +267,93 @@ public static class ChatToolBridge
         AgentRunScope.Enter(reg.Scope);
         var (allow, reason) = await reg.Approve!(name, callArgs).ConfigureAwait(false);
         return Verdict(allow, input, allow ? null : reason ?? $"The user did not allow {name} in CluadeX.");
+    }
+
+    /// <summary>The card, in the asking chat's run: the answer, or null when the run stopped or the turn ended.</summary>
+    private static async Task<string?> AskOnCardAsync(string question, List<string> options, Registration reg)
+    {
+        AgentRunScope.Enter(reg.Scope);
+        try { return await reg.Ask!(question, options).WaitAsync(reg.Cts.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return null; }
+    }
+
+    /// <summary>The ask_user MCP tool (Codex, Gemini, Antigravity, Claude Code).</summary>
+    private static async Task<(bool Ok, string Text)> AskFromToolAsync(JsonElement request, Registration reg)
+    {
+        if (reg.Ask == null) return (false, "CluadeX: this turn cannot ask the user — ask in your reply instead.");
+        var args = request.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : default;
+        string question = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("question", out var q)
+            && q.ValueKind == JsonValueKind.String ? q.GetString()?.Trim() ?? "" : "";
+        if (question.Length == 0) return (false, "CluadeX: ask_user needs a question.");
+        var options = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("options", out var o)
+            ? AgentToolService.ParseAskOptions(o.ValueKind == JsonValueKind.String ? o.GetString() ?? "" : o.GetRawText())
+            : new List<string>();
+        string? answer = await AskOnCardAsync(question, options, reg).ConfigureAwait(false);
+        return answer is { Length: > 0 }
+            ? (true, "User answered: " + answer)
+            : (false, "The user did not answer in CluadeX (the run was stopped).");
+    }
+
+    /// <summary>Claude Code's AskUserQuestion, one card per question. The CLI's tool only returns the answers it finds in
+    /// its input, so they go back in updatedInput; a refusal would tell the model that the user declined.</summary>
+    private static async Task<string> AnswerCliQuestionsAsync(JsonElement input, Registration reg)
+    {
+        var questions = ReadCliQuestions(input);
+        if (questions.Count == 0) return Verdict(false, input, "CluadeX: AskUserQuestion came with no question.");
+        var answers = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var q in questions)
+        {
+            string? answer = await AskOnCardAsync(CliQuestionPrompt(q), q.Options, reg).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(answer)) return Verdict(false, input, "The user did not answer in CluadeX (the run was stopped).");
+            answers[q.Text] = answer;
+        }
+        return AnswersVerdict(input, answers);
+    }
+
+    /// <summary>The questions of an AskUserQuestion input: {questions:[{question, options:[{label, description}],
+    /// multiSelect}]}. Pure: the harness checks it.</summary>
+    public static List<CliQuestion> ReadCliQuestions(JsonElement input)
+    {
+        var list = new List<CliQuestion>();
+        if (input.ValueKind != JsonValueKind.Object || !input.TryGetProperty("questions", out var qs) || qs.ValueKind != JsonValueKind.Array)
+            return list;
+        foreach (var q in qs.EnumerateArray())
+        {
+            if (q.ValueKind != JsonValueKind.Object || Str(q, "question") is not { Length: > 0 } text) continue;
+            var options = new List<string>();
+            var notes = new List<string>();
+            if (q.TryGetProperty("options", out var os) && os.ValueKind == JsonValueKind.Array)
+                foreach (var o in os.EnumerateArray())
+                {
+                    if (o.ValueKind != JsonValueKind.Object || Str(o, "label") is not { Length: > 0 } label) continue;
+                    options.Add(label);
+                    if (Str(o, "description") is { Length: > 0 } d) notes.Add(label + ": " + d);
+                }
+            list.Add(new CliQuestion(text, options, notes, q.TryGetProperty("multiSelect", out var m) && m.ValueKind == JsonValueKind.True));
+        }
+        return list;
+
+        static string? Str(JsonElement e, string key) =>
+            e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()?.Trim() : null;
+    }
+
+    /// <summary>The card's text: what each option means, and how to pick several (an option button answers at once), in
+    /// the question's own language. Pure.</summary>
+    public static string CliQuestionPrompt(CliQuestion q)
+    {
+        var sb = new StringBuilder(q.Text);
+        foreach (var note in q.Notes) sb.Append("\n• ").Append(note);
+        bool thai = q.Text.Any(c => c is >= '฀' and <= '๿');
+        if (q.Multi) sb.Append("\n\n").Append(thai ? "เลือกได้หลายข้อ: พิมพ์ในช่องคำตอบ คั่นด้วยจุลภาค" : "You can pick several: type them in the answer box, separated by commas.");
+        return sb.ToString();
+    }
+
+    /// <summary>The verdict that answers AskUserQuestion: its input with answers (question text → answer). Pure.</summary>
+    public static string AnswersVerdict(JsonElement input, IReadOnlyDictionary<string, string> answers)
+    {
+        var updated = input.ValueKind == JsonValueKind.Object ? JsonNode.Parse(input.GetRawText())!.AsObject() : new JsonObject();
+        updated["answers"] = JsonSerializer.SerializeToNode(answers);
+        return JsonSerializer.Serialize(new { behavior = "allow", updatedInput = updated }, Json);
     }
 
     /// <summary>Why a permission question is refused without asking anyone (null = put it to CluadeX's gate).
@@ -363,6 +478,22 @@ public static class ChatToolBridge
               + "with its path. Never answer that you cannot open a folder."
             : s.Description,
         inputSchema = s.InputSchema,
+    }).Append(new
+    {
+        name = AskToolName,
+        description = "Ask the user a question on a card in the CluadeX chat and wait for the answer. Use it whenever you need "
+            + "the user's decision or choice: this is the way to reach them while you work. Give options for a choice; they can "
+            + "also type a free answer.",
+        inputSchema = (object)new
+        {
+            type = "object",
+            properties = new
+            {
+                question = new { type = "string", description = "The question, in the user's language." },
+                options = new { type = "array", items = new { type = "string" }, description = "Short answers to choose from (optional)." },
+            },
+            required = new[] { "question" },
+        },
     }).Append(new
     {
         name = ApproveToolName,
