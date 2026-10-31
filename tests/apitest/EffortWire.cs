@@ -126,6 +126,48 @@ internal static class EffortWire
         var ctx = P("ok", ctx: 150_000);
         check("auto-pick", "a long conversation is at least medium", ctx.Effort == "medium" && ctx.ReasonKey == "bigContext", D(ctx));
 
+        // The owner's words are the task; what the app put around them is not.
+        string recall = "<brainx_recall_ab12>\nA bug, a crash and an error in an old note: " + new string('x', 1600) + "\n</brainx_recall_ab12>\n\n";
+        var recalled = P(recall + "สวัสดีค่ะ");
+        check("auto-pick", "a recall block is not the task: a greeting under one stays low", recalled.Effort == "low" && recalled.ReasonKey == "chat" && !recalled.PlanFirst, D(recalled));
+        var late = P("สวัสดีค่ะ\n\n[The app's automatic BrainX recall did not answer in time. Before you start, call brain_search, then do the task.]");
+        check("auto-pick", "the late-recall note is not the task either", late.Effort == "low", D(late));
+        check("auto-pick", "own words drop the block and keep the message", AutoEffortPolicy.OwnWords(recall + "ต่อ") == "ต่อ", AutoEffortPolicy.OwnWords(recall + "ต่อ"));
+
+        // A short go-ahead carries on the last task, whatever the chat held in between.
+        AutoEffortPolicy.Decision After(string m, params string[] earlier) => AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(m, Earlier: earlier));
+        var carried = After("ต่อ", "กดปุ่ม Save แล้วแอปแครช ช่วยแก้ที");
+        check("auto-pick", "\"ต่อ\" after a bug carries the bug's high", carried.Effort == "high" && carried.ReasonKey == "carryOn", D(carried));
+        var chain = After("แก้เลยนะ", "กดปุ่ม Save แล้วแอปแครช ช่วยแก้ที", "ต่อ", "ลุย");
+        check("auto-pick", "a chain of go-aheads looks past each other to the task", chain.Effort == "high", D(chain));
+        var capped = After("ต่อ", huge);
+        check("auto-pick", "a go-ahead stops at high: xhigh is for what a brief says itself", capped.Effort == "high", D(capped));
+        var floor = After("ต่อ", "สวัสดี");
+        check("auto-pick", "a go-ahead after chat is at least medium", floor.Effort == "medium", D(floor));
+        var alone = P("ต่อ");
+        check("auto-pick", "a go-ahead with nothing before it stays low", alone.Effort == "low", D(alone));
+        var longer = After("ต่อท้ายไฟล์ด้วยบรรทัดนี้", "กดปุ่ม Save แล้วแอปแครช ช่วยแก้ที");
+        check("auto-pick", "a real request that starts with the same word is not a go-ahead", longer.ReasonKey != "carryOn", D(longer));
+        var fromHistory = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn("ต่อ", 0, new[]
+        {
+            new ChatMessage { Role = MessageRole.User, Content = "กดปุ่ม Save แล้วแอปแครช ช่วยแก้ที" },
+            new ChatMessage { Role = MessageRole.Assistant, Content = "ต่อ" },
+        }));
+        check("auto-pick", "the chat's history reaches the pick, the owner's turns only", fromHistory.Effort == "high" && fromHistory.ReasonKey == "carryOn", D(fromHistory));
+
+        // English words start at a word; Thai trouble is more than the words it was born with.
+        foreach (var (msg, want) in new[]
+        {
+            ("how do I change the theme?", "medium"), ("show me the report", "low"), ("explain this function", "low"),
+            ("รันเทสต์ที่ค้าง", "medium"), ("ปล่อยรุ่นใหม่", "medium"), ("ติดค้างอะไรอีก", "low"), ("ระบบนี้ฉลาดพอหรือยัง", "low"),
+            ("เกมไม่เปิดขึ้นมา", "high"), ("โปรแกรมดับไปเลย", "high"), ("ไม่ปรากฏในหน้าไลเซนส์", "high"),
+            ("Sync ล้มเหลว: Could not fetch release from GitHub", "high"),
+        })
+        {
+            var d = P(msg);
+            check("auto-pick", $"\"{msg}\" starts at {want}", d.Effort == want, D(d));
+        }
+
         // The loop climbs from the task's own start, and says why.
         check("auto-climb", "from a bug's high: a red build climbs to xhigh, green drops back to high",
             CodeAgentService.StepEffortFor(2, false, 3, false, true, 1, 0, false) == "xhigh"

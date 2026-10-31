@@ -293,7 +293,7 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(Id, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId! : "";
         var scope = AgentRunScope.Current;
-        var (effort, whyKey) = ClaudeDevProvider.ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, scope?.UserImages?.Count ?? 0);
+        var (effort, whyKey) = ClaudeDevProvider.ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, scope?.UserImages?.Count ?? 0, history);
         if (scope != null)
         {
             scope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;

@@ -2506,8 +2506,8 @@ internal static partial class Program
             Vm.RefreshStickyPlan();
             await Render();
             var bar = Find<Border>(Win).FirstOrDefault(b => b.Name == "StickyPlanBar");
-            Check("U13 the plan bar shows over the chat with 1/3 and the item in progress",
-                bar is { IsVisible: true } && Vm.StickyPlanHeader.EndsWith("1/3") && Vm.StickyPlanNow == "Port the fix" && Math.Abs(Vm.StickyPlanProgress - 1.0 / 3) < 0.01,
+            Check("U13 the plan bar shows over the chat on step 2/3 and the item in progress, its line at the one finished",
+                bar is { IsVisible: true } && Vm.StickyPlanHeader.EndsWith("2/3") && Vm.StickyPlanNow == "Port the fix" && Math.Abs(Vm.StickyPlanProgress - 1.0 / 3) < 0.01,
                 $"{Vm.StickyPlanHeader} · {Vm.StickyPlanNow} · visible={bar?.IsVisible}");
             Check("U13 with no author yet the bar wears the chat's model", ReferenceEquals(Vm.StickyPlanCharacter, Vm.ActiveCharacter), Vm.StickyPlanCharacter.ToString());
             var authors = (System.Collections.IDictionary)typeof(ChatViewModel).GetField("_planAuthors", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Vm)!;
