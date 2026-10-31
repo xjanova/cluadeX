@@ -32,6 +32,22 @@ internal static partial class Program
         Check("RW setup: three exchanges", rows.Count == 6, string.Join(" | ", rows.Select(m => m.Content)));
         var q2 = rows[2];
 
+        // Owner 2026-10-31: the label was squares. These are words on an IconButton, whose icon font has no letters and
+        // whose 36 px would clip them: both have to be overridden, whatever the label says.
+        foreach (var row in new[] { rows[0], rows[1] })
+        {
+            row.IsHovered = true;
+            await Render();
+            var words = Container(row) == null ? [] : Find<System.Windows.Controls.Button>(Container(row))
+                .Where(b => Equals(b.Content, L("chat.rewindHere")) || Equals(b.Content, L("chat.forkHere"))).ToList();
+            Check($"RW0 on a {row.Role} row both buttons are readable words: a text font, wide enough to hold them",
+                words.Count == 2 && words.All(b => b.IsVisible && !b.FontFamily.Source.Contains("MDL2") && b.ActualWidth > 70 && b.ActualHeight > 0),
+                string.Join(" | ", words.Select(b => $"{b.Content} {b.FontFamily.Source} {b.ActualWidth:0}x{b.ActualHeight:0}")));
+            if (row.Role == MessageRole.Assistant) SaveShot(Path.Combine(AppContext.BaseDirectory, "chat-rewind-buttons.png"));
+            row.IsHovered = false;
+        }
+        await Render();
+
         var confirmsBefore = ConfirmTitles.Count;
         ConfirmAnswer = false;
         Vm.RewindToMessageCommand.Execute(q2);

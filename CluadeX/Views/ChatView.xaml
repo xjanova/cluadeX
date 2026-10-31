@@ -1743,15 +1743,18 @@
                                                         ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
-                                                <!-- Go back to this point of the chat, here or in a new chat -->
+                                                <!-- Go back to this point of the chat, here or in a new chat. These two are words on an
+                                                     IconButton: without their own font and size its icon font draws squares and its 36 px clips them. -->
                                                 <Button Content="{services:Loc chat.rewindHere}"
-                                                        Style="{StaticResource IconButton}"
+                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
                                                         FontSize="11" Padding="6,2" Margin="2,0"
                                                         ToolTip="{services:Loc chat.rewindHereTip}"
                                                         Click="RewindMessage_Click"
                                                         Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                                 <Button Content="{services:Loc chat.forkHere}"
-                                                        Style="{StaticResource IconButton}"
+                                                        Style="{StaticResource IconButton}" FontFamily="{DynamicResource Font.Ui}"
+                                                        Width="Auto" Height="Auto" VerticalAlignment="Center"
                                                         FontSize="11" Padding="6,2" Margin="2,0"
                                                         ToolTip="{services:Loc chat.forkHereTip}"
                                                         Click="ForkMessage_Click"
