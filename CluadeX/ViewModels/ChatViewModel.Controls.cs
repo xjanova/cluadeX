@@ -41,15 +41,15 @@ public partial class ChatViewModel
     private ChatModelChoice? _selectedChatModel;
     private bool _syncingModelChoice;
 
-    /// <summary>The model answering this chat (null while a model on this PC answers). Setting it switches the model —
-    /// a run in progress uses it from its next step — and, between runs, the provider.</summary>
+    /// <summary>The model answering this chat (null while a model on this PC answers). Setting it switches the model and
+    /// the provider at once: a run in this chat stops and carries on with the new model (SwitchChatModelAsync).</summary>
     public ChatModelChoice? SelectedChatModel
     {
         get => _selectedChatModel;
         set
         {
             if (_syncingModelChoice || value == null || Equals(value, _selectedChatModel)) return;
-            _ = SwitchChatModelAsync(value);
+            _ = SwitchChatModelAsync(value, carryOnNow: true);
         }
     }
 
@@ -197,10 +197,10 @@ public partial class ChatViewModel
         }
         // A GGUF on this PC (in-process or llama-server) — listed while it answers. Picking another one is the local picker's
         // and the Models page's job: it loads weights into VRAM.
-        if (_providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer
-            || _providerManager.ActiveProviderType == AiProviderType.Ollama && _ollamaModels is not { Count: > 0 })
+        if (_providerManager.PickedProviderType is AiProviderType.Local or AiProviderType.LlamaServer
+            || _providerManager.PickedProviderType == AiProviderType.Ollama && _ollamaModels is not { Count: > 0 })
         {
-            var at = _providerManager.ActiveProviderType;
+            var at = _providerManager.PickedProviderType;
             string name = at == AiProviderType.Ollama
                 ? (s.ProviderConfigs.TryGetValue(nameof(AiProviderType.Ollama), out var oc) ? oc.EffectiveModelId ?? "" : "")
                 : s.SelectedModelName ?? "";
@@ -223,7 +223,7 @@ public partial class ChatViewModel
                 foreach (var c in list) ChatModelChoices.Add(c);
                 OnPropertyChanged(nameof(HasChatModelChoices));
             }
-            var active = _providerManager.ActiveProviderType;
+            var active = _providerManager.PickedProviderType;
             string activeModel = s.ProviderConfigs.TryGetValue(active.ToString(), out var ac) && !string.IsNullOrWhiteSpace(ac.EffectiveModelId)
                 ? ac.EffectiveModelId!.Trim() : DefaultModelOf(active);
             var sel = ChatModelChoices.FirstOrDefault(c => c.Provider == active && c.Model == activeModel);
@@ -237,20 +237,44 @@ public partial class ChatViewModel
         RefreshChatModelPlaceholder();
     }
 
-    private async Task SwitchChatModelAsync(ChatModelChoice c)
+    /// <summary>A pick is being carried out (the chat's run stopping): a second pick waits for it.</summary>
+    private bool _switchingModel;
+
+    /// <summary>
+    /// Make <paramref name="c"/> what answers. The box (<paramref name="carryOnNow"/>): a run in the chat on screen cannot
+    /// change model where it stands — a CLI turn is one process started with its model, a request is on its way — so it
+    /// stops and the task carries on with the new model at once (owner 2026-10-31: "เปลี่ยนโมเดลกลางทางแล้วมันไม่เปลี่ยนจริงทันที").
+    /// A run in another chat keeps its provider and is left alone. A pipe caller is waiting for its run's outcome, so
+    /// that run is never restarted, and a pick from outside (<see cref="ChooseFromOutsideAsync"/>) stops nothing.
+    /// </summary>
+    private async Task SwitchChatModelAsync(ChatModelChoice c, bool carryOnNow = false)
     {
+        if (_switchingModel) return;
+        _switchingModel = true;
         try
         {
             if (c.NeedsKey) { StatusText = LocF("chat.model.needsKey", c.ProviderLabel); return; }
             // A GGUF on this PC is only listed while it answers: nothing to switch. (An Ollama model is: Ollama loads it.)
             if (c.Provider is AiProviderType.Local or AiProviderType.LlamaServer) return;
-            bool otherProvider = _providerManager.ActiveProviderType != c.Provider;
+            bool otherProvider = _providerManager.PickedProviderType != c.Provider;
+            var onScreen = RunOf(CurrentSession);
+            bool pipeRun = onScreen?.Scope.FromPipe == true;
             if (otherProvider)
             {
-                // A run holds its provider for the whole loop; the model of the same provider can change mid-run.
-                if (_runs.Count > 0) { StatusText = Loc("chat.model.providerBusy"); return; }
+                if (carryOnNow ? pipeRun : _runs.Count > 0) { StatusText = Loc("chat.model.providerBusy"); return; }
                 // Cloud providers are the paid tier — the same gate as Settings ▸ AI Provider. (The BrainX room is not.)
                 if (c.Provider is not (AiProviderType.BrainX or AiProviderType.Ollama) && _activation?.IsActivated != true) { StatusText = Loc("settings.activationRequired"); return; }
+            }
+            var carryOn = carryOnNow && !pipeRun ? onScreen : null;
+            if (carryOn != null)
+            {
+                StatusText = LocF("chat.model.stopping", c.Model);
+                try { carryOn.Cts?.Cancel(); } catch (ObjectDisposedException) { }
+                if (await Task.WhenAny(carryOn.Done.Task, Task.Delay(TimeSpan.FromSeconds(20))) != carryOn.Done.Task)
+                {
+                    StatusText = Loc("chat.busy.stillStopping");
+                    return;
+                }
             }
             string key = c.Provider.ToString();
             _settingsService.UpdateSettings(s =>
@@ -261,6 +285,7 @@ public partial class ChatViewModel
             });
             if (otherProvider) await _providerManager.SwitchProviderAsync(c.Provider);
             StatusText = LocF("chat.model.switched", c.Model);
+            if (carryOn != null) await CarryOnWithNewModelAsync(carryOn.Session, c);
         }
         catch (Exception ex)
         {
@@ -269,6 +294,7 @@ public partial class ChatViewModel
         }
         finally
         {
+            _switchingModel = false;
             RefreshUsageStrip();   // shows what really answers now (the old pick when the switch was refused)
             // The box shows what answers, never a pick that was refused: the ComboBox kept "claude-haiku-5-5 · ยังไม่มีคีย์"
             // while Claude Dev (sonnet) went on answering (owner 2026-10-20: "ฉันเลือก haiku แต่มันตอบว่าเป็น sonnet").
@@ -279,6 +305,18 @@ public partial class ChatViewModel
                 OnPropertyChanged(nameof(SelectedChatModel));
             });
         }
+    }
+
+    /// <summary>The task a model switch stopped goes on, as if the owner had said so. Not when they have opened another
+    /// chat meanwhile (the stopped chat says it was interrupted) or the new model cannot answer (the chat says why).</summary>
+    private async Task CarryOnWithNewModelAsync(ChatSession session, ChatModelChoice c)
+    {
+        if (!ReferenceEquals(CurrentSession, session) || !await EnsureProviderReadyAsync()) return;
+        if (!ReferenceEquals(CurrentSession, session) || RunOf(session) != null) return;
+        Messages.Add(new ChatMessage { Role = MessageRole.System, Content = "🔄 " + LocF("chat.model.carryOn", c.Model) });
+        var bubble = new ChatMessage { Role = MessageRole.User, Content = Loc("chat.pause.resumeText") };
+        Messages.Add(bubble);
+        Detached(() => RunTurnAsync(bubble, bubble.Content, null, false));
     }
 
     /// <summary>

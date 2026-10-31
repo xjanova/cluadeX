@@ -582,7 +582,7 @@ public partial class ChatViewModel : ViewModelBase
     /// A report for another model than the one picked (the user switched since) is not shown.</summary>
     private LiveModelReport.Snapshot? LiveSnapshot()
     {
-        var type = _providerManager.ActiveProviderType;
+        var type = _providerManager.PickedProviderType;
         var run = RunOf(CurrentSession);
         var snap = LiveModelReport.For(run?.Scope, type);
         if (snap != null && run == null && !ReportMatchesPick(type, snap.Model)) snap = null;
@@ -694,7 +694,7 @@ public partial class ChatViewModel : ViewModelBase
     /// rate-limit snapshot and the session's cost. Cheap; called on every change and every 5 s.</summary>
     private void RefreshUsageStrip()
     {
-        var type = _providerManager.ActiveProviderType;
+        var type = _providerManager.PickedProviderType;
         var s = _settingsService.Settings;
         string? configured = s.ProviderConfigs.TryGetValue(type.ToString(), out var cfg) && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId)
             ? cfg.EffectiveModelId!.Trim() : null;
@@ -4157,7 +4157,8 @@ public partial class ChatViewModel : ViewModelBase
     /// captions inside the balloon (FoldedIntoBalloon) — what runs stays inside, the final answer outside.</summary>
     private ChatMessage? BalloonFor(IList<ChatMessage> list, string toolName, bool success)
     {
-        if (!success || !Groupable(GetToolCategory(toolName))) return null;
+        bool edit = FileEditTools.Contains(toolName);
+        if (!success || !edit && !Groupable(GetToolCategory(toolName))) return null;
         var narration = new List<ChatMessage>();
         for (int i = list.Count - 1; i >= 0; i--)
         {
@@ -4168,7 +4169,8 @@ public partial class ChatViewModel : ViewModelBase
                 narration.Add(m);
                 continue;
             }
-            if (!IsFoldable(m)) return null;
+            if (edit ? !FoldsEditInto(m, toolName) : !IsFoldable(m)) return null;
+            if (edit) StartEditSteps(m);
             for (int k = narration.Count - 1; k >= 0; k--)
             {
                 var n = narration[k];
@@ -4210,12 +4212,16 @@ public partial class ChatViewModel : ViewModelBase
 
     private static readonly HashSet<string> FileEditTools = new(StringComparer.OrdinalIgnoreCase) { "edit_file", "multi_edit", "write_file" };
 
-    /// <summary>A successful edit row of the same file that the next edit to that file folds into.</summary>
-    internal static bool FoldsEditInto(ChatMessage row, string toolName, string? target) =>
+    /// <summary>A successful edit row the next edit folds into, whichever file it touches.</summary>
+    internal static bool FoldsEditInto(ChatMessage row, string toolName) =>
         row.Role == MessageRole.ToolAction && row.ToolSuccess && row.HasDiff && !row.IsCollapsedGroup
-        && row.ToolKind != null && FileEditTools.Contains(row.ToolKind) && FileEditTools.Contains(toolName)
-        && !string.IsNullOrEmpty(target)
-        && (row.EditCount > 1 ? row.ToolTarget == $"{target} ×{row.EditCount}" : row.ToolTarget == target);
+        && row.ToolKind != null && FileEditTools.Contains(row.ToolKind) && FileEditTools.Contains(toolName);
+
+    /// <summary>The first edit of a row becomes its first box, as a group's first call does.</summary>
+    private static void StartEditSteps(ChatMessage row)
+    {
+        if (!row.HasGroupSteps) row.AddGroupStep(new ToolStepView(row.ToolKind, row.ToolVerb ?? "", row.ToolTarget, row.ToolElapsedTime));
+    }
 
     /// <summary>"mcp__brainx-brain__task_update" → "brainx-brain/task_update" for a group row's list.</summary>
     private static string ShortToolName(string toolName) =>
@@ -4390,13 +4396,19 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            // Edits to one file in a row are one row (owner 2026-10-18: "ทำไมมันเยอะจังกล่องการแก้ไข ไม่ได้รวมไว้เหรอ"):
-            // the +/− add up and its diff shows each change in turn. Another file, a failure or a line between them starts a new row.
+            // Edits in a row are one row, one file or many (owner 2026-10-18: "ทำไมมันเยอะจังกล่องการแก้ไข ไม่ได้รวมไว้เหรอ",
+            // 2026-10-31: "การแก้ไฟล์ก็ควรรวบเป็นหมวดไว้ด้วย"): the +/− add up, its diff shows each change in turn and each
+            // file is a box when it is opened. A failure, or anything but a short line between them, starts a new row.
             string? editTarget = ToolTargetOf(toolResult.ToolName, toolResult.Arguments, run?.Scope?.WorkingDirectory ?? WorkingDirectory);
             if (lastMsg != null && toolResult.Success && toolResult.Diff is { Lines.Count: > 0 } editDiff
-                && FoldsEditInto(lastMsg, toolResult.ToolName, editTarget))
+                && FoldsEditInto(lastMsg, toolResult.ToolName))
             {
-                lastMsg.AppendEdit(editDiff, toolElapsed, toolResult.Output, outputLines, editTarget);
+                StartEditSteps(lastMsg);
+                lastMsg.AddGroupStep(StepOf(toolResult.ToolName, toolResult.Arguments, toolElapsed, run?.Scope?.WorkingDirectory ?? WorkingDirectory));
+                lastMsg.AppendEdit(editDiff, toolElapsed, toolResult.Output, outputLines, JoinTargets(lastMsg.ToolTarget, editTarget), editTarget);
+                lastMsg.ToolOutput = CapGroupOutput(lastMsg.ToolOutput ?? "");
+                int files = (lastMsg.ToolTarget ?? "").Split(", ").Length;
+                if (files > 1) lastMsg.ToolVerb = LocF("chat.tools.editGroupVerb", files);
                 ScrollToBottom?.Invoke();
                 return;
             }

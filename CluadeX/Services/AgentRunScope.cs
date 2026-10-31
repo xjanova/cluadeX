@@ -37,6 +37,11 @@ public sealed class AgentRunScope
     /// <summary>Whoever started the run (the chat page's run record), for routing its events back.</summary>
     public object? Owner { get; }
 
+    /// <summary>The provider this run started on, kept for its whole life: another chat may pick another one meanwhile.
+    /// Null = the provider picked (AiProviderManager).</summary>
+    public Providers.IAiProvider? Provider { get; set; }
+    public Models.AiProviderType? ProviderType { get; set; }
+
     /// <summary>Accept edits for THIS run only (a pipe task approved for its folder that runs in the background): the
     /// user's own switch stays on their project. Checked by PermissionService.AcceptsEditsIn; set only for a folder
     /// IsUnsafeAcceptEditsRoot allows.</summary>
@@ -201,6 +206,8 @@ public sealed class AgentRunScope
         var child = new AgentRunScope(SessionKey, workingDirectory ?? WorkingDirectory, Owner)
         {
             Parent = this,
+            Provider = Provider,
+            ProviderType = ProviderType,
             AcceptEditsRoot = acceptEditsInFolder ? workingDirectory : AcceptEditsRoot,
             FromPipe = FromPipe,
             TaskRequest = TaskRequest,

@@ -149,6 +149,9 @@ public class ChatMessage : INotifyPropertyChanged
         set { if (_canRetry != value) { _canRetry = value; OnPropertyChanged(); } }
     }
 
+    /// <summary>A point of the conversation a chat can go back to or fork from (the bubble's hover actions).</summary>
+    public bool CanRewind => Role is MessageRole.User or MessageRole.Assistant or MessageRole.ToolAction;
+
     // ─── Hover State (for action buttons) ───
     public bool IsHovered
     {
@@ -303,24 +306,32 @@ public class ChatMessage : INotifyPropertyChanged
         if (GroupSteps.Count == 1) OnPropertyChanged(nameof(HasGroupSteps));
     }
 
-    /// <summary>How many edits this row holds (1 for a plain edit row; more once later edits to the same file folded in).</summary>
+    /// <summary>How many edits this row holds (1 for a plain edit row; more once later edits folded in).</summary>
     public int EditCount { get; set; } = 1;
 
-    /// <summary>The diff lines one row keeps: a long run of edits to one file stops growing the row's diff here
+    /// <summary>The diff lines one row keeps: a long run of edits stops growing the row's diff here
     /// (the +/− counts stay exact).</summary>
     public const int MaxFoldedDiffLines = 1500;
 
-    /// <summary>A later edit to the same file folds into this row: the +/− add up, its diff follows the earlier ones after
-    /// a separator, the times add up and its output follows. Raises change for everything the row shows.</summary>
-    public void AppendEdit(EditDiffResult diff, string? elapsed, string? output, int outputLines, string? target)
+    /// <summary>A later edit folds into this row: the +/− add up, its diff follows the earlier ones after a separator
+    /// naming its file when the row holds several (<paramref name="file"/>), the times add
+    /// up and its output follows. <paramref name="target"/> is what the row now says it touched. Raises change for
+    /// everything the row shows.</summary>
+    public void AppendEdit(EditDiffResult diff, string? elapsed, string? output, int outputLines, string? target, string? file = null)
     {
+        string held = ToolTarget ?? "";   // before this edit: "a", "a ×3" or "a ×3, b"
+        bool severalFiles = !string.IsNullOrEmpty(file) && held.Length > 0
+            && (held.Contains(", ") || held != file && !held.StartsWith(file + " ×", StringComparison.Ordinal));
         EditCount++;
         DiffAdded += diff.Added;
         DiffRemoved += diff.Removed;
         var lines = new List<EditDiffLine>(DiffLines ?? new());
         if (lines.Count < MaxFoldedDiffLines)
         {
-            lines.Add(new EditDiffLine { Kind = EditDiffKind.Hunk, Text = $"── #{EditCount} ──" });
+            // The second file is when the first one needs naming, however many edits it already had.
+            if (severalFiles && (lines.Count == 0 || !lines[0].Text.StartsWith("── #1 ", StringComparison.Ordinal)))
+                lines.Insert(0, new EditDiffLine { Kind = EditDiffKind.Hunk, Text = $"── #1 · {System.Text.RegularExpressions.Regex.Replace(held, @" ×\d+$", "")} ──" });
+            lines.Add(new EditDiffLine { Kind = EditDiffKind.Hunk, Text = severalFiles ? $"── #{EditCount} · {file} ──" : $"── #{EditCount} ──" });
             lines.AddRange(diff.Lines.Take(MaxFoldedDiffLines - lines.Count));
         }
         DiffLines = lines;
@@ -329,7 +340,7 @@ public class ChatMessage : INotifyPropertyChanged
         ToolElapsedTime = SumElapsed(ToolElapsedTime, elapsed);
         ToolOutput = string.IsNullOrEmpty(ToolOutput) ? output : ToolOutput + "\n---\n" + output;
         ToolOutputLines += outputLines;
-        ToolTarget = target == null ? ToolTarget : $"{target} ×{EditCount}";
+        ToolTarget = target ?? ToolTarget;
         foreach (var name in new[] { nameof(DiffAdded), nameof(DiffRemoved), nameof(DiffAddedText), nameof(DiffRemovedText),
                      nameof(DiffLines), nameof(DiffPairs), nameof(HasDiff), nameof(DiffStat), nameof(ToolElapsedTime),
                      nameof(ToolOutput), nameof(ToolOutputLines), nameof(EditCount) })

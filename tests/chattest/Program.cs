@@ -314,6 +314,8 @@ internal static partial class Program
         await TestLiveEffort();               // U11: "auto → level" shown while a run works; Pause → Resume
         await TestPlanWindow();               // U12: the plan window — live plan, add items, go back, branch
         await TestToolGrouping();             // G: tool rows fold together
+        await TestRewindAndFork();            // RW: rewind to / fork from any message
+        await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)

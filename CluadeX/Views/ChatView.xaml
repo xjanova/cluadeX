@@ -1743,6 +1743,19 @@
                                                         ToolTip="{services:Loc chat.copyMessageTip}"
                                                         Click="CopyMessage_Click"
                                                         Tag="{Binding Content}"/>
+                                                <!-- Go back to this point of the chat, here or in a new chat -->
+                                                <Button Content="{services:Loc chat.rewindHere}"
+                                                        Style="{StaticResource IconButton}"
+                                                        FontSize="11" Padding="6,2" Margin="2,0"
+                                                        ToolTip="{services:Loc chat.rewindHereTip}"
+                                                        Click="RewindMessage_Click"
+                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
+                                                <Button Content="{services:Loc chat.forkHere}"
+                                                        Style="{StaticResource IconButton}"
+                                                        FontSize="11" Padding="6,2" Margin="2,0"
+                                                        ToolTip="{services:Loc chat.forkHereTip}"
+                                                        Click="ForkMessage_Click"
+                                                        Visibility="{Binding CanRewind, Converter={StaticResource BoolVis}, FallbackValue=Collapsed}"/>
                                                 <!-- Retry: only on a failed REPLY (CanRetry), never on a tool row —
                                                      retrying one re-ran the whole agent turn. -->
                                                 <Button Content="&#xE72C;" FontFamily="Segoe MDL2 Assets"
