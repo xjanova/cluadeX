@@ -51,6 +51,16 @@ internal static class Program
         string dataRoot = Path.Combine(AppContext.BaseDirectory, "Data");
         if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
 
+        // --db <copy of codex.db>: start on a real chat list. Always a copy: start-up cleans the store it opens.
+        var cli = Environment.GetCommandLineArgs();
+        int dbArg = Array.IndexOf(cli, "--db");
+        string realDb = dbArg >= 0 && dbArg + 1 < cli.Length ? cli[dbArg + 1] : null;
+        if (realDb != null)
+        {
+            Directory.CreateDirectory(dataRoot);
+            File.Copy(realDb, Path.Combine(dataRoot, "codex.db"));
+        }
+
         var services = new ServiceCollection();
         typeof(CluadeX.App).GetMethod("ConfigureServices", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [services]);
         var sp = services.BuildServiceProvider();
@@ -72,6 +82,18 @@ internal static class Program
         while (vm.ChatVM.CurrentSession == null && wait.ElapsedMilliseconds < 20000) await Task.Delay(60);
         await Task.Delay(1500);
 
+        if (realDb != null)
+        {
+            await SidebarChecks.RealList(win, vm);
+            return 0;
+        }
+        await SidebarChecks.Run(win, vm, settings, Check);
+        if (cli.Contains("--sidebar"))
+        {
+            Console.WriteLine($"\n{Pass} passed, {Fail} failed");
+            return Fail == 0 ? 0 : 1;
+        }
+
         Dump();
         var empty = Count(win);
         Console.WriteLine($"few chats ({vm.ChatVM.VisibleSessions.Count}): {empty.Running} running, {empty.Hidden} of them hidden");
@@ -90,8 +112,9 @@ internal static class Program
         Check("no clock runs uncapped while the app sits idle", Uncapped == 0, $"{Uncapped} uncapped");
         Check("the storyboards can be paused at all (they are found by name)", many.Paused > 0, $"{many.Paused} paused");
 
-        // A row that starts working shows its spinner turning, and it stops again with the run.
-        var row = vm.ChatVM.VisibleSessions[^1];
+        // A row that starts working shows its spinner turning, and it stops again with the run (the first row: only the
+        // rows in view exist).
+        var row = vm.ChatVM.VisibleSessions[0];
         row.RunStatus = "working";
         row.RunStep = "working on it";
         await Task.Delay(400);

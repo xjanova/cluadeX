@@ -805,10 +805,7 @@ public class MainViewModel : ViewModelBase
     private void NavigateTo(string? target)
     {
         if (target == null) return;
-        CluadeX.Helpers.UiStallWatchdog.Note("opening page " + target);
-        var navWatch = System.Diagnostics.Stopwatch.StartNew();
-        SelectedNavItem = target;
-        CurrentView = target switch
+        ViewModelBase? view = target switch
         {
             "Chat" => ChatVM,
             "Models" => ModelManagerVM,
@@ -833,6 +830,13 @@ public class MainViewModel : ViewModelBase
             "HookLibrary" => HookLibraryVM,
             _ => ChatVM,
         };
+        // Already there: every chat opened from the sidebar asks for the page it is on, and "opening" it again is not free.
+        if (target == SelectedNavItem && ReferenceEquals(view, CurrentView)) return;
+
+        CluadeX.Helpers.UiStallWatchdog.Note("opening page " + target);
+        var navWatch = System.Diagnostics.Stopwatch.StartNew();
+        SelectedNavItem = target;
+        CurrentView = view;
 
         // Sync model list/selection when navigating to Chat (picks up changes from Models tab)
         if (target == "Chat")

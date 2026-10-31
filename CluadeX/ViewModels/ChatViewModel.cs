@@ -255,17 +255,45 @@ public partial class ChatViewModel : ViewModelBase
             flat.Add(s);
         }
 
-        // Unchanged (a chat switch, a run's state, a title typed elsewhere): the sidebar keeps its rows. It was cleared and
-        // refilled every time — re-grouping, re-templating and restarting each row's animations on the UI thread.
+        // Unchanged (a chat switch, a run's state, a title typed elsewhere): the sidebar keeps its rows. Changed: only what
+        // differs is touched. Clearing and refilling re-grouped and re-templated everything on the UI thread, and threw the
+        // list to another scroll position (its rows are built as they come into view, so it loses its place). The view
+        // groups a row when it is added, so a chat that moved to another day's group goes out and comes back in.
         var tree = SplitTree(flat).ToList();
-        if (!tree.SequenceEqual(VisibleSessions))
+        var wanted = tree.ToHashSet();
+        for (int i = VisibleSessions.Count - 1; i >= 0; i--)
+            if (!wanted.Contains(VisibleSessions[i]) || _rowGroups.GetValueOrDefault(VisibleSessions[i]) != VisibleSessions[i].DateGroupLabel)
+                VisibleSessions.RemoveAt(i);
+        for (int i = 0; i < tree.Count; i++)
         {
-            VisibleSessions.Clear();
-            foreach (var s in tree) VisibleSessions.Add(s);
+            if (i < VisibleSessions.Count && ReferenceEquals(VisibleSessions[i], tree[i])) continue;
+            int at = VisibleSessions.IndexOf(tree[i]);
+            if (at >= 0) VisibleSessions.Move(at, i);
+            else VisibleSessions.Insert(i, tree[i]);
         }
+        _rowGroups = tree.ToDictionary(s => s, s => s.DateGroupLabel);
         UpdateSplitSummaries();
         OnPropertyChanged(nameof(VisibleSessionsCount));
+
+        int total = Sessions.Count(s => !Hidden(s));
+        SidebarFilterText = total == 0 ? ""
+            : filter ? LocF("sidebar.filter.project", ProjectName, VisibleSessions.Count, total)
+            : LocF("sidebar.filter.all", total);
+        AllProjectsTip = !HasProject ? Loc("sidebar.filter.noProjectTip")
+            : ShowAllProjectSessions ? LocF("sidebar.filter.onlyTip", ProjectName)
+            : LocF("nav.allProjectsTip", total - VisibleSessions.Count);
     }
+
+    private Dictionary<ChatSession, string> _rowGroups = new();
+
+    private string _sidebarFilterText = "";
+    /// <summary>The line above the chat list: whose chats it holds and how many (owner 2026-10-31: the all-projects button
+    /// looked dead, because the newest rows on top often stay the same either way).</summary>
+    public string SidebarFilterText { get => _sidebarFilterText; private set => SetProperty(ref _sidebarFilterText, value); }
+
+    private string _allProjectsTip = "";
+    /// <summary>What the all-projects button does from here (it cannot do anything while no project is open).</summary>
+    public string AllProjectsTip { get => _allProjectsTip; private set => SetProperty(ref _allProjectsTip, value); }
 
     private bool _bulkSessions;
 
@@ -4970,12 +4998,40 @@ public partial class ChatViewModel : ViewModelBase
     /// folders when this differs.</summary>
     private string? _syncedModelPath;
 
-    public void RefreshLocalModelsList()
+    public void RefreshLocalModelsList() => _ = RescanLocalModelsAsync();
+
+    private bool _modelScanRunning, _modelScanAgain;
+
+    /// <summary>The model folders are walked to the bottom, so never on the UI thread: on a folder of 114,739 files with
+    /// no model in it that froze the window for seconds. One scan at a time; a request during one runs once after it.</summary>
+    private async Task RescanLocalModelsAsync()
     {
-        var models = _huggingFaceService.GetLocalModels();
-        LocalModels.Clear();
-        foreach (var m in models)
-            LocalModels.Add(m);
+        if (_modelScanRunning) { _modelScanAgain = true; return; }
+        _modelScanRunning = true;
+        try
+        {
+            do
+            {
+                _modelScanAgain = false;
+                ApplyLocalModels(await Task.Run(_huggingFaceService.GetLocalModels));
+            }
+            while (_modelScanAgain);
+        }
+        catch (Exception ex) { _debugLog?.Warn("Chat", "scanning the model folders failed", ex); }
+        finally { _modelScanRunning = false; }
+    }
+
+    private void ApplyLocalModels(List<ModelInfo> models)
+    {
+        // The answer lands a moment later now: an unchanged list leaves the box alone (it may be open), and a model being
+        // loaded stays picked (nothing counts as loaded yet, so the box would go blank).
+        if (!models.Select(m => m.LocalPath).SequenceEqual(LocalModels.Select(m => m.LocalPath)))
+        {
+            LocalModels.Clear();
+            foreach (var m in models)
+                LocalModels.Add(m);
+        }
+        if (IsLoadingModel) return;
 
         // Pre-select the currently loaded model. With the llama-server backend (Gemma 4 / Llama 4 / Qwen 3) the
         // in-process engine has no path, so a ready local provider means the saved model is the loaded one.
