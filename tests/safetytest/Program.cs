@@ -32,9 +32,10 @@ internal static class Program
     static readonly string Tilde = "~";
 
     [STAThread]
-    static int Main()
+    static int Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
+        if (args.Contains("--live-ask")) return LiveAskCheck();
         string work = Path.Combine(Path.GetTempPath(), "cx-safetytest-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(work);
         // A private approval pipe, inherited by the CluadeX.exe --cx-guard children below: the owner's running CluadeX
@@ -745,7 +746,211 @@ internal static class Program
             ticket2.Dispose();
         }
         else Check("a second turn gets a ticket", false);
+        AskCardChecks(scope, proj, Talk);
         Check("every --cx-tools process exits by itself once the CLI closes its stdin (none left running)", lingered == 0, $"lingered={lingered}");
+    }
+
+    /// <summary>The question card from a CLI agent: Claude Code's AskUserQuestion and the ask_user MCP tool the other CLIs
+    /// use, through the real --cx-tools process, with a stand-in for the user's click.</summary>
+    static void AskCardChecks(AgentRunScope scope, string proj, Func<string, string[], List<string>> talk)
+    {
+        Console.WriteLine("Question card (AskUserQuestion, ask_user over MCP, the other providers' way in)");
+        var cards = new List<(string Q, List<string> O)>();
+        AgentRunScope? scopeCard = null;
+        using var turn = new CancellationTokenSource();
+        var ticket = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+            proj, turn.Token, null, (q, o) =>
+            {
+                lock (cards) { cards.Add((q, o)); scopeCard = AgentRunScope.Current; }
+                return Task.FromResult<string?>(q.Contains("ไม่ตอบ") ? null : o.Count > 0 ? o[^1] : "พิมพ์เอง");
+            });
+        Check("card: a turn gets a ticket", ticket != null);
+        if (ticket == null) return;
+        string Approve(int id, object input) => JsonSerializer.Serialize(new { jsonrpc = "2.0", id, method = "tools/call",
+            @params = new { name = "approve", arguments = new { tool_name = "AskUserQuestion", input, tool_use_id = "toolu_q" } } });
+        string Tool(int id, object arguments) => JsonSerializer.Serialize(new { jsonrpc = "2.0", id, method = "tools/call", @params = new { name = "ask_user", arguments } });
+        var two = new { questions = new object[]
+        {
+            new { question = "สีอะไรดีคะ?", header = "สี", multiSelect = false, options = new[] { new { label = "แดง", description = "สีเดิม" }, new { label = "ฟ้า", description = "" } } },
+            new { question = "ขนาดไหน?", header = "ขนาด", multiSelect = true, options = new[] { new { label = "S", description = "" }, new { label = "L", description = "" } } },
+        } };
+        var replies = talk(ticket.Token, new[]
+        {
+            Approve(21, two),
+            Approve(22, new { questions = new object[] { new { question = "ไม่ตอบ", options = Array.Empty<object>() } } }),
+            Approve(23, new { questions = Array.Empty<object>() }),
+            Tool(24, new { question = "จะ push เลยไหมคะ", options = new[] { "push", "ยังก่อน" } }),
+            Tool(25, new { question = "ชื่อไฟล์อะไร", options = "a.txt, b.txt" }),
+            Tool(26, new { question = "ถามเปล่า" }),
+            Tool(27, new { question = "ไม่ตอบ" }),
+            Tool(28, new { options = new[] { "x" } }),
+        });
+        string R(int id) => replies.FirstOrDefault(r => r.Contains("\"id\":" + id + ",") || r.Contains("\"id\":" + id + "}")) ?? "";
+        Check("card: AskUserQuestion → one card per question, allowed with the answers in updatedInput, keyed by the question",
+            R(21).Contains("allow") && R(21).Contains("updatedInput") && R(21).Contains("สีอะไรดีคะ?") && R(21).Contains("answers")
+            && R(21).Contains("ฟ้า") && R(21).Contains("ขนาดไหน?") && cards.Count(c => c.Q.StartsWith("สีอะไรดีคะ?") || c.Q.StartsWith("ขนาดไหน?")) == 2, R(21));
+        Check("card: the card shows the option labels and what they mean, in the asking chat's run",
+            cards.Any(c => c.O.SequenceEqual(new[] { "แดง", "ฟ้า" }) && c.Q.Contains("แดง: สีเดิม")) && ReferenceEquals(scopeCard, scope), string.Join(" | ", cards.Select(c => c.Q)));
+        Check("card: a multi-select says how to pick several", cards.Any(c => c.Q.StartsWith("ขนาดไหน?") && c.Q.Contains("พิมพ์ในช่องคำตอบ")), string.Join(" | ", cards.Select(c => c.Q)));
+        Check("card: nobody answered → deny, never an empty answer", R(22).Contains("deny") && !R(22).Contains("updatedInput"), R(22));
+        Check("card: an AskUserQuestion with no question → deny, no card", R(23).Contains("deny") && !cards.Any(c => c.Q.Length == 0), R(23));
+        Check("card: ask_user over MCP answers the CLI", R(24).Contains("User answered: ยังก่อน") && R(24).Contains("\"isError\":false"), R(24));
+        Check("card: options as an array and as comma text", cards.Any(c => c.O.SequenceEqual(new[] { "push", "ยังก่อน" })) && cards.Any(c => c.O.SequenceEqual(new[] { "a.txt", "b.txt" })), "");
+        Check("card: no options → the free answer", R(26).Contains("User answered: พิมพ์เอง"), R(26));
+        Check("card: ask_user not answered → an error result, not a made-up answer", R(27).Contains("\"isError\":true") && !R(27).Contains("User answered"), R(27));
+        Check("card: ask_user with no question opens nothing", R(28).Contains("\"isError\":true") && !cards.Any(c => c.O.SequenceEqual(new[] { "x" })), R(28));
+        ticket.Dispose();
+
+        // The run stops while the card waits: the CLI gets its answer at once, the pipe call does not hang.
+        var waiting = new TaskCompletionSource<string?>();
+        var turn2 = new CancellationTokenSource();
+        var ticket2 = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+            proj, turn2.Token, null, (q, o) => { turn2.CancelAfter(200); return waiting.Task; });
+        if (ticket2 != null)
+        {
+            var sw = Stopwatch.StartNew();
+            var stopped = talk(ticket2.Token, new[] { Tool(31, new { question = "รอ" }), Approve(32, new { questions = new object[] { new { question = "รอ" } } }) });
+            Check($"card: stopping the run ends a waiting question at once ({sw.ElapsedMilliseconds} ms)",
+                sw.ElapsedMilliseconds < 15000 && stopped.Count == 2 && stopped.All(r => r.Contains("isError\":true") || r.Contains("deny")), string.Join("\n", stopped));
+            ticket2.Dispose();
+        }
+        // A turn registered with no asker (nothing to show a card on) refuses, as before.
+        using var turn3 = new CancellationTokenSource();
+        var ticket3 = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }), proj, turn3.Token);
+        if (ticket3 != null)
+        {
+            var none = talk(ticket3.Token, new[] { Tool(41, new { question = "ถาม" }), Approve(42, new { questions = new object[] { new { question = "ถาม" } } }) });
+            Check("card: no asker → ask_user errors, AskUserQuestion is denied", none.Count == 2 && none.Any(r => r.Contains("\"isError\":true")) && none.Any(r => r.Contains("deny")), string.Join("\n", none));
+            ticket3.Dispose();
+        }
+
+        // ── every provider's way in ──
+        var names = CluadeX.Services.Tools.ChatToolBridge.QualifiedToolNames;
+        Check("card: ask_user is one of the tools a CLI gets unasked", names.Contains("mcp__cluadex__ask_user"), string.Join(",", names));
+        string list = CluadeX.Services.Tools.ChatToolBridge.Respond("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", "t", (_, _, _) => (true, "")) ?? "";
+        Check("card: tools/list offers ask_user with its schema", list.Contains("\"name\":\"ask_user\"") && list.Contains("question"), list);
+        var codex = CluadeX.Services.Providers.OpenAIDevProvider.McpOverrides(CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"));
+        Check("card: Codex runs ask_user unasked (approval_policy=never would refuse it otherwise)", codex.Any(o => o.Contains("ask_user={approval_mode='approve'}")), string.Join("\n", codex));
+        var gemini = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"), null);
+        Check("card: Gemini's read-only mode may call CluadeX's own tools", gemini["mcpServers"]?["cluadex"]?["trust"]?.GetValue<bool>() == true, gemini.ToJsonString());
+        string agyCall(string tool, string server) => JsonSerializer.Serialize(new { toolCall = new { name = "call_mcp_tool", args = new { ServerName = server, ToolName = tool } } });
+        var readOnly = new CluadeX.Services.Safety.AntigravityGuard.Config(false, false, proj, proj);
+        Check("card: Antigravity's guard lets a read-only chat ask", CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("ask_user", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Allow);
+        Check("card: ...and still refuses every other MCP tool there, or an ask_user of another server",
+            CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("new_chat", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
+            && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("ask_user", "other"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny);
+        using var cliRow = JsonDocument.Parse("{\"questions\":[{\"question\":\"สีอะไรดีคะ?\"}]}");
+        var row = CluadeX.Services.Providers.ClaudeDevToolMap.Map("AskUserQuestion", cliRow.RootElement, null);
+        Check("card: Claude Code's row carries the question", row.Name == "ask_user" && row.Args.GetValueOrDefault("question") == "สีอะไรดีคะ?", row.Args.GetValueOrDefault("question") ?? "(none)");
+        using var mcpRow = JsonDocument.Parse("{\"question\":\"push ไหม\"}");
+        var row2 = CluadeX.Services.Providers.ClaudeDevToolMap.Map("mcp__cluadex__ask_user", mcpRow.RootElement, null);
+        Check("card: the MCP tool's row reads as a question too", row2.Name == "ask_user" && row2.Type == CluadeX.Models.ToolType.AskUser && row2.Args.GetValueOrDefault("question") == "push ไหม", row2.Name);
+        Check("card: options from a model that sends a JSON array", AgentToolService.ParseAskOptions("[\"a, b\",\"c\"]").SequenceEqual(new[] { "a, b", "c" }));
+        Check("card: options as plain text, and none", AgentToolService.ParseAskOptions("a, b").SequenceEqual(new[] { "a", "b" }) && AgentToolService.ParseAskOptions("").Count == 0 && AgentToolService.ParseAskOptions("[broken").SequenceEqual(new[] { "[broken" }));
+    }
+
+    static readonly string CodexBin = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"OpenAI\Codex\bin");
+
+    /// <summary>--live-ask: the real CLIs against the real --cx-tools (a few cents of the owner's plans): that Claude Code's
+    /// AskUserQuestion really takes answers from updatedInput, and that Codex and Gemini really reach the card over MCP,
+    /// which nothing offline can prove.</summary>
+    static int LiveAskCheck()
+    {
+        string? exe = MatchingExe();
+        if (exe == null) { Console.WriteLine("FAIL no CluadeX.exe of this build"); return 1; }
+        string pipe = "cx-safetytest-live-" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable("CLUADEX_TOOLS_PIPE", pipe);
+        CluadeX.Services.Tools.ChatToolBridge.StartServer();
+        string dir = Path.Combine(Path.GetTempPath(), "cx-liveask-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var scope = new AgentRunScope("safetytest-live", dir);
+        var cards = new List<string>();
+        void Run(string label, string allowed, string prompt)
+        {
+            using var turn = new CancellationTokenSource();
+            var ticket = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+                dir, turn.Token, (_, _) => Task.FromResult((false, (string?)"no")), (q, o) =>
+                {
+                    lock (cards) cards.Add(label + ": " + q + " [" + string.Join("|", o) + "]");
+                    return Task.FromResult<string?>("blue");
+                });
+            if (ticket == null) { Check(label + ": ticket", false); return; }
+            string config = Path.Combine(dir, "mcp-" + label + ".json");
+            File.WriteAllText(config, CluadeX.Services.Tools.ChatToolBridge.ConfigJson(exe, ticket.Token, pipe), new UTF8Encoding(false));
+            var psi = new ProcessStartInfo("cmd.exe") { WorkingDirectory = dir, UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8 };
+            foreach (var a in new[] { "/c", "claude", "-p", "--model", "haiku", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--mcp-config", config,
+                "--permission-prompt-tool", CluadeX.Services.Tools.ChatToolBridge.ApproveToolQualified, "--allowedTools", allowed }) psi.ArgumentList.Add(a);
+            using var p = Process.Start(psi)!;
+            p.StandardInput.Write(prompt);
+            p.StandardInput.Close();
+            var err = p.StandardError.ReadToEndAsync();
+            string text = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(180000);
+            string result = text.Split('\n').LastOrDefault(l => l.Contains("\"type\":\"result\"")) ?? "";
+            Console.WriteLine($"[{label}] exit={p.ExitCode} {result[..Math.Min(500, result.Length)]} {err.Result[..Math.Min(300, err.Result.Length)]}");
+            Check(label + ": a card opened with its question", cards.Any(c => c.StartsWith(label + ":") && c.Contains("colour", StringComparison.OrdinalIgnoreCase)), string.Join("\n", cards));
+            Check(label + ": the model got the user's answer", result.Contains("blue", StringComparison.OrdinalIgnoreCase) && !result.Contains("\"is_error\":true"), result);
+            ticket.Dispose();
+        }
+        const string Finish = " Then reply with exactly the word the user answered, nothing else.";
+        Run("AskUserQuestion", "Read", "Use the AskUserQuestion tool now to ask 'Which colour?' with the options red and blue." + Finish);
+        Run("ask_user", "mcp__cluadex__ask_user", "Call the mcp__cluadex__ask_user tool now with the question 'Which colour?' and the options red and blue." + Finish);
+        // Codex and Gemini: the arguments, prompt and settings CluadeX really starts them with, in a read-only turn.
+        const string Ask = "Before answering, call CluadeX's ask_user tool with the question 'Which colour?' and the options red and blue." + Finish;
+        void Other(string label, string cli, string[] args, string stdin, Action<string, ProcessStartInfo> prepare)
+        {
+            using var turn = new CancellationTokenSource();
+            var ticket = CluadeX.Services.Tools.ChatToolBridge.Register(scope, (call, ct) => Task.FromResult(new CluadeX.Models.ToolResult { Type = call.Type, ToolName = call.ToolName, Success = true }),
+                dir, turn.Token, null, (q, o) =>
+                {
+                    lock (cards) cards.Add(label + ": " + q + " [" + string.Join("|", o) + "]");
+                    return Task.FromResult<string?>("blue");
+                });
+            if (ticket == null) { Check(label + ": ticket", false); return; }
+            var psi = new ProcessStartInfo(cli) { WorkingDirectory = dir, UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
+            string config = CluadeX.Services.Tools.ChatToolBridge.ConfigJson(exe, ticket.Token, pipe);
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            prepare(config, psi);
+            using var p = Process.Start(psi)!;
+            p.StandardInput.Write(stdin);
+            p.StandardInput.Close();
+            var err = p.StandardError.ReadToEndAsync();
+            var read = p.StandardOutput.ReadToEndAsync();
+            if (!p.WaitForExit(170000)) { try { p.Kill(true); } catch { } Console.WriteLine($"[{label}] timed out"); }
+            string text = read.Wait(5000) ? read.Result : "";
+            string tail = text.Length > 900 ? text[^900..] : text;
+            string errText = err.Wait(1000) ? err.Result : "";
+            Console.WriteLine($"[{label}] exit={(p.HasExited ? p.ExitCode : -1)} …{tail}\n{errText[..Math.Min(500, errText.Length)]}");
+            Check(label + ": a card opened with its question", cards.Any(c => c.StartsWith(label + ":") && c.Contains("colour", StringComparison.OrdinalIgnoreCase)), string.Join("\n", cards));
+            Check(label + ": the model got the user's answer", tail.Contains("blue", StringComparison.OrdinalIgnoreCase), tail);
+            ticket.Dispose();
+        }
+        string? codex = Directory.Exists(CodexBin) ? Directory.GetDirectories(CodexBin).Select(d => Path.Combine(d, "codex.exe")).Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault() : null;
+        if (codex != null)
+        {
+            Other("codex", codex, Array.Empty<string>(), CluadeX.Services.Providers.OpenAIDevProvider.BuildPrompt(dir, null, null, "", Ask), (config, psi) =>
+            {
+                foreach (var a in CluadeX.Services.Providers.OpenAIDevProvider.BuildArgs(dir, null, "default", "low", null, config)) psi.ArgumentList.Add(a);
+            });
+        }
+        else Console.WriteLine("GAP codex.exe not found");
+        string gemini = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"npm\node_modules\@google\gemini-cli\bundle\gemini.js");
+        if (File.Exists(gemini))
+            Other("gemini", "node", new[] { gemini }, Ask, (config, psi) =>
+            {
+                foreach (var a in CluadeX.Services.Providers.GeminiDevProvider.BuildArgs(dir, null, "default", null)) psi.ArgumentList.Add(a);
+                var turn = CluadeX.Services.Providers.GeminiTurnHome.Create();
+                string realHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                turn.CarryUserHome(realHome, Path.Combine(realHome, ".gemini"));
+                turn.WriteSettingsAsync(CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, config, null, CluadeX.Services.Providers.GeminiDevProvider.ReadUserSettings()), CancellationToken.None).GetAwaiter().GetResult();
+                psi.Environment["GEMINI_CLI_HOME"] = turn.Home;
+                psi.Environment["NO_COLOR"] = "1";
+                psi.Environment["TERM"] = "xterm-256color";
+            });
+        else Console.WriteLine("GAP gemini-cli not found at " + gemini);
+        foreach (var c in cards) Console.WriteLine("  card " + c);
+        Console.WriteLine(Fail == 0 ? "live ask: all passed" : $"live ask: {Fail} FAILED");
+        return Fail == 0 ? 0 : 1;
     }
 
     static void DayApprovalChecks(string work)

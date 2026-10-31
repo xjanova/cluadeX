@@ -189,7 +189,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                 ? "To work in another project, call mcp__cluadex__open_project (CluadeX asks the user) or start a chat there with " +
                   "mcp__cluadex__new_chat; a new, independent request that arrives mid-task goes to its own chat with new_chat too, " +
                   "and mcp__cluadex__close_chat lists the chats you split off and puts finished ones away. Never answer that you " +
-                  "cannot open a chat or a folder. "
+                  "cannot open a chat or a folder. AskUserQuestion and mcp__cluadex__ask_user both show the user a question card. "
                 : "") +
             "Other agents on this machine: task_queue / agent_inbox show work waiting, task_handoff hands a task to another agent, " +
             "cowork_* is the shared room (brainx-brain tools). ";

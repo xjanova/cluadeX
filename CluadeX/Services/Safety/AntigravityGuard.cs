@@ -73,6 +73,11 @@ public static class AntigravityGuard
 
         if (ReadTools.Contains(tool)) return new Decision(Verdict.Allow, null, who);
 
+        // Asking the user changes nothing, so a read-only chat may ask too.
+        if (tool == McpTool && Str(args, "ToolName") == Tools.ChatToolBridge.AskToolName
+            && Str(args, "ServerName")?.EndsWith(Tools.ChatToolBridge.ServerName, StringComparison.Ordinal) == true)
+            return new Decision(Verdict.Allow, null, who);
+
         if (tool == McpTool)
             return cfg.Edit || cfg.Run
                 ? new Decision(Verdict.Allow, null, who)
