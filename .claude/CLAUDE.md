@@ -187,6 +187,11 @@ rate-limit/5xx never wiping a key) runs in the same `--offline` pass against a l
 xmanstudio `ProductLicenseController` rules (`tests/apitest/MockLicense.cs`) — never against xman4289.com:
 **a PC that calls `/demo` again after its trial gets flagged as trial abuse on the real server.** The client
 reads the mock's URL from `CLUADEX_LICENSE_API`, which only Debug builds honour.
+Gemini Dev's guard is proven in `tests/safetytest/GeminiCliReal.cs`: the real provider on the real installed CLI with
+its hidden `--fake-responses` recording (no account, no network, no model). It needs the normal worktree build, not
+`-p:OutDir=` (the test wants a `CluadeX.exe` of the linked DLL's version). To try a newer CLI without installing it,
+put a folder with `gemini.cmd` and `node_modules\@google\gemini-cli\bundle` first on PATH — and read the
+`(Ready · <path>)` line, because that is the only proof which CLI ran.
 The older IDE harness `navtest` (132 assertions: search, navigation, rename, completion, diff, merge
 conflicts, live debugpy) lived in a session scratchpad and its source is gone — **harnesses belong in
 `tests/`, never in a scratchpad.** These harnesses have repeatedly caught bugs the compiler could not:

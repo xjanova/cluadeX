@@ -39,8 +39,9 @@ public interface IDelegatedCliProvider
 ///   stream-json shape (<see cref="GeminiStreamTranslator"/>), so the chat's tool rows, plan, diffs and steps come from
 ///   the one renderer that already works (<see cref="ClaudeDevStreamTurn"/>) — not a second, half-tested copy.
 /// - CluadeX's safety guard rides along as a BeforeTool hook (<c>CluadeX.exe --cx-guard</c>, the same exe Claude Dev
-///   uses) through a per-turn system settings file (GEMINI_CLI_SYSTEM_SETTINGS_PATH), together with CluadeX's chat
-///   tools and the BrainX brain as MCP servers. --skip-trust: an untrusted folder runs without its MCP servers.
+///   uses) through a per-turn GEMINI_CLI_HOME (<see cref="GeminiTurnHome"/>, which says why), together with CluadeX's
+///   chat tools and the BrainX brain as MCP servers. --skip-trust: an untrusted folder runs without its hooks or MCP
+///   servers. A turn that may edit or run is killed before the model starts unless the hooks are proven live.
 /// </summary>
 public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
 {
@@ -65,8 +66,16 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     public event Action<string>? OnError;
 
     /// <summary>The models offered in the chat's model box. "default" sends no -m (the CLI's own pick, which follows
-    /// what the signed-in account may use); the aliases are the CLI's own.</summary>
-    public static readonly string[] KnownModels = ["default", "pro", "flash", "flash-lite"];
+    /// what the signed-in account may use); the aliases are the CLI's own, the rest the API's ids, newest first, which
+    /// the CLI passes on as they are (gemini-4-argon is newer than CLI 0.66's own list).</summary>
+    public static readonly string[] KnownModels =
+    [
+        "default", "pro", "flash", "flash-lite",
+        "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        "gemma-4-31b-it", "gemma-4-26b-a4b-it",
+    ];
 
     public GeminiDevProvider(SettingsService settingsService, FileSystemService fileSystemService)
     {
@@ -206,41 +215,56 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         return args;
     }
 
+    /// <summary>The hooks of a turn that may edit or run: PowerShell commands for the CLI, and the turn's id, which ends
+    /// the hook names (a project's hooksConfig.disabled cannot name what it has never seen).</summary>
+    public sealed record TurnHooks(string Id, string GuardCommand, string LoadedCommand);
+
     /// <summary>
-    /// The system-scope settings for one turn (GEMINI_CLI_SYSTEM_SETTINGS_PATH): CluadeX's guard as a BeforeTool hook on
-    /// the shell and file-writing tools, and the MCP servers — CluadeX's chat tools (from the ChatToolBridge config) and
-    /// the BrainX brain when the user's own Gemini settings do not already have it (copied from Claude Code's
-    /// registration). Pure: the caller writes it.
+    /// The settings.json of one turn's home: the user's own settings (<paramref name="user"/>), CluadeX's guard as a
+    /// BeforeTool hook on the shell and file-writing tools with the SessionStart hook that proves it loaded, and the MCP
+    /// servers — CluadeX's chat tools (from the ChatToolBridge config) and the BrainX brain when the user's own Gemini
+    /// settings do not already have it (copied from Claude Code's registration). Pure: the caller writes it.
     /// </summary>
-    public static JsonObject BuildSystemSettings(string guardExe, string? chatToolsConfigJson, string? brainServerJson, bool guard)
+    public static JsonObject BuildTurnSettings(TurnHooks? hooks, string? chatToolsConfigJson, string? brainServerJson, JsonObject? user = null)
     {
-        var settings = new JsonObject();
-        if (guard)
+        var settings = user?.DeepClone() as JsonObject ?? new JsonObject();
+        if (hooks != null)
         {
-            settings["hooksConfig"] = new JsonObject { ["enabled"] = true };
-            settings["hooks"] = new JsonObject
+            var config = settings["hooksConfig"] as JsonObject ?? new JsonObject();
+            config["enabled"] = true;
+            settings["hooksConfig"] = config;
+            var events = settings["hooks"] as JsonObject ?? new JsonObject();
+            settings["hooks"] = events;
+            void Add(string eventName, JsonObject definition)
             {
-                ["BeforeTool"] = new JsonArray
+                var list = events[eventName] as JsonArray ?? new JsonArray();
+                events[eventName] = list;
+                list.Add(definition);
+            }
+            Add("SessionStart", new JsonObject
+            {
+                ["hooks"] = new JsonArray
+                {
+                    new JsonObject { ["name"] = "cluadex-loaded-" + hooks.Id, ["type"] = "command", ["command"] = hooks.LoadedCommand, ["timeout"] = 30_000 },
+                },
+            });
+            Add("BeforeTool", new JsonObject
+            {
+                ["matcher"] = "run_shell_command|write_file|replace",
+                ["hooks"] = new JsonArray
                 {
                     new JsonObject
                     {
-                        ["matcher"] = "run_shell_command|write_file|replace",
-                        ["hooks"] = new JsonArray
-                        {
-                            new JsonObject
-                            {
-                                ["name"] = "cluadex-guard",
-                                ["type"] = "command",
-                                ["command"] = $"\"{guardExe}\" {Safety.GuardHook.Flag}",
-                                // Milliseconds here (Claude Code counts seconds): long enough to answer the red prompt.
-                                ["timeout"] = 300_000,
-                            },
-                        },
+                        ["name"] = "cluadex-guard-" + hooks.Id,
+                        ["type"] = "command",
+                        ["command"] = hooks.GuardCommand,
+                        // Milliseconds here (Claude Code counts seconds): long enough to answer the red prompt.
+                        ["timeout"] = 300_000,
                     },
                 },
-            };
+            });
         }
-        var servers = new JsonObject();
+        var servers = settings["mcpServers"] as JsonObject ?? new JsonObject();
         if (!string.IsNullOrWhiteSpace(chatToolsConfigJson))
         {
             try
@@ -281,20 +305,24 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         ?? userServers.Distinct().ToList();
 
     /// <summary>~/.gemini/settings.json (the user's own Gemini CLI settings), or null.</summary>
-    private static JsonObject? ReadUserSettings()
+    public static JsonObject? ReadUserSettings()
     {
         try
         {
             string path = Path.Combine(GeminiHome(), "settings.json");
-            return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path)) as JsonObject : null;
+            // The CLI reads JSON with comments; this copy becomes the turn's settings, so a comment must not lose them.
+            return File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path), null,
+                new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject : null;
         }
         catch { return null; }
     }
 
-    private static string GeminiHome() =>
+    private static string UserHome() =>
         Environment.GetEnvironmentVariable("GEMINI_CLI_HOME") is { Length: > 0 } h
-            ? Path.Combine(h, ".gemini")
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini");
+            ? h
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    private static string GeminiHome() => Path.Combine(UserHome(), ".gemini");
 
     /// <summary>brainx-brain as Claude Code registers it in ~/.claude.json, or null.</summary>
     private static string? BrainServerFromClaude()
@@ -333,28 +361,43 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(Id, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId! : "";
 
-        // The turn's system settings: the guard (worker turns), CluadeX's chat tools, the brain.
+        // The turn's own home: the user's settings plus the guard (worker turns), CluadeX's chat tools, the brain.
         var user = ReadUserSettings();
         var userServers = (user?["mcpServers"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? new List<string>();
         string? chatToolsJson = null;
         if (!string.IsNullOrWhiteSpace(extras?.ToolsConfig))
             try { chatToolsJson = await File.ReadAllTextAsync(extras.ToolsConfig, ct); } catch { chatToolsJson = null; }
         string? brain = userServers.Contains(BrainServerName) ? null : BrainServerFromClaude();
-        var systemSettings = BuildSystemSettings(Safety.GuardHook.ExePath(), chatToolsJson, brain, guard: worker);
-        string? settingsPath = null;
+        GeminiTurnHome? turn = null;
+        var turnSettings = new JsonObject();
+        string? turnError = null;
         try
         {
-            string dir = Path.Combine(Path.GetTempPath(), "cluadex-guard");
-            Directory.CreateDirectory(dir);
-            settingsPath = Path.Combine(dir, $"gemini-dev-{Guid.NewGuid():N}.json");
-            await File.WriteAllTextAsync(settingsPath, systemSettings.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
-                new UTF8Encoding(false), ct);
+            turn = GeminiTurnHome.Create();
+            var hooks = worker
+                ? turn.WriteGuardHooks(AntigravityDevProvider.ShortPath(Safety.GuardHook.ExePath()), noEdit: grant is { Run: true, Edit: false })
+                : null;
+#if DEBUG
+            // tests/safetytest: the CLI ignored the turn's hooks, as it ignored the system settings file on 0.64.
+            if (Environment.GetEnvironmentVariable("CLUADEX_GEMINI_TEST_NO_HOOKS") == "1") hooks = null;
+#endif
+            turnSettings = BuildTurnSettings(hooks, chatToolsJson, brain, user);
+            turn.CarryUserHome(UserHome(), GeminiHome());
+            await turn.WriteSettingsAsync(turnSettings, ct);
         }
-        catch { settingsPath = null; }
-        if (worker && settingsPath == null)
+        catch (OperationCanceledException) { turn?.Delete(); throw; }
+        catch (Exception ex) { turnError = ex.Message; }
+        if (turnError != null)
         {
-            // No settings file = no guard: the turn runs without the shell rather than unguarded.
-            grant = grant! with { Run = false };
+            turn?.Delete();
+            turn = null;
+            if (worker)
+            {
+                // No home = no guard: the turn does not run at all (--approval-mode would let it edit or run unchecked).
+                OnError?.Invoke("Gemini Dev: could not write the turn's guard: " + turnError);
+                yield return "⛔ Gemini Dev ไม่ได้รัน — เขียนไฟล์ตัวกันความปลอดภัยของเทิร์นนี้ไม่สำเร็จ (" + Cap(turnError, 200) + ") จึงไม่ปล่อยให้ Gemini CLI ทำงานโดยไม่มีตัวกัน";
+                yield break;
+            }
         }
 
         var psi = new ProcessStartInfo(cli.Node)
@@ -371,15 +414,20 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         psi.ArgumentList.Add(cli.Script);
         foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras),
                      CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd))) psi.ArgumentList.Add(a);
-        if (settingsPath != null) psi.Environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = settingsPath;
-        if (grant is { Run: true, Edit: false }) psi.Environment[Safety.GuardHook.NoEditEnv] = "1";
+#if DEBUG
+        // Debug builds only: tests/safetytest drives this turn with the real CLI and a recorded model (--fake-responses).
+        if (Environment.GetEnvironmentVariable("CLUADEX_GEMINI_TEST_ARGS") is { Length: > 0 } testArgs)
+            foreach (var a in testArgs.Split('|')) psi.ArgumentList.Add(a);
+#endif
+        if (turn != null) psi.Environment["GEMINI_CLI_HOME"] = turn.Home;
         psi.Environment["NO_COLOR"] = "1";
         // Without a TTY the CLI warns "256-color support not detected" on stderr every turn; TERM quiets it.
         psi.Environment["TERM"] = "xterm-256color";
 
-        var translator = new GeminiStreamTranslator(ServerNamesOf(systemSettings, userServers));
+        var translator = new GeminiStreamTranslator(ServerNamesOf(turnSettings, userServers));
         SetStatus("Gemini Dev thinking…");
         Process? proc = null;
+        bool hooksSeen = !worker, hooksMissing = false;
         try
         {
             proc = Process.Start(psi);
@@ -409,7 +457,15 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             bool any = false;
             while ((line = await ReadLineOrNullAsync(proc.StandardOutput, timeout.Token)) != null)
             {
-                foreach (var claudeLine in translator.Translate(line))
+                var claudeLines = translator.Translate(line);
+                // Fail closed: the CLI ran SessionStart before its first event, so no marker = the guard is not loaded.
+                if (translator.Started && !hooksSeen && !(hooksSeen = File.Exists(turn!.Marker)))
+                {
+                    hooksMissing = true;
+                    try { proc.Kill(entireProcessTree: true); } catch { }
+                    break;
+                }
+                foreach (var claudeLine in claudeLines)
                 {
                     DelegatedUsageEstimate.Current.Value?.Feed(claudeLine);
                     try { sink?.Invoke(claudeLine); } catch { }
@@ -425,6 +481,16 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
                     translator.TakeText();   // the rows carry it
                     if (translator.HasOutput && !any) { any = true; SetStatus("Gemini Dev working…"); }
                 }
+            }
+            if (hooksMissing)
+            {
+                OnError?.Invoke("Gemini Dev: the Gemini CLI did not load CluadeX's guard hooks");
+                SetStatus("Ready");
+                yield return "⛔ **หยุด Gemini Dev ก่อนเริ่มทำงาน** — Gemini CLI ไม่ได้โหลดตัวกันความปลอดภัยของ CluadeX (hook) "
+                    + "จึงไม่ปล่อยให้รันต่อโดยไม่มีตัวกัน\n\nสาเหตุที่พบบ่อย: ไฟล์ `.gemini/settings.json` ในโปรเจกต์ปิด hook ไว้ "
+                    + "(`hooksConfig.enabled: false`) — ลบค่านั้นออก หรือ Gemini CLI รุ่นใหม่เปลี่ยนวิธีโหลด hook — "
+                    + "ระหว่างนี้ใช้โมเดลอื่นในกล่องเลือกโมเดลได้";
+                yield break;
             }
             foreach (var claudeLine in translator.Flush())
             {
@@ -453,7 +519,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         {
             try { if (proc is { HasExited: false }) proc.Kill(entireProcessTree: true); } catch { }
             proc?.Dispose();
-            if (settingsPath != null) try { File.Delete(settingsPath); } catch { }
+            turn?.Delete();
         }
     }
 
@@ -488,7 +554,14 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         || text.Contains("quota", StringComparison.OrdinalIgnoreCase)
         || text.Contains("429", StringComparison.Ordinal)
         || IsIneligibleAccount(text)
-        || IsDeniedProject(text));
+        || IsDeniedProject(text)
+        || NeedsBilling(text));
+
+    /// <summary>Google asks the API key's Cloud project to pay: "The Gemini API free tier is not available for this
+    /// project. … please set up billing" (403, seen 2026-10-31 on CLI 0.64 with a key chosen with /auth, on every model).
+    /// A new key in the same project does not help (ai.google.dev/gemini-api/docs/troubleshooting).</summary>
+    public static bool NeedsBilling(string? text) => text != null
+        && text.Contains("free tier is not available", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Google refuses the API key's Cloud project: `[API Error: {"error":{"code":403,"message":"Your project has
     /// been denied access. Please contact support.","status":"PERMISSION_DENIED"}}]` (seen 2026-10-19, CLI 0.64 with a
@@ -520,6 +593,15 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
                  + "3. เปิดเทอร์มินัลรัน `gemini` พิมพ์ `/auth` แล้วเลือก **Use Gemini API key**\n"
                  + "4. ปิด-เปิด CluadeX ใหม่ (ให้เห็นตัวแปรใหม่) แล้วกด **ลองใหม่**\n\n"
                  + "ระหว่างนี้เปลี่ยนไปใช้โมเดลอื่นในกล่องเลือกโมเดลได้ (เช่น Gemini API ที่มีคีย์ หรือ Claude Dev)";
+        if (NeedsBilling(refusal))
+            return $"💳 **Google ไม่เปิด Gemini API แบบฟรีให้โปรเจกต์ของ API key นี้**\n\nข้อความจาก Gemini CLI: `{raw}`\n\n"
+                 + "CluadeX และ Gemini CLI เชื่อมต่อถึง Google แล้ว แต่ Google ไม่ให้โปรเจกต์นี้ใช้ free tier ทุกโมเดลจึงตอบ 403 เหมือนกัน "
+                 + "รอ ล็อกอินใหม่ หรือสร้างคีย์ใหม่ในโปรเจกต์เดิมก็ไม่หาย\n\n"
+                 + "**วิธีแก้:**\n"
+                 + "1. เปิด https://aistudio.google.com/billing แล้วผูกบัญชี Cloud Billing กับโปรเจกต์นี้ "
+                 + "(มีค่าใช้จ่ายตามราคา Gemini API หรือหักจากเครดิต Google Cloud)\n"
+                 + "2. กลับมากด **ลองใหม่** — ใช้คีย์เดิมได้\n\n"
+                 + "ระหว่างนี้เปลี่ยนไปใช้โมเดลอื่นในกล่องเลือกโมเดลได้ (เช่น Antigravity Dev หรือ Claude Dev)";
         if (IsDeniedProject(refusal))
             return $"⛔ **Google ปฏิเสธ API key นี้ (โปรเจกต์ของคีย์ถูกระงับสิทธิ์)**\n\nข้อความจาก Gemini CLI: `{raw}`\n\n"
                  + "Google ตอบ 403 PERMISSION_DENIED — โปรเจกต์ Google Cloud ที่คีย์นี้สังกัดอยู่ถูก Google ปิดสิทธิ์ใช้ Gemini API "
@@ -673,6 +755,8 @@ public sealed class GeminiStreamTranslator
     public string? ResultText { get; private set; }
     public bool Done { get; private set; }
     public bool HasOutput { get; private set; }
+    /// <summary>The CLI's first event arrived (its SessionStart hooks have run by then).</summary>
+    public bool Started { get; private set; }
 
     /// <summary>Plain reply text not yet taken (for a read-only turn, which streams text instead of rows).</summary>
     public string TakeText()
@@ -690,6 +774,7 @@ public sealed class GeminiStreamTranslator
         try { node = JsonNode.Parse(line); }
         catch (JsonException) { return output; }
         if (node is not JsonObject ev) return output;
+        Started = true;
         string type = ev["type"]?.GetValue<string>() ?? "";
         switch (type)
         {

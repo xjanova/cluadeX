@@ -139,6 +139,18 @@ internal static class GeminiDevWire
         }
         check("gd-auth", "an ineligible-account refusal is not taken for a denied project", !GeminiDevProvider.IsDeniedProject(picked), "");
 
+        // The real refusal on the owner's key (2026-10-31, CLI 0.64, every model): a project with no free tier.
+        string noFree = "[API Error: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 403,\\n    \\\"message\\\": \\\"The Gemini API free tier is not available for this project. "
+            + "To use the Gemini API, please set up billing to upgrade to the paid tier at https://aistudio.google.com/billing.\\\",\\n    \\\"status\\\": \\\"PERMISSION_DENIED\\\"\\n  }\\n}\\n\",\"code\":403,\"status\":\"Forbidden\"}}]";
+        check("gd-auth", "a 403 'free tier is not available' is a refusal, and not read as a blocked project", GeminiDevProvider.LooksLikeAuthRefusal(noFree) && GeminiDevProvider.NeedsBilling(noFree), noFree);
+        foreach (bool si in new[] { true, false })
+        {
+            string? bhelp = GeminiDevProvider.AuthGuidance(noFree, signedIn: si);
+            check("gd-auth", $"no free tier (signedIn={si}) → the billing page and 'the same key works', not 'make a new key' and not /login",
+                bhelp != null && bhelp.Contains("aistudio.google.com/billing") && bhelp.Contains("ใช้คีย์เดิมได้")
+                && !bhelp.Contains("Create API key") && !bhelp.Contains("/login"), bhelp ?? "");
+        }
+
         // ─── signed in: a key chosen with /auth lives in the OS keychain; only settings.json shows it ───
         string ghome = Path.Combine(Path.GetTempPath(), "cx-gemini-home-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(ghome);
@@ -181,7 +193,7 @@ internal static class GeminiDevWire
         // ─── the turn's settings: chat tools + the brain as MCP servers ───
         string bridge = J(new { mcpServers = new { cluadex = new { command = @"C:\x\CluadeX.exe", args = new[] { "--cx-tools" }, env = new { CLUADEX_TOOLS_TOKEN = "t" } } } });
         string brain = J(new { type = "stdio", command = @"C:\Users\x\.brainx\mcp\brainx-mcp.exe", args = new[] { @"G:\Obsidian" } });
-        var settings = GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", bridge, brain, guard: true);
+        var settings = GeminiDevProvider.BuildTurnSettings(new GeminiDevProvider.TurnHooks("id", "& 'g.cmd'", "& 'l.cmd'"), bridge, brain);
         var servers = settings["mcpServers"]?.AsObject();
         check("gd-settings", "CluadeX's chat tools and the brain become the CLI's MCP servers (the brain without Claude's \"type\")",
             servers != null && servers["cluadex"]?["command"]?.GetValue<string>() == @"C:\x\CluadeX.exe"

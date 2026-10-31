@@ -54,6 +54,7 @@ internal static class Program
             GeminiDevGuard();
             AntigravityGuardChecks(work);
             ChatTools(work);
+            GeminiCliReal.Run(work, Check, MatchingExe);
             RunGates(work);
             DayApprovalChecks(work);
             DangerGate();
@@ -418,11 +419,20 @@ internal static class Program
         foreach (var fine in new[] { "git push -u origin feature/fix", "git push --recurse-submodules=check", "git push origin main --tags", "git push --dry-run" })
             Check($"…an ordinary push stays allowed ({fine})", GuardHook.NeverRun(fine) == null);
 
-        var settings = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: true).ToJsonString();
-        Check("the turn's settings hold the BeforeTool hook on Gemini's shell/write/replace with --cx-guard, timeout in ms",
-            settings.Contains("BeforeTool") && settings.Contains("run_shell_command|write_file|replace") && settings.Contains("--cx-guard")
+        var hooks = new CluadeX.Services.Providers.GeminiDevProvider.TurnHooks("abc", "& 'g.cmd'", "& 'l.cmd'");
+        var mine = System.Text.Json.Nodes.JsonNode.Parse("""{"hooksConfig":{"enabled":false},"hooks":{"BeforeTool":[{"hooks":[]}]},"mcpServers":{"own":{"command":"x"}},"general":{"a":1}}""") as System.Text.Json.Nodes.JsonObject;
+        var settings = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(hooks, null, null, mine).ToJsonString();
+        Check("the turn's settings hold the BeforeTool hook on Gemini's shell/write/replace, timeout in ms, named for this turn",
+            settings.Contains("run_shell_command|write_file|replace") && settings.Contains("cluadex-guard-abc") && settings.Contains("cluadex-loaded-abc")
             && settings.Contains("300000") && settings.Contains("\"enabled\":true"), settings);
-        var advice = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: false).ToJsonString();
+        Check("…on top of the user's own settings, hooks and MCP servers", settings.Contains("\"own\"") && settings.Contains("\"general\"")
+            && System.Text.Json.Nodes.JsonNode.Parse(settings)?["hooks"]?["BeforeTool"]?.AsArray().Count == 2, settings);
+        Check("the wrapper goes through PowerShell's call operator (a bare quoted path is a parse error there)",
+            CluadeX.Services.Providers.GeminiTurnHome.PowerShellCall(@"C:\it's\guard.cmd") == @"& 'C:\it''s\guard.cmd'", "");
+        string cmd = CluadeX.Services.Providers.GeminiTurnHome.GuardCmd(@"C:\x\CluadeX.exe", noEdit: true);
+        Check("the wrapper holds --cx-guard, the no-edit flag and turns any failure into exit 2",
+            cmd.Contains("--cx-guard") && cmd.Contains(GuardHook.NoEditEnv + "=1") && cmd.Contains(GuardHook.TurnDirEnv) && cmd.Contains("exit /b 2"), cmd);
+        var advice = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, null, null).ToJsonString();
         Check("a read-only advice run carries no hook", !advice.Contains("BeforeTool"), advice);
 
         string? exe = MatchingExe();
@@ -821,7 +831,7 @@ internal static class Program
         Check("card: tools/list offers ask_user with its schema", list.Contains("\"name\":\"ask_user\"") && list.Contains("question"), list);
         var codex = CluadeX.Services.Providers.OpenAIDevProvider.McpOverrides(CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"));
         Check("card: Codex runs ask_user unasked (approval_policy=never would refuse it otherwise)", codex.Any(o => o.Contains("ask_user={approval_mode='approve'}")), string.Join("\n", codex));
-        var gemini = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings("x.exe", CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"), null, false);
+        var gemini = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, CluadeX.Services.Tools.ChatToolBridge.ConfigJson("x.exe", "t", "p"), null);
         Check("card: Gemini's read-only mode may call CluadeX's own tools", gemini["mcpServers"]?["cluadex"]?["trust"]?.GetValue<bool>() == true, gemini.ToJsonString());
         string agyCall(string tool, string server) => JsonSerializer.Serialize(new { toolCall = new { name = "call_mcp_tool", args = new { ServerName = server, ToolName = tool } } });
         var readOnly = new CluadeX.Services.Safety.AntigravityGuard.Config(false, false, proj, proj);
@@ -929,9 +939,11 @@ internal static class Program
             Other("gemini", "node", new[] { gemini }, Ask, (config, psi) =>
             {
                 foreach (var a in CluadeX.Services.Providers.GeminiDevProvider.BuildArgs(dir, null, "default", null)) psi.ArgumentList.Add(a);
-                string settings = Path.Combine(dir, "gemini-system.json");
-                File.WriteAllText(settings, CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(exe, config, null, false).ToJsonString(), new UTF8Encoding(false));
-                psi.Environment["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = settings;
+                var turn = CluadeX.Services.Providers.GeminiTurnHome.Create();
+                string realHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                turn.CarryUserHome(realHome, Path.Combine(realHome, ".gemini"));
+                turn.WriteSettingsAsync(CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, config, null, CluadeX.Services.Providers.GeminiDevProvider.ReadUserSettings()), CancellationToken.None).GetAwaiter().GetResult();
+                psi.Environment["GEMINI_CLI_HOME"] = turn.Home;
                 psi.Environment["NO_COLOR"] = "1";
                 psi.Environment["TERM"] = "xterm-256color";
             });

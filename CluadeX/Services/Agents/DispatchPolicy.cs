@@ -187,7 +187,7 @@ public static class DispatchPolicy
         {
             AiProviderType.Anthropic => m.Contains("opus") || m.Contains("fable") || m.Contains("mythos") ? runModel : "claude-opus-5-5",
             AiProviderType.OpenAI => m.Contains("astra") ? runModel : "gpt-6-astra",
-            AiProviderType.Gemini => m.Contains("pro") ? runModel : "gemini-3.1-pro-preview",
+            AiProviderType.Gemini => m.Contains("pro") || m.Contains("argon") ? runModel : "gemini-3.1-pro-preview",
             _ => null,
         };
     }
