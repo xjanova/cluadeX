@@ -2048,6 +2048,12 @@ public partial class CodeAgentService
     private async Task<AgentLoopResult> RunDelegatedTurnAsync(Providers.IAiProvider provider, AiProviderType delegated,
         List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
     {
+        if (delegated is AiProviderType.ClaudeDev or AiProviderType.OpenAIDev
+            && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto)
+        {
+            var pick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, AgentRunScope.Current?.UserImages?.Count ?? 0, history));
+            _debugLog?.Info("Agent", $"effort auto starts at {pick.Effort} ({pick.ReasonKey}) · the CLI runs the turn, no climb");
+        }
         var result = await RunDelegatedTurnCoreAsync(provider, delegated, history, userMessage, ct, progress);
         if (!result.AuthRefused || provider is not Providers.IDelegatedCliProvider claudeDev) return result;
         string cliName = delegated switch { AiProviderType.GeminiDev => "Gemini Dev", AiProviderType.AntigravityDev => "Antigravity Dev", AiProviderType.OpenAIDev => "OpenAI Dev", _ => "Claude Dev" };
@@ -2517,8 +2523,7 @@ public partial class CodeAgentService
             && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto
             && AgentRunScope.Current is { } legacyScope)
         {
-            var pick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage, legacyScope.UserImages?.Count ?? 0,
-                history.Sum(h => CluadeX.Helpers.TokenBudget.EstimateTokens(h.Content))));
+            var pick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, legacyScope.UserImages?.Count ?? 0, history));
             legacyScope.EffortWhy = _localizationService.T("auto.why." + pick.ReasonKey);
             legacyScope.StepEffort = pick.Effort;
             legacyScope.LiveEffort = pick.Effort;
@@ -3101,12 +3106,10 @@ public partial class CodeAgentService
         bool smartEffortOn = !loopIsLocal && EffortLevels.Normalize(_settingsService.Settings.ReasoningEffort) == EffortLevels.Auto;
         bool taskNonTrivial = LooksNonTrivialTask(userMessage ?? "");
         // A long, multi-part brief earns a careful first (planning) step.
-        bool bigSpec = taskNonTrivial && (userMessage ?? "").Length >= 1500;
+        bool bigSpec = taskNonTrivial && AutoEffortPolicy.OwnWords(userMessage).Length >= 1500;
         // Where "auto" starts: read from the task (a bug, a plan, several files, a long brief, a retry, a picture, a long
         // chat), not from "is there a verb" — and the reason goes beside the level in the chat.
-        var autoPick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage,
-            AgentRunScope.Current?.UserImages?.Count ?? 0,
-            history.Sum(h => CluadeX.Helpers.TokenBudget.EstimateTokens(h.Content))));
+        var autoPick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, AgentRunScope.Current?.UserImages?.Count ?? 0, history));
         int effortBase = autoPick.Level;
         bool effortPlanFirst = autoPick.PlanFirst || bigSpec;
         string effortWhyKey = autoPick.ReasonKey;
@@ -4605,8 +4608,8 @@ public partial class CodeAgentService
     /// tool call / planning) vs a trivial question? Length or an action verb (EN or TH) ⇒ non-trivial.</summary>
     private static bool LooksNonTrivialTask(string userMessage)
     {
-        if (string.IsNullOrWhiteSpace(userMessage)) return false;
-        string m = userMessage.ToLowerInvariant();
+        string m = AutoEffortPolicy.OwnWords(userMessage).ToLowerInvariant();
+        if (m.Length == 0) return false;
         if (m.Length > 200) return true;
         string[] verbs =
         {

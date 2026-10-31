@@ -74,7 +74,7 @@ public partial class ChatViewModel
     public IReadOnlyList<BranchLink> StickyBranches { get => _stickyBranches; private set => SetProperty(ref _stickyBranches, value); }
 
     private string _stickyPlanHeader = "", _stickyPlanNow = "";
-    /// <summary>"แผนงาน 2/5".</summary>
+    /// <summary>"แผนงาน 2/5": on the second of five.</summary>
     public string StickyPlanHeader { get => _stickyPlanHeader; private set => SetProperty(ref _stickyPlanHeader, value); }
     /// <summary>The item in progress (or the next one).</summary>
     public string StickyPlanNow { get => _stickyPlanNow; private set => SetProperty(ref _stickyPlanNow, value); }
@@ -149,10 +149,10 @@ public partial class ChatViewModel
             StickyPlanItems = items;
             // The plan's identity: its chat and its items' words (a status change keeps it; a new plan has new words).
             _stickyPlanSignature = session.Id + "|" + string.Join("|", items.Select(p => p.Text));
-            StickyPlanHeader = items.Count == 0 ? "" : $"{Loc("chat.plan")} {done}/{items.Count}";
-            StickyPlanNow = items.FirstOrDefault(p => p.IsActive)?.Text
-                            ?? items.FirstOrDefault(p => p.IsPending)?.Text
-                            ?? (items.Count > 0 ? Loc("chat.plan.allDone") : "");
+            // The number is the step it is on, not how many are finished: the third item running reads 3/5, never 2/5.
+            var now = items.FirstOrDefault(p => p.IsActive) ?? items.FirstOrDefault(p => p.IsPending);
+            StickyPlanHeader = items.Count == 0 ? "" : $"{Loc("chat.plan")} {now?.Number ?? items.Count}/{items.Count}";
+            StickyPlanNow = now?.Text ?? (items.Count > 0 ? Loc("chat.plan.allDone") : "");
             StickyPlanProgress = items.Count == 0 ? 0 : (double)done / items.Count;
 
             string TitleOf(string id) => Sessions.FirstOrDefault(s => s.Id == id)?.Title ?? "";

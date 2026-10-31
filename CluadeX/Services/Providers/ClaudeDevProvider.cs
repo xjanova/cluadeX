@@ -287,11 +287,11 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// them; the CLI's own hooks then report the level it really ran at. An explicit pick goes out as it is.
     /// Returns (level to send, reason key or null).
     /// </summary>
-    public static (string Effort, string? WhyKey) ResolveEffort(string setting, string userMessage, int images)
+    public static (string Effort, string? WhyKey) ResolveEffort(string setting, string userMessage, int images, IEnumerable<ChatMessage>? history = null)
     {
         string s = Models.EffortLevels.Normalize(setting);
         if (s != Models.EffortLevels.Auto) return (s, null);
-        var pick = AutoEffortPolicy.Pick(new AutoEffortPolicy.Input(userMessage, images));
+        var pick = AutoEffortPolicy.Pick(AutoEffortPolicy.ForTurn(userMessage, images, history));
         return (pick.Effort, pick.ReasonKey);
     }
 
@@ -518,7 +518,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         string model = _settingsService.Settings.ProviderConfigs.TryGetValue(ProviderId, out var cfg)
             && !string.IsNullOrWhiteSpace(cfg.EffectiveModelId) ? cfg.EffectiveModelId : "";
         var effortScope = AgentRunScope.Current;
-        var (effort, whyKey) = ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, effortScope?.UserImages?.Count ?? 0);
+        var (effort, whyKey) = ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, effortScope?.UserImages?.Count ?? 0, history);
         if (effortScope != null) effortScope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;
         var extras = Extras.Value;
         if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
