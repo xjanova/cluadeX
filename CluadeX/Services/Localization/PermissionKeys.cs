@@ -144,6 +144,7 @@ internal static class PermissionKeys
         ["auto.why.longSpec"] = new() { ["en"] = "long brief", ["th"] = "โจทย์ยาว" },
         ["auto.why.bigTask"] = new() { ["en"] = "big, hard task", ["th"] = "งานใหญ่และยาก" },
         ["auto.why.retry"] = new() { ["en"] = "still not fixed", ["th"] = "ครั้งก่อนยังไม่หาย" },
+        ["auto.why.carryOn"] = new() { ["en"] = "carrying on the last task", ["th"] = "ทำงานเดิมต่อ" },
         ["auto.why.image"] = new() { ["en"] = "has a picture", ["th"] = "มีรูปให้ดู" },
         ["auto.why.bigContext"] = new() { ["en"] = "long conversation", ["th"] = "บทสนทนายาว" },
         ["auto.why.wrapUp"] = new() { ["en"] = "summing up", ["th"] = "สรุปงาน" },
