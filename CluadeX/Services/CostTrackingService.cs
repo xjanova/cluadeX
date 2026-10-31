@@ -548,7 +548,9 @@ public class CostTrackingService
             _ when m.Contains("o1-pro") => new(150.0m, 600.0m, 0m, 0m),
             _ when m.Contains("o1") => new(15.0m, 60.0m, 0m, 0m),
 
-            // ── Google Gemini Models ── (paid tier, October 2026; 3.6–3.8 Flash promo price until 2026-12-31)
+            // ── Google Gemini Models ── (paid tier, October 2026; 3.6–3.8 Flash promo price until 2026-12-31,
+            // 4 Argon's until 2026-11-30, then double)
+            _ when m.Contains("gemini-4-argon") => new(2.0m, 10.0m, 0.10m, 0m),
             _ when m.Contains("gemini-3.8-flash") || m.Contains("gemini-3.7-flash") || m.Contains("gemini-3.6-flash")
                 => new(0.75m, 3.75m, 0.075m, 0m),
             _ when m.Contains("gemini-3.5-flash-lite") => new(0.30m, 2.50m, 0.03m, 0m),
@@ -557,7 +559,7 @@ public class CostTrackingService
             _ when m.Contains("gemini-3.1-pro") => new(2.0m, 12.0m, 0.20m, 0m),
             _ when m.Contains("gemini-2.5-flash-lite") => new(0.10m, 0.40m, 0m, 0m),
             _ when m.Contains("gemini-3-pro") => new(2.0m, 12.0m, 0m, 0m),
-            _ when m.Contains("gemini-3-flash") => new(0.30m, 2.5m, 0m, 0m),
+            _ when m.Contains("gemini-3-flash") => new(0.50m, 3.0m, 0.05m, 0m),
             _ when m.Contains("gemini-2.5-pro") => new(1.25m, 10.0m, 0m, 0m),
             _ when m.Contains("gemini-2.5-flash") => new(0.30m, 2.50m, 0m, 0m),
             _ when m.Contains("gemini-2.0") => new(0.10m, 0.40m, 0m, 0m),

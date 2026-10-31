@@ -18,12 +18,13 @@ public class GeminiProvider : ApiProviderBase, IModelLister
     public const string DefaultModel = "gemini-3.8-flash";
 
     // Newest first (October 2026). Only the offline starting list: Test Connection replaces it with the
-    // models this key can call (GET /v1beta/models). gemini-2.0-* and all 1.5 models are shut down;
-    // 2.5 is still served, but only to accounts that already used it.
+    // models this key can call (GET /v1beta/models). gemini-2.0-*, all 1.5 models and gemini-3-pro-preview are shut
+    // down; 3.7 Flash and 3.5 Flash now route to 3.8 and 3.6; 2.5 is still served, but only to accounts that already
+    // used it. gemini-4-argon has no free tier.
     public static readonly string[] KnownModels =
     [
-        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
-        "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+        "gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash",
+        "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
         "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
         // Gemma (open models served by the same API)
         "gemma-4-31b-it", "gemma-4-26b-a4b-it", "gemma-4-e4b-it", "gemma-4-e2b-it",
@@ -31,9 +32,11 @@ public class GeminiProvider : ApiProviderBase, IModelLister
     ];
 
     private const string KeysUrl = "aistudio.google.com/apikey";
-    private const string BillingUrl = "aistudio.google.com/usage";
+    private const string BillingUrl = "aistudio.google.com/billing";
     // maxOutputTokens counts thinking tokens; a local-model-sized cap leaves nothing for the answer.
     private const int ThinkingMaxTokensFloor = 32768;
+    // Gemini 4 refuses more than this outside background mode (a 400).
+    private const int Gemini4MaxOutputTokens = 65536;
 
     public enum ThinkingControl { None, Level, Budget }
 
@@ -127,11 +130,9 @@ public class GeminiProvider : ApiProviderBase, IModelLister
     private static Dictionary<string, object> BuildGenerationConfig(string model, AppSettings settings)
     {
         var thinking = ThinkingOf(model);
-        var generationConfig = new Dictionary<string, object>
-        {
-            ["maxOutputTokens"] = thinking == ThinkingControl.None
-                ? settings.MaxTokens : Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor),
-        };
+        int maxTokens = thinking == ThinkingControl.None ? settings.MaxTokens : Math.Max(settings.MaxTokens, ThinkingMaxTokensFloor);
+        if (model.StartsWith("gemini-4", StringComparison.OrdinalIgnoreCase)) maxTokens = Math.Min(maxTokens, Gemini4MaxOutputTokens);
+        var generationConfig = new Dictionary<string, object> { ["maxOutputTokens"] = maxTokens };
         // Sampling is ignored by Gemini 3 and announced to become a 400 — only older models get it.
         if (thinking != ThinkingControl.Level)
         {

@@ -131,6 +131,27 @@ public static class GuardHook
     /// then refuses Gemini's file-writing tools outright.</summary>
     public const string NoEditEnv = "CLUADEX_GUARD_NO_EDIT";
 
+    /// <summary>Set by a Gemini Dev run's hook wrapper: the turn's GEMINI_CLI_HOME, which holds this hook and the settings
+    /// that load it.</summary>
+    public const string TurnDirEnv = "CLUADEX_GUARD_TURN_DIR";
+
+    /// <summary>Does this Gemini tool call reach the turn's own files? Its .gemini\tmp is the CLI's scratch space (plans,
+    /// tool output), free to use. Pure.</summary>
+    public static bool TouchesTurnDir(string tool, string text, string turnDir)
+    {
+        static string Norm(string s) => s.Replace('/', '\\').Trim().TrimEnd('\\');
+        string dir = Norm(turnDir), t = Norm(text);
+        if (dir.Length == 0 || t.Length == 0) return false;
+        string scratch = dir + @"\.gemini\tmp";
+        if (tool == "run_shell_command")
+        {
+            if (t.Contains("GEMINI_CLI_HOME", StringComparison.OrdinalIgnoreCase)) return true;
+            t = t.Replace(scratch, "", StringComparison.OrdinalIgnoreCase);
+            return t.Contains(dir, StringComparison.OrdinalIgnoreCase);
+        }
+        return t.StartsWith(dir + @"\", StringComparison.OrdinalIgnoreCase) && !t.StartsWith(scratch, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Gemini CLI's tool names (Gemini Dev runs carry this hook as a BeforeTool hook, same exe).</summary>
     private static bool IsGeminiTool(string tool) => tool is "run_shell_command" or "write_file" or "replace";
 
@@ -187,6 +208,11 @@ public static class GuardHook
             string called = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
             if (called is "write_file" or "replace" && Environment.GetEnvironmentVariable(NoEditEnv) == "1")
                 return Block("CluadeX safety: this run may run commands but not edit files — propose the change as a diff instead.");
+            if (Environment.GetEnvironmentVariable(TurnDirEnv) is { Length: > 0 } turnDir
+                && root.TryGetProperty("tool_input", out var turnIn) && turnIn.ValueKind == JsonValueKind.Object)
+                foreach (var key in new[] { "command", "file_path" })
+                    if (turnIn.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String && TouchesTurnDir(called, v.GetString() ?? "", turnDir))
+                        return Block("CluadeX safety: this turn's guard files are off limits — leave GEMINI_CLI_HOME alone.");
             if (called == "run_shell_command" && root.TryGetProperty("tool_input", out var cmdIn) && cmdIn.ValueKind == JsonValueKind.Object
                 && cmdIn.TryGetProperty("command", out var cmd) && cmd.ValueKind == JsonValueKind.String && NeverRun(cmd.GetString() ?? "") is { } never)
                 return Block(never);

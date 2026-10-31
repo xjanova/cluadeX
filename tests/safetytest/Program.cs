@@ -53,6 +53,7 @@ internal static class Program
             GeminiDevGuard();
             AntigravityGuardChecks(work);
             ChatTools(work);
+            GeminiCliReal.Run(work, Check, MatchingExe);
             RunGates(work);
             DayApprovalChecks(work);
             DangerGate();
@@ -417,11 +418,20 @@ internal static class Program
         foreach (var fine in new[] { "git push -u origin feature/fix", "git push --recurse-submodules=check", "git push origin main --tags", "git push --dry-run" })
             Check($"…an ordinary push stays allowed ({fine})", GuardHook.NeverRun(fine) == null);
 
-        var settings = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: true).ToJsonString();
-        Check("the turn's settings hold the BeforeTool hook on Gemini's shell/write/replace with --cx-guard, timeout in ms",
-            settings.Contains("BeforeTool") && settings.Contains("run_shell_command|write_file|replace") && settings.Contains("--cx-guard")
+        var hooks = new CluadeX.Services.Providers.GeminiDevProvider.TurnHooks("abc", "& 'g.cmd'", "& 'l.cmd'");
+        var mine = System.Text.Json.Nodes.JsonNode.Parse("""{"hooksConfig":{"enabled":false},"hooks":{"BeforeTool":[{"hooks":[]}]},"mcpServers":{"own":{"command":"x"}},"general":{"a":1}}""") as System.Text.Json.Nodes.JsonObject;
+        var settings = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(hooks, null, null, mine).ToJsonString();
+        Check("the turn's settings hold the BeforeTool hook on Gemini's shell/write/replace, timeout in ms, named for this turn",
+            settings.Contains("run_shell_command|write_file|replace") && settings.Contains("cluadex-guard-abc") && settings.Contains("cluadex-loaded-abc")
             && settings.Contains("300000") && settings.Contains("\"enabled\":true"), settings);
-        var advice = CluadeX.Services.Providers.GeminiDevProvider.BuildSystemSettings(@"C:\x\CluadeX.exe", null, null, guard: false).ToJsonString();
+        Check("…on top of the user's own settings, hooks and MCP servers", settings.Contains("\"own\"") && settings.Contains("\"general\"")
+            && System.Text.Json.Nodes.JsonNode.Parse(settings)?["hooks"]?["BeforeTool"]?.AsArray().Count == 2, settings);
+        Check("the wrapper goes through PowerShell's call operator (a bare quoted path is a parse error there)",
+            CluadeX.Services.Providers.GeminiTurnHome.PowerShellCall(@"C:\it's\guard.cmd") == @"& 'C:\it''s\guard.cmd'", "");
+        string cmd = CluadeX.Services.Providers.GeminiTurnHome.GuardCmd(@"C:\x\CluadeX.exe", noEdit: true);
+        Check("the wrapper holds --cx-guard, the no-edit flag and turns any failure into exit 2",
+            cmd.Contains("--cx-guard") && cmd.Contains(GuardHook.NoEditEnv + "=1") && cmd.Contains(GuardHook.TurnDirEnv) && cmd.Contains("exit /b 2"), cmd);
+        var advice = CluadeX.Services.Providers.GeminiDevProvider.BuildTurnSettings(null, null, null).ToJsonString();
         Check("a read-only advice run carries no hook", !advice.Contains("BeforeTool"), advice);
 
         string? exe = MatchingExe();
