@@ -54,6 +54,38 @@
 
     <Window.Resources>
         <conv:EqualsMultiConverter x:Key="EqualsMulti"/>
+        <!-- A small on/off icon in the chat list's header. The on state is set on the glyph itself: a Foreground on the
+             button is a local value, which a template trigger on that property can never beat. -->
+        <Style x:Key="SidebarToggle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                            <TextBlock x:Name="glyph" Text="{TemplateBinding Content}" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource Text.Faint}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
+                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Selected}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="glyph" Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
+                                <Setter TargetName="glyph" Property="Opacity" Value="0.45"/>
+                                <Setter TargetName="bg" Property="Background" Value="Transparent"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <DataTemplate DataType="{x:Type vm:ChatViewModel}">
             <views:ChatView/>
         </DataTemplate>
@@ -695,59 +727,24 @@
                                             </ControlTemplate>
                                         </Button.Template>
                                     </Button>
-                                    <ToggleButton Width="24" Height="24"
+                                    <!-- Off when no project is open: every chat already shows, so a live button would answer nothing -->
+                                    <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE1A6;"
                                                   IsChecked="{Binding ChatVM.ShowAllProjectSessions}"
-                                                  Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                  Foreground="{DynamicResource Text.Faint}"
-                                                  ToolTip="{services:Loc nav.allProjectsTip}">
-                                        <ToggleButton.Template>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                    <TextBlock Text="&#xE1A6;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                               Foreground="{TemplateBinding Foreground}"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </ToggleButton.Template>
-                                    </ToggleButton>
+                                                  IsEnabled="{Binding ChatVM.HasProject}"
+                                                  ToolTipService.ShowOnDisabled="True"
+                                                  ToolTip="{Binding ChatVM.AllProjectsTip}"/>
                                     <!-- Split chats that were put away: show them (dimmed, with "bring back") -->
-                                    <ToggleButton Width="24" Height="24"
+                                    <ToggleButton Style="{StaticResource SidebarToggle}" Content="&#xE7B8;"
                                                   IsChecked="{Binding ChatVM.ShowArchivedSplits}"
-                                                  Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                                  Foreground="{DynamicResource Text.Faint}"
-                                                  ToolTip="{services:Loc chat.split.showAwayTip}">
-                                        <ToggleButton.Template>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                                    <TextBlock Text="&#xE7B8;" FontFamily="Segoe MDL2 Assets" FontSize="10"
-                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                               Foreground="{TemplateBinding Foreground}"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="Foreground" Value="{DynamicResource Sidebar.Toggle.Checked}"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter TargetName="bg" Property="Background" Value="{DynamicResource State.Hover}"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </ToggleButton.Template>
-                                    </ToggleButton>
+                                                  ToolTip="{services:Loc chat.split.showAwayTip}"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
 
-                            <!-- Search box -->
-                            <Border Grid.Row="1" Margin="14,2,14,10" Padding="8,0"
+                            <!-- Search box, then what the list holds: the top rows often stay the same when the filter changes,
+                                 so the count is what shows the button did something -->
+                            <StackPanel Grid.Row="1">
+                            <Border Margin="14,2,14,6" Padding="8,0"
                                     Background="{DynamicResource Surface.Input}"
                                     BorderBrush="{DynamicResource Border.Default}" BorderThickness="1"
                                     CornerRadius="6">
@@ -776,12 +773,46 @@
                                     </Button>
                                 </Grid>
                             </Border>
+                            <TextBlock Text="{Binding ChatVM.SidebarFilterText}" FontSize="10.5" Margin="16,0,14,6"
+                                       Foreground="{DynamicResource Text.Muted}" TextTrimming="CharacterEllipsis">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ChatVM.SidebarFilterText}" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            </StackPanel>
 
                             <!-- Sessions list / search results -->
-                            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="6,0,6,12">
-                                <Grid>
-                                    <!-- Normal session list -->
-                                    <ItemsControl ItemsSource="{Binding ChatVM.VisibleSessions}">
+                                <Grid Grid.Row="2">
+                                    <!-- Normal session list. Only the rows in view are built: pressing "all projects" built all
+                                         of them at once on the UI thread, over a second for 84 chats on an idle machine. -->
+                                    <ItemsControl ItemsSource="{Binding ChatVM.VisibleSessions}"
+                                                  VirtualizingPanel.IsVirtualizing="True"
+                                                  VirtualizingPanel.IsVirtualizingWhenGrouping="True"
+                                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                                  VirtualizingPanel.ScrollUnit="Pixel"
+                                                  ScrollViewer.CanContentScroll="True">
+                                        <ItemsControl.Template>
+                                            <ControlTemplate TargetType="ItemsControl">
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6,0,6,12" Focusable="False"
+                                                              CanContentScroll="True">
+                                                    <ItemsPresenter/>
+                                                </ScrollViewer>
+                                            </ControlTemplate>
+                                        </ItemsControl.Template>
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <VirtualizingStackPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
                                         <ItemsControl.GroupStyle>
                                             <GroupStyle>
                                                 <GroupStyle.HeaderTemplate>
@@ -1171,17 +1202,18 @@
                                     </TextBlock>
 
                                     <!-- Search results -->
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6,0,6,12">
+                                    <ScrollViewer.Style>
+                                        <Style TargetType="ScrollViewer">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ScrollViewer.Style>
                                     <ItemsControl ItemsSource="{Binding ChatVM.SearchResults}">
-                                        <ItemsControl.Style>
-                                            <Style TargetType="ItemsControl">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding ChatVM.IsSearchingHistory}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ItemsControl.Style>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSearchResultCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -1225,8 +1257,8 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
+                                    </ScrollViewer>
                                 </Grid>
-                            </ScrollViewer>
 
                             <!-- The project's files under the chats (owner 2026-10-18: "ช่องแสดงไฟล์ไปไว้ในด้านซ้าย ต่อจาก
                                  บทสนทนา จะเหมาะกว่าไว้ใต้แชท"); drag the line between them to share the height. -->
