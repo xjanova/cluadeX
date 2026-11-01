@@ -421,6 +421,21 @@ public class MainViewModel : ViewModelBase
             }
             NavigateTo(target);
         };
+        // A model that is not connected yet: the wizard, and back to the chat when it is (the typed message stayed in its box).
+        if (setupVM != null)
+        {
+            chatVM.ConnectionRequested += (provider, model) =>
+            {
+                setupVM.OpenWizard(provider, model, fromChat: true);
+                NavigateTo("Setup");
+            };
+            setupVM.ConnectCancelled += () => NavigateTo("Chat");
+            setupVM.ConnectFinished += async (provider, model) =>
+            {
+                NavigateTo("Chat");
+                await chatVM.ConnectionReadyAsync(provider, model);
+            };
+        }
         TimeMachineVM = timeMachineVM;
         HexEditorVM = hexEditorVM;
         CodeEditorVM = codeEditorVM;

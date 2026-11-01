@@ -316,6 +316,7 @@ internal static partial class Program
         await TestToolGrouping();             // G: tool rows fold together
         await TestRewindAndFork();            // RW: rewind to / fork from any message
         await TestModelSwitchNow();           // MS: the model box takes effect at once, mid-run too
+        await TestConnectWizardJump();        // CW: a model that is not connected opens its wizard
         await TestScreenGuard();              // S: one screen, many chats (follow tick, screen guard, draft rows)
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
@@ -2877,7 +2878,7 @@ internal sealed class FakeStep
 internal sealed record FakeCall(List<(MessageRole Role, string Content)> History, string Input);
 
 /// <summary>An offline provider: replays a script of steps and records what it was sent.</summary>
-internal sealed class FakeProvider : IAiProvider
+internal class FakeProvider : IAiProvider
 {
     public readonly Queue<FakeStep> Script = new();
     /// <summary>Scripts keyed by a marker in the conversation ("[A1]"): with several chats running at once, each

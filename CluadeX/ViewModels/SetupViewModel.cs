@@ -127,7 +127,15 @@ public sealed class SetupViewModel : ViewModelBase
     /// <summary>A row wants another page: ("Settings", provider) · ("McpServers", null) · ("License", null).</summary>
     public event Action<string, string?>? NavigateRequested;
 
+    /// <summary>The wizard finished: (provider, the model picked in the chat's box, or null). The chat switches to it.</summary>
+    public event Action<Models.AiProviderType, string?>? ConnectFinished;
+    /// <summary>The wizard was closed and the chat had sent the owner here.</summary>
+    public event Action? ConnectCancelled;
+
     public ObservableCollection<SetupGroupViewModel> Groups { get; } = new();
+    /// <summary>Every provider, for the cards at the top of the page.</summary>
+    public ObservableCollection<ConnectionCardViewModel> Connections { get; } = new();
+    public ConnectWizardViewModel Wizard { get; }
 
     private readonly ConnectionService? _connections;
     private readonly BrainXInstaller _brainInstaller;
@@ -141,6 +149,7 @@ public sealed class SetupViewModel : ViewModelBase
         _mcp = mcp;
         _brainInstaller = new BrainXInstaller(log);
         RecheckCommand = new AsyncRelayCommand(RecheckAsync);
+        Wizard = new ConnectWizardViewModel(this, setup);
         LocalizedResources.Instance.PropertyChanged += (_, _) => App.Current?.Dispatcher.BeginInvoke(Relabel);
     }
 
@@ -160,6 +169,21 @@ public sealed class SetupViewModel : ViewModelBase
     public void OnShown()
     {
         if (_facts == null && !_checking) _ = RecheckAsync();
+    }
+
+    /// <summary>What the last check found (null before the first one).</summary>
+    internal SetupFacts? Facts => _facts;
+
+    internal SetupRowViewModel? RowOf(string id) => Groups.SelectMany(g => g.Rows).FirstOrDefault(r => r.Id == id);
+
+    /// <summary>Open the wizard on one provider (the chat's model box and Send come here, and the page's cards).</summary>
+    public void OpenWizard(Models.AiProviderType provider, string? model = null, bool fromChat = false) => Wizard.Open(provider, model, fromChat);
+
+    internal void OnWizardFinished(Models.AiProviderType provider, string? model) => ConnectFinished?.Invoke(provider, model);
+
+    internal void OnWizardClosed(bool fromChat)
+    {
+        if (fromChat) ConnectCancelled?.Invoke();
     }
 
     public async Task RecheckAsync()
@@ -196,9 +220,16 @@ public sealed class SetupViewModel : ViewModelBase
         }
         int ready = items.Count(i => i.IsReady);
         Summary = LF("setup.summary", ready, items.Count);
+        foreach (var p in ProviderConnections.All)
+        {
+            var connection = ProviderConnections.For(p, facts);
+            if (Connections.FirstOrDefault(c => c.Provider == p) is { } card) card.Update(connection);
+            else Connections.Add(new ConnectionCardViewModel(connection, _setup.ProviderName(p), x => OpenWizard(x)));
+        }
         Banner = facts.InsidePackage ? L("setup.banner.insidePackage")
             : !SystemSetupService.AnyChatModelReady(facts) ? L("setup.banner.noModel")
             : "";
+        Wizard.Refresh(facts, fresh: !_reapplying);
     }
 
     private void Relabel()
@@ -208,8 +239,15 @@ public sealed class SetupViewModel : ViewModelBase
             g.Relabel();
             foreach (var r in g.Rows) r.Relabel();
         }
-        if (_facts != null) Apply(_facts);
+        foreach (var c in Connections) c.Relabel();
+        Wizard.Relabel();
+        _reapplying = true;
+        try { if (_facts != null) Apply(_facts); }
+        finally { _reapplying = false; }
     }
+
+    /// <summary>Apply is showing facts it already had (a language change): they say nothing new to an open wizard.</summary>
+    private bool _reapplying;
 
     /// <summary>A row's button.</summary>
     public async void Do(SetupRowViewModel row, SetupAction? action)
@@ -253,6 +291,9 @@ public sealed class SetupViewModel : ViewModelBase
                 case SetupActionKind.InstallBrainX:
                     await InstallBrainXAsync(row);
                     break;
+                case SetupActionKind.EnterKey:
+                    if (Enum.TryParse<Models.AiProviderType>(action.Target, out var keyFor)) await EnterKeyAsync(row, keyFor);
+                    break;
             }
         }
         catch (Exception ex)
@@ -274,6 +315,21 @@ public sealed class SetupViewModel : ViewModelBase
     // ═══════════════════════════════════════════════════════════════════
     //  Connections
     // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>The key goes straight into the store the Settings page uses, typed where nothing shows it. The provider's
+    /// own test says whether it works: formats change, so only blanks and spaces are refused here.</summary>
+    private async Task EnterKeyAsync(SetupRowViewModel row, Models.AiProviderType provider)
+    {
+        string name = _setup.ProviderName(provider);
+        string? key = Services.Helpers.InputDialog.Show(LF("connect.key.title", name), L("wizard.key.prompt"), secret: true,
+            okLabel: L("connect.key.save"), cancelLabel: L("connect.confirm.cancel"));
+        if (key == null) return;
+        key = key.Trim();
+        if (key.Length == 0 || key.Any(char.IsWhiteSpace)) { row.Note = L("wizard.key.bad"); return; }
+        if (!_setup.SaveApiKey(provider, key)) { row.Note = L("setup.note.failed"); return; }
+        await RecheckAsync();
+        SystemSetupService.RaiseToolsChanged();
+    }
 
     private static string Title(ConnectorDef c) => L(c.TitleKey);
 
