@@ -301,6 +301,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
                 return $"brain · reconnecting {(_reconnectAttempts.TryGetValue(name, out int a) ? a : 1)}/{MaxReconnectAttempts}";
             return GetServerState(name) switch
             {
+                McpServerState.Ready when !IsResponding(name) => "brain · not responding",
                 McpServerState.Ready    => $"brain {BrainVersionLabel}· {BrainToolCount} tools",
                 McpServerState.Starting => "brain · connecting…",
                 McpServerState.Failed   => "brain · DOWN",
@@ -541,6 +542,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             _ => BrainAutoConnect.Failed,
         };
     }
+
+    /// <summary>The user removed BrainX or said "Not interested": it is not connected by itself.</summary>
+    public bool BrainAutoConnectDeclined => _settingsService.Settings.BrainXAutoConnectDeclined;
 
     /// <summary>The user's answer to "connect BrainX by itself at startup?" — set when they remove a brain server
     /// on the MCP page or press "Not interested"; cleared only by an explicit Connect in the BrainX window.</summary>
@@ -1470,6 +1474,21 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             || head is "uv" && words.Count > 1 && words[1].Equals("tool", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>A connection to this server, wired to the supervisor — not started, and not yet the server's connection.</summary>
+    private IMcpTransport CreateTransport(string name, McpServerConfig config)
+    {
+        // A url entry is a server on the network (Streamable HTTP); everything else is a process on stdio.
+        IMcpTransport transport = config.IsRemote ? new McpHttpTransport() : new McpStdioTransport();
+        transport.OnServerError += msg => LogStderr(name, msg);
+        transport.OnUnexpectedExit += () => HandleTransportExit(name, transport);
+        transport.OnNotification += notif =>
+        {
+            if (notif.Method == "notifications/tools/list_changed")
+                _ = OnToolsListChangedAsync(name, transport);
+        };
+        return transport;
+    }
+
     private async Task<bool> StartServerCoreAsync(string name, McpServerConfig config, CancellationToken ct)
     {
         // Stop existing transport if running. Supervision comes off FIRST so the
@@ -1489,15 +1508,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         {
             Log(name, config.IsRemote ? $"Connecting: {config.Url}" : $"Starting: {config.Command} {string.Join(' ', config.Args)}");
 
-            // A url entry is a server on the network (Streamable HTTP); everything else is a process on stdio.
-            IMcpTransport transport = config.IsRemote ? new McpHttpTransport() : new McpStdioTransport();
-            transport.OnServerError += msg => LogStderr(name, msg);
-            transport.OnUnexpectedExit += () => HandleTransportExit(name, transport);
-            transport.OnNotification += notif =>
-            {
-                if (notif.Method == "notifications/tools/list_changed")
-                    _ = RefreshToolsAsync(name, CancellationToken.None);
-            };
+            var transport = CreateTransport(name, config);
 
             // Start process and wait for read loop to be ready (prevents race condition)
             await transport.StartAsync(config);
@@ -1506,18 +1517,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
             // Initialize handshake — 15 s by default, longer for a package runner's first start or when the entry
             // sets startupTimeoutSeconds (StartupTimeoutFor).
-            var initParams = new McpInitializeParams
-            {
-                ClientInfo = new McpClientInfo
-                {
-                    Name = "CluadeX",
-                    Version = AutoUpdateService.CurrentVersion,
-                },
-            };
-
             if (startupSeconds != DefaultStartupTimeoutSeconds)
                 Log(name, $"Waiting up to {startupSeconds}s for initialize (first start of a package runner, or the entry's startupTimeoutSeconds).");
-            var initResponse = await transport.SendRequestAsync("initialize", initParams, timeoutMs: startupSeconds * 1000, ct: ct);
+            var initResponse = await transport.SendRequestAsync("initialize", InitializeParams(), timeoutMs: startupSeconds * 1000, ct: ct);
 
             if (!initResponse.IsSuccess)
             {
@@ -1531,15 +1533,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             }
 
             // The server's own name + version (BrainX says e.g. "brainx-mcp 2.9.497") — shown on the brain chip.
-            try
-            {
-                if (initResponse.Result is { } res && res.TryGetProperty("serverInfo", out var si))
-                {
-                    string ver = si.TryGetProperty("version", out var v) ? v.GetString() ?? "" : "";
-                    if (ver.Length > 0) _serverVersions[name] = ver;
-                }
-            }
-            catch { }
+            if (ReadServerVersion(initResponse) is { } ver) _serverVersions[name] = ver;
+            else _serverVersions.TryRemove(name, out _);
 
             // Send initialized notification
             await transport.SendNotificationAsync("notifications/initialized", ct: ct);
@@ -1554,6 +1549,8 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
             // blocks, and a half-started transport must not trigger a respawn race.
             _supervised[name] = 1;
             _readySinceUtc[name] = DateTime.UtcNow;
+            NoteConnected(name);
+            _updates.TryRemove(name, out _);
             // This launch works on this machine (a package runner's package is downloaded now): the next app start
             // waits the normal 15 s, not 120.
             StartHistory.Record(name, config);
@@ -1609,6 +1606,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         // full budget again rather than inheriting a verdict from before the fix.
         _rapidCrashes.TryRemove(name, out _);
         _readySinceUtc.TryRemove(name, out _);
+        _updates.TryRemove(name, out _);
         if (_transports.TryGetValue(name, out var transport))
         {
             await transport.StopAsync();
@@ -1638,6 +1636,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
         _supervised.TryRemove(name, out _);
         _transports.TryRemove(name, out _);
+        _updates.TryRemove(name, out _);
         _toolRegistry.RemoveServer(name);
         try { OnToolsChanged?.Invoke(); } catch { }
 
@@ -1816,31 +1815,49 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         string serverName, string toolName, Dictionary<string, object> arguments,
         CancellationToken ct = default)
     {
-        if (!_transports.TryGetValue(serverName, out var transport) || !transport.IsAlive)
+        // Counted before it is sent, and only on the connection that is still the server's: a new build taking over
+        // (ReplaceBrainAsync) waits for this count, so a call must never slip onto a process that is being retired.
+        IMcpTransport transport;
+        CallCounter calls;
+        while (true)
         {
-            // Say WHICH of the several "not running" situations this is — the bare
-            // message sent the model (and the human) hunting for a config problem
-            // when the real answer was "it crashed and is coming back in 4s".
-            // For the model, in English. Its OWN last error (this used to quote the brain's for any server), and
-            // the 🧠 chip only as a route for the brain.
-            var state = GetServerState(serverName);
-            string route = LooksLikeBrain(serverName) ? "Ctrl+K → MCP Servers, or click the 🧠 chip" : "Ctrl+K → MCP Servers";
-            string lastError = _lastErrors.TryGetValue(serverName, out var le) ? le : "no detail";
-            string hint = state switch
+            if (!_transports.TryGetValue(serverName, out transport!) || !transport.IsAlive)
             {
-                McpServerState.Reconnecting => "it crashed and is being restarted — retry in a few seconds",
-                McpServerState.Failed       => $"it failed to start ({lastError}); restart it from MCP Servers ({route})",
-                McpServerState.Starting     => "it is still starting up — retry in a few seconds",
-                _                           => $"it is stopped; start it from MCP Servers ({route})",
-            };
-            throw new InvalidOperationException($"MCP server '{serverName}' is not running: {hint}");
+                // Say WHICH of the several "not running" situations this is — the bare
+                // message sent the model (and the human) hunting for a config problem
+                // when the real answer was "it crashed and is coming back in 4s".
+                // For the model, in English. Its OWN last error (this used to quote the brain's for any server), and
+                // the 🧠 chip only as a route for the brain.
+                var state = GetServerState(serverName);
+                string route = LooksLikeBrain(serverName) ? "Ctrl+K → MCP Servers, or click the 🧠 chip" : "Ctrl+K → MCP Servers";
+                string lastError = _lastErrors.TryGetValue(serverName, out var le) ? le : "no detail";
+                string hint = state switch
+                {
+                    McpServerState.Reconnecting => "it crashed and is being restarted — retry in a few seconds",
+                    McpServerState.Failed       => $"it failed to start ({lastError}); restart it from MCP Servers ({route})",
+                    McpServerState.Starting     => "it is still starting up — retry in a few seconds",
+                    _                           => $"it is stopped; start it from MCP Servers ({route})",
+                };
+                throw new InvalidOperationException($"MCP server '{serverName}' is not running: {hint}");
+            }
+            calls = _calls.GetOrCreateValue(transport);
+            Interlocked.Increment(ref calls.Count);
+            if (_transports.TryGetValue(serverName, out var still) && ReferenceEquals(still, transport)) break;
+            Interlocked.Decrement(ref calls.Count);
         }
 
         var callParams = new { name = toolName, arguments = arguments };
-        // 3 minutes, not the transport's 30 s default: brain_synthesize, media_generate and friends routinely run
-        // past 30 s, and a timeout there reported a tool that was still working as failed. The user's Stop
-        // (ct) still ends it at once.
-        var response = await transport.SendRequestAsync("tools/call", callParams, timeoutMs: 180_000, ct: ct);
+        JsonRpcResponse response;
+        try
+        {
+            // 3 minutes, not the transport's 30 s default: brain_synthesize, media_generate and friends routinely run
+            // past 30 s, and a timeout there reported a tool that was still working as failed. The user's Stop
+            // (ct) still ends it at once.
+            response = await transport.SendRequestAsync("tools/call", callParams, timeoutMs: 180_000, ct: ct);
+        }
+        finally { Interlocked.Decrement(ref calls.Count); }
+        if (response.IsSuccess && _transports.TryGetValue(serverName, out var serving) && ReferenceEquals(serving, transport))
+            NoteHeard(serverName);
 
         if (!response.IsSuccess)
         {
@@ -1878,49 +1895,7 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
 
         try
         {
-            var tools = new List<McpTool>();
-            string? cursor = null;
-            bool listed = false;
-            // tools/list is paginated (MCP 2025-03+): a server with many tools returns nextCursor, and reading only
-            // the first page silently dropped the rest. Bounded so a server that loops its cursor can't hang us.
-            for (int page = 0; page < 20; page++)
-            {
-                var response = await transport.SendRequestAsync("tools/list",
-                    cursor == null ? new { } : (object)new { cursor }, ct: ct);
-                cursor = null;
-                if (!response.IsSuccess || !response.Result.HasValue) break;
-                listed = true;
-
-                // Guard: only call TryGetProperty on Object-kind JsonElements, and ensure
-                // the 'tools' field is actually an array before enumerating. Malformed MCP
-                // servers can return unexpected shapes — prior code could throw here.
-                var result = response.Result.Value;
-                if (result.ValueKind != JsonValueKind.Object) break;
-                if (result.TryGetProperty("tools", out var toolsArray) && toolsArray.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var toolElem in toolsArray.EnumerateArray())
-                    {
-                        var tool = new McpTool
-                        {
-                            Name = toolElem.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-                            Description = toolElem.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "",
-                            Title = toolElem.TryGetProperty("title", out var t) ? t.GetString() : null,
-                            // Clone: the element must outlive this page's response document.
-                            InputSchema = toolElem.TryGetProperty("inputSchema", out var s) ? s.Clone() : null,
-                            ServerName = name,
-                        };
-
-                        if (!string.IsNullOrEmpty(tool.Name))
-                            tools.Add(tool);
-                    }
-                }
-                if (result.TryGetProperty("nextCursor", out var next) && next.ValueKind == JsonValueKind.String
-                    && next.GetString() is { Length: > 0 } nc)
-                    cursor = nc;
-                if (cursor == null) break;
-            }
-
-            if (listed)
+            if (await ListToolsAsync(transport, name, ct) is { } tools)
             {
                 _toolRegistry.UpdateServer(name, tools);
                 OnToolsChanged?.Invoke();
@@ -1931,6 +1906,53 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         {
             Log(name, $"Failed to list tools: {ex.Message}");
         }
+    }
+
+    /// <summary>Every page of tools/list on this connection, or null when the server answered none of it.</summary>
+    private static async Task<List<McpTool>?> ListToolsAsync(IMcpTransport transport, string name, CancellationToken ct)
+    {
+        var tools = new List<McpTool>();
+        string? cursor = null;
+        bool listed = false;
+        // tools/list is paginated (MCP 2025-03+): a server with many tools returns nextCursor, and reading only
+        // the first page silently dropped the rest. Bounded so a server that loops its cursor can't hang us.
+        for (int page = 0; page < 20; page++)
+        {
+            var response = await transport.SendRequestAsync("tools/list",
+                cursor == null ? new { } : (object)new { cursor }, ct: ct);
+            cursor = null;
+            if (!response.IsSuccess || !response.Result.HasValue) break;
+            listed = true;
+
+            // Guard: only call TryGetProperty on Object-kind JsonElements, and ensure
+            // the 'tools' field is actually an array before enumerating. Malformed MCP
+            // servers can return unexpected shapes — prior code could throw here.
+            var result = response.Result.Value;
+            if (result.ValueKind != JsonValueKind.Object) break;
+            if (result.TryGetProperty("tools", out var toolsArray) && toolsArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var toolElem in toolsArray.EnumerateArray())
+                {
+                    var tool = new McpTool
+                    {
+                        Name = toolElem.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        Description = toolElem.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "",
+                        Title = toolElem.TryGetProperty("title", out var t) ? t.GetString() : null,
+                        // Clone: the element must outlive this page's response document.
+                        InputSchema = toolElem.TryGetProperty("inputSchema", out var s) ? s.Clone() : null,
+                        ServerName = name,
+                    };
+
+                    if (!string.IsNullOrEmpty(tool.Name))
+                        tools.Add(tool);
+                }
+            }
+            if (result.TryGetProperty("nextCursor", out var next) && next.ValueKind == JsonValueKind.String
+                && next.GetString() is { Length: > 0 } nc)
+                cursor = nc;
+            if (cursor == null) break;
+        }
+        return listed ? tools : null;
     }
 
     /// <summary>Check if a server is running.</summary>
@@ -1945,13 +1967,14 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
     {
         if (_disposed) return;
         _disposed = true;
+        try { _liveStop.Cancel(); } catch { }
 
         // Disarm supervision BEFORE killing anything, or app shutdown looks like
         // five crashes and the reconnect loops race the process exit.
         _supervised.Clear();
 
         // Take a snapshot so concurrent mutation during shutdown is safe.
-        var snapshot = _transports.Values.ToList();
+        var snapshot = _transports.Values.Concat(_retiring.Keys).Distinct().ToList();
         _transports.Clear();
 
         // Shut down all servers in parallel, bounded total timeout.
