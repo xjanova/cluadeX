@@ -197,6 +197,8 @@ public partial class App : Application
                     // said "Not interested" before, or mcp_servers.json can't be read (registering means writing it).
                     // Not installed: invite, once.
                     var auto = await mcpManager.AutoConnectInstalledBrainAsync();
+                    // From here the page's status, the brain's version and a BrainX update are watched, not looked up once.
+                    mcpManager.StartLiveMonitor();
                     // Connections CluadeX kept in its own list move into BrainX once it is installed (BrainX first, never both).
                     try { await _serviceProvider.GetRequiredService<Services.Connections.ConnectionService>().ReconcileAsync(); }
                     catch (Exception ex) { dbg?.Warn("Connections", "moving connections to BrainX failed", ex); }

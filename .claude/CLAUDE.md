@@ -130,6 +130,24 @@ the one feature that genuinely needs an external adapter, so it **probes** for `
 - XDREAMER = ai.xman4289.com (`ConnectorCatalog.XDreamerUrl`), keys `axm-…` from /developer, `ConnectorNeed.None`.
 - Proven offline by `tests/mcptest` N1–N8 (in-process fake server) and `tests/setuptest` C1, C9b, C9c.
 
+## MCP page is live, and CluadeX follows BrainX (`McpServerManager.Live.cs`)
+- The page reads state, not a snapshot: state changes post to the VM, a 5 s timer redraws "connected for / last answer",
+  and pings (30 s local, 60 s remote) turn a process that is alive but silent into `unresponsive` — 2 missed in a row. A
+  server with a call in flight is never pinged (brainx-mcp reads stdin on one thread, busy is not hung), -32601 counts as
+  alive, -32603 does not (a launcher with no worker), and a server that never answered a ping is simply not pinged again.
+- BrainX's own launcher does the swap: `~\.brainx\mcp` is the same path for every version, the client's process is a thin
+  launcher, and it swaps its worker when idle, on the same pipe, ending with `tools/list_changed`. Its replayed initialize
+  answer is swallowed, so **nothing tells CluadeX the new version**: the brain (only the brain) is asked with a second
+  `initialize` when disk ≠ reported. Never send that to another server.
+- CluadeX steps in when the launcher didn't move within `BrainSwapGrace` (45 s) or the brain stops answering:
+  `ReplaceBrainAsync` starts the new process **beside** the old, handshake + tools + `SwapSoak`, then one atomic
+  `_transports.TryUpdate`. Old process drains its calls and stops; state never leaves Ready, tools never vanish. A build
+  that fails leaves the old serving, says so on the page, and is tried once per build stamp (dll mtime:length).
+- Only a `brainx-mcp` program is followed, not any server with "brain" in its name. A brain the user stopped stays stopped.
+- Proven by `tests/mcptest` L1–L20 (this exe copied to brainx-mcp.exe, a version is the text of runtime.version) and, on
+  demand, `dotnet run -- --real-launcher <copy of ~\.brainx\mcp with the old dll, new one in next\>` (R1–R4,
+  `BRAINX_SANDBOX=1` + throwaway vault).
+
 ## Important paths / guarantees
 - New DI singletons: `SessionMemoryService`, `LocalGgufProvider` now injected into ChatViewModel (optional constructor arg — falls back to direct LLamaSharp if missing).
 - `AppSettings` new fields: `MicrocompactEnabled`, `MicrocompactKeepRecentTurns`, `MicrocompactMaxOldResultChars`, `SessionMemoryEnabled`, `ModelCatalogGridView`, `SidebarNavExpanded`.
