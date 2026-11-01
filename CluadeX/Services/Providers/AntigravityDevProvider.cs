@@ -191,8 +191,9 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
 
     /// <summary>The turn's one stdin message: the conversation so far, the user's message, then what CluadeX tells the
     /// agent about this chat (the grant, the folders, the language). Pure.</summary>
+    /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null)
+        string transcript, string userMessage, string? codeComments = null, string? browserHint = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -214,6 +215,7 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
               "propose file edits as diffs/snippets for the app to apply. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         wrapper += " " + Tools.ChatToolBridge.AskHint;
+        if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.AntigravityDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
 
@@ -404,7 +406,8 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
             using (var stdin = new StreamWriter(proc.StandardInput.BaseStream, new UTF8Encoding(false)))
             {
                 string prompt = BuildPrompt(cwd, grant, ClaudeDevProvider.TurnAddDirs(extras), ClaudeDevProvider.BuildTranscript(history),
-                    userMessage, CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd));
+                    userMessage, CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
+                    chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null);
                 await stdin.WriteLineAsync(StdinLine(prompt));
             }   // closing stdin ends the session after this one turn
 

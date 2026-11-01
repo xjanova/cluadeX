@@ -121,7 +121,7 @@ internal static partial class Program
         Fake.Script.Clear();
         Fake.Script.Enqueue(FakeStep.Reply("Carried on from step 101", " — all steps are done."));
         callsBefore = Fake.Calls.Count;
-        var go = await Dispatch("cluadex.continue_chat", "{\"title\":\"HIVE-T2\",\"message\":\"continue\"}");
+        var go = await Dispatch("cluadex.continue_chat", "{\"title\":\"HIVE-T2\",\"message\":\"continue\",\"focus\":true}");
         await Render();
         Check("C3 continue_chat returns the turn's final reply with isError=false",
             !go.IsError && go.GetTextOutput().Contains("all steps are done"), go.GetTextOutput());
@@ -142,7 +142,7 @@ internal static partial class Program
         Fake.Script.Enqueue(FakeStep.Hang());
         using (var cts = new CancellationTokenSource())
         {
-            var call = Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(oldest.Id) + ",\"message\":\"keep going\"}", cts.Token);
+            var call = Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(oldest.Id) + ",\"message\":\"keep going\",\"focus\":true}", cts.Token);
             bool began = await WaitUntil(() => Vm.IsGenerating && Vm.CurrentSession?.Id == oldest.Id, 10000);
             cts.Cancel();
             var r = await Task.WhenAny(call, Task.Delay(20000)) == call ? await call : null;
@@ -151,5 +151,120 @@ internal static partial class Program
                 began && r is { IsError: true } && r.GetTextOutput().Contains("Cancelled") && !Vm.IsGenerating, r?.GetTextOutput() ?? "no result");
         }
         Fake.Script.Clear();
+
+        await TestPipeOffScreen(newest, oldest);
+    }
+
+    static JsonElement StatusOf(McpToolResult r)
+    {
+        using var doc = JsonDocument.Parse(r.GetTextOutput());
+        return doc.RootElement.Clone();
+    }
+
+    /// <summary>continue_chat leaves the window alone unless asked; task_status and list_chats say how a chat stands.</summary>
+    static async Task TestPipeOffScreen(ChatSession idle, ChatSession another)
+    {
+        Log("\n## T6b — continue_chat beside the owner's chat, cluadex.task_status");
+        Vm.SetWorkingDirectory(ProjA);
+        await FreshChat();
+        Vm.UserInput = "the owner's draft";
+        var screen = Vm.CurrentSession;
+        var rows = Vm.Messages;
+        int rowCount = rows.Count;
+
+        Fake.Script.Clear();
+        Fake.Script.Enqueue(FakeStep.Reply("Done beside you", " — nothing moved."));
+        int calls = Fake.Calls.Count;
+        var go = await Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(idle.Id) + ",\"message\":\"carry on quietly\"}");
+        await Render();
+        Check("O1 no focus: the reply comes back", !go.IsError && go.GetTextOutput().Contains("nothing moved"), go.GetTextOutput());
+        Check("O1 the chat on screen, its rows, its project and the draft are untouched",
+            ReferenceEquals(Vm.CurrentSession, screen) && ReferenceEquals(Vm.Messages, rows) && Vm.Messages.Count == rowCount
+            && SamePath(Vm.WorkingDirectory, ProjA) && Vm.UserInput == "the owner's draft", $"{Vm.CurrentSession?.Title} / {Vm.WorkingDirectory}");
+        Check("O1 the model got that chat's history",
+            Fake.Calls.Skip(calls).Any(c => c.Input.Contains("carry on quietly") && c.History.Any(h => h.Content.Contains("Finished."))));
+        var stored = Persist.LoadSession(idle.Id);
+        Check("O1 the turn is saved in that chat, the history kept",
+            stored != null && stored.Messages.Any(m => m.Content == "task beta chat") && stored.Messages.Any(m => m.Content == "carry on quietly")
+            && stored.Messages.Any(m => m.Content.Contains("nothing moved")));
+
+        var done = await Dispatch("cluadex.task_status", "{\"chatId\":" + Js(idle.Id) + "}");
+        var doneStatus = done.IsError ? default : StatusOf(done);
+        Check("S1 task_status of a finished turn: idle, its reply, started by the pipe, with its step count",
+            !done.IsError && doneStatus.GetProperty("activity").GetString() == "idle"
+            && doneStatus.GetProperty("lastReply").GetString()!.Contains("nothing moved")
+            && doneStatus.GetProperty("startedBy").GetString() == "pipe", done.GetTextOutput());
+
+        var slash = await Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(idle.Id) + ",\"message\":\"/compact\"}");
+        var picked = await Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(idle.Id) + ",\"message\":\"go\",\"model\":\"x\"}");
+        Check("O2 a slash command or a model needs focus: said, and nothing is sent",
+            slash.IsError && slash.GetTextOutput().Contains("focus") && picked.IsError && picked.GetTextOutput().Contains("focus")
+            && ReferenceEquals(Vm.CurrentSession, screen), slash.GetTextOutput() + " / " + picked.GetTextOutput());
+
+        // Running off screen: listed, reported, refused a second message, stopped by its caller.
+        Fake.Script.Clear();
+        Fake.Script.Enqueue(FakeStep.Hang());
+        using (var cts = new CancellationTokenSource())
+        {
+            var call = Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(another.Id) + ",\"message\":\"a long one\"}", cts.Token);
+            bool began = await WaitUntil(() => Fake.Calls.Any(c => c.Input.Contains("a long one")), 10000);
+            var listed = await Dispatch("cluadex.list_chats", "{\"query\":\"alpha chat\"}");
+            var row = listed.IsError ? default : ChatsOf(listed).FirstOrDefault(r => r.GetProperty("id").GetString() == another.Id);
+            Check("O3 a turn beside the owner's chat is listed as running", began && row.ValueKind == JsonValueKind.Object
+                && row.GetProperty("running").GetBoolean() && row.GetProperty("activity").GetString() == "running", listed.GetTextOutput());
+            var twice = await Dispatch("cluadex.continue_chat", "{\"chatId\":" + Js(another.Id) + ",\"message\":\"again\"}");
+            Check("O3 a second message is refused while it runs", twice.IsError && twice.GetTextOutput().Contains("already running"), twice.GetTextOutput());
+            var live = await Dispatch("cluadex.task_status", "{\"chatId\":" + Js(another.Id) + "}");
+            Check("S2 task_status while it runs says running, with the numbers present",
+                !live.IsError && StatusOf(live).GetProperty("activity").GetString() == "running" && StatusOf(live).GetProperty("step").ValueKind == JsonValueKind.Number, live.GetTextOutput());
+            Check("O3 and the window never moved", ReferenceEquals(Vm.CurrentSession, screen) && !Vm.IsGenerating);
+            cts.Cancel();
+            var r = await Task.WhenAny(call, Task.Delay(20000)) == call ? await call : null;
+            await Render();
+            Check("O4 the caller going away stops it: Cancelled, the slot freed", r is { IsError: true } && r.GetTextOutput().Contains("Cancelled"), r?.GetTextOutput() ?? "no result");
+            var after = await Dispatch("cluadex.list_chats", "{\"query\":\"alpha chat\"}");
+            Check("O4 it is idle again", !after.IsError && ChatsOf(after).Any(c => c.GetProperty("id").GetString() == another.Id && !c.GetProperty("running").GetBoolean()), after.GetTextOutput());
+        }
+
+        // A task, by the id its caller gave it, and after its call ended.
+        Fake.Script.Clear();
+        Fake.Script.Enqueue(FakeStep.Reply("The task's report."));
+        var task = await Task.Run(() => FreeVm().RunMcpTaskAsync("t6-status", "Report.", null, null, ProjB, CancellationToken.None));
+        await WaitIdle();
+        var byTask = await Dispatch("cluadex.task_status", "{\"taskId\":\"t6-status\"}");
+        Check("S3 task_status by taskId: the call's result and the chat's last reply",
+            !byTask.IsError && StatusOf(byTask).GetProperty("callResult").GetString()!.Contains("The task's report")
+            && StatusOf(byTask).GetProperty("callFailed").GetBoolean() == false
+            && StatusOf(byTask).GetProperty("lastReply").GetString()!.Contains("The task's report"), byTask.GetTextOutput());
+        var unknownTask = await Dispatch("cluadex.task_status", "{\"taskId\":\"never-ran\"}");
+        var neither = await Dispatch("cluadex.task_status", "{}");
+        Check("S4 an unknown task, or neither id, is an error", unknownTask.IsError && neither.IsError && neither.GetTextOutput().Contains("taskId"),
+            unknownTask.GetTextOutput() + " / " + neither.GetTextOutput());
+        Vm.UserInput = "";
+        Fake.Script.Clear();
+
+        // new_chat with this chat's history, and without. A store of its own: the split tests above used up the burst limit.
+        var links = ChatLinkStore.Current;
+        ChatLinkStore.Current = new ChatLinkStore(Path.Combine(PipeRoot, "fork-links-" + Guid.NewGuid().ToString("N")[..6]));
+        await Open(idle.Id);
+        string forked = await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, "fork of beta", true);
+        await Render();
+        var child = Vm.CurrentSession!;
+        var original = Persist.LoadSession(idle.Id)!;
+        Check("FK1 fork: the new chat starts with the asking chat's history, as rows of its own", child.Id != idle.Id
+            && Vm.Messages.Any(m => m.Content == "task beta chat") && Vm.Messages.Any(m => m.Content == "carry on quietly")
+            && !Vm.Messages.Any(m => original.Messages.Any(o => o.Id == m.Id)), forked);
+        Check("FK1 it is a split of that chat", child.ParentId == idle.Id, child.ParentId ?? "no parent");
+        await Open(idle.Id);
+        await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, "clean of beta", false);
+        await Render();
+        Check("FK2 no fork: the new chat starts clean", !Vm.Messages.Any(m => m.Content == "task beta chat"), string.Join(" | ", Vm.Messages.Select(m => m.Content)));
+        var module = new CluadeX.Services.Tools.ProjectToolModule();
+        var refused = new ToolCall { ToolName = "new_chat", Type = ToolType.NewChat };
+        refused.Arguments["path"] = ProjB;
+        refused.Arguments["fork"] = "true";
+        var noFork = await module.ExecuteAsync(refused, new CluadeX.Services.Tools.ToolModuleContext(), CancellationToken.None);
+        Check("FK3 a fork into another project is refused in words", !noFork.Success && (noFork.Output ?? "").Contains("fork"), noFork.Output ?? "");
+        ChatLinkStore.Current = links;
     }
 }

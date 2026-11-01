@@ -53,6 +53,9 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     private bool _isLoading;
 
     public const string Id = "GeminiDev";
+    /// <summary>Spawns sub-agents of its own; the dispatch policy reaches them through the CLI (Agents.CliAgentGate).</summary>
+    public bool RunsOwnSubAgents => true;
+
     public string ProviderId => Id;
     public string DisplayName => "Gemini Dev (Gemini CLI)";
     public bool IsReady => _cli != null;
@@ -166,8 +169,9 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     // ─── One turn ───
 
     /// <summary>The CLI's arguments for one call (after the script path). Pure, so the harness checks them.</summary>
+    /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, IReadOnlyList<string>? addDirs,
-        string? codeComments = null)
+        string? codeComments = null, string? browserHint = null, string? agentLine = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -187,6 +191,8 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
               "You have read-only tools; propose file edits as diffs/snippets for the app to apply, don't try to write. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         wrapper += " " + Tools.ChatToolBridge.AskHint;
+        if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
+        if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.GeminiDev, false);
         // The user's AI-comment instruction (CodeCommentPolicy); ArgumentList carries the line breaks as they are.
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
@@ -225,9 +231,25 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
     /// servers — CluadeX's chat tools (from the ChatToolBridge config) and the BrainX brain when the user's own Gemini
     /// settings do not already have it (copied from Claude Code's registration). Pure: the caller writes it.
     /// </summary>
-    public static JsonObject BuildTurnSettings(TurnHooks? hooks, string? chatToolsConfigJson, string? brainServerJson, JsonObject? user = null)
+    public static JsonObject BuildTurnSettings(TurnHooks? hooks, string? chatToolsConfigJson, string? brainServerJson, JsonObject? user = null,
+        Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null)
     {
         var settings = user?.DeepClone() as JsonObject ?? new JsonObject();
+        // The policy in Gemini's own settings: sub-agents off, and generalist off always (it writes, and invoke_agent has no
+        // worktree). codebase_investigator stays read-only, on the cheap model when one is known.
+        if (dispatch is { Legacy: false })
+        {
+            var experimental = settings["experimental"] as JsonObject ?? new JsonObject();
+            settings["experimental"] = experimental;
+            if (!dispatch.SubAgents) experimental["enableAgents"] = false;
+            var agents = settings["agents"] as JsonObject ?? new JsonObject();
+            settings["agents"] = agents;
+            var overrides = agents["overrides"] as JsonObject ?? new JsonObject();
+            agents["overrides"] = overrides;
+            overrides["generalist"] = new JsonObject { ["enabled"] = false };
+            if (!string.IsNullOrWhiteSpace(readOnlyAgentModel))
+                overrides["codebase_investigator"] = new JsonObject { ["modelConfig"] = new JsonObject { ["model"] = readOnlyAgentModel } };
+        }
         if (hooks != null)
         {
             var config = settings["hooksConfig"] as JsonObject ?? new JsonObject();
@@ -250,7 +272,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             });
             Add("BeforeTool", new JsonObject
             {
-                ["matcher"] = "run_shell_command|write_file|replace",
+                ["matcher"] = "run_shell_command|write_file|replace|invoke_agent",
                 ["hooks"] = new JsonArray
                 {
                     new JsonObject
@@ -273,9 +295,16 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
                     foreach (var kv in fromBridge.ToList())
                         if (kv.Value != null)
                         {
-                            // Headless default mode refuses a tool that needs approval, and these ask in the app themselves.
+                            // Headless default mode refuses a tool that needs approval, and these ask in the app themselves
+                            // (CluadeX's gate — the browser_* tools' permission card included — runs inside every call).
                             var server = kv.Value.DeepClone();
-                            if (kv.Key == Tools.ChatToolBridge.ServerName && server is JsonObject own) own["trust"] = true;
+                            if (kv.Key == Tools.ChatToolBridge.ServerName && server is JsonObject own)
+                            {
+                                own["trust"] = true;
+                                // Milliseconds: a call may wait on CluadeX's card as long as the user takes. Gemini's own
+                                // 10-minute limit gave up on it while the card still showed.
+                                own["timeout"] = (long)Tools.ChatToolBridge.CallTimeout.TotalMilliseconds;
+                            }
                             servers[kv.Key] = server;
                         }
             }
@@ -364,6 +393,7 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         // The turn's own home: the user's settings plus the guard (worker turns), CluadeX's chat tools, the brain.
         var user = ReadUserSettings();
         var userServers = (user?["mcpServers"] as JsonObject)?.Select(kv => kv.Key).ToList() ?? new List<string>();
+        var dispatch = extras?.Dispatch?.Invoke();
         string? chatToolsJson = null;
         if (!string.IsNullOrWhiteSpace(extras?.ToolsConfig))
             try { chatToolsJson = await File.ReadAllTextAsync(extras.ToolsConfig, ct); } catch { chatToolsJson = null; }
@@ -381,7 +411,9 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
             // tests/safetytest: the CLI ignored the turn's hooks, as it ignored the system settings file on 0.64.
             if (Environment.GetEnvironmentVariable("CLUADEX_GEMINI_TEST_NO_HOOKS") == "1") hooks = null;
 #endif
-            turnSettings = BuildTurnSettings(hooks, chatToolsJson, brain, user);
+            turnSettings = BuildTurnSettings(hooks, chatToolsJson, brain, user, dispatch,
+                Agents.CliAgentPolicy.ModelFor(AiProviderType.GeminiDev, true, _settingsService.Settings.SubAgentModelOverrides)
+                ?? Agents.DispatchPolicy.CheapestModel(AiProviderType.Gemini));
             turn.CarryUserHome(UserHome(), GeminiHome());
             await turn.WriteSettingsAsync(turnSettings, ct);
         }
@@ -413,13 +445,16 @@ public class GeminiDevProvider : IAiProvider, IDelegatedCliProvider
         };
         psi.ArgumentList.Add(cli.Script);
         foreach (var a in BuildArgs(cwd, grant, model, ClaudeDevProvider.TurnAddDirs(extras),
-                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd))) psi.ArgumentList.Add(a);
+                     CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
+                     chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null,
+                     Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.GeminiDev))) psi.ArgumentList.Add(a);
 #if DEBUG
         // Debug builds only: tests/safetytest drives this turn with the real CLI and a recorded model (--fake-responses).
         if (Environment.GetEnvironmentVariable("CLUADEX_GEMINI_TEST_ARGS") is { Length: > 0 } testArgs)
             foreach (var a in testArgs.Split('|')) psi.ArgumentList.Add(a);
 #endif
         if (turn != null) psi.Environment["GEMINI_CLI_HOME"] = turn.Home;
+        if (!string.IsNullOrEmpty(extras?.GateToken)) psi.Environment[Safety.GuardHook.AgentGateTokenEnv] = extras.GateToken;
         psi.Environment["NO_COLOR"] = "1";
         // Without a TTY the CLI warns "256-color support not detected" on stderr every turn; TERM quiets it.
         psi.Environment["TERM"] = "xterm-256color";

@@ -60,6 +60,8 @@ public partial class SettingsViewModel : ViewModelBase
         // Dispatch policy (Services/Agents/DispatchPolicy.cs)
         [nameof(DispatchPolicyEnabled)] = (vm, s) => s.DispatchPolicyEnabled = vm.DispatchPolicyEnabled,
         [nameof(DesktopControlEnabled)] = (vm, s) => s.DesktopControlEnabled = vm.DesktopControlEnabled,
+        [nameof(CliRunBudgetUsd)] = (vm, s) => s.CliRunBudgetUsd = Math.Max(0, vm.CliRunBudgetUsd),
+        [nameof(CliDailyBudgetUsd)] = (vm, s) => s.CliDailyBudgetUsd = Math.Max(0, vm.CliDailyBudgetUsd),
         [nameof(MaxParallelAgents)] = (vm, s) => s.MaxParallelAgents = Math.Clamp(vm.MaxParallelAgents, 1, Services.Agents.DispatchPolicy.MaxParallelCap),
         [nameof(SpeculativeFixEnabled)] = (vm, s) => s.SpeculativeFixEnabled = vm.SpeculativeFixEnabled,
         [nameof(SpeculativeFixCount)] = (vm, s) => s.SpeculativeFixCount = Math.Clamp(vm.SpeculativeFixCount, 2, 3),
@@ -162,6 +164,10 @@ public partial class SettingsViewModel : ViewModelBase
     private bool _desktopControlEnabled = true;
     public bool DesktopControlEnabled { get => _desktopControlEnabled; set => SetProperty(ref _desktopControlEnabled, value); }
     public int MaxParallelAgents { get => _maxParallelAgents; set => SetProperty(ref _maxParallelAgents, value); }
+    private decimal _cliRunBudgetUsd;
+    public decimal CliRunBudgetUsd { get => _cliRunBudgetUsd; set => SetProperty(ref _cliRunBudgetUsd, value); }
+    private decimal _cliDailyBudgetUsd;
+    public decimal CliDailyBudgetUsd { get => _cliDailyBudgetUsd; set => SetProperty(ref _cliDailyBudgetUsd, value); }
     public bool SpeculativeFixEnabled { get => _speculativeFixEnabled; set => SetProperty(ref _speculativeFixEnabled, value); }
     public int SpeculativeFixCount { get => _speculativeFixCount; set => SetProperty(ref _speculativeFixCount, value); }
     public int SpeculativeFixMinutes { get => _speculativeFixMinutes; set => SetProperty(ref _speculativeFixMinutes, value); }
@@ -649,6 +655,8 @@ public partial class SettingsViewModel : ViewModelBase
         DispatchPolicyEnabled = src.DispatchPolicyEnabled;
         DesktopControlEnabled = src.DesktopControlEnabled;
         MaxParallelAgents = src.MaxParallelAgents;
+        CliRunBudgetUsd = src.CliRunBudgetUsd;
+        CliDailyBudgetUsd = src.CliDailyBudgetUsd;
         SpeculativeFixEnabled = src.SpeculativeFixEnabled;
         SpeculativeFixCount = src.SpeculativeFixCount;
         SpeculativeFixMinutes = src.SpeculativeFixMinutes;

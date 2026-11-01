@@ -292,9 +292,12 @@ public partial class CodeAgentService
     /// window. That budget applies at EVERY local ctx: the old ≥16k path sent the whole MCP catalogue
     /// unmetered, which is its own overflow (30 BrainX schemas alone measure ~5.6k tokens).
     ///
-    /// Admission order is core built-ins → MCP → the remaining built-ins. The long tail of built-ins
-    /// yielding to MCP is deliberate: everything in the tail has a run_command fallback, an MCP server
-    /// has none.
+    /// Admission order is core built-ins → the browser's core → MCP → the remaining built-ins. The long
+    /// tail of built-ins yielding to MCP is deliberate: everything in the tail has a run_command fallback,
+    /// an MCP server has none. Neither has the browser: behind a connected BrainX (~128 schemas) it never
+    /// got its turn, so a local model asked to open a page had nothing to open it with. In a web project,
+    /// where the browser is core, browser_open and browser_read keep their room ahead of the other core
+    /// tools on a window too small for all of them.
     /// </summary>
     /// <param name="reservedTokens">
     /// Everything the request needs that ISN'T schemas — system prompt, history, and generation. Measured
@@ -324,6 +327,11 @@ public partial class CodeAgentService
         var tail = ctxTokens < 16000
             ? new List<Services.Providers.ToolSchema>()          // small ctx: core built-ins only
             : builtIns.Except(core).ToList();
+        var browserCore = tail.Where(t => Browser.BrowserToolModule.CoreToolNames.Contains(t.Name)).ToList();
+        tail = tail.Except(browserCore).ToList();
+        var moduleCore = core.Where(t => moduleCoreNames.Contains(t.Name))
+            .OrderBy(t => t.Name is "browser_open" or "browser_read" ? 0 : 1).ToList();
+        core = core.Except(moduleCore).ToList();
 
         // Schemas may claim what is left over — but NEVER more than a third of the
         // window, and never all of it.
@@ -358,7 +366,14 @@ public partial class CodeAgentService
         }
 
         Admit(pinned, true); // brain recall — the one group the system prompt makes mandatory
+        // Held out of the core built-ins' budget, unless they would take half of it (a 600-token floor).
+        int held = moduleCore.Where(t => t.Name is "browser_open" or "browser_read").Sum(EstimateSchemaTokens);
+        if (held * 2 > budget) held = 0;
+        budget -= held;
         Admit(core, false);
+        budget += held;
+        Admit(moduleCore, false);
+        Admit(browserCore, false);
         Admit(mcp, true); // registration order — the server's own idea of what matters first
         Admit(tail, false);
 
@@ -455,6 +470,7 @@ public partial class CodeAgentService
     private bool _cachedNativeTools;
     /// <summary>Whether the cached prompt told the model it can see tool images.</summary>
     private bool _cachedVision;
+    private bool _cachedBrowser;
     /// <summary>The project the cached prompt describes: two chats can run at once in different projects.</summary>
     private string? _cachedPromptDir;
     // Her character comes from the active provider: Claude → Codex inside the 30 s window must not keep Claude's voice.
@@ -474,6 +490,7 @@ public partial class CodeAgentService
         // The vision line is a fact about the active model AND loop: switching to a blind one inside the 30 s window
         // must not leave a prompt that says "you can see images".
         bool visionNow = PromptSeesImages(_providerManager.ActiveProvider);
+        bool browserNow = _agentToolService.ModuleToolRefusal(ToolType.BrowserOpen) == null;
         string dirNow = _fileSystemService.WorkingDirectory ?? "";
         var providerNow = _providerManager.ActiveProviderType;
         var personaNow = AgentPersona.For(providerNow);
@@ -488,6 +505,7 @@ public partial class CodeAgentService
                 && string.Equals(_cachedBrainStatusLine, brainNow, StringComparison.Ordinal)
                 && _cachedNativeTools == nativeNow
                 && _cachedVision == visionNow
+                && _cachedBrowser == browserNow
                 && _cachedPromptProvider == providerNow
                 && _cachedPersona == personaNow
                 && string.Equals(_cachedPromptLanguage, languageNow, StringComparison.Ordinal)
@@ -504,6 +522,7 @@ public partial class CodeAgentService
             _cachedBrainStatusLine = brainNow;
             _cachedNativeTools = nativeNow;
             _cachedVision = visionNow;
+            _cachedBrowser = browserNow;
             _cachedPromptDir = dirNow;
             _cachedPromptProvider = providerNow;
             _cachedPersona = personaNow;
@@ -1760,6 +1779,12 @@ public partial class CodeAgentService
                 sb.AppendLine($"DETECTED PROJECT TYPE: {projType}");
             }
         }
+        else if (includeToolDefs)
+        {
+            // The [ACTION:] catalogue lives in the project block, so the sections below taught browser_* (Chrome needs no
+            // project) to a model never told how to call a tool.
+            sb.AppendLine(_agentToolService.GetProjectlessToolDefinitionsPrompt());
+        }
 
         // ─── Tool-group sections (background processes, built-in browser, Claude in Chrome) ───
         // Only for groups whose tools are offered this turn; nothing at all when none are registered.
@@ -2088,6 +2113,17 @@ public partial class CodeAgentService
         List<ChatMessage> history, string userMessage, CancellationToken ct, IProgress<string>? progress = null)
     {
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
+        // Today's cap for CLI agents is used up: nothing is started (the CLI's own stop only comes after a first request).
+        if (provider.RunsOwnSubAgents && CliBudgetLeft() is <= 0)
+        {
+            string spent = _localizationService.T("agent.cliBudgetSpent");
+            _debugLog?.Info("Agent", $"{delegated} not started · the CLI daily budget is used");
+            return new AgentLoopResult
+            {
+                TurnCount = 1, FinalResponse = spent, StopReason = "budget",
+                Steps = { new AgentStep { StepNumber = 1, ResponseText = spent } },
+            };
+        }
         // A chat another model worked in: the new one gets the task, where it stopped and what changed — not the
         // bare "ทำต่อ" (AgentHandoff). The brief replaces the replayed transcript, which tool rows had filled.
         string? brief = null;
@@ -2119,6 +2155,14 @@ public partial class CodeAgentService
         }
         // A worker turn (edit/run) drives the same events as the native loop: rows, plan, steps, sub-agent map.
         var turn = grant is { Edit: true } or { Run: true } ? StartClaudeDevTurn(folder, progress) : null;
+        // The policy holds for the sub-agents a CLI spawns itself: its hook asks here before each one.
+        var spawnGate = cliAgent && provider.RunsOwnSubAgents
+            ? new Agents.CliAgentGate(delegated, CurrentDispatch, _settingsService.Settings.SubAgentModelOverrides, m => _debugLog?.Info("Dispatch", m))
+            : null;
+        if (turn != null && spawnGate != null) turn.SubAgentEnded += spawnGate.Finished;
+        var worktreesBefore = spawnGate != null && Agents.CliAgentPolicy.CanIsolate(delegated)
+            ? await Agents.CliWorktreeSweep.ListAsync(folder, ct) : null;
+        List<Agents.CliWorktree> keptWorktrees = new();
         // CluadeX's chat tools for the CLI (open_project / new_chat / close_chat, run here through the same gate inside
         // this chat's run) and the folders the user allowed beside the project.
         using var chatTools = cliAgent
@@ -2127,7 +2171,7 @@ public partial class CodeAgentService
                 // answers — the user's rules, "Allow in this chat", or the permission row in this chat.
                 delegated == AiProviderType.ClaudeDev ? _agentToolService.AuthorizeCliMcpCallAsync : null,
                 // A question from any CLI opens the same card as ask_user on the native loop.
-                _agentToolService.AskUserAsync)
+                _agentToolService.AskUserAsync, spawnGate)
             : null;
         if (cliAgent)
         {
@@ -2135,8 +2179,12 @@ public partial class CodeAgentService
                 .Concat(_settingsService.Settings.AllowedProjectFolders ?? new List<string>());
             var dirs = folder == null ? new List<string>()
                 : Providers.ClaudeDevProvider.ExtraDirs(folder, allowed, Directory.Exists, p => PermissionService.IsUnsafeAcceptEditsRoot(p));
-            Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs);
-            _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}");
+            // The browser_* tools ride the chat tools' server: the wrapper says up front when the gate refuses them now.
+            string? browserRefusal = chatTools != null ? _agentToolService.ModuleToolRefusal(ToolType.BrowserOpen) : null;
+            Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs, browserRefusal,
+                provider.RunsOwnSubAgents ? CurrentDispatch : null, spawnGate != null ? chatTools?.Token : null, CliBudgetLeft());
+            _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}"
+                + (chatTools != null ? $" · browser={(browserRefusal == null ? "on" : "off")}" : ""));
         }
         Providers.ClaudeDevProvider.Grant.Value = grant;
         Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
@@ -2155,6 +2203,7 @@ public partial class CodeAgentService
         }
         catch (OperationCanceledException) when (turn != null)
         {
+            turn.CloseUnfinishedAgents();
             if (usageEstimate.HasReportedUsage || turn.HasOutput) RecordPackageUsage(turn.Answer);
             // Stopped mid-task: what it did so far still goes to the brain, as for the native loop.
             SaveRunToBrain(userMessage, new AgentLoopResult
@@ -2170,6 +2219,15 @@ public partial class CodeAgentService
             Providers.ClaudeDevProvider.StreamSink.Value = null;
             Providers.ClaudeDevProvider.Extras.Value = null;
             Providers.BrainXRoomProvider.Grant.Value = null;
+            spawnGate?.ReleaseAll();
+            // Stopped or not: nothing stays behind that holds no work. Not on the turn's token, that may be the stop.
+            if (worktreesBefore != null)
+                try
+                {
+                    using var sweepTime = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    keptWorktrees = await Agents.CliWorktreeSweep.SweepAsync(folder, worktreesBefore, m => _debugLog?.Info("Dispatch", m), sweepTime.Token);
+                }
+                catch (Exception ex) { _debugLog?.Warn("Dispatch", $"sub-agent worktrees not cleared: {ex.GetType().Name}"); }
         }
         if (turn != null)
         {
@@ -2177,6 +2235,18 @@ public partial class CodeAgentService
             // (a limit hit mid-task) is said under it; a turn that produced nothing carries the provider's explanation.
             // A short closing remark after the real summary (a Stop hook's "saved to the brain") keeps the summary.
             string text = turn.Answer;
+            // "Done" means every sub-agent is done: the process is gone, so one with no end reported never finished.
+            var unfinished = turn.CloseUnfinishedAgents();
+            if (unfinished.Count > 0)
+            {
+                _debugLog?.Warn("Agent", $"{delegated} ended with {unfinished.Count} sub-agent(s) unfinished");
+                text = (text + "\n\n⚠ " + _localizationService.T("agent.subAgentsUnfinished", unfinished.Count, string.Join(", ", unfinished.Select(u => Shorten(u, 60))))).Trim();
+            }
+            if (turn.StoppedAtBudget)
+                text = (text + "\n\n⚠ " + _localizationService.T("agent.cliBudgetStopped")).Trim();
+            if (keptWorktrees.Count > 0)
+                text = (text + "\n\n⚠ " + _localizationService.T("agent.worktreesKept", keptWorktrees.Count,
+                    string.Join(", ", keptWorktrees.Select(w => $"{w.Branch} ({w.Path})")))).Trim();
             // A login / billing refusal: the CLI also prints it as its "answer", so the raw "Not logged in · Please run
             // /login" showed twice and the explanation never ran (it only runs when nothing was said). Say how to fix
             // it instead — owner 2026-10-18: "ต้องทำให้ cluadex รู้วิธีแนะนำให้ผู้ใช้แก้ได้ด้วย".
@@ -2201,8 +2271,8 @@ public partial class CodeAgentService
             cdResult.FinalResponse = text;
             cdResult.Steps.AddRange(turn.Steps);
             cdResult.TurnCount = Math.Max(1, turn.Steps.Count);
-            cdResult.Success = !turn.ResultIsError && (text.Length > 0 || cdResult.TotalToolCalls > 0);
-            cdResult.StopReason = turn.ResultIsError || !cdResult.Success ? "error" : "end_turn";
+            cdResult.Success = !turn.ResultIsError && unfinished.Count == 0 && (text.Length > 0 || cdResult.TotalToolCalls > 0);
+            cdResult.StopReason = unfinished.Count > 0 ? "sub_agents_unfinished" : turn.ResultIsError || !cdResult.Success ? "error" : "end_turn";
             if (cdResult.Steps.Count == 0) cdResult.Steps.Add(new AgentStep { StepNumber = 1, ResponseText = text });
             _debugLog?.Info("Agent", $"{delegated} worker turn done · steps={turn.Steps.Count} tools={cdResult.TotalToolCalls}"
                 + $" plan={turn.Plan.Count} error={turn.ResultIsError} textLen={text.Length}"

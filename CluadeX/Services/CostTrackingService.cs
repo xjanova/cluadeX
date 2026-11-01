@@ -185,6 +185,14 @@ public class CostTrackingService
         }
     }
 
+    /// <summary>Today's API-equivalent use of one CLI on the user's plan (what <see cref="AppSettings.CliDailyBudgetUsd"/> reads).</summary>
+    public decimal TodayPackageUsd(string provider)
+    {
+        lock (_lock)
+            return _days.TryGetValue(DayKey(DateTime.Now), out var d) && d.ByProvider != null
+                   && d.ByProvider.TryGetValue(provider, out var part) ? part.BaselineUsd : 0m;
+    }
+
     /// <summary>CLI usage is an estimated API-equivalent value, never an extra API charge or a budget deduction.</summary>
     public void RecordPackageUsage(string provider, decimal equivalentUsd, int inputTokens, int outputTokens, string method, int cacheReadTokens = 0)
     {

@@ -569,6 +569,22 @@ internal static class Program
             var without = Fit(null).Select(s => s.Name).ToList();
             Check("S2", "below 16k ctx, a module's LocalCoreToolNames join the core set (others stay out)", withCore.Contains("read_file") && withCore.Contains("bg_list") && !withCore.Contains("browser_open"), string.Join(",", withCore));
             Check("S2b", "…control: without them only the built-in core survives", without.SequenceEqual(new[] { "read_file" }), string.Join(",", without));
+            // A connected BrainX must not push the browser out: it has no run_command fallback either.
+            var fleet = new List<ToolSchema> { Schema("read_file"), Schema("bg_list"), Schema("browser_open"), Schema("browser_read"), Schema("browser_scroll") };
+            fleet.AddRange(Enumerable.Range(0, 2000).Select(i => Schema($"mcp__brain__tool_{i}")));
+            var big = ((List<ToolSchema>)fit.Invoke(null, new object?[] { fleet, 32000, 2000, 0, 0, null })!).Select(s => s.Name).ToList();
+            Check("S2c", "≥16k with a big MCP fleet: the browser's core keeps its place ahead of MCP, the rest of the tail still yields",
+                big.Contains("browser_open") && big.Contains("browser_read") && !big.Contains("browser_scroll") && !big.Contains("bg_list") && big.Any(n => n.StartsWith("mcp__")),
+                string.Join(",", big.Take(6)));
+            // A web project on a window too small for the whole core: browser_open keeps its room ahead of the file tools.
+            var tight = new List<ToolSchema> { Schema("browser_read"), Schema("browser_open") };
+            tight.InsertRange(0, new[] { "read_file", "write_file", "edit_file", "run_command", "grep_search", "glob_search" }.Select(n => Schema(n)));
+            var coreNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "browser_open", "browser_read" };
+            var one = Enumerable.Range(0, 1).Select(_ => Schema("read_file")).ToList();
+            int cost = (int)typeof(CodeAgentService).GetMethod("EstimateSchemaTokens", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, new object[] { one[0] })!;
+            int ctx = cost * 12;   // budget = ctx/3 = 4 schemas: all the core would not fit
+            var small = ((List<ToolSchema>)fit.Invoke(null, new object?[] { tight, ctx, 0, 0, 0, coreNames })!).Select(s => s.Name).ToList();
+            Check("S2d", "web project, tiny window: browser_open and browser_read survive", small.Contains("browser_open") && small.Contains("browser_read") && small.Contains("read_file"), $"ctx={ctx} {string.Join(",", small)}");
             return Task.CompletedTask;
         });
 

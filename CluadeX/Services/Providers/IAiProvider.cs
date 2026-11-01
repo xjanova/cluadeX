@@ -38,6 +38,10 @@ public interface IAiProvider : IDisposable
     /// <summary>Whether this provider supports native tool_use API format (structured tool calls).</summary>
     bool SupportsNativeToolUse => false;
 
+    /// <summary>A CLI agent that spawns sub-agents of its own (Claude Code's Agent, Codex's spawn_agent, Gemini's
+    /// invoke_agent). CluadeX runs no tool loop for it, yet the dispatch policy still applies to those spawns.</summary>
+    bool RunsOwnSubAgents => false;
+
     /// <summary>Chat with native tool support. Only called when SupportsNativeToolUse is true.
     /// <paramref name="onTextDelta"/> (optional) is invoked with each streamed text chunk as it arrives,
     /// so the agent loop can render the model's reply live instead of waiting for the whole turn.

@@ -398,6 +398,7 @@ public partial class ChatViewModel
         if (run != null)
         {
             PostRunCostSummary(run);
+            RememberRunStats(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));

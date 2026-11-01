@@ -14,7 +14,8 @@ namespace CluadeX.Services.Safety;
 /// <item>reads (view_file, list_dir, grep_search, find_by_name, the web reads) always pass;</item>
 /// <item>file writes need the edit grant, commands the run grant, and both go through the same checks as Claude Dev's
 ///   guard (<see cref="GuardHook.Decide"/>, <see cref="GuardHook.NeverRun"/>, the red prompt);</item>
-/// <item>MCP calls need a worker grant; any other tool (the browser, tools a later agy adds) needs the run grant;</item>
+/// <item>MCP calls need a worker grant — except CluadeX's own ask_user and browser_* tools, which CluadeX's gate judges
+///   inside the call; any other tool (agy's own browser, tools a later agy adds) needs the run grant;</item>
 /// <item>nothing may write into the turn's own plugin folder (where this hook's .cmd lives).</item>
 /// </list>
 /// agy's hook protocol (docs/hooks + the CRT spike on agy 1.2.7, Windows): the call arrives on stdin as
@@ -73,9 +74,11 @@ public static class AntigravityGuard
 
         if (ReadTools.Contains(tool)) return new Decision(Verdict.Allow, null, who);
 
-        // Asking the user changes nothing, so a read-only chat may ask too.
-        if (tool == McpTool && Str(args, "ToolName") == Tools.ChatToolBridge.AskToolName
-            && Str(args, "ServerName")?.EndsWith(Tools.ChatToolBridge.ServerName, StringComparison.Ordinal) == true)
+        // Asking the user changes nothing, so a read-only chat may ask too. CluadeX's browser tools pass in any chat like
+        // on the other CLIs: each runs through CluadeX's own gate inside the call (Dev Preview, the site's permission card,
+        // the user's rules) — the same answer a native call gets, so this hook adds no second question.
+        if (tool == McpTool && IsCluadexServer(Str(args, "ServerName"))
+            && (Str(args, "ToolName") is { } own && (own == Tools.ChatToolBridge.AskToolName || Browser.BrowserToolModule.ToolNames.Contains(own))))
             return new Decision(Verdict.Allow, null, who);
 
         if (tool == McpTool)
@@ -175,6 +178,12 @@ public static class AntigravityGuard
     /// the rest relative to the .cmd itself (%~dp0).</summary>
     public static string GuardCmd(string exe) => $"@\"{exe}\" {Flag} --config \"%~dp0guard.json\"\r\n";
     public static string LoadedCmd(string exe) => $"@\"{exe}\" {Flag} --loaded \"%~dp0hooks.loaded\"\r\n";
+
+    /// <summary>CluadeX's own MCP server as agy names it: "cluadex", or "&lt;plugin&gt;_cluadex" (the turn's plugin prefixes
+    /// its servers).</summary>
+    private static bool IsCluadexServer(string? server) =>
+        server == Tools.ChatToolBridge.ServerName
+        || server?.EndsWith("_" + Tools.ChatToolBridge.ServerName, StringComparison.Ordinal) == true;
 
     private static Decision Deny(string reason) => new(Verdict.Deny, reason);
 

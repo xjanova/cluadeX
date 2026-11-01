@@ -1513,7 +1513,8 @@ static class PipeTests
                 var cc = Tool("cluadex.continue_chat");
                 bool Has(JsonElement? t, params string[] props) => t is { } e && e.TryGetProperty("description", out var d) && d.GetString()!.Length > 40
                     && props.All(p => e.GetProperty("inputSchema").GetProperty("properties").TryGetProperty(p, out _));
-                chatTools = Has(lc, "project", "query", "limit") && Has(cc, "chatId", "title", "message", "maxSteps", "provider", "model")
+                chatTools = Has(lc, "project", "query", "limit") && Has(cc, "chatId", "title", "message", "maxSteps", "provider", "model", "focus")
+                    && Has(Tool("cluadex.task_status"), "taskId", "chatId")
                     && cc!.Value.GetProperty("inputSchema").GetProperty("required").EnumerateArray().Select(x => x.GetString()).SequenceEqual(new[] { "message" })
                     && lc!.Value.GetProperty("description").GetString()!.Contains("Read-only");
             }

@@ -54,6 +54,7 @@ internal static class Program
             GeminiDevGuard();
             AntigravityGuardChecks(work);
             ChatTools(work);
+            AgentControlChecks.Run(work, Check, MatchingExe);
             GeminiCliReal.Run(work, Check, MatchingExe);
             RunGates(work);
             DayApprovalChecks(work);
@@ -847,6 +848,115 @@ internal static class Program
         Check("card: the MCP tool's row reads as a question too", row2.Name == "ask_user" && row2.Type == CluadeX.Models.ToolType.AskUser && row2.Args.GetValueOrDefault("question") == "push ไหม", row2.Name);
         Check("card: options from a model that sends a JSON array", AgentToolService.ParseAskOptions("[\"a, b\",\"c\"]").SequenceEqual(new[] { "a, b", "c" }));
         Check("card: options as plain text, and none", AgentToolService.ParseAskOptions("a, b").SequenceEqual(new[] { "a", "b" }) && AgentToolService.ParseAskOptions("").Count == 0 && AgentToolService.ParseAskOptions("[broken").SequenceEqual(new[] { "[broken" }));
+
+        BrowserBridgeChecks(proj, new AgentRunScope("safety", proj), agyCall, readOnly, codex, gemini, list);
+    }
+
+    /// <summary>The browser_* tools through the bridge, for every CLI (owner 2026-11-01: a Claude Dev chat had no browser_open;
+    /// "โมเดลอื่นๆก็ต้องเรียกได้นะ"). Offline: the protocol, the relay with a fake Execute, each CLI's config, the [ACTION:] parser.</summary>
+    static void BrowserBridgeChecks(string proj, AgentRunScope scope, Func<string, string, string> agyCall,
+        CluadeX.Services.Safety.AntigravityGuard.Config readOnly, List<string> codex, System.Text.Json.Nodes.JsonObject gemini, string list)
+    {
+        var names = CluadeX.Services.Tools.ChatToolBridge.QualifiedToolNames;
+        var tools = CluadeX.Services.Browser.BrowserToolModule.ToolNames;
+        Check("browser: all 14 tools are in the CLI's list and in tools/list",
+            tools.Count == 14 && tools.All(n => names.Contains("mcp__cluadex__" + n) && list.Contains($"\"name\":\"{n}\"")), list.Length.ToString());
+        Check("browser: Claude Dev's args allow them and its prompt puts them first",
+            CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "opus", "high", "c.json").Contains("mcp__cluadex__browser_eval")
+            && CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "opus", "high", "c.json").Contains("before any other browser tool"));
+        Check("browser: no cluadex server, no browser line", !CluadeX.Services.Providers.ClaudeDevProvider.BuildArgs(proj, null, "opus", "high").Contains("browser_open"));
+        Check("browser: a refused browser says why and forbids switching tools",
+            CluadeX.Services.Tools.ChatToolBridge.BrowserHint("Dev Preview is off") is var h && h.Contains("Dev Preview is off") && h.Contains("unavailable") && !h.Contains('\n'));
+        Check("browser: Codex runs them unasked, waits on a card, calls them directly",
+            codex.Any(o => o.Contains("browser_click={approval_mode='approve'}") && o.Contains("tool_timeout_sec=14400") && o.Contains("omit_tools_from")), string.Join("\n", codex));
+        Check("browser: Gemini waits on a card past its 10-minute limit", gemini["mcpServers"]?["cluadex"]?["timeout"]?.GetValue<long>() == 14_400_000, gemini.ToJsonString());
+        Check("browser: Antigravity leaves them to CluadeX's gate in a read-only chat, on CluadeX's server only",
+            CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("browser_click", "cluadex-chat_cluadex"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Allow
+            && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("browser_click", "other"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny
+            && CluadeX.Services.Safety.AntigravityGuard.Decide(agyCall("browser_click", "x_cluadexx"), readOnly).Verdict == CluadeX.Services.Safety.AntigravityGuard.Verdict.Deny);
+
+        using var numArgs = JsonDocument.Parse("{\"x\":44.5,\"css\":true,\"ref\":null,\"wait_for_previous\":true,\"Text\":\"ก\"}");
+        var parsed = CluadeX.Services.Tools.ChatToolBridge.ToolArguments(numArgs.RootElement);
+        Check("browser: arguments as the native loop builds them", parsed["x"] == "44.5" && parsed["css"] == "true" && parsed["text"] == "ก"
+            && !parsed.ContainsKey("ref") && !parsed.ContainsKey("wait_for_previous"), string.Join(",", parsed));
+
+        // A screenshot through the protocol: MCP image content, only on success, never base64 in the text.
+        string big = new string('A', 1_500_000);
+        var shot = new CluadeX.Services.Tools.ChatToolBridge.Reply(true, "ok", new[] { new CluadeX.Models.ToolImage("image/jpeg", big, 100, 100) });
+        const string callShot = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"browser_screenshot\"}}";
+        string okReply = CluadeX.Services.Tools.ChatToolBridge.Respond(callShot, "t", (Func<string, string, JsonElement, CluadeX.Services.Tools.ChatToolBridge.Reply>)((_, _, _) => shot)) ?? "";
+        using (var r = JsonDocument.Parse(okReply))
+        {
+            var c = r.RootElement.GetProperty("result").GetProperty("content");
+            Check("browser: a picture past 1 MiB arrives whole as image content", c.GetArrayLength() == 2 && c[1].GetProperty("type").GetString() == "image"
+                && c[1].GetProperty("data").GetString().Length == big.Length && c[0].GetProperty("text").GetString() == "ok");
+        }
+        string errReply = CluadeX.Services.Tools.ChatToolBridge.Respond(callShot, "t", (Func<string, string, JsonElement, CluadeX.Services.Tools.ChatToolBridge.Reply>)((_, _, _) => shot with { Ok = false })) ?? "";
+        Check("browser: an error carries no image", !errReply.Contains("\"image\"") && errReply.Contains("\"isError\":true"));
+
+        // The relay over the real pipe code path: gate result, images, a dead token, cancelling, one lane.
+        var running = 0; var peak = 0; var seen = new List<CluadeX.Models.ToolCall>();
+        using var turn = new CancellationTokenSource();
+        var ticket = CluadeX.Services.Tools.ChatToolBridge.Register(scope, async (call, ct) =>
+        {
+            lock (seen) seen.Add(call);
+            int now = Interlocked.Increment(ref running);
+            lock (seen) peak = Math.Max(peak, now);
+            try
+            {
+                if (call.ToolName == "browser_read") await Task.Delay(Timeout.Infinite, ct);
+                await Task.Delay(40, ct);
+            }
+            finally { Interlocked.Decrement(ref running); }
+            return new CluadeX.Models.ToolResult
+            {
+                Type = call.Type, ToolName = call.ToolName, Success = call.ToolName != "browser_console", Output = "seen", Error = call.ToolName == "browser_console" ? "refused by the gate" : null,
+                Images = call.ToolName == "browser_screenshot" ? new List<CluadeX.Models.ToolImage> { new("image/jpeg", "QUJD", 10, 10) } : null,
+            };
+        }, proj, turn.Token);
+        string Call(string tool, string args = "{}") => "{\"token\":\"" + ticket!.Token + "\",\"tool\":\"" + tool + "\",\"args\":" + args + "}";
+        CluadeX.Services.Tools.ChatToolBridge.Reply Go(string line, CancellationToken ct = default) =>
+            CluadeX.Services.Tools.ChatToolBridge.HandleAsync(line, ct).GetAwaiter().GetResult();
+
+        var one = Go(Call("browser_screenshot", "{\"full_page\":true}"));
+        Check("browser: a call reaches Execute as its tool type, with its image", one.Ok && one.Images?.Count == 1
+            && seen[0].Type == CluadeX.Models.ToolType.BrowserScreenshot && seen[0].Arguments["full_page"] == "true", one.Text);
+        var refused = Go(Call("browser_console"));
+        Check("browser: the gate's refusal is what the agent reads", !refused.Ok && refused.Text.Contains("refused by the gate"), refused.Text);
+        Check("browser: another tool is still no tool", !Go(Call("run_command")).Ok && !Go(Call("browser_nope")).Ok);
+        Task.WaitAll(Enumerable.Range(0, 6).Select(_ => Task.Run(() => Go(Call("browser_click")))).ToArray());
+        Check("browser: a turn's calls run one at a time on the shared page", peak == 1, "peak=" + peak);
+
+        using (var giveUp = new CancellationTokenSource(150))
+        {
+            var sw = Stopwatch.StartNew();
+            var hung = Go(Call("browser_read"), giveUp.Token);
+            Check("browser: the agent giving up stops the call", !hung.Ok && hung.Text.Contains("stopped waiting") && sw.ElapsedMilliseconds < 5000, hung.Text);
+        }
+        var stuck = Task.Run(() => Go(Call("browser_read")));
+        Thread.Sleep(150);
+        turn.Cancel();
+        Check("browser: Stop ends a call in flight", stuck.Wait(5000) && !stuck.Result.Ok && stuck.Result.Text.Contains("turn was stopped"), stuck.IsCompleted ? stuck.Result.Text : "(still running)");
+        var late = Go(Call("browser_click"));
+        Check("browser: a call after the turn does nothing", !late.Ok);
+        string oldToken = ticket.Token;
+        ticket.Dispose();
+        Check("browser: a dead token is refused", !Go("{\"token\":\"" + oldToken + "\",\"tool\":\"browser_click\",\"args\":{}}").Ok);
+
+        var cancel = CluadeX.Services.Tools.ChatToolBridge.Peek("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":7}}");
+        var callId = CluadeX.Services.Tools.ChatToolBridge.Peek(callShot);
+        Check("browser: a cancel names the call it cancels", cancel.CancelsId == callId.CallId && callId.CallId == "n:7");
+
+        // The native side's gaps: [ACTION:] arguments that span lines.
+        var eval = AgentToolService.ParseFreeTextArgs("expression: const a = {\n  foo: 1,\n  bar: 2\n};\nreturn a.foo;\ntimeout_ms: 5000", "expression", "await", "timeout_ms");
+        Check("browser: [ACTION:] keeps a multi-line script whole", eval["expression"] == "const a = {\n  foo: 1,\n  bar: 2\n};\nreturn a.foo;" && eval["timeout_ms"] == "5000" && eval.Count == 2, string.Join("|", eval));
+        var typed = AgentToolService.ParseFreeTextArgs("ref: e12\ntext: บรรทัดหนึ่ง\nบรรทัดสอง\nsubmit: true", "text", "ref", "clear", "submit");
+        Check("browser: [ACTION:] keeps typed lines and the other arguments", typed["text"] == "บรรทัดหนึ่ง\nบรรทัดสอง" && typed["ref"] == "e12" && typed["submit"] == "true", string.Join("|", typed));
+
+        var core = CluadeX.Services.Browser.BrowserToolModule.CoreToolNames;
+        Check("browser: the core set is real tools", core.All(tools.Contains));
+        var bigShot = CluadeX.Services.Tools.ChatToolBridge.ImagesForCli(new[] { new CluadeX.Models.ToolImage("image/jpeg", "not-base64", 3000, 3000) });
+        Check("browser: a picture that cannot be sent is named, never dropped silently", bigShot.Images.Count == 0 && bigShot.Notes.Count == 1, string.Join("|", bigShot.Notes));
     }
 
     static readonly string CodexBin = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"OpenAI\Codex\bin");

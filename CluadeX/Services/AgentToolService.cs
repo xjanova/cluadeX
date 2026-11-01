@@ -312,6 +312,11 @@ public class AgentToolService : IDisposable
         }
     }
 
+    /// <summary>Why a module's tool may not run right now (license, Features switch, missing engine), or null when it
+    /// may — what a CLI agent's turn is told up front, since its tool list (ChatToolBridge) is not filtered by the gate.</summary>
+    public string? ModuleToolRefusal(ToolType type) =>
+        ModuleFor(type) is { } module ? ModuleRefusal(module, type) : string.Format(L("tool.module.unavailable"), type, "?");
+
     private static readonly Regex ApiSafeToolName = new(@"^[a-zA-Z0-9_-]{1,64}$", RegexOptions.Compiled);
 
     /// <summary>The module's schemas that may be offered right now: a valid, unique name that resolves to one of
@@ -397,8 +402,9 @@ public class AgentToolService : IDisposable
     }
 
     /// <summary>The permission gate for a module call: null = go ahead, otherwise the failed result. With the
-    /// permission system switched off only <see cref="ToolPermission.AlwaysAsk"/> calls are still asked about.</summary>
-    private async Task<ToolResult?> CheckModulePermissionAsync(IAgentToolModule module, ToolCall call)
+    /// permission system switched off only <see cref="ToolPermission.AlwaysAsk"/> calls are still asked about.
+    /// <paramref name="ct"/> retires the prompt when the call is given up (a CLI agent's call through ChatToolBridge).</summary>
+    private async Task<ToolResult?> CheckModulePermissionAsync(IAgentToolModule module, ToolCall call, CancellationToken ct = default)
     {
         var (action, scope, resource, perm) = EvaluateModulePermission(module, call);
         if (!_settingsService.Settings.Features.PermissionSystem && !perm.AlwaysAsk && !perm.AskEvenWhenPermissionsOff) return null;
@@ -414,6 +420,7 @@ public class AgentToolService : IDisposable
             AlwaysAsk = perm.AlwaysAsk || askRule,
             ChatScopeKey = perm.AlwaysAsk || askRule ? null : perm.ChatScopeKey,
             AlwaysKey = perm.OnAllowedAlways != null ? resource : null,
+            GivenUp = ct,
         };
         bool allowed = OnPermissionRequired != null && await OnPermissionRequired.Invoke(info);
         if (!allowed) return Fail(call, $"User denied permission for {scope}: {resource}");
@@ -818,7 +825,7 @@ public class AgentToolService : IDisposable
             // Checked even with the permission system off, because a module may mark a call AlwaysAsk.
             else if (ModuleFor(call.Type) is { } permModule)
             {
-                var refused = await CheckModulePermissionAsync(permModule, call);
+                var refused = await CheckModulePermissionAsync(permModule, call, ct);
                 if (refused != null) return refused;
             }
             // ── Permission check (respects PermissionSystem toggle) ──
@@ -1179,7 +1186,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
-        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "string", "workers only: JSON array [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "string", "workers only: JSON array [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
@@ -1806,14 +1813,22 @@ public class AgentToolService : IDisposable
         return sb.ToString();
     }
 
+    /// <summary>The [ACTION:] catalogue with no project open: the module tools that work without one, or "" when none.</summary>
+    public string GetProjectlessToolDefinitionsPrompt()
+    {
+        string tools = GetModuleToolDefinitionsPrompt(withoutProject: true);
+        return tools.Length == 0 ? "" : "AVAILABLE TOOLS:\nTo use a tool, write a tool call block in the format each one shows.\n" + tools;
+    }
+
     /// <summary>The module tools that pass their gate, as [ACTION:] blocks for the text protocol (empty when none).</summary>
-    private string GetModuleToolDefinitionsPrompt()
+    private string GetModuleToolDefinitionsPrompt(bool withoutProject = false)
     {
         if (_toolModules.Length == 0) return "";
         var sb = new StringBuilder();
         var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var module in _toolModules)
         {
+            if (withoutProject && !module.WorksWithoutProject) continue;
             foreach (var schema in AllowedModuleSchemas(module, taken))
             {
                 if (sb.Length == 0) sb.AppendLine().AppendLine("    MORE TOOLS:").AppendLine();
@@ -3798,7 +3813,8 @@ public class AgentToolService : IDisposable
             try
             {
                 string? result = await OnAgentSpawnRequested.Invoke(new SubAgentRequest(task, context, call.GetArg("type", "explore"),
-                    Pieces: call.GetArg("pieces", "")), ct);
+                    Pieces: call.GetArg("pieces", ""),
+                    ContinueId: int.TryParse(call.GetArg("continue_agent"), out int carryOn) ? carryOn : null), ct);
                 if (result != null)
                     return new ToolResult
                     {
@@ -4093,6 +4109,10 @@ public class AgentToolService : IDisposable
             return ParseNotebookEditArgs(body);
         }
 
+        // A script or typed text spans lines, and a line of JS with a colon is not a key.
+        if (toolType == ToolType.BrowserEval) return ParseFreeTextArgs(body, "expression", "await", "timeout_ms");
+        if (toolType == ToolType.BrowserType) return ParseFreeTextArgs(body, "text", "ref", "clear", "submit");
+
         // Standard key: value parsing for single-line args
         foreach (var line in body.Split('\n'))
         {
@@ -4258,6 +4278,36 @@ public class AgentToolService : IDisposable
         if (codeBuilder.Length > 0)
             args["code"] = codeBuilder.ToString().TrimEnd('\r', '\n');
 
+        return args;
+    }
+
+    /// <summary>[ACTION:] arguments where <paramref name="textKey"/>'s value runs over lines, up to a line that opens one
+    /// of <paramref name="otherKeys"/> (the tool's other arguments, so a stray "foo: 1," in a script stays in it). Pure.</summary>
+    public static Dictionary<string, string> ParseFreeTextArgs(string body, string textKey, params string[] otherKeys)
+    {
+        var args = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var text = new StringBuilder();
+        bool inText = false;
+        foreach (var raw in body.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            int colon = line.IndexOf(':');
+            string key = colon > 0 ? line[..colon].Trim() : "";
+            if (key.Equals(textKey, StringComparison.OrdinalIgnoreCase))
+            {
+                text.Clear().Append(line[(colon + 1)..].TrimStart());
+                inText = true;
+            }
+            else if (otherKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            {
+                args[key.ToLowerInvariant()] = line[(colon + 1)..].Trim();
+                inText = false;
+            }
+            else if (inText) text.Append('\n').Append(line);
+            else if (key.Length > 0) args[key.ToLowerInvariant()] = line[(colon + 1)..].Trim();
+        }
+        string value = text.ToString().Trim('\r', '\n');
+        if (value.Length > 0) args[textKey] = value;
         return args;
     }
 

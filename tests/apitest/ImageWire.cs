@@ -1248,6 +1248,36 @@ internal static class ImageWire
             long bFirst = calls.Where(c => c.Id == "B" && c.Msgs == 1).Select(c => c.Ms).DefaultIfEmpty(long.MaxValue).Min();
             Check("subagent", "the two sub-agents ran at the same time (each started before the other's second step)",
                 aFirst < bSecond && bFirst < aSecond, $"A first {aFirst} ms / second {aSecond} ms · B first {bFirst} ms / second {bSecond} ms");
+
+            // ── continue_agent: the same sub-agent takes a second message, with what it read still in its conversation ──
+            var keepResponder = anth.Responder;
+            anth.Responder = body =>
+            {
+                using var d = JsonDocument.Parse(body);
+                string sys = d.RootElement.TryGetProperty("system", out var sy) && sy.ValueKind == JsonValueKind.Array
+                    ? string.Concat(sy.EnumerateArray().Select(x => Str(x, "text"))) : "";
+                if (sys.Contains("You are a sub-agent of CluadeX"))
+                    return (200, "text/event-stream", TextSse(body.Contains("FOLLOW-UP")
+                        ? (body.Contains("REPORT-FIRST") ? "SECOND-REMEMBERS" : "SECOND-FORGOT") : "REPORT-FIRST"));
+                var carry = System.Text.RegularExpressions.Regex.Match(body, @"continue_agent (\d+) carries");
+                if (body.Contains("SECOND-") && body.Contains("no sub-agent 99999")) return (200, "text/event-stream", TextSse("CARRY-DONE"));
+                if (body.Contains("SECOND-")) return (200, "text/event-stream", ToolUseSse("toolu_c3", "agent_spawn", "{\"task\":\"x\",\"continue_agent\":\"99999\"}"));
+                if (carry.Success) return (200, "text/event-stream", ToolUseSse("toolu_c2", "agent_spawn", "{\"task\":\"FOLLOW-UP\",\"continue_agent\":\"" + carry.Groups[1].Value + "\"}"));
+                return (200, "text/event-stream", ToolUseSse("toolu_c1", "agent_spawn", "{\"task\":\"look at it\"}"));
+            };
+            // A run's scope holds its sub-agents' conversations; a fixed effort, or "auto" picks low for so short a message.
+            var carrySettings = sp.GetRequiredService<SettingsService>().Settings;
+            string carryEffort = carrySettings.ReasoningEffort;
+            carrySettings.ReasoningEffort = "medium";
+            AgentRunScope.Enter(new AgentRunScope("carry-on", project));
+            var carryRes = await Turn(new List<ChatMessage>(), "Ask one sub-agent, then ask it again.");
+            AgentRunScope.Enter(null);
+            carrySettings.ReasoningEffort = carryEffort;
+            string carryBody = anth.Bodies().Last(b => !b.Contains("You are a sub-agent of CluadeX"));
+            Check("subagent", "continue_agent: the same sub-agent answers with its earlier conversation in hand",
+                carryRes.FinalResponse == "CARRY-DONE" && carryBody.Contains("SECOND-REMEMBERS"), $"final={carryRes.FinalResponse}");
+            Check("subagent", "continue_agent on a number that is not there: refused in words, the run goes on", carryBody.Contains("no sub-agent 99999"), "");
+            anth.Responder = keepResponder;
             string subToolList = calls.FirstOrDefault().Tools ?? "";
             Check("subagent", "an explore sub-agent gets read tools only: read_file yes; agent_spawn, write_file, run_command, git_push no",
                 subToolList.Contains("read_file") && !subToolList.Split(',').Any(t => t is "agent_spawn" or "write_file" or "run_command" or "git_push" or "edit_file"),

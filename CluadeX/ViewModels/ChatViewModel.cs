@@ -1010,10 +1010,10 @@ public partial class ChatViewModel : ViewModelBase
             App.Current?.Dispatcher.BeginInvoke(() => OnAgentAddedFolder(scope, path));
         // The agent opens a new chat itself (new_chat), and puts finished ones away (close_chat). The asking chat is read
         // here, on the tool's own flow (its run scope), before the hop to the UI thread.
-        Services.Tools.ProjectToolModule.NewChatHandler = (path, message, title) =>
+        Services.Tools.ProjectToolModule.NewChatHandler = (path, message, title, fork) =>
         {
             string? parentId = FlowRun?.Session.Id;
-            return App.Current.Dispatcher.InvokeAsync(() => OpenChatForAgent(path, message, title, parentId)).Task;
+            return App.Current.Dispatcher.InvokeAsync(() => OpenChatForAgent(path, message, title, parentId, fork)).Task;
         };
         Services.Tools.ProjectToolModule.CloseChatHandler = target =>
         {
@@ -1240,7 +1240,7 @@ public partial class ChatViewModel : ViewModelBase
             if (AutoApproves(info, askRun?.Session ?? CurrentSession)) return Task.FromResult(true);
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var token = askRun?.Cts?.Token ?? CancellationToken.None;
-            CancellationTokenRegistration reg = default;
+            CancellationTokenRegistration reg = default, givenUp = default;
 
             // In people's words first (what, where, the result, how risky); the real command folded underneath.
             Services.Safety.PlainPermission? plain = null;
@@ -1273,6 +1273,7 @@ public partial class ChatViewModel : ViewModelBase
                 if (allow && prompt.PermissionAllowedAlways) info.AllowedAlways = true;
                 tcs.TrySetResult(allow);
                 reg.Dispose();
+                givenUp.Dispose();
             };
 
             // If the user hits Stop (cancels the turn) while this prompt is still open, resolve it as DENIED so
@@ -1280,12 +1281,16 @@ public partial class ChatViewModel : ViewModelBase
             // IsGenerating stuck on (and a late "Allow" could even apply an edit after the turn was cancelled).
             // The task is resolved right here (the dispatcher may be busy); the prompt's buttons are retired on
             // the UI thread, where ResolvePermission's second resolve of the task is a no-op.
-            reg = token.Register(() =>
+            void Retire()
             {
                 if (tcs.TrySetResult(false))
                     dispatcher.InvokeAsync(() => prompt.ResolvePermission(PermissionOutcome.Cancelled));
                 reg.Dispose();
-            });
+                givenUp.Dispose();
+            }
+            reg = token.Register(Retire);
+            // The same when the asking call itself is given up: a CLI agent cancelled it or stopped waiting.
+            givenUp = info.GivenUp.Register(Retire);
 
             dispatcher.InvokeAsync(() =>
             {
@@ -2333,7 +2338,7 @@ public partial class ChatViewModel : ViewModelBase
     /// with <paramref name="message"/>, its first turn started as the user's message. The asking chat keeps running
     /// beside it (each run has its own folder). Not awaited: the new chat's turn is its own. Returns the tool's report.
     /// </summary>
-    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null)
+    private string OpenChatForAgent(string? path, string? message, string? title, string? parentId = null, bool fork = false)
     {
         parentId ??= CurrentSession?.Id;
         // A ceiling on agent splits: each one starts a run that may split again (SplitLimits). Thrown = the tool fails
@@ -2353,11 +2358,23 @@ public partial class ChatViewModel : ViewModelBase
             }
         }
         string? from = Sessions.FirstOrDefault(s => s.Id == parentId)?.Title ?? CurrentSession?.Title;
+        // Read before the new chat goes on screen: from the store, as Fork does, so the copy holds no live rows or callbacks.
+        List<ChatMessage>? inherited = null;
+        if (fork)
+        {
+            if (parentId != null && _runs.FirstOrDefault(r => r.Session.Id == parentId) is { } parentRun) SaveRunChat(parentRun);
+            else SaveNow();
+            inherited = (parentId == null ? null : _persistenceService.LoadSession(parentId)?.Messages)?.ToList();
+            if (inherited == null || inherited.Count == 0) throw new InvalidOperationException("this chat has no stored history to fork");
+            foreach (var m in inherited) m.Id = Guid.NewGuid().ToString();
+        }
         if (path != null && !string.Equals(path, _fileSystemService.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
             ApplyWorkingDirectory(path, announce: false, showEditor: false);
         NewSession();
         var chat = CurrentSession ?? throw new InvalidOperationException("no chat was created");
         if (title != null) chat.Title = title;
+        if (inherited != null)
+            foreach (var m in inherited) Messages.Add(m);
         // The split, for the sidebar's tree and for close_chat: what this chat was opened to do.
         if (parentId != null)
             ChatLinkStore.Current?.Link(chat.Id, parentId, title ?? FirstLineOf(message) ?? "");
@@ -2415,6 +2432,22 @@ public partial class ChatViewModel : ViewModelBase
         int? maxSteps = null,
         bool? acceptEdits = null)
     {
+        var outcome = await RunMcpTaskCoreAsync(taskId, spec, lessons, contextFiles, workingDirectory, ct, maxSteps, acceptEdits);
+        // cluadex.task_status: how the call ended, for a caller that lost it. A run that never got a chat has nothing to tie it to.
+        if (_pipeTasks.TryGetValue(taskId, out var task)) _pipeTasks[taskId] = task with { Outcome = outcome };
+        return outcome;
+    }
+
+    private async Task<McpTaskOutcome> RunMcpTaskCoreAsync(
+        string taskId,
+        string spec,
+        IReadOnlyList<string>? lessons,
+        IReadOnlyList<string>? contextFiles,
+        string? workingDirectory,
+        CancellationToken ct,
+        int? maxSteps,
+        bool? acceptEdits)
+    {
         if (string.IsNullOrWhiteSpace(spec))
             return new McpTaskOutcome("(empty spec — nothing to do)", IsError: true);
 
@@ -2471,11 +2504,17 @@ public partial class ChatViewModel : ViewModelBase
                 // Already approved for this folder in this session: no second question. The user has Accept edits on
                 // there themselves: on for THIS task only — remembering the folder would let a later pipe task switch
                 // it on unasked after the user turned it off. Otherwise the user is asked, in CluadeX.
-                int decision = await dispatcher.InvokeAsync(() =>
-                    _pipeAcceptEditsApproved.Contains(key) ? 1
-                    : _permissionService.AcceptsEditsIn(target) ? 2
-                    : Confirm(LocF("chat.acceptEdits.pipeConfirm", taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
-                        && _pipeAcceptEditsApproved.Add(key) ? 1 : 0);
+                _pipeConsents[taskId] = target;
+                int decision;
+                try
+                {
+                    decision = await dispatcher.InvokeAsync(() =>
+                        _pipeAcceptEditsApproved.Contains(key) ? 1
+                        : _permissionService.AcceptsEditsIn(target) ? 2
+                        : Confirm(LocF("chat.acceptEdits.pipeConfirm", taskId, target), Loc("chat.acceptEdits.pipeConfirmTitle"))
+                            && _pipeAcceptEditsApproved.Add(key) ? 1 : 0);
+                }
+                finally { _pipeConsents.TryRemove(taskId, out _); }
                 if (decision != 0)
                 {
                     acceptTarget = target;
@@ -2604,6 +2643,8 @@ public partial class ChatViewModel : ViewModelBase
             await Task.WhenAny(busy, Task.Delay(Timeout.Infinite, ct));
             ct.ThrowIfCancellationRequested();
         }
+
+        if (taskSession != null) _pipeTasks[taskId] = new PipeTask(taskSession.Id, null);
 
         // The run's scope for THIS flow too (BeginTurn entered it inside the dispatcher call above, which does not
         // carry back here): the agent loop below and every event it raises then belong to this task's run.

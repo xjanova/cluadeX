@@ -1452,7 +1452,7 @@ internal static partial class Program
                 && mod.GetToolSchemas().Any(s => s.Name == "new_chat"));
             string? opened = null;
             var keep = CluadeX.Services.Tools.ProjectToolModule.NewChatHandler;
-            CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = (p, m, t) => { opened = $"{p}|{m}|{t}"; return Task.FromResult("ok"); };
+            CluadeX.Services.Tools.ProjectToolModule.NewChatHandler = (p, m, t, _) => { opened = $"{p}|{m}|{t}"; return Task.FromResult("ok"); };
             try
             {
                 string dir = Path.GetTempPath().TrimEnd('\\');
@@ -1498,7 +1498,7 @@ internal static partial class Program
             var p0 = ChatInDb("SC parent", "plan the release", "ok");
             await Open(p0.Id);
             string parentId = vm.CurrentSession!.Id;
-            string said = await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, "SC split A");
+            string said = await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, "SC split A", false);
             var made = vm.CurrentSession!;
             Check("SC new_chat records the asking chat as the parent, and the task", made.ParentId == parentId && made.SplitTask == "SC split A", said);
             made.Messages.Add(new ChatMessage { Role = MessageRole.User, Content = "build the API" });
@@ -1537,7 +1537,7 @@ internal static partial class Program
             // Owner 2026-10-18: "ระวัง … ผลิตออกมาไม่หยุด" — agent splits have a ceiling (SplitLimits).
             async Task<string?> TryNewChat(string title)
             {
-                try { await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, title); return null; }
+                try { await CluadeX.Services.Tools.ProjectToolModule.NewChatHandler!(null, null, title, false); return null; }
                 catch (Exception ex) { return ex.Message; }
             }
             await Open(aId);
@@ -1870,6 +1870,12 @@ internal static partial class Program
             var t5 = Task.Run(() => FreeVm().RunMcpTaskAsync("t5-prompt", "run echo hi", null, null, ProjB, CancellationToken.None));
             bool prompted = await WaitUntil(() => Vm.Messages.Any(m => m.Role == MessageRole.PermissionRequest && !m.PermissionAnswered), 20000);
             var prompt = Vm.Messages.LastOrDefault(m => m.Role == MessageRole.PermissionRequest);
+            var asking = await Dispatch("cluadex.task_status", "{\"taskId\":\"t5-prompt\"}");
+            var askingList = await Dispatch("cluadex.list_chats", "{\"query\":\"t5-prompt\"}");
+            Check("P5 a run held at a permission prompt reads waiting_consent, in task_status and list_chats, saying what is asked",
+                prompted && !asking.IsError && StatusOf(asking).GetProperty("activity").GetString() == "waiting_consent"
+                && StatusOf(asking).GetProperty("waitingFor").GetString()!.Length > 0
+                && ChatsOf(askingList).Any(c => c.GetProperty("activity").GetString() == "waiting_consent"), asking.GetTextOutput());
             Vm.StopGenerationCommand.Execute(null);
             var o5 = await Task.WhenAny(t5, Task.Delay(20000)) == t5 ? await t5 : null;
             await Render();

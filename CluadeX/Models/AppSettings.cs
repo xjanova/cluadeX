@@ -270,6 +270,12 @@ public class AppSettings
     public decimal RunBudgetUsd { get; set; } = 2m;
     /// <summary>A paid run asks before going on once CluadeX has spent this much today (USD, all chats). 0 = no daily cap.</summary>
     public decimal DailyBudgetUsd { get; set; }
+
+    /// <summary>The same two guards for a CLI agent on the user's own plan (Claude Dev, OpenAI Dev, Gemini Dev), in the
+    /// API-equivalent dollars the CLI reports. Separate, and off by default: a plan's run is not an API bill, and the $2
+    /// API guard would end every long task there. 0 = none.</summary>
+    public decimal CliRunBudgetUsd { get; set; }
+    public decimal CliDailyBudgetUsd { get; set; }
     /// <summary>The chat page's right-hand panel (project files, latest image, latest run) is shown.</summary>
     public bool ChatSidePanel { get; set; } = true;
     /// <summary>Widths the user dragged panels to, by <see cref="Views.ResizeGrip.Key"/> (px).</summary>

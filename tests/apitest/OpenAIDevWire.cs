@@ -134,8 +134,9 @@ internal static class OpenAIDevWire
         string bridge = J(new { mcpServers = new { cluadex = new { command = @"C:\x\CluadeX.exe", args = new[] { "--cx-tools" }, env = new { CLUADEX_TOOLS_TOKEN = "t" } } } });
         var mcpArgs = OpenAIDevProvider.McpOverrides(bridge);
         check("od-mcp", "the chat tools become mcp_servers.cluadex with the Windows path as a TOML literal string, each tool approved (the app asks itself)",
-            mcpArgs.Count == 1 && mcpArgs[0] == @"mcp_servers.cluadex={command='C:\x\CluadeX.exe', args=['--cx-tools'], env={CLUADEX_TOOLS_TOKEN='t'}, "
-                + "tools={new_chat={approval_mode='approve'}, open_project={approval_mode='approve'}, close_chat={approval_mode='approve'}, ask_user={approval_mode='approve'}}}", mcpArgs.FirstOrDefault() ?? "");
+            mcpArgs.Count == 1 && mcpArgs[0].StartsWith(@"mcp_servers.cluadex={command='C:\x\CluadeX.exe', args=['--cx-tools'], env={CLUADEX_TOOLS_TOKEN='t'}, "
+                + "tools={new_chat={approval_mode='approve'}, open_project={approval_mode='approve'}, close_chat={approval_mode='approve'}, ask_user={approval_mode='approve'}, ")
+            && CluadeX.Services.Browser.BrowserToolModule.ToolNames.All(n => mcpArgs[0].Contains(n + "={approval_mode='approve'}")), mcpArgs.FirstOrDefault() ?? "");
 
         // ─── the brain under approval_policy=never: the same tools Claude Dev may call unasked, nothing more ───
         static List<string> Approved(List<string> a) => a.Select((x, i) => (x, i)).Where(p => p.x == "-c" && p.i + 1 < a.Count
