@@ -214,7 +214,8 @@ public partial class ChatViewModel
             bool mayMoveMain = newChat || string.IsNullOrWhiteSpace(main);
             if (mayMoveMain && !named.Any(n => PathEquals(n, main)))
             {
-                ApplyWorkingDirectory(named[0], announce: false, showEditor: false);
+                // (the brain was asked first: the user may be in another chat by now, and that chat keeps its folder)
+                if (ReferenceEquals(session, CurrentSession)) ApplyWorkingDirectory(named[0], announce: false, showEditor: false);
                 ProjectRegistryService.Current?.Record(named[0]);
                 session.ProjectPath = named[0];
                 session.ExtraFolders.Clear();

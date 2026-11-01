@@ -7,8 +7,8 @@ using CluadeX.Services.UiStudio.Pages;
 namespace CluadeX.ViewModels;
 
 /// <summary>
-/// The Studio follows the project the chat has open — the moment the chat opens it, not when the Studio page is
-/// first visited — so the preview is ready the first time it is looked at. What it does while nobody looks is kept
+/// The Studio shows the project of the chat on screen — from the moment the chat is opened, not when the Studio page
+/// is first visited — so the preview is ready the first time it is looked at. What it does while nobody looks is kept
 /// small: opening the project and starting a cheap preview (a static site, a site that already runs). A dev server
 /// is started early only when its packages are already installed; an install and the Flutter screens wait for the
 /// page to be shown. Drawing work for a change (re-rendering screens) waits too, and catches up on show.
@@ -35,18 +35,34 @@ public sealed partial class UiStudioViewModel
     public void SetOnScreen(bool onScreen)
     {
         _onScreen = onScreen;
+        _chat.ProjectPageOnScreen = onScreen || _graphOnScreen;
         _studio.PageVisible = onScreen;
         if (onScreen) CatchUpOnShow();
     }
 
+    /// <summary>The Node Graph's page is on screen (see <see cref="ChatViewModel.ProjectPageOnScreen"/>).</summary>
+    internal void SetGraphOnScreen(bool onScreen)
+    {
+        _graphOnScreen = onScreen;
+        _chat.ProjectPageOnScreen = _onScreen == true || _graphOnScreen;
+    }
+    private bool _graphOnScreen;
+
     private void HookAppProject()
     {
-        _fs.OnWorkingDirectoryChanged += () => Application.Current?.Dispatcher.BeginInvoke(QueueFollow);
+        _chat.ChatProjectChanged += OnChatProjectChanged;
         // A folder the chat opened while still empty (the AI makes the site after opening it) stayed "Unsupported" for
         // good, so the Studio never showed the page it then wrote (owner 2026-10-20). Look again when files appear.
         _studio.FilesChanged += _ => RedetectAfterFilesAppeared();
-        // the project open at start-up (the last chat's): followed once the window is up, after the start-up work
-        Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, QueueFollow);
+        // the chat restored at start-up: followed once the window is up, after the start-up work
+        Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () => FollowChat());
+    }
+
+    private void OnChatProjectChanged()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) FollowChat();
+        else dispatcher.BeginInvoke(() => FollowChat());
     }
 
     /// <summary>An "Unsupported" project that files were just written into: detect it again, and start it the way a
@@ -60,8 +76,9 @@ public sealed partial class UiStudioViewModel
         _log?.Info("UiStudio", $"files appeared in {_studio.Root}: now {_studio.Project.Kind}");
     }
 
-    /// <summary>Chats switch projects in bursts (the session list, a restore): follow the folder it settles on.</summary>
-    private void QueueFollow()
+    /// <summary>Chats switch in bursts (the arrow keys in a list, a restore): the preview starts on the project it
+    /// settles on. The Studio itself is already there — see <see cref="FollowChat"/>.</summary>
+    private void QueueStart()
     {
         _followTimer ??= NewFollowTimer();
         _followTimer.Stop();
@@ -70,25 +87,38 @@ public sealed partial class UiStudioViewModel
 
     private DispatcherTimer NewFollowTimer()
     {
-        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
-        t.Tick += (_, _) => { t.Stop(); FollowAppProject(); };
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        t.Tick += (_, _) => { t.Stop(); if (_studio.HasProject) StartFollowed(); };
         return t;
     }
 
-    /// <summary>Open the chat's project in the Studio, unless the Studio is already on it or is in the middle of
-    /// something that a switch would throw away (a review round, a save check).</summary>
-    internal void FollowAppProject()
+    /// <summary>Be on the project of the chat on screen, and nothing else: another chat's project is left at once,
+    /// a chat without one shows the empty page. Late results of the project left are dropped by what they each hold
+    /// (<see cref="_pagesCts"/>, the root they read); a review round waits for the user to come back.</summary>
+    internal void FollowChat(bool startPreview = true)
     {
         OnPropertyChanged(nameof(CurrentAppProject));
         OnPropertyChanged(nameof(HasAppProject));
-        string? p = _fs.AppWorkingDirectory;
-        if (string.IsNullOrEmpty(p) || !Directory.Exists(p)) return;
-        if (_studio.HasProject && SamePath(_studio.Root, p)) return;
-        if (_session != null || IsChecking) return;
-
+        string p = _chat.ChatProject;
+        if (p.Length > 0 ? _studio.HasProject && SamePath(_studio.Root, p) : !_studio.HasProject)
+        {
+            if (!startPreview) _followTimer?.Stop();
+            return;
+        }
+        _followTimer?.Stop();
+        ParkRound();
+        _startOnShow = _pagesOnShow = false;
+        ShowGallery = false;
+        if (p.Length == 0)
+        {
+            _studio.CloseProject();
+            _log?.Info("UiStudio", "the chat on screen has no project");
+            return;
+        }
         _studio.OpenProject(p);
-        StartFollowed();
+        TakeParkedRound();
         _log?.Info("UiStudio", $"followed the chat's project {p} ({_studio.Project.Kind})");
+        if (startPreview) QueueStart();
     }
 
     /// <summary>Start what a followed project shows, by its kind: only the cheap and safe things run unasked.</summary>

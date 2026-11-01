@@ -129,6 +129,30 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         NavigateRequested?.Invoke(url);
     }
 
+    /// <summary>What the browser is sent to when its project is gone: no page shows under another project's name.</summary>
+    public const string BlankPage = "about:blank";
+
+    /// <summary>The browser may still hold the last project's page (until a navigation lands). What that page sends
+    /// — a pick, a tree, an inline edit whose line numbers mean another project's files — is dropped.</summary>
+    public bool PageIsOld { get; private set; }
+
+    /// <summary>The view reports that a navigation landed: messages now come from a page opened for this project.</summary>
+    public void NotePageLoaded() => PageIsOld = false;
+
+    private void LeavePage()
+    {
+        PageIsOld = true;
+        PageUrl = null;
+        PageIsLocal = false;
+        LastRequestedUrl = null;
+        ServerBaseUrl = null;
+        Selection = null;
+        Tree = null;
+        TreeTruncated = false;
+        _undo.Clear();
+        NavigateRequested?.Invoke(BlankPage);
+    }
+
     public int UndoCount => _undo.Count;
 
     // ───────────────────────────── project & serving ─────────────────────────────
@@ -142,13 +166,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
             return;
         }
         StopServing();
-        _undo.Clear();
         Project = StudioProject.Detect(root);
-        ServerBaseUrl = null;
-        Selection = null;
-        Tree = null;
-        LastRequestedUrl = null;
-        _pendingReload = null;
+        LeavePage();
         StartWatching();
         _log?.Info("UiStudio", $"project {root} → {Project.Kind} ({Project.Framework})");
         ProjectChanged?.Invoke();
@@ -160,12 +179,8 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
     {
         StopServing();
         StopWatching();
-        _undo.Clear();
-        LastRequestedUrl = null;
         Project = new StudioProjectInfo();
-        Selection = null;
-        Tree = null;
-        PageUrl = null;
+        LeavePage();
         ProjectChanged?.Invoke();
         SelectionChanged?.Invoke();
         TreeChanged?.Invoke();
@@ -177,6 +192,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         if (!HasProject) return "studio.err.noProject";
         if (IsServing || IsStarting) { if (PageUrl != null) RequestNavigate(PageUrl); return null; }
         IsStarting = true;
+        int start = ++_startRun;
         ServingChanged?.Invoke();
         try
         {
@@ -202,7 +218,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
                 {
                     var dev = new DevServerRunner(Root);
                     var dispatcher = Application.Current?.Dispatcher;
-                    dev.Output += line => dispatcher?.BeginInvoke(() => ServerOutput?.Invoke(line));
+                    dev.Output += line => dispatcher?.BeginInvoke(() => { if (ReferenceEquals(_dev, dev)) ServerOutput?.Invoke(line); });
                     dev.UrlFound += url => dispatcher?.BeginInvoke(() =>
                     {
                         if (!ReferenceEquals(_dev, dev)) return;
@@ -251,16 +267,24 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
         }
         finally
         {
-            IsStarting = false;
-            ServingChanged?.Invoke();
+            // (a start that was stopped: the next project's own start may be running by now, and it keeps its flag)
+            if (start == _startRun)
+            {
+                IsStarting = false;
+                ServingChanged?.Invoke();
+            }
         }
     }
+
+    private int _startRun;
 
     public void StopServing()
     {
         try { _startCts?.Cancel(); } catch { }
         _startCts?.Dispose();
         _startCts = null;
+        _startRun++;
+        IsStarting = false;
         _pendingReload = null;   // (the project's watcher stays: it belongs to the project, not to the preview)
         _static?.Dispose();
         _static = null;
@@ -283,6 +307,7 @@ public sealed class StudioService : IAppShutdownHook, IDisposable
 
     public void HandleOverlayMessage(OverlayMessage msg)
     {
+        if (PageIsOld) return;
         switch (msg.Type)
         {
             case "select":

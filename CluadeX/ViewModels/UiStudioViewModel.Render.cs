@@ -411,6 +411,7 @@ public sealed partial class UiStudioViewModel
         if (l10n?.IsGenerated(path) == true) return;
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
+            if (!path.StartsWith(_studio.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;   // another project since
             if (rel == "l10n.yaml")
             {
                 try { _l10n = FlutterL10n.Load(_studio.Root); } catch { _l10n = null; }

@@ -195,7 +195,15 @@ public partial class ChatViewModel : ViewModelBase
     public ChatSession? CurrentSession
     {
         get => _currentSession;
-        set { if (SetProperty(ref _currentSession, value)) { RaiseRunStateChanged(); RefreshStickyPlan(); OnPropertyChanged(nameof(FollowEditsHere)); } }
+        set
+        {
+            var left = _currentSession;
+            if (!SetProperty(ref _currentSession, value)) return;
+            RaiseRunStateChanged();
+            RefreshStickyPlan();
+            OnPropertyChanged(nameof(FollowEditsHere));
+            WatchChatProject(left, value);
+        }
     }
     public string WorkingDirectory
     {
@@ -2514,7 +2522,7 @@ public partial class ChatViewModel : ViewModelBase
 
                 // The screen belongs to the user: busy (typing, just switched chats, watching a run) or taken over a
                 // moment ago → the task runs in its own chat in the background and nothing on screen moves.
-                if (!MayTakeScreen(DateTime.UtcNow, _lastUserActivityUtc, _lastScreenTakeUtc, RunOf(CurrentSession) != null))
+                if (ProjectPageOnScreen || !MayTakeScreen(DateTime.UtcNow, _lastUserActivityUtc, _lastScreenTakeUtc, RunOf(CurrentSession) != null))
                 {
                     string folder = runDir ?? _fileSystemService.AppWorkingDirectory;
                     var bg = new ChatSession { ProjectPath = folder, Title = taskId };
