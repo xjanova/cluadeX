@@ -373,6 +373,7 @@ public partial class App : Application
                 "cluadex.choose_model"      => await HandleChooseModelAsync(invocation.Arguments),
                 "cluadex.list_chats"        => await HandleListChatsAsync(invocation.Arguments),
                 "cluadex.continue_chat"     => await HandleContinueChatAsync(invocation.Arguments, ct),
+                "cluadex.task_status"       => await HandleTaskStatusAsync(invocation.Arguments),
                 _ => ErrorResult($"Unknown tool '{invocation.ToolName}'"),
             };
             if (startupNote != null)
@@ -804,7 +805,7 @@ public partial class App : Application
     }
 
     /// <summary>The chats there are, newest first — for carrying one on with continue_chat. Read-only: nothing on screen
-    /// changes. Returns a JSON array of { id, title, project, updatedAt, running, paused }.</summary>
+    /// changes. Returns a JSON array of { id, title, project, updatedAt, running, paused, activity, waitingFor, doing }.</summary>
     private async Task<McpToolResult> HandleListChatsAsync(System.Text.Json.JsonElement args)
     {
         if (_serviceProvider == null) return ErrorResult("DI not initialised");
@@ -820,7 +821,46 @@ public partial class App : Application
             updatedAt = new DateTimeOffset(c.UpdatedAt).ToString("o", System.Globalization.CultureInfo.InvariantCulture),
             running = c.Running,
             paused = c.Paused,
+            activity = c.Activity,
+            waitingFor = c.WaitingFor,
+            doing = c.Doing,
         })));
+    }
+
+    /// <summary>How a task or chat stands now and what its last turn said. Read-only.</summary>
+    private async Task<McpToolResult> HandleTaskStatusAsync(System.Text.Json.JsonElement args)
+    {
+        if (_serviceProvider == null) return ErrorResult("DI not initialised");
+        string? taskId = ReadString(args, "taskId");
+        string? chatId = ReadString(args, "chatId");
+        if (string.IsNullOrWhiteSpace(taskId) && string.IsNullOrWhiteSpace(chatId))
+            return ErrorResult("'taskId' (or 'chatId') is required");
+        var chat = _serviceProvider.GetRequiredService<ViewModels.ChatViewModel>();
+        var s = await chat.TaskStatusForPipeAsync(taskId, chatId);
+        if (s == null) return ErrorResult($"No task or chat '{taskId ?? chatId}' — cluadex.list_chats lists the chats.");
+        return TextResult(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            chatId = s.ChatId,
+            title = s.Title,
+            project = s.Project,
+            taskId = s.TaskId,
+            activity = s.Activity,
+            waitingFor = s.WaitingFor,
+            doing = s.Doing,
+            startedBy = s.Stats?.StartedBy,
+            provider = s.Stats?.Provider,
+            model = s.Stats?.Model,
+            step = s.Stats?.Step,
+            inputTokens = s.Stats?.InputTokens,
+            outputTokens = s.Stats?.OutputTokens,
+            cacheReadTokens = s.Stats?.CacheReadTokens,
+            cacheWriteTokens = s.Stats?.CacheWriteTokens,
+            costUsd = s.Stats?.CostUsd,
+            subAgents = s.SubAgents.Select(a => new { a.Label, a.Kind, a.Task, a.State, a.Action, a.Model, a.ToolCalls, a.CostUsd }),
+            lastReply = s.LastReply,
+            callResult = s.Outcome?.Text,
+            callFailed = s.Outcome?.IsError,
+        }));
     }
 
     private const int MaxListChats = 200;
@@ -849,7 +889,7 @@ public partial class App : Application
         }
 
         var chat = _serviceProvider.GetRequiredService<ViewModels.ChatViewModel>();
-        var outcome = await chat.ContinueChatForPipeAsync(chatId, title, message, maxSteps, provider, model, ct);
+        var outcome = await chat.ContinueChatForPipeAsync(chatId, title, message, maxSteps, provider, model, ct, ReadBool(args, "focus") == true);
         return ToMcpResult(outcome);
     }
 

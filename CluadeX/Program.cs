@@ -43,6 +43,12 @@ public static class Program
             Environment.Exit(Services.Safety.GuardHook.RunEffortReport());
             return;
         }
+        // A CLI's sub-agent spawn: the hook asks the running app, which refuses it or sets its model and worktree. Headless.
+        if (args.Length > 0 && args[0] == Services.Safety.GuardHook.AgentGateFlag)
+        {
+            Environment.Exit(Services.Safety.GuardHook.RunAgentGate());
+            return;
+        }
         // CluadeX's chat tools (open_project / new_chat / close_chat) as an MCP server for a Claude Dev run — headless too.
         if (args.Length > 0 && args[0] == Services.Tools.ChatToolBridge.Flag)
         {

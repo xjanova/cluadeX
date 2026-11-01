@@ -163,6 +163,8 @@ public sealed class ClaudeDevStreamTurn
     private readonly List<(string Id, TodoItem Item)> _plan = new();
     private int _taskSeq;
     private readonly Dictionary<string, CodeAgentService.SubAgentEvent> _subAgents = new();
+    /// <summary>Sub-agents started in the background: their Agent call has returned, they run until task_notification.</summary>
+    private readonly HashSet<string> _background = new();
     private int _subAgentSeq;
 
     public ClaudeDevStreamTurn(string? runFolder) => _runFolder = runFolder;
@@ -177,6 +179,23 @@ public sealed class ClaudeDevStreamTurn
     /// <summary>The whole plan, every time it changes (TodoWrite, TaskCreate, TaskUpdate).</summary>
     public event Action<IReadOnlyList<TodoItem>>? PlanChanged;
     public event Action<CodeAgentService.SubAgentEvent>? SubAgent;
+    /// <summary>The sub-agent of this Agent call ended (done, failed, stopped or refused): its place at the gate is free.</summary>
+    public event Action<string>? SubAgentEnded;
+
+    /// <summary>The process is gone. A sub-agent still open never reported an end, so it did not finish: each is closed on
+    /// the map as stopped. Returns their labels.</summary>
+    public List<string> CloseUnfinishedAgents()
+    {
+        var left = _subAgents.ToList();
+        _subAgents.Clear();
+        _background.Clear();
+        foreach (var (id, sub) in left)
+        {
+            SubAgent?.Invoke(sub with { Phase = "stopped", Detail = "" });
+            SubAgentEnded?.Invoke(id);
+        }
+        return left.Select(a => string.IsNullOrWhiteSpace(a.Value.Task) ? a.Value.Label : a.Value.Task).ToList();
+    }
 
     public List<AgentStep> Steps { get; } = new();
     public IReadOnlyList<TodoItem> Plan => _plan.Select(p => p.Item).ToList();
@@ -185,6 +204,8 @@ public sealed class ClaudeDevStreamTurn
     public bool Done { get; private set; }
     public bool ResultIsError { get; private set; }
     public string? ResultText { get; private set; }
+    /// <summary>The CLI stopped the turn at --max-budget-usd.</summary>
+    public bool StoppedAtBudget { get; private set; }
     public decimal? CostUsd { get; private set; }
     public int? NumTurns { get; private set; }
 
@@ -222,10 +243,12 @@ public sealed class ClaudeDevStreamTurn
                 case "assistant" when parent != null: OnSubAgentMessage(parent, root); break;
                 case "assistant": OnAssistant(root); break;
                 case "user" when parent == null: OnUser(root); break;
+                case "system": OnSystem(root); break;
                 case "result":
                     Done = true;
                     ResultIsError = root.TryGetProperty("is_error", out var e) && e.ValueKind == JsonValueKind.True;
                     ResultText = root.TryGetProperty("result", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+                    StoppedAtBudget |= Str(root, "subtype") == "error_max_budget_usd";
                     if (root.TryGetProperty("total_cost_usd", out var c) && c.ValueKind == JsonValueKind.Number) CostUsd = c.GetDecimal();
                     if (root.TryGetProperty("num_turns", out var n) && n.ValueKind == JsonValueKind.Number) NumTurns = n.GetInt32();
                     break;
@@ -334,10 +357,52 @@ public sealed class ClaudeDevStreamTurn
                 result.Summary = $"Plan: {_plan.Count(p => p.Item.Status == "completed")}/{_plan.Count}";
             call.Step.ToolResults.Add(result);
 
-            if (_subAgents.Remove(id, out var sub))
-                SubAgent?.Invoke(sub with { Phase = isError ? "failed" : "done", Detail = FirstLine(text, 120) });
+            if (_subAgents.TryGetValue(id, out var sub)) OnAgentCallReturned(id, sub, isError, text, structured);
             ToolExecuted?.Invoke(result);
         }
+    }
+
+    /// <summary>An Agent call came back. run_in_background returns at once with status "async_launched": that is the start
+    /// of the work, not its end — it used to show as done with the agent still running.</summary>
+    private void OnAgentCallReturned(string id, CodeAgentService.SubAgentEvent sub, bool isError, string text, JsonElement structured)
+    {
+        string? served = structured.ValueKind == JsonValueKind.Object ? Str(structured, "resolvedModel") : null;
+        if (!string.IsNullOrEmpty(served)) sub = sub with { Model = served };
+        if (!isError && structured.ValueKind == JsonValueKind.Object && Str(structured, "status") == "async_launched")
+        {
+            _background.Add(id);
+            _subAgents[id] = sub;
+            SubAgent?.Invoke(sub with { Phase = "tool", Detail = "⏳" });
+            return;
+        }
+        _subAgents.Remove(id);
+        SubAgent?.Invoke(sub with { Phase = isError ? "failed" : "done", Detail = FirstLine(text, 120) });
+        SubAgentEnded?.Invoke(id);
+    }
+
+    /// <summary>What the CLI says about background work: its progress, and its end (the only sign of it).</summary>
+    private void OnSystem(JsonElement root)
+    {
+        string subtype = Str(root, "subtype");
+        if (subtype is not ("task_progress" or "task_notification")) return;
+        string id = Str(root, "tool_use_id");
+        if (!_background.Contains(id) || !_subAgents.TryGetValue(id, out var sub)) return;
+        if (subtype == "task_progress")
+        {
+            sub = sub with { Phase = "tool", Detail = FirstLine(Str(root, "description"), 120), Steps = sub.Steps + 1 };
+            _subAgents[id] = sub;
+            SubAgent?.Invoke(sub);
+            return;
+        }
+        _background.Remove(id);
+        _subAgents.Remove(id);
+        string status = Str(root, "status");
+        SubAgent?.Invoke(sub with
+        {
+            Phase = status == "completed" ? "done" : status == "stopped" ? "stopped" : "failed",
+            Detail = FirstLine(Str(root, "summary"), 120),
+        });
+        SubAgentEnded?.Invoke(id);
     }
 
     /// <summary>A sub-agent's own message (parent_tool_use_id = the Task call): its tools go to the agent map, not to
@@ -347,6 +412,8 @@ public sealed class ClaudeDevStreamTurn
         if (!_subAgents.TryGetValue(parent, out var sub)) return;
         if (!root.TryGetProperty("message", out var msg) || !msg.TryGetProperty("content", out var content)
             || content.ValueKind != JsonValueKind.Array) return;
+        // The model it really runs on: the gate may have changed the one the call named.
+        if (Str(msg, "model") is { Length: > 0 } model && model != sub.Model) _subAgents[parent] = sub = sub with { Model = model };
         foreach (var part in content.EnumerateArray())
         {
             if (Str(part, "type") != "tool_use") continue;

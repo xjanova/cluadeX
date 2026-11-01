@@ -681,7 +681,9 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
             description = "List CluadeX's chats, newest first, to find one to carry on with cluadex.continue_chat. " +
                           "Read-only: nothing in the CluadeX window changes. Returns JSON text: an array of " +
                           "{ id, title, project, updatedAt (ISO 8601), running (a turn is going on in it now), " +
-                          "paused (its last reply is a Pause — it can be resumed) }.",
+                          "paused (its last reply is a Pause — it can be resumed), activity (waiting_consent, running, paused " +
+                          "or idle), waitingFor (what the owner is being asked), doing (the step it is on) }. A task held at " +
+                          "its Accept-edits dialog has no chat yet: it is listed with an empty id and waiting_consent.",
             inputSchema = new
             {
                 type = "object",
@@ -696,9 +698,10 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
         new
         {
             name = "cluadex.continue_chat",
-            description = "Carry on an existing chat: opens it in the CluadeX window (as clicking it in the sidebar does, " +
-                          "which also opens its project), sends `message` as the user (as pressing Send does — a slash " +
-                          "command or skill works the same), waits for that turn and returns its final reply as text. isError " +
+            description = "Carry on an existing chat: sends `message` as the user into it, waits for that turn and returns " +
+                          "its final reply as text. The CluadeX window is left alone: the turn runs beside what the owner has " +
+                          "open. With focus: true the chat is opened as clicking it in the sidebar does (which also opens its " +
+                          "project) and the message goes through Send; a slash command, a skill or `model` needs that. isError " +
                           "is true when the chat does not exist, is already running, the message started no reply, or the " +
                           "turn failed, hit its step limit, was stopped in CluadeX or the caller disconnected. Requests on " +
                           "one connection run one at a time; the call blocks until the turn ends.",
@@ -711,9 +714,30 @@ public sealed class McpHostService : INotifyPropertyChanged, IDisposable
                     chatId = new { type = "string", description = "The chat's id from cluadex.list_chats" },
                     title = new { type = "string", description = "When no chatId: the newest chat with exactly this title (case-insensitive)" },
                     message = new { type = "string", description = "What to send, as the user would type it (e.g. 'continue')" },
+                    focus = new { type = "boolean", description = "Optional: open the chat on screen first. Default false: nothing on screen moves" },
                     maxSteps = new { type = "integer", description = "Optional step limit for this turn (1-100000, 0 = no limit). Default: the Max agent steps setting; the result says when it could not be applied" },
                     provider = new { type = "string", description = "Optional, with model: the provider of that model (e.g. 'Anthropic')" },
                     model = new { type = "string", description = "Optional: pick this model for the chat first, by cluadex.choose_model's rules (a model from get_active_model's options); nothing is sent when it is refused" },
+                }
+            }
+        },
+        new
+        {
+            name = "cluadex.task_status",
+            description = "How a task or chat stands now, and what its latest turn said — also a turn that ended after the call " +
+                          "that started it returned, or after that caller went away. Read-only: nothing in the CluadeX window " +
+                          "changes. Returns JSON text: { chatId, title, project, taskId, activity (waiting_consent, running, paused " +
+                          "or idle), waitingFor, doing, startedBy (pipe or user), provider, model, step, inputTokens, outputTokens, " +
+                          "cacheReadTokens, cacheWriteTokens, costUsd, subAgents [{ Label, Kind, Task, State, Action, Model, " +
+                          "ToolCalls, CostUsd }], lastReply, callResult, callFailed }. The numbers are null for a chat with no run " +
+                          "since CluadeX started.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    taskId = new { type = "string", description = "The taskId given to cluadex.write_code" },
+                    chatId = new { type = "string", description = "Or the chat's id from cluadex.list_chats" },
                 }
             }
         },

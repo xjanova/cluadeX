@@ -25,6 +25,38 @@ internal static class DispatchKeys
         },
         ["settings.maxParallel"] = new() { ["en"] = "Max parallel agents", ["th"] = "จำนวนเอเจนต์ที่ทำพร้อมกันสูงสุด" },
         ["settings.maxParallelDesc"] = new() { ["en"] = "Per run, 1–8.", ["th"] = "ต่อหนึ่งรอบงาน 1–8 ตัว" },
+        ["settings.cliRunBudget"] = new() { ["en"] = "CLI agents: budget per run (USD)", ["th"] = "เอเจนต์ CLI: งบต่อรอบ (ดอลลาร์)" },
+        ["settings.cliRunBudgetDesc"] = new()
+        {
+            ["en"] = "Claude Dev stops the turn at this API-equivalent value, sub-agents included. 0 = no limit.",
+            ["th"] = "Claude Dev หยุดเทิร์นเมื่อมูลค่าเทียบ API ถึงค่านี้ รวมเอเจนต์ย่อย ใส่ 0 = ไม่จำกัด",
+        },
+        ["settings.cliDailyBudget"] = new() { ["en"] = "CLI agents: budget per day (USD)", ["th"] = "เอเจนต์ CLI: งบต่อวัน (ดอลลาร์)" },
+        ["settings.cliDailyBudgetDesc"] = new()
+        {
+            ["en"] = "Per CLI, API-equivalent. Once reached, no new turn starts on it today. 0 = no limit.",
+            ["th"] = "แยกตาม CLI คิดเป็นมูลค่าเทียบ API ถึงแล้ววันนี้จะไม่เริ่มเทิร์นใหม่ ใส่ 0 = ไม่จำกัด",
+        },
+        ["agent.subAgentsUnfinished"] = new()
+        {
+            ["en"] = "{0} sub-agent(s) did not finish, so this task is not complete: {1}",
+            ["th"] = "มีเอเจนต์ย่อย {0} ตัวทำงานไม่จบ งานนี้จึงยังไม่เสร็จ: {1}",
+        },
+        ["agent.cliBudgetStopped"] = new()
+        {
+            ["en"] = "The turn stopped at this run's budget (Settings ▸ Agent), so the task may be unfinished. Say \"continue\" to carry on.",
+            ["th"] = "เทิร์นนี้หยุดเพราะถึงงบต่อรอบแล้ว (การตั้งค่า ▸ เอเจนต์) งานอาจยังไม่เสร็จ พิมพ์ \"ทำต่อ\" เพื่อทำต่อได้",
+        },
+        ["agent.worktreesKept"] = new()
+        {
+            ["en"] = "{0} sub-agent worktree(s) still hold work, nothing was deleted: {1}",
+            ["th"] = "มี worktree ของเอเจนต์ย่อย {0} ชุดที่ยังมีงานค้าง ฉันไม่ได้ลบ: {1}",
+        },
+        ["agent.cliBudgetSpent"] = new()
+        {
+            ["en"] = "Today's budget for this CLI agent is used up (Settings ▸ Agent). Nothing was started.",
+            ["th"] = "งบวันนี้ของเอเจนต์ CLI นี้หมดแล้ว (การตั้งค่า ▸ เอเจนต์) จึงยังไม่ได้เริ่มงาน",
+        },
         ["settings.specFix"] = new() { ["en"] = "Speculative fix", ["th"] = "ส่งตัวแก้แข่งกัน (speculative fix)" },
         ["settings.specFixDesc"] = new()
         {

@@ -38,6 +38,9 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     private bool _isLoading;
 
     public const string Id = "OpenAIDev";
+    /// <summary>Spawns sub-agents of its own; the dispatch policy reaches them through the CLI (Agents.CliAgentGate).</summary>
+    public bool RunsOwnSubAgents => true;
+
     public string ProviderId => Id;
     public string DisplayName => "OpenAI Dev (Codex CLI)";
     public bool IsReady => _exe != null;
@@ -142,7 +145,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
     /// class summary); the chat tools ride along as MCP servers through -c overrides; "-" reads the prompt from stdin.
     /// </summary>
     public static List<string> BuildArgs(string cwd, ClaudeDevProvider.WorkerGrant? grant, string model, string effort,
-        IReadOnlyList<string>? addDirs, string? chatToolsConfigJson = null, bool brainInCodexConfig = false)
+        IReadOnlyList<string>? addDirs, string? chatToolsConfigJson = null, bool brainInCodexConfig = false,
+        Agents.DispatchDecision? dispatch = null, string? readOnlyAgentModel = null)
     {
         bool write = grant is { Edit: true } || grant is { Run: true };
         var args = new List<string>
@@ -167,6 +171,19 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         {
             args.Add("--add-dir");
             args.Add(dir);
+        }
+        // What Codex's config can hold of the policy: sub-agents off, and how many threads at once. It has no hook on
+        // spawn_agent, so read-only and worktrees stay a rule in the prompt (CliAgentPolicy.PromptLine).
+        if (dispatch is { Legacy: false })
+        {
+            args.Add("-c");
+            args.Add(dispatch.SubAgents ? $"agents.max_threads={dispatch.MaxConcurrency}" : "features.multi_agent=false");
+            // One model for all its sub-agents: Settings' pick for search work, on a step where they only search.
+            if (dispatch is { SubAgents: true, ReadOnlyOnly: true } && !string.IsNullOrWhiteSpace(readOnlyAgentModel))
+            {
+                args.Add("-c");
+                args.Add($"agents.default_subagent_model='{readOnlyAgentModel.Replace("'", "")}'");
+            }
         }
         foreach (var o in McpOverrides(chatToolsConfigJson))
         {
@@ -220,8 +237,17 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
                 // CluadeX's chat tools ask the user in the app themselves (open_project's permission gate), so Codex runs
                 // them unasked — under approval_policy=never it would refuse them otherwise.
                 if (name == Tools.ChatToolBridge.ServerName)
+                {
                     parts.Add("tools={" + string.Join(", ", Tools.ChatToolBridge.QualifiedToolNames
                         .Select(q => q[$"mcp__{name}__".Length..] + "={approval_mode='approve'}")) + "}");
+                    // A call may wait on CluadeX's permission card or question card for as long as the user takes; Codex's
+                    // own limit (60 s by default) would give up on it while the card still shows.
+                    parts.Add("tool_timeout_sec=" + (int)Tools.ChatToolBridge.CallTimeout.TotalSeconds);
+                    // Called as tools, not from code mode's JS (Codex 0.166 puts every MCP tool there): only a direct call
+                    // gives the model a screenshot as an image — from JS it is base64 text the model never sees as a picture.
+                    // The same setting OpenAI's own computer-use plugin ships with.
+                    parts.Add("omit_tools_from=['code_mode', 'deferred']");
+                }
                 list.Add($"mcp_servers.{TomlKey(name)}={{{string.Join(", ", parts)}}}");
             }
         }
@@ -238,8 +264,9 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         k.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-') ? k : Toml(k);
 
     /// <summary>The prompt on stdin: CluadeX's wrapper, the conversation so far, then the request. Pure.</summary>
+    /// <param name="browserHint">ClaudeDevProvider.BrowserHintFor: the browser line when the turn has CluadeX's server.</param>
     public static string BuildPrompt(string cwd, ClaudeDevProvider.WorkerGrant? grant, IReadOnlyList<string>? addDirs,
-        string transcript, string userMessage, string? codeComments = null)
+        string transcript, string userMessage, string? codeComments = null, string? browserHint = null, string? agentLine = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -258,6 +285,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
               "You can read the project but not change it; propose file edits as diffs/snippets for the app to apply. " + folders +
               "Answer in Markdown (code in fenced blocks) and in the language the user writes in.";
         wrapper += " " + Tools.ChatToolBridge.AskHint;
+        if (!string.IsNullOrWhiteSpace(browserHint)) wrapper += " " + browserHint;
+        if (worker && !string.IsNullOrWhiteSpace(agentLine)) wrapper += " " + agentLine;
         wrapper += "\n\n" + AgentPersona.Section(AiProviderType.OpenAIDev, false);
         if (!string.IsNullOrWhiteSpace(codeComments)) wrapper += "\n\n" + codeComments.Trim();
         var sb = new StringBuilder();
@@ -298,7 +327,9 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
         {
             scope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;
             scope.LiveEffort = effort;
+            scope.StepEffort = effort;
         }
+        var dispatch = extras?.Dispatch?.Invoke();
         string? chatToolsJson = null;
         if (!string.IsNullOrWhiteSpace(extras?.ToolsConfig))
             try { chatToolsJson = await File.ReadAllTextAsync(extras.ToolsConfig, ct); } catch { chatToolsJson = null; }
@@ -316,7 +347,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var a in BuildArgs(cwd, grant, model, effort, addDirs, chatToolsJson,
-                     CodexConfigHasServer(GeminiDevProvider.BrainServerName))) psi.ArgumentList.Add(a);
+                     CodexConfigHasServer(GeminiDevProvider.BrainServerName), dispatch,
+                     Agents.CliAgentPolicy.ModelFor(AiProviderType.OpenAIDev, true, _settingsService.Settings.SubAgentModelOverrides))) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
 
         string shownModel = !string.IsNullOrWhiteSpace(model) && model is not ("default" or "auto") ? model : "";
@@ -335,7 +367,8 @@ public class OpenAIDevProvider : IAiProvider, IDelegatedCliProvider
             using (var stdin = new StreamWriter(proc.StandardInput.BaseStream, new UTF8Encoding(false)))
             {
                 await stdin.WriteAsync(BuildPrompt(cwd, grant, addDirs, ClaudeDevProvider.BuildTranscript(history), userMessage,
-                    CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd)));
+                    CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd),
+                    chatToolsJson != null ? ClaudeDevProvider.BrowserHintFor(extras) : null));
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -665,6 +698,16 @@ public sealed class CodexStreamTranslator
                 bool failed = Str(item, "status") == "failed" || item["error"] is JsonObject;
                 string body = failed ? Str(item["error"] as JsonObject, "message") ?? "MCP tool error" : McpResultText(item["result"]);
                 Result(id, output, body, failed);
+                return;
+            }
+            // Codex 0.166's exec --json reports wait but no spawn_agent item (two live runs, 2026-11-01): the map fills in
+            // when a build reports it. Only the spawn is a sub-agent; wait, send_input and close_agent are not.
+            case "collab_tool_call" when Str(item, "tool") == "spawn_agent":
+            {
+                var input = new JsonObject { ["description"] = Str(item, "prompt") ?? "", ["subagent_type"] = "codex" };
+                if (!done) { Start(id, output, "Agent", input); return; }
+                if (!_started.Contains(id)) Start(id, output, "Agent", input);
+                Result(id, output, "", failed: Str(item, "status") == "failed");
                 return;
             }
             case "web_search":

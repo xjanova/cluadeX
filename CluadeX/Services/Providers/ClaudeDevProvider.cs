@@ -47,6 +47,9 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// fable→claude-fable-5-1). Aliases, not full ids, so a new model generation needs no CluadeX release.</summary>
     public static readonly string[] KnownModels = ["default", "fable", "opus", "sonnet", "haiku"];
 
+    /// <summary>Spawns sub-agents of its own; the dispatch policy reaches them through the CLI (Agents.CliAgentGate).</summary>
+    public bool RunsOwnSubAgents => true;
+
     public string ProviderId => "ClaudeDev";
     public string DisplayName => "Claude Dev (Claude Code CLI)";
     public bool IsReady => _cliPath != null;
@@ -121,8 +124,18 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     public const int MaxAddDirs = 16;
 
     /// <summary>What a turn adds besides the grant: CluadeX's chat tools (the --mcp-config file of
-    /// Tools.ChatToolBridge, null = none) and the folders the user allowed beside the project (--add-dir).</summary>
-    public sealed record TurnExtras(string? ToolsConfig, IReadOnlyList<string> AddDirs);
+    /// Tools.ChatToolBridge, null = none) and the folders the user allowed beside the project (--add-dir).
+    /// <paramref name="BrowserRefusal"/>: why the browser_* tools may not run right now (null = they may) — the wrapper
+    /// says it, since the CLI's tool list shows them whatever the gate says.
+    /// <paramref name="Dispatch"/>: the policy for the level this turn really runs at, called once the provider resolved
+    /// it. <paramref name="GateToken"/>: what the spawn hook shows the app. <paramref name="BudgetLeftUsd"/>: the CLI's own
+    /// hard stop, where it has one.</summary>
+    public sealed record TurnExtras(string? ToolsConfig, IReadOnlyList<string> AddDirs, string? BrowserRefusal = null,
+        Func<Agents.DispatchDecision>? Dispatch = null, string? GateToken = null, decimal? BudgetLeftUsd = null);
+
+    /// <summary>The browser line for a CLI's wrapper: only when the turn has CluadeX's MCP server. Null = none.</summary>
+    public static string? BrowserHintFor(TurnExtras? extras, bool claudeNames = false) =>
+        string.IsNullOrWhiteSpace(extras?.ToolsConfig) ? null : Tools.ChatToolBridge.BrowserHint(extras.BrowserRefusal, claudeNames);
 
     /// <summary>The extras for the turn in flight (set by the agent loop around its one delegated call).</summary>
     public static readonly AsyncLocal<TurnExtras?> Extras = new();
@@ -177,8 +190,12 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <paramref name="codeComments"/>: the user's AI-comment instruction (CodeCommentPolicy), "" / null for none.</summary>
     /// <param name="allLevels">The CLI takes xhigh and max (2.1.200+ lists "low, medium, high, xhigh, max"); otherwise
     /// they go out as high so an older CLI never rejects the flag.</param>
+    /// <param name="browserRefusal">Why CluadeX's browser_* tools may not run right now (TurnExtras.BrowserRefusal).</param>
+    /// <param name="dispatch">The policy for this step (null = no policy behind the turn: sub-agents as before).</param>
+    /// <param name="budgetUsd">The most the turn may spend, sub-agents included (null = no limit).</param>
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
-        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null)
+        string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null,
+        string? browserRefusal = null, Agents.DispatchDecision? dispatch = null, decimal? budgetUsd = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -189,7 +206,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                 ? "To work in another project, call mcp__cluadex__open_project (CluadeX asks the user) or start a chat there with " +
                   "mcp__cluadex__new_chat; a new, independent request that arrives mid-task goes to its own chat with new_chat too, " +
                   "and mcp__cluadex__close_chat lists the chats you split off and puts finished ones away. Never answer that you " +
-                  "cannot open a chat or a folder. AskUserQuestion and mcp__cluadex__ask_user both show the user a question card. "
+                  "cannot open a chat or a folder. AskUserQuestion and mcp__cluadex__ask_user both show the user a question card. " +
+                  Tools.ChatToolBridge.BrowserHint(browserRefusal, claudeNames: true) + " "
                 : "") +
             "Other agents on this machine: task_queue / agent_inbox show work waiting, task_handoff hands a task to another agent, " +
             "cowork_* is the shared room (brainx-brain tools). ";
@@ -198,9 +216,10 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
               $"Project working directory: {cwd}. " +
               (grant!.Edit ? "You may create and edit files inside it. " : "You may not edit files: propose changes as diffs. ") +
               (grant.Run ? "You may run commands (builds, tests, git) in it. " : "You may not run commands. ") +
+              (Agents.CliAgentPolicy.PromptLine(dispatch, AiProviderType.ClaudeDev) ??
               "When the task has two or more independent parts (several folders or questions to investigate, bulky reading, " +
               "separate files to change), hand them to sub-agents with the Task tool — several in one response run in parallel, " +
-              "and the user watches each one on the agent map. Keep a small task to yourself. " +
+              "and the user watches each one on the agent map. Keep a small task to yourself. ") +
               folders +
               "Stay inside the project folder" + (addDirs.Count > 0 ? " and those folders" : "") + " unless the user's request names another. " +
               reach +
@@ -221,7 +240,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         if (chatTools) tools += "," + string.Join(",", Tools.ChatToolBridge.QualifiedToolNames);
         if (grant is { Edit: true }) tools += "," + EditTools;
         if (grant is { Run: true }) tools += ",Bash";
-        if (worker) tools += "," + SubAgentTools;
+        bool noSubAgents = dispatch is { Legacy: false, SubAgents: false };
+        if (worker && !noSubAgents) tools += "," + SubAgentTools;
 
         // Worker turns stream events (stream-json) so the chat shows each step while a long task runs; text mode
         // printed nothing until the very end — a 30-minute task looked hung.
@@ -236,7 +256,12 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         // refused silently: headless, the CLI had no one to ask.
         if (chatTools) args.Append(" --permission-prompt-tool ").Append(Quote(Tools.ChatToolBridge.ApproveToolQualified));
         foreach (var dir in addDirs) args.Append(" --add-dir ").Append(Quote(dir));
-        if (grant is { Run: true }) args.Append(" --disallowedTools ").Append(Quote(NeverTools));
+        var refused = new List<string>();
+        if (grant is { Run: true }) refused.Add(NeverTools);
+        if (noSubAgents) refused.Add(SubAgentTools);
+        if (refused.Count > 0) args.Append(" --disallowedTools ").Append(Quote(string.Join(",", refused)));
+        if (budgetUsd is { } budget)
+            args.Append(" --max-budget-usd ").Append(Math.Max(0.01m, budget).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
         if (grant is { Edit: true }) args.Append(" --permission-mode acceptEdits");
         // Every worker that may edit or run carries CluadeX's PreToolUse guard (Safety.GuardHook): the CLI's own Bash
         // never passes through CluadeX's command checks otherwise — the 2026-10-17 `rd /s /q C:\` went through there.
@@ -521,10 +546,13 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         var (effort, whyKey) = ResolveEffort(_settingsService.Settings.ReasoningEffort, userMessage, effortScope?.UserImages?.Count ?? 0, history);
         if (effortScope != null) effortScope.EffortWhy = whyKey != null ? LocalizedResources.Instance["auto.why." + whyKey] : null;
         var extras = Extras.Value;
+        // The policy reads the level this turn really runs at, resolved above.
+        if (effortScope != null) effortScope.StepEffort = effort;
+        var dispatch = extras?.Dispatch?.Invoke();
         if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd));
+            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd);
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.
         string sentEffort = SentEffort(effort, allLevels);
         if (effortScope != null) effortScope.LiveEffort = sentEffort;
@@ -564,6 +592,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         };
         try { Directory.CreateDirectory(Path.GetDirectoryName(effortReport)!); psi.Environment[Safety.GuardHook.EffortReportEnv] = effortReport; }
         catch { /* no report: the sent level stands */ }
+        if (!string.IsNullOrEmpty(extras?.GateToken)) psi.Environment[Safety.GuardHook.AgentGateTokenEnv] = extras.GateToken;
 
         // No SetLoading here: "loading" drives the full-window "กำลังโหลดโมเดล" overlay, which then covered the chat for
         // the whole turn — a worker turn of half an hour hid every step it streamed (owner 2026-10-17). The chat's own

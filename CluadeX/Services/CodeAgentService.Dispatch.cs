@@ -25,22 +25,41 @@ public partial class CodeAgentService
         var root = RootOf(scope);
         var provider = _providerManager.ActiveProvider;
         string? folder = _fileSystemService.HasWorkingDirectory ? _fileSystemService.WorkingDirectory : null;
+        bool cli = provider?.RunsOwnSubAgents == true;
         return DispatchPolicy.Decide(new DispatchInput
         {
             Effort = DispatchPolicy.ResolveEffort(s.ReasoningEffort, scope?.StepEffort),
             PolicyEnabled = s.DispatchPolicyEnabled,
-            ProviderCanRunSubAgents = provider != null && provider.SupportsNativeToolUse && provider.IsReady,
-            RunBudgetUsd = s.RunBudgetUsd,
+            ProviderCanRunSubAgents = provider != null && (provider.SupportsNativeToolUse || cli) && provider.IsReady,
+            RunBudgetUsd = cli ? s.CliRunBudgetUsd : s.RunBudgetUsd,
             BudgetGrantedUsd = root?.BudgetGrantedUsd ?? 0,
             RunSpentUsd = root?.CostUsd ?? 0,
-            DailyBudgetUsd = s.DailyBudgetUsd,
-            TodaySpentUsd = _costTrackingService?.TodayCostUsd ?? 0,
+            DailyBudgetUsd = cli ? s.CliDailyBudgetUsd : s.DailyBudgetUsd,
+            TodaySpentUsd = cli ? TodayCliUsd() : _costTrackingService?.TodayCostUsd ?? 0,
             MaxParallel = s.MaxParallelAgents,
             SpeculativeFixEnabled = s.SpeculativeFixEnabled,
             SpeculativeFixCount = s.SpeculativeFixCount,
             CanEditProject = DecideWorkerGrant(_permissionService, folder)?.Edit == true,
             IsGitRepo = folder != null && HasGitFolder(folder),
         });
+    }
+
+    private decimal TodayCliUsd() =>
+        _costTrackingService?.TodayPackageUsd(_providerManager.ActiveProviderType.ToString()) ?? 0;
+
+    /// <summary>What a CLI turn may still spend, for its own hard stop (--max-budget-usd): the less of the run's budget
+    /// and what is left of today's. Null = no guard is set.</summary>
+    internal decimal? CliBudgetLeft()
+    {
+        var s = _settingsService.Settings;
+        decimal? left = null;
+        if (s.CliRunBudgetUsd > 0) left = s.CliRunBudgetUsd + (RootOf(AgentRunScope.Current)?.BudgetGrantedUsd ?? 0);
+        if (s.CliDailyBudgetUsd > 0)
+        {
+            decimal today = Math.Max(0, s.CliDailyBudgetUsd - TodayCliUsd());
+            left = left is { } l ? Math.Min(l, today) : today;
+        }
+        return left;
     }
 
     /// <summary>The run in this flow has spent its per-run budget (plus what the user allowed past it).</summary>

@@ -286,6 +286,10 @@ public class PermissionRequestInfo
     public string? AlwaysKey { get; set; }
     /// <summary>The user answered "Always allow".</summary>
     public bool AllowedAlways { get; set; }
+    /// <summary>Trips when the asking call itself is given up — a CLI agent cancelled it or stopped waiting
+    /// (ChatToolBridge): the prompt is retired then, as on Stop, so a late "Allow" answers nobody. None = only the
+    /// run's Stop retires it.</summary>
+    public CancellationToken GivenUp { get; set; }
 }
 
 /// <summary>
@@ -309,6 +313,6 @@ public class TodoItem
 }
 
 /// <summary>One sub-agent to run: agent_spawn (Type explore | general) or subagent_invoke (Type = the specialist's
-/// name, with its Persona and AllowedTools).</summary>
+/// name, with its Persona and AllowedTools). <paramref name="ContinueId"/>: a sub-agent of this run to carry on with.</summary>
 public sealed record SubAgentRequest(string Task, string Context, string Type, string? Persona = null,
-    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null);
+    IReadOnlyCollection<string>? AllowedTools = null, string? Pieces = null, int? ContinueId = null);

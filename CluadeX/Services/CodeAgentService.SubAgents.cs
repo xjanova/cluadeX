@@ -90,7 +90,21 @@ public partial class CodeAgentService
     /// <summary>How one sub-agent runs when the dispatcher starts it: its map id and label, kind, routed model, own scope
     /// (its cost), its warm-start context; ReportOnDone = false for a fixer, whose "done" comes after the re-run.</summary>
     private sealed record SubAgentRunOptions(int Id, string Label, string Kind, string? Model, AgentRunScope? Scope,
-        string? Warm = null, bool ReportOnDone = true);
+        string? Warm = null, bool ReportOnDone = true, SubAgentThread? Thread = null);
+
+    /// <summary>A sub-agent's conversation, so agent_spawn's continue_agent carries on with it. Finished: it ended with a
+    /// report, so the conversation can take another message; one that failed mid-tool cannot.</summary>
+    private sealed class SubAgentThread
+    {
+        public required SubAgentRequest Request { get; init; }
+        public required int Id { get; init; }
+        public List<NativeMessage> Messages { get; } = new();
+        public bool Finished;
+        public int Busy;
+    }
+
+    /// <summary>A run's sub-agent conversations: they end with the run.</summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<AgentRunScope, System.Collections.Concurrent.ConcurrentDictionary<int, SubAgentThread>> _subAgentThreads = new();
 
     public event Action<SubAgentEvent>? OnSubAgentEvent;
 
@@ -107,6 +121,24 @@ public partial class CodeAgentService
         if (string.Equals(request.Type, "workers", StringComparison.OrdinalIgnoreCase))
             return await RunWorkersAsync(request, ct);
 
+        var parent = AgentRunScope.Current;
+        SubAgentThread? earlier = null;
+        if (request.ContinueId is int carryOn)
+        {
+            if (parent == null || !_subAgentThreads.GetOrCreateValue(parent).TryGetValue(carryOn, out earlier))
+                return $"There is no sub-agent {carryOn} in this run to carry on with. Start a new one.";
+            if (!earlier.Finished)
+                return $"Sub-agent {carryOn} did not end with a report, so it cannot take another message. Start a new one.";
+            if (Interlocked.CompareExchange(ref earlier.Busy, 1, 0) != 0)
+                return $"Sub-agent {carryOn} is already working on a message.";
+            request = earlier.Request with { Task = request.Task, Context = request.Context, ContinueId = carryOn };
+        }
+        try { return await RunRoutedSubAgentAsync(request, parent, earlier, ct); }
+        finally { if (earlier != null) Volatile.Write(ref earlier.Busy, 0); }
+    }
+
+    private async Task<string?> RunRoutedSubAgentAsync(SubAgentRequest request, AgentRunScope? parent, SubAgentThread? earlier, CancellationToken ct)
+    {
         // ─── the dispatch policy: may this one run, on which model, how many at once ───
         var dispatch = CurrentDispatch();
         bool canEdit = SubAgentCanEdit(request);
@@ -115,7 +147,6 @@ public partial class CodeAgentService
             _debugLog?.Info("Dispatch", $"sub-agent refused ({request.Type}, edit={canEdit}) · {dispatch.Reason}");
             return refusal;
         }
-        var parent = AgentRunScope.Current;
         var gate = GateFor(parent, dispatch.MaxConcurrency);
         await gate.WaitAsync(ct);
         try
@@ -127,14 +158,17 @@ public partial class CodeAgentService
             AgentRunScope.Enter(child ?? parent);
             Agents.SubAgentModel.Use(model);
             if (!dispatch.Legacy) parent?.MarkStrategy((int)Agents.DispatchStrategy.FanOut);
-            string warm = dispatch.Legacy ? "" : WarmContext();
+            string warm = dispatch.Legacy || earlier != null ? "" : WarmContext();
             if (!dispatch.Legacy && !canEdit && QuotaRecentlyExhausted && _settingsService.Settings.AutoFailoverOnQuota)
                 return await RunSubAgentOnClaudeDevAsync(BriefOf(request, warm), false, ct);
-            int n = Interlocked.Increment(ref _subAgentCounter);
+            int n = earlier?.Id ?? Interlocked.Increment(ref _subAgentCounter);
             bool thai = _localizationService.CurrentLanguage == "th";
             bool specialist = !string.IsNullOrWhiteSpace(request.Persona);
             string label = (thai ? $"เอเจนต์ย่อย #{n}" : $"Sub-agent #{n}") + (specialist ? $" ({request.Type})" : "");
-            return await RunSubAgentCoreAsync(request, ct, new SubAgentRunOptions(n, label, request.Type, model, child, warm));
+            var thread = earlier ?? new SubAgentThread { Request = request, Id = n };
+            if (parent != null) _subAgentThreads.GetOrCreateValue(parent)[n] = thread;
+            string? report = await RunSubAgentCoreAsync(request, ct, new SubAgentRunOptions(n, label, request.Type, model, child, warm, Thread: thread));
+            return report == null || parent == null || !thread.Finished ? report : $"{report}\n\n(Sub-agent {n}: agent_spawn with continue_agent {n} carries on with it.)";
         }
         catch (OperationCanceledException)
         {
@@ -171,6 +205,14 @@ public partial class CodeAgentService
         if (provider == null || !provider.SupportsNativeToolUse || !provider.IsReady)
             return null;
 
+        // A slot on this machine, across every chat. Only sub-agents queue here: the main loops keep moving.
+        await Agents.AgentLoad.EnterAsync(ct);
+        try { return await RunHeldSubAgentAsync(provider, request, ct, opts); }
+        finally { Agents.AgentLoad.Leave(); }
+    }
+
+    private async Task<string?> RunHeldSubAgentAsync(Providers.IAiProvider provider, SubAgentRequest request, CancellationToken ct, SubAgentRunOptions? opts)
+    {
         string task = request.Task, context = request.Context, type = request.Type;
         bool thai = _localizationService.CurrentLanguage == "th";
         int n = opts?.Id ?? Interlocked.Increment(ref _subAgentCounter);
@@ -195,7 +237,9 @@ public partial class CodeAgentService
         // Warm start: the cached repo map and the run's brain recall, once — not a re-read of the project. A fixer's or
         // worker's prompt already carries its own (Warm is the prompt itself then).
         if (!string.IsNullOrWhiteSpace(opts?.Warm) && opts!.Warm != task) first.Append("\n\n").Append(opts.Warm!.Trim());
-        var messages = new List<NativeMessage> { new() { Role = "user", Content = { new ContentBlock { Type = "text", Text = first.ToString() } } } };
+        var messages = opts?.Thread?.Messages ?? new List<NativeMessage>();
+        if (opts?.Thread != null) opts.Thread.Finished = false;
+        messages.Add(new NativeMessage { Role = "user", Content = { new ContentBlock { Type = "text", Text = first.ToString() } } });
 
         OnAgentStatus?.Invoke($"{label}: {(thai ? "เริ่มงาน" : "starting")} · {Shorten(task, 60)}");
         var ev = new SubAgentEvent(n, label, opts?.Kind ?? type, Shorten(task, 160), "start", "", 0, opts?.Model);
@@ -251,6 +295,11 @@ public partial class CodeAgentService
                     System.Text.RegularExpressions.RegexOptions.Multiline);
                 RaiseSubAgent(ev with { Phase = opts?.ReportOnDone == false ? "tool" : "done",
                     Detail = Shorten(gist, 140), Steps = step, CostUsd = Cost() });
+                if (opts?.Thread != null)
+                {
+                    messages.Add(response.ToAssistantMessage(includeToolUse: false));
+                    opts.Thread.Finished = true;
+                }
                 return report.Length > 0 ? report : (thai ? "(เอเจนต์ย่อยไม่ได้เขียนรายงาน)" : "(the sub-agent wrote no report)");
             }
 

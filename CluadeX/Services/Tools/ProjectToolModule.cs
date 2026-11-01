@@ -38,7 +38,7 @@ public sealed class ProjectToolModule : IAgentToolModule
     /// the first message to start there (null = an empty chat), a title (null = from the message). Returns what the
     /// tool reports, or throws to fail it. Null in harnesses with no chat page.
     /// </summary>
-    public static Func<string?, string?, string?, Task<string>>? NewChatHandler;
+    public static Func<string?, string?, string?, bool, Task<string>>? NewChatHandler;
 
     public const string CloseChatToolName = "close_chat";
 
@@ -127,6 +127,12 @@ public sealed class ProjectToolModule : IAgentToolModule
                     ["type"] = "string",
                     ["description"] = "Optional short title for the chat in the sidebar.",
                 },
+                ["fork"] = new Dictionary<string, string>
+                {
+                    ["type"] = "boolean",
+                    ["description"] = "true: the new chat starts with this chat's history (a fork), so the message may rely on "
+                        + "it, and every turn there carries that history's cost. Default: it starts clean. Same project only.",
+                },
             },
         };
         yield return new ToolSchema
@@ -138,7 +144,7 @@ public sealed class ProjectToolModule : IAgentToolModule
                 + "work to its own chat, or when the user adds a NEW, independent request while you are still working on "
                 + "something else (a note that arrives mid-task): start that request in its own chat so both run at once, and "
                 + "keep corrections or follow-ups of the current task here. The message must be complete — that chat does not "
-                + "see this one. Never answer that you cannot open a chat.",
+                + "see this one, unless you pass fork. Never answer that you cannot open a chat.",
             InputSchema = JsonDocument.Parse(JsonSerializer.Serialize(chatSchema)).RootElement.Clone(),
         };
 
@@ -243,9 +249,11 @@ public sealed class ProjectToolModule : IAgentToolModule
         }
         string? message = call.GetArg("message").Trim() is { Length: > 0 } m ? m : null;
         string? title = call.GetArg("title").Trim() is { Length: > 0 } t ? t : null;
+        bool fork = bool.TryParse(call.GetArg("fork"), out bool f) && f;
+        if (fork && full != null) return Fail("fork stays in this chat's project: leave path out, or start clean with a complete message.");
         try
         {
-            string said = await NewChatHandler(full, message, title);
+            string said = await NewChatHandler(full, message, title, fork);
             if (full != null) _registry?.Record(full);
             return new ToolResult
             {

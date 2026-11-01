@@ -30,6 +30,14 @@ public static class GuardHook
     /// <see cref="EffortReportEnv"/>'s file, and never blocks.</summary>
     public const string EffortFlag = "--cx-effort";
 
+    /// <summary><c>CluadeX.exe --cx-agent-gate</c>: the PreToolUse hook on a CLI's sub-agent spawn. It asks the running
+    /// app (Agents.CliAgentGate) and refuses, or hands the call back with its model and worktree set.</summary>
+    public const string AgentGateFlag = "--cx-agent-gate";
+
+    /// <summary>The turn's chat-tools token, for the gate (the CLI passes its environment on to its hooks). Unset = a CLI
+    /// run with no gate behind it: the spawn goes through as it did before.</summary>
+    public const string AgentGateTokenEnv = "CLUADEX_AGENT_GATE";
+
     /// <summary>The file a run's hooks write the CLI's effort level into (ClaudeDevProvider sets it per run; the CLI passes
     /// its environment on to its hooks).</summary>
     public const string EffortReportEnv = "CLUADEX_EFFORT_REPORT";
@@ -127,6 +135,60 @@ public static class GuardHook
         return 0;
     }
 
+    /// <summary>The hook's stdout for a rewritten spawn (Claude Code reads hookSpecificOutput.updatedInput). A refusal is
+    /// the guard's exit 2. Null = nothing to change. Pure.</summary>
+    public static string? AgentGateOutput(string? rewrittenInput)
+    {
+        if (string.IsNullOrWhiteSpace(rewrittenInput)) return null;
+        return new System.Text.Json.Nodes.JsonObject
+        {
+            ["hookSpecificOutput"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["hookEventName"] = "PreToolUse",
+                ["updatedInput"] = System.Text.Json.Nodes.JsonNode.Parse(rewrittenInput),
+            },
+        }.ToJsonString();
+    }
+
+    /// <summary>The spawn hook's entry point. The app cannot be reached: refused, so a turn never spawns past its policy
+    /// unseen; the model carries on alone with the reason.</summary>
+    public static int RunAgentGate()
+    {
+        string input;
+        try
+        {
+            using var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+            input = stdin.ReadToEnd();
+        }
+        catch { return Block("CluadeX could not read this sub-agent call — do the work yourself."); }
+        ReportEffort(input);
+        return GateSpawn(input);
+    }
+
+    /// <summary>One spawn through the app's gate. Gemini Dev comes here from its one BeforeTool hook, the guard.</summary>
+    private static int GateSpawn(string input)
+    {
+        string? token = Environment.GetEnvironmentVariable(AgentGateTokenEnv);
+        if (string.IsNullOrWhiteSpace(token)) return 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(input);
+            var root = doc.RootElement;
+            var ti = root.TryGetProperty("tool_input", out var t) && t.ValueKind == JsonValueKind.Object ? t : default;
+            static string Field(JsonElement e, string n) =>
+                e.ValueKind == JsonValueKind.Object && e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+            // Claude Code: subagent_type (absent = general-purpose); Gemini CLI: agent_name.
+            string type = Field(ti, "subagent_type") is { Length: > 0 } st ? st : Field(ti, "agent_name") is { Length: > 0 } an ? an : "general-purpose";
+            string id = Field(root, "tool_use_id") is { Length: > 0 } tu ? tu : Field(root, "tool_call_id");
+            var reply = Tools.ChatToolBridge.AskAgentGate(token, type, id, ti);
+            if (!reply.Allow) return Block(reply.Reason ?? "CluadeX refused this sub-agent — do the work yourself.");
+            if (AgentGateOutput(reply.Input) is { } output)
+                using (var o = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))) o.Write(output);
+            return 0;
+        }
+        catch (Exception ex) { return Block($"CluadeX could not check this sub-agent ({ex.GetType().Name}) — do the work yourself."); }
+    }
+
     /// <summary>Set in a Gemini Dev run that may run commands but not edit (the CLI's yolo mode allows both): the guard
     /// then refuses Gemini's file-writing tools outright.</summary>
     public const string NoEditEnv = "CLUADEX_GUARD_NO_EDIT";
@@ -206,6 +268,7 @@ public static class GuardHook
             using var doc = JsonDocument.Parse(input);
             var root = doc.RootElement;
             string called = root.TryGetProperty("tool_name", out var tn) ? tn.GetString() ?? "" : "";
+            if (called == "invoke_agent") return GateSpawn(input);
             if (called is "write_file" or "replace" && Environment.GetEnvironmentVariable(NoEditEnv) == "1")
                 return Block("CluadeX safety: this run may run commands but not edit files — propose the change as a diff instead.");
             if (Environment.GetEnvironmentVariable(TurnDirEnv) is { Length: > 0 } turnDir
@@ -353,6 +416,11 @@ public static class GuardHook
                         matcher = "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
                         // Long enough for the user to read the red prompt and answer (DangerApprovalPipe waits 280 s).
                         hooks = new[] { new { type = "command", command = $"\"{exe}\" {Flag}", timeout = 300 } },
+                    },
+                    new
+                    {
+                        matcher = "Agent|Task",
+                        hooks = new[] { new { type = "command", command = $"\"{exe}\" {AgentGateFlag}", timeout = 30 } },
                     },
                 },
                 Stop = stop,

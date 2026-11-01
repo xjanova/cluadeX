@@ -540,6 +540,24 @@
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.cliRunBudget}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.cliRunBudgetDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding CliRunBudgetUsd, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{services:Loc settings.cliDailyBudget}" Style="{StaticResource SettingLabel}"/>
+                                        <TextBlock Text="{services:Loc settings.cliDailyBudgetDesc}" Style="{StaticResource SettingDesc}"/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" Text="{Binding CliDailyBudgetUsd, UpdateSourceTrigger=PropertyChanged}"
+                                             Style="{StaticResource NumBox}" Margin="16,0,0,0"/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel>
                                         <TextBlock Text="{services:Loc settings.specFix}" Style="{StaticResource SettingLabel}"/>
                                         <TextBlock Text="{services:Loc settings.specFixDesc}" Style="{StaticResource SettingDesc}"/>
                                     </StackPanel>
