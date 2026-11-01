@@ -551,7 +551,18 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     public List<ChatMessage> Messages { get; set; } = new();
 
     /// <summary>Absolute path of the project folder this session was created in (empty = no project).</summary>
-    public string ProjectPath { get; set; } = "";
+    public string ProjectPath
+    {
+        get => _projectPath;
+        set
+        {
+            if (_projectPath == value) return;
+            _projectPath = value;
+            Raise(nameof(ProjectPath));
+            Raise(nameof(ProjectName));
+        }
+    }
+    private string _projectPath = "";
 
     /// <summary>Related folders open beside <see cref="ProjectPath"/> for this chat (kept while the app runs).</summary>
     public List<string> ExtraFolders { get; } = new();

@@ -320,6 +320,7 @@ internal static partial class Program
         await TestWatchPage();                // W: the Watch page
         await TestPersonaBoxes();             // PB: boxes in the look of who is talking (girl + colour)
         await TestPlainPermission();          // PP: the permission prompt in plain words; the live model / effort chip
+        await TestProjectPagesFollowChat();   // CP: UI Studio and Node Graph show the project of the chat on screen
         await TestStartupFollowsProject();    // F6: the chat restored at startup opens its own project (last: a 2nd VM)
 
         var changed = ProfileBefore.Where(kv => ProfileSnapshot().TryGetValue(kv.Key, out var a) && a != kv.Value).Select(kv => kv.Key).ToList();

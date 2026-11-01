@@ -270,14 +270,11 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     public bool IsStarting => _studio.IsStarting;
     public bool ShowStartButton => HasProject && !IsUnsupported && !IsSimulated && !IsServing && !IsStarting;
 
-    /// <summary>Called the first time the page is shown (and on later visits): follow the app's open project when
-    /// the Studio has none yet. A static site starts at once; a Node project waits for Start (npm install may be big).</summary>
+    /// <summary>Called the first time the page is shown (and on later visits): the Studio is on the chat's project
+    /// already (it follows the chat), so this only does what following left for the first look.</summary>
     public void PageShown()
     {
-        OnPropertyChanged(nameof(CurrentAppProject));
-        OnPropertyChanged(nameof(HasAppProject));
-        if (!_studio.HasProject && _fs.AppWorkingDirectory is { Length: > 0 } p && Directory.Exists(p))
-            OpenProject(p, autoStart: StudioProject.Detect(p).Kind == StudioProjectKind.Static);
+        FollowChat();
         CatchUpOnShow();   // what following the chat's project left for the first look (a dev server, the screens)
     }
 
@@ -290,10 +287,14 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     public void OpenProject(string path, bool autoStart)
     {
         if (!Directory.Exists(path)) { Status(T("studio.err.noFolder"), error: true); return; }
-        _studio.OpenProject(path);
-        // The Studio's project is the app's project: the chat, the AI and the code editor work on the same files.
+        bool again = _studio.HasProject && SamePath(_studio.Root, path);
+        // The Studio shows the chat's project: the folder goes to the chat (or a chat of its own), and the Studio
+        // follows it there — the chat, the AI and the code editor work on the same files.
         try { _chat.OpenProjectQuietly(path); }
         catch (Exception ex) { _log?.Warn("UiStudio", "could not switch the app project", ex); }
+        if (again) _studio.OpenProject(path);   // the same root: detected again
+        else FollowChat(startPreview: false);   // (this caller decides what starts)
+        if (!_studio.HasProject || !SamePath(_studio.Root, path)) { Status(T("studio.err.noFolder"), error: true); return; }
         ShowGallery = false;
         if (_studio.Project.Kind == StudioProjectKind.Simulated) { ShowPages = true; return; }   // a native app: its screens are the view
         if (autoStart && !IsUnsupported) _ = StartAsync();
@@ -316,12 +317,16 @@ public sealed partial class UiStudioViewModel : ViewModelBase
 
     private async Task StartAsync()
     {
+        string root = _studio.Root;
         if (_studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther)
         {
             ShowLog = true;
             Status(Directory.Exists(Path.Combine(_studio.Root, "node_modules")) ? T("studio.startingDev") : T("studio.installing"));
         }
         string? err = await _studio.StartAsync();
+        // the chat moved on while this one started: what it says and what it earned (the go-ahead for a dev server)
+        // were this project's, never the next one's
+        if (!SamePath(root, _studio.Root)) return;
         if (err != null) Status(T(err), error: true);
         else if (_studio.Project.Kind == StudioProjectKind.Static) Status(T("studio.started"));
         if (err == null && _studio.IsServing && _studio.Project.Kind is StudioProjectKind.Vite or StudioProjectKind.NodeOther && _studio.HasProject)
@@ -337,11 +342,23 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         ResetPages();
         ServerLog.Clear();
         LastLogLine = "";
+        if (!SamePath(_shownRoot, _studio.Root))
+        {
+            // Another project: what was typed or shown for the last one must not stay to be sent or read as this one's.
+            _shownRoot = _studio.Root;
+            Url = "";
+            ShowLog = false;
+            AiRequest = StageRequest = ReviseText = PageSearch = BaseUrlText = NewWebUrl = "";
+            StatusText = "";
+            StatusIsError = false;
+        }
         foreach (var name in new[] { nameof(HasProject), nameof(NoProject), nameof(ProjectName), nameof(ProjectPath), nameof(ProjectKindText),
                      nameof(IsUnsupported), nameof(UnsupportedText), nameof(ShowLocatorBanner), nameof(ShowApproxBanner), nameof(ShowStartButton), nameof(CanUndo),
-                     nameof(IsSimulated), nameof(IsDesktopApp), nameof(IsServerSite), nameof(IsLiveView) })
+                     nameof(IsSimulated), nameof(IsDesktopApp), nameof(IsServerSite), nameof(IsLiveView), nameof(IsRemotePage), nameof(CanEditSource) })
             OnPropertyChanged(name);
     }
+
+    private string _shownRoot = "";
 
     private void RefreshTexts()
     {
@@ -392,6 +409,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
     /// <summary>The view reports the page's address.</summary>
     public void NotePage(string? url)
     {
+        if (url == StudioService.BlankPage) url = null;   // (the page left behind when a project goes: no address)
         _studio.NotePage(url);
         MarkCurrentPage(url);
         Url = url ?? "";
@@ -696,6 +714,7 @@ public sealed partial class UiStudioViewModel : ViewModelBase
         {
             // Ask the browser which values it accepts — a typo is refused here instead of being written to the source.
             string? json = await _studio.Evaluate($"window.__cx ? __cx.invalidCss({JsonSerializer.Serialize(styleChanges)}) : []");
+            if (!ReferenceEquals(el, Selection)) return;   // the user picked something else, or the chat moved on, while the page answered
             string[] bad = Array.Empty<string>();
             try { bad = json == null ? bad : JsonSerializer.Deserialize<string[]>(json) ?? bad; } catch { }
             if (bad.Length > 0)
@@ -703,7 +722,6 @@ public sealed partial class UiStudioViewModel : ViewModelBase
                 Status(T("studio.badCss", string.Join(", ", bad.Select(b => $"{b}: {styleChanges[b]}"))), error: true);
                 return;
             }
-            if (!ReferenceEquals(el, Selection)) return;   // the user picked something else while the page answered
         }
         bool textChanged = _textValue != _textOriginal && CanEditText;
         bool classChanged = _classValue != _classOriginal;

@@ -1,21 +1,61 @@
+using System.ComponentModel;
 using System.IO;
 
 namespace CluadeX.ViewModels;
 
-/// <summary>The UI Studio's way into the chat: switch the app's project without leaving the Studio, and hand the
-/// AI a request about one element.</summary>
+/// <summary>The UI Studio's way into the chat: the project they show, switching the app's project without leaving
+/// the Studio, and handing the AI a request about one element.</summary>
 public partial class ChatViewModel
 {
+    /// <summary>The project of the chat on screen ("" = it has none, or its folder is gone). The UI Studio and the Node
+    /// Graph show this and nothing else — not the app's working folder, which a run or a pipe task may move for a
+    /// moment. Owner 2026-11-01: "เราอยู่แชทไหนต้องแสดงของแชทนั้น จะเปลี่ยนต่อเมื่อสลับไปแชทใหม่ทันที".</summary>
+    public string ChatProject { get; private set; } = "";
+
+    /// <summary>The chat on screen became another project's, or its own project changed. A run in any other chat
+    /// never raises this: only the chat on screen is watched.</summary>
+    public event Action? ChatProjectChanged;
+
+    /// <summary>The UI Studio or the Node Graph is on screen: the user is looking at this chat's project, so a pipe task
+    /// runs in its own chat in the background instead of bringing another project up under them.</summary>
+    public bool ProjectPageOnScreen { get; set; }
+
+    private void WatchChatProject(Models.ChatSession? left, Models.ChatSession? now)
+    {
+        if (left != null) left.PropertyChanged -= OnChatOnScreenChanged;
+        if (now != null) now.PropertyChanged += OnChatOnScreenChanged;
+        NoteChatProject();
+    }
+
+    private void OnChatOnScreenChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Models.ChatSession.ProjectPath)) NoteChatProject();
+    }
+
+    private void NoteChatProject()
+    {
+        string? path = CurrentSession?.ProjectPath;
+        string now = !string.IsNullOrWhiteSpace(path) && Directory.Exists(path) ? path : "";
+        if (PathEquals(now, ChatProject)) return;
+        ChatProject = now;
+        OnPropertyChanged(nameof(ChatProject));
+        ChatProjectChanged?.Invoke();
+    }
+
     /// <summary>Make <paramref name="path"/> the open project (announced in the chat) without bringing the code
-    /// editor forward — the user stays on the page that opened it.</summary>
+    /// editor forward — the user stays on the page that opened it. It becomes the project of the chat on screen; a
+    /// chat that is running, or that already holds work on another project, keeps its own and the new project gets a
+    /// chat of its own, so the two never mix.</summary>
     public void OpenProjectQuietly(string path)
     {
-        if (string.Equals(WorkingDirectory, path, StringComparison.OrdinalIgnoreCase)) return;
-        if (IsGenerating) NewSession();   // a running reply keeps its own folder; the new project gets its own chat
+        if (PathEquals(ChatProject, path) && PathEquals(WorkingDirectory, path)) return;
+        bool holdsOtherProject = Messages.Count > 0 && ChatProject.Length > 0 && !PathEquals(ChatProject, path);
+        if (IsGenerating || holdsOtherProject) NewSession();
         ApplyWorkingDirectory(path, announce: true, showEditor: false);
-        if (CurrentSession is { } chat && (string.IsNullOrWhiteSpace(chat.ProjectPath) || !Directory.Exists(chat.ProjectPath)))
+        if (CurrentSession is { } chat && !PathEquals(chat.ProjectPath ?? "", path))
         {
             chat.ProjectPath = path;
+            if (Messages.Count > 0) { _isDirty = true; AutoSave(); }
             RebuildVisibleSessions();
         }
     }
