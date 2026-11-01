@@ -24,7 +24,7 @@ static partial class Program
 
         Console.WriteLine("── rows for a bare PC (nothing installed, no key, no license) ──");
         var bare = SystemSetupService.BuildItems(new SetupFacts());
-        Check("B1", "every piece has a row, none ready", bare.Count == 15 && bare.All(i => !i.IsReady), string.Join(",", bare.Select(i => $"{i.Id}:{i.State}")));
+        Check("B1", "every piece has a row, none ready", bare.Count == 17 && bare.All(i => !i.IsReady), string.Join(",", bare.Select(i => $"{i.Id}:{i.State}")));
         var codexRow = Row(bare, "codexcli");
         Check("B1c", "Codex CLI (OpenAI Dev) without Node: Node first, then npm install -g @openai/codex by npm's full path",
             codexRow.State == SetupState.Missing && codexRow.Primary?.Commands is { Count: 2 } cc && cc[0].Contains("OpenJS.NodeJS.LTS") && cc[1].Contains("@openai/codex"),
@@ -87,6 +87,7 @@ static partial class Program
         {
             ClaudeSignedIn = true, GeminiSignedIn = true, CodexCli = @"C:\x\codex.exe", CodexSignedIn = true, OllamaRunning = true, OllamaModels = 3, Debugpy = true, LlamaServer = @"C:\x\llama-server.exe",
             Git = @"C:\git.exe", GitVersion = "2.55", DotnetSdk = "8.0.426", WebView2 = true, WebView2Version = "155", BrainConnected = true,
+            AgyCli = @"C:\x\agy.exe", AgySignedIn = true, LocalLoaded = true, LocalModel = "x.gguf",
             AnthropicKey = true, OpenAiKey = true, GeminiKey = true,
         };
         var all = SystemSetupService.BuildItems(full);
@@ -134,7 +135,7 @@ static partial class Program
         Check("R3", "a found Git reports its version", facts.Git == null || facts.GitVersion is { Length: > 0 }, facts.GitVersion ?? "null");
         Check("R4", "the Gemini CLI installed on this PC is found (node + its script)", facts.GeminiCli?.EndsWith("gemini.js") == true, facts.GeminiCli ?? "null");
         var rows = SystemSetupService.BuildItems(facts);
-        Check("R5", "the rows for this PC build (15), each with a state", rows.Count == 15, rows.Count.ToString());
+        Check("R5", "the rows for this PC build (17), each with a state", rows.Count == 17, rows.Count.ToString());
 
         Console.WriteLine("── every string the page shows, in Thai ──");
         var loc = new LocalizationService();
@@ -147,6 +148,7 @@ static partial class Program
             "setup.note.installing", "setup.note.installed", "setup.note.installedNotFound", "setup.note.installFailed", "setup.note.signingIn",
             "setup.note.signInFailed", "setup.note.starting", "setup.note.startFailed", "setup.note.readyNow", "setup.note.notYet", "setup.note.failed" };
         keys.AddRange(ConnectionTextKeys());
+        keys.AddRange(WizardTextKeys());
         foreach (var set in new[] { bare, items, all, SystemSetupService.BuildItems(running), SystemSetupService.BuildItems(new SetupFacts { Connections = FakeConnections() }) })
             foreach (var i in set)
             {
@@ -157,14 +159,14 @@ static partial class Program
         static bool Thai(string s) => s.Any(ch => ch >= '\u0E00' && ch <= '\u0E7F');
         var missing = keys.Distinct().Where(k => LocalizedResources.Instance[k] == k || !Thai(LocalizedResources.Instance[k]) && !k.EndsWith(".git") && !k.EndsWith(".ollama")
             && !k.EndsWith(".node") && !k.EndsWith(".dotnet") && !k.EndsWith(".webview2") && !k.EndsWith(".brainx") && !k.EndsWith(".llamaserver")
-            && !k.EndsWith(".claudecode") && !k.EndsWith(".geminicli") && !k.EndsWith(".codexcli") && !k.EndsWith(".python")
+            && !k.EndsWith(".claudecode") && !k.EndsWith(".geminicli") && !k.EndsWith(".codexcli") && !k.EndsWith(".agycli") && !k.EndsWith(".python")
             && !k.StartsWith("setup.item.conn-")).ToList();
         Check("L1", $"{keys.Distinct().Count()} keys resolve, in Thai (product names may stay as they are)", missing.Count == 0, string.Join(", ", missing));
         loc.SetLanguage("en");
         var noEn = keys.Distinct().Where(k => LocalizedResources.Instance[k] == k).ToList();
         Check("L2", "…and in English", noEn.Count == 0, string.Join(", ", noEn));
 
-        Console.WriteLine("── the page renders (real XAML, app resources, Thai) ──");
+        Console.WriteLine("── the page and the wizard render (real XAML, app resources, Thai) ──");
         loc.SetLanguage("th");
         string outDir = Path.Combine(AppContext.BaseDirectory, "renders");
         Exception? renderError = null;
@@ -194,6 +196,7 @@ static partial class Program
                     using (var fs = File.Create(file)) enc.Save(fs);
                     shots.Add(file);
                 }
+                WizardDriven(svc);
             }
             catch (Exception ex) { renderError = ex; }
         });
@@ -204,6 +207,8 @@ static partial class Program
             renderError?.ToString() ?? "");
         foreach (var s in shots) Console.WriteLine("        " + s);
 
+        WizardSteps();
+        WizardAssets();
         await ConnectionTests();
 
         Console.WriteLine($"\n═══ {pass} pass · {fail} FAIL ═══");

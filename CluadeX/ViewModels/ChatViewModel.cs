@@ -3215,7 +3215,7 @@ public partial class ChatViewModel : ViewModelBase
             return;
         }
 
-        if (!await EnsureProviderReadyAsync()) return;
+        if (!await EnsureProviderReadyAsync(fromBox)) return;
 
         // The chat on screen since startup was never opened through LoadSessionAsync: its folder comes back here.
         FollowChatProject(CurrentSession);
@@ -3328,10 +3328,17 @@ public partial class ChatViewModel : ViewModelBase
     /// <summary>True when the active provider can answer. Waits for (or retries) its initialise — after a
     /// restart an API provider was never initialised and every first message failed. When it still can't,
     /// posts one honest bubble: no model loaded, or the provider's own reason (bad key, no credit, …).</summary>
-    private async Task<bool> EnsureProviderReadyAsync()
+    /// <param name="fromTheOwner">The owner pressed Send: a provider that is not connected opens its wizard, and the message
+    /// stays in the box. Nobody is at the keyboard for a pipe caller or a carried-on task, so those get the bubble.</param>
+    private async Task<bool> EnsureProviderReadyAsync(bool fromTheOwner = false)
     {
         var provider = _providerManager.ActiveProvider;
-        if (provider.IsReady) return true;
+        if (provider.IsReady)
+        {
+            if (!fromTheOwner || !await SignedOutAsync(provider)) return true;
+            RequestConnection(_providerManager.ActiveProviderType, null);
+            return false;
+        }
 
         StatusText = LocF("chat.status.connecting", provider.DisplayName);
         bool ready;
@@ -3349,12 +3356,13 @@ public partial class ChatViewModel : ViewModelBase
         }
 
         provider = _providerManager.ActiveProvider;
+        if (fromTheOwner && RequestConnection(_providerManager.ActiveProviderType, null)) return false;
         bool local = _providerManager.ActiveProviderType is AiProviderType.Local or AiProviderType.LlamaServer;
         string reason = SanitizeErrorMessage(string.IsNullOrWhiteSpace(provider.StatusMessage) ? "" : provider.StatusMessage);
         Messages.Add(new ChatMessage
         {
             Role = MessageRole.Assistant,
-            Content = local ? Loc("chat.err.noModel") : LocF("chat.err.providerNotReady", provider.DisplayName, reason),
+            Content = local ? Loc("chat.err.noModel") : LocF(NotReadyKey(_providerManager.ActiveProviderType), provider.DisplayName, reason),
             HasError = true,
         });
         StatusText = local ? Loc("chat.status.noModel") : LocF("chat.status.providerNotReady", provider.DisplayName);

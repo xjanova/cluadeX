@@ -12,7 +12,7 @@
 
     <AssemblyName>CluadeX</AssemblyName>
     <RootNamespace>CluadeX</RootNamespace>
-    <Version>3.0.205</Version>
+    <Version>3.0.206</Version>
     <Description>CluadeX - AI Coding Assistant by Xman Studio</Description>
     <Company>Xman Studio</Company>
     <Authors>Xman Studio</Authors>
@@ -46,6 +46,7 @@
     <Resource Include="Assets\splash-girl.png" />
     <Resource Include="Assets\Girls\*.png" />
     <Resource Include="Assets\Icons\*.png" />
+    <Resource Include="Assets\Wizard\*" />
   </ItemGroup>
 
   <!-- Syntax definitions AvalonEdit lacks (GDScript, Godot shader/scene, JSONC, YAML, TOML, shell) โ€” loaded by
