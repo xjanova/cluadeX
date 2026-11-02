@@ -300,6 +300,7 @@ public partial class UiStudioView : UserControl
             core.SourceChanged += (_, _) => _vm?.NotePage(core.Source);
             core.NavigationCompleted += (_, e) =>
             {
+                if (e.IsSuccess) _studio?.NotePageLoaded();
                 _vm?.NotePage(core.Source);
                 if (!e.IsSuccess && e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
                     _vm?.Status(Loc("studio.err.navigate", e.WebErrorStatus.ToString()), error: true);
@@ -329,6 +330,7 @@ public partial class UiStudioView : UserControl
 
     private void Navigate(string url)
     {
+        if (url == StudioService.BlankPage) _reselectSrc = _reselectSelector = null;   // the project is gone: so is its picked element
         if (Web.CoreWebView2 == null) { _pendingUrl = url; _init ??= InitWebAsync(); return; }
         Wake();
         try { Web.CoreWebView2.Navigate(url); }
@@ -367,7 +369,8 @@ public partial class UiStudioView : UserControl
 
     private void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (_vm == null || _studio == null) return;
+        // (the last project's page, still talking while the browser leaves it: its locators mean another project's files)
+        if (_vm == null || _studio == null || _studio.PageIsOld || e.Source == StudioService.BlankPage) return;
         string json;
         try { json = e.WebMessageAsJson; }
         catch { return; }

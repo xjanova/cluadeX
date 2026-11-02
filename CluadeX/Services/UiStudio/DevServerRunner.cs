@@ -51,6 +51,8 @@ public sealed class DevServerRunner : IDisposable
             foreach (var line in unsafeRun.Split('\n')) Output?.Invoke(line);
             return (false, "unsafe");
         }
+        // stopped during the check (the chat moved to another project): nothing may start now, it would never be stopped
+        if (ct.IsCancellationRequested) return (false, "cancelled");
         if (Safety.ProcessLaunchPolicy.DryRun)
         {
             Output?.Invoke(Safety.ProcessLaunchPolicy.Report($"{pm} install && {runLine}"));

@@ -51,6 +51,7 @@ internal static class StudioKeys
         ["studio.remoteBanner"] = E("A page from the internet: you can inspect it and tweak it live, but nothing is written anywhere. Export your tweaks as CSS.", "หน้าเว็บจากอินเทอร์เน็ต: ตรวจและปรับสดได้ แต่จะไม่เขียนลงไฟล์ใด ๆ ส่งออกสิ่งที่ปรับเป็น CSS ได้"),
 
         // ═══════ STUDIO: empty state ═══════
+        ["studio.empty.noChatProject"] = E("This chat has no project yet. Open a folder for it, or switch to the chat of the project you want.", "แชทนี้ยังไม่มีโปรเจกต์ — เปิดโฟลเดอร์ให้แชทนี้ หรือสลับไปแชทของโปรเจกต์ที่ต้องการ"),
         ["studio.empty.title"] = E("Edit your UI live — straight into the code", "แก้หน้าตาแอปแบบสด — ลงโค้ดตรงจุด"),
         ["studio.empty.body"] = E("Open a web project (HTML, React, Vue, Svelte…), click any element on the page and change it. Every change is written to the exact line that renders it.", "เปิดโปรเจกต์เว็บ (HTML, React, Vue, Svelte…) คลิก element ใดก็ได้บนหน้าแล้วแก้ ทุกการแก้จะเขียนลงบรรทัดที่สร้าง element นั้นจริง ๆ"),
         ["studio.empty.open"] = E("Open a project", "เปิดโปรเจกต์"),
@@ -181,7 +182,7 @@ internal static class StudioKeys
         ["graph.busy"] = E("Reading the project…", "กำลังอ่านโปรเจกต์…"),
         ["graph.empty"] = E("No web source files found in this project.", "ไม่พบไฟล์ซอร์สเว็บในโปรเจกต์นี้"),
         ["graph.failed"] = E("Could not read the project — see the Debug Log.", "อ่านโปรเจกต์ไม่สำเร็จ — ดูที่ Debug Log"),
-        ["graph.noProject"] = E("Open a project (in the chat, the Code editor or the UI Studio) to see its graph.", "เปิดโปรเจกต์ก่อน (จากแชท, Code editor หรือ UI Studio) แล้วจะเห็นกราฟ"),
+        ["graph.noProject"] = E("This chat has no project yet. Open a folder for it (in the chat, the Code editor or the UI Studio) to see its graph.", "แชทนี้ยังไม่มีโปรเจกต์ — เปิดโฟลเดอร์ให้แชทนี้ (จากแชท, Code editor หรือ UI Studio) แล้วจะเห็นกราฟ"),
         ["graph.liveEmpty"] = E("The Live UI view shows the page running in the UI Studio — open it there first.", "มุมมอง UI สด แสดงหน้าเว็บที่รันอยู่ใน UI Studio — เปิดหน้าใน UI Studio ก่อน"),
         ["graph.summary"] = E("{0} nodes · {1} links", "{0} โหนด · {1} เส้น"),
         ["graph.truncated"] = E("large project — partly shown", "โปรเจกต์ใหญ่ — แสดงบางส่วน"),

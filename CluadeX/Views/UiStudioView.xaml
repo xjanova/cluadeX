@@ -611,6 +611,7 @@
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="760" Margin="24">
                         <TextBlock Text="&#xE790;" FontFamily="Segoe MDL2 Assets" FontSize="40" Foreground="{DynamicResource Accent.1}" HorizontalAlignment="Center"/>
                         <TextBlock Text="{services:Loc studio.empty.title}" FontSize="24" FontWeight="SemiBold" Foreground="{DynamicResource Text.Primary}" HorizontalAlignment="Center" Margin="0,14,0,6"/>
+                        <TextBlock Text="{services:Loc studio.empty.noChatProject}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Accent.1}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,8"/>
                         <TextBlock Text="{services:Loc studio.empty.body}" FontSize="13" Foreground="{DynamicResource Text.Muted}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,26"/>
                         <UniformGrid Columns="3">
                             <Button Style="{StaticResource StudioToolBtn}" Command="{Binding OpenFolderCommand}" Padding="18,16" Margin="6">

@@ -700,6 +700,7 @@ public sealed partial class UiStudioViewModel
         if (IsNotSource(path, rel, l10n)) return;
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
+            if (!path.StartsWith(_studio.Root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return;   // another project since
             // renamed in during the round and not in the snapshot: a new file (undo all deletes it) — it keeps the old
             // file's creation time, so NoteSourceChanged would not take it for new
             if (renamedIn && _session is { FullSnapshot: true } s && !s.Before.ContainsKey(path) && !s.Unread.Contains(path)

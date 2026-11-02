@@ -139,6 +139,7 @@ public sealed partial class UiStudioViewModel
         SampleData data;
         try { data = await Task.Run(() => FlutterSampleData.For(root, over, ct), ct); }
         catch (OperationCanceledException) { return; }
+        if (ct.IsCancellationRequested) return;   // another project was opened: this request was about the one left
         if (data.Replies.Count == 0) { Status(T("studio.samples.none"), error: true); return; }
         // the AI made values before: it writes the file again (seeing the values the screens use now) — asked first
         if (data.Overridden > 0 && File.Exists(over))

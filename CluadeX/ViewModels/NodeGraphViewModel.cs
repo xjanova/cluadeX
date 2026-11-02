@@ -25,7 +25,6 @@ public sealed class NodeGraphViewModel : ViewModelBase
     private readonly UiStudioViewModel _ui;
     private readonly CodeEditorViewModel _editor;
     private readonly LocalizationService _loc;
-    private readonly FileSystemService _fs;
     private readonly SettingsService _settings;
     private readonly DebugLogService? _log;
     private CancellationTokenSource? _buildCts;
@@ -34,13 +33,12 @@ public sealed class NodeGraphViewModel : ViewModelBase
     private string? _savedFor;
 
     public NodeGraphViewModel(StudioService studio, UiStudioViewModel ui, CodeEditorViewModel editor, LocalizationService loc,
-        FileSystemService fs, SettingsService settings, DebugLogService? log = null)
+        SettingsService settings, DebugLogService? log = null)
     {
         _studio = studio;
         _ui = ui;
         _editor = editor;
         _loc = loc;
-        _fs = fs;
         _settings = settings;
         _log = log;
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -60,9 +58,18 @@ public sealed class NodeGraphViewModel : ViewModelBase
         studio.ProjectChanged += () =>
         {
             if (string.Equals(_builtFor, RootPath, StringComparison.OrdinalIgnoreCase) && Graph != null) return;   // same folder re-detected
+            // Another project: a build still reading the last one stops, and a drag still waiting to be saved goes to
+            // that project's file before its positions are replaced.
+            _buildCts?.Cancel();
+            _liveTimer!.Stop();
+            FlushLayout();
+            RecentlyChanged.Clear();
+            _dirty = false;
             Graph = null;
             SelectedNode = null;
             _builtFor = null;
+            EmptyText = "";
+            OnPropertyChanged(nameof(RootName));
             if (IsVisible) _ = RefreshAsync();
             else QueuePrebuild();
         };
@@ -103,6 +110,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
             if (_isVisible == value) return;
             _isVisible = value;
             _studio.KeepPageAwake = value && IsLive;
+            _ui.SetGraphOnScreen(value);
             if (value && _dirty && IsProject && Graph != null) { _liveTimer.Stop(); _ = RefreshAsync(keepView: true); }
         }
     }
@@ -221,10 +229,11 @@ public sealed class NodeGraphViewModel : ViewModelBase
         }
     }
 
-    public string RootName => _studio.HasProject ? Path.GetFileName(_studio.Root.TrimEnd(Path.DirectorySeparatorChar))
-        : _fs.AppWorkingDirectory is { Length: > 0 } p ? Path.GetFileName(p.TrimEnd(Path.DirectorySeparatorChar)) : "";
+    public string RootName => RootPath is { } p ? Path.GetFileName(p.TrimEnd(Path.DirectorySeparatorChar)) : "";
 
-    private string? RootPath => _studio.HasProject ? _studio.Root : _fs.AppWorkingDirectory is { Length: > 0 } p && Directory.Exists(p) ? p : null;
+    /// <summary>The Studio's project — the project of the chat on screen. No fallback to the app's folder: a chat
+    /// without a project shows an empty graph, not whatever folder was open before it.</summary>
+    private string? RootPath => _studio.HasProject ? _studio.Root : null;
 
     public Task RefreshAsync() => RefreshAsync(keepView: false);
 
@@ -235,9 +244,9 @@ public sealed class NodeGraphViewModel : ViewModelBase
         OnPropertyChanged(nameof(RootName));
         if (IsLive) { BuildLive(); return; }
         string? root = RootPath;
-        if (root == null) { Graph = null; EmptyText = T("graph.noProject"); return; }
-
         _buildCts?.Cancel();
+        if (root == null) { IsBusy = false; Graph = null; EmptyText = T("graph.noProject"); return; }
+
         var cts = _buildCts = new CancellationTokenSource();
         var old = Graph;
         keepView &= old != null && string.Equals(_builtFor, root, StringComparison.OrdinalIgnoreCase);
@@ -280,7 +289,7 @@ public sealed class NodeGraphViewModel : ViewModelBase
     private void BuildLive()
     {
         var tree = _studio.Tree;
-        if (tree == null) { Graph = null; EmptyText = T("graph.liveEmpty"); return; }
+        if (tree == null) { Graph = null; EmptyText = T(_studio.HasProject ? "graph.liveEmpty" : "graph.noProject"); return; }
         var g = new ProjectGraph { Truncated = _studio.TreeTruncated };
         void Walk(DomNode d, string? parent, int depth)
         {
@@ -462,9 +471,17 @@ public sealed class NodeGraphViewModel : ViewModelBase
         return Path.Combine(_settings.DataRoot, "UiStudio", "graph", hash + ".json");
     }
 
+    private void FlushLayout()
+    {
+        if (!_saveTimer.IsEnabled) return;
+        _saveTimer.Stop();
+        SaveLayout();
+    }
+
     private void LoadLayout(string root)
     {
         if (string.Equals(_savedFor, root, StringComparison.OrdinalIgnoreCase)) return;
+        FlushLayout();
         _savedFor = root;
         _saved = new();
         try
