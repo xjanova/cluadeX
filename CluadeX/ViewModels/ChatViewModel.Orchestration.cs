@@ -5,6 +5,7 @@ using CluadeX.Models;
 using CluadeX.Services;
 using CluadeX.Services.Agents;
 using CluadeX.Services.Background;
+using CluadeX.Services.Tools;
 
 namespace CluadeX.ViewModels;
 
@@ -23,6 +24,8 @@ public partial class ChatViewModel
     private readonly ConcurrentDictionary<string, WorkflowCard> _workflowCards = new(StringComparer.Ordinal);
     /// <summary>Workflows the owner resumed from a card: their end is told to the chat (a tool run reports its own).</summary>
     private readonly ConcurrentDictionary<string, byte> _resumedFromCard = new(StringComparer.Ordinal);
+    /// <summary>wrap_up's box per chat, shown when the turn ends.</summary>
+    private readonly ConcurrentDictionary<string, NextStep> _pendingNextStep = new(StringComparer.Ordinal);
     /// <summary>Background commands that ended, per chat, merged when several end within 2 s.</summary>
     private readonly Dictionary<string, List<BgSnapshot>> _bgEnded = new(StringComparer.Ordinal);
     private DispatcherTimer? _bgTimer;
@@ -51,6 +54,11 @@ public partial class ChatViewModel
         ChatMessage.SplitChipsFor = m => new ObservableCollection<ChatSession>(
             (m.ToolOutput ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(id => Sessions.FirstOrDefault(s => s.Id == id)).OfType<ChatSession>());
+        ChatMessage.NextStepFor = m => NextStep.FromJson(m.ToolOutput) is { } step
+            ? new NextStepView(step, m.ToolSummary, (_, label) => OnNextStepPicked(m, label))
+            : null;
+
+        OrchestrationToolModule.NextStepRequested += (chat, step) => { if (chat != null) _pendingNextStep[chat] = step; };
 
         if (_cleanup?.Background is { } bg)
             bg.Ended += (snap, owner) => App.Current?.Dispatcher.BeginInvoke(() => OnBackgroundEnded(snap, owner));
@@ -219,4 +227,32 @@ public partial class ChatViewModel
         return text.Length > 240 ? text[..240] + "…" : text;
     }
 
+    // ─── the next-step box ───
+
+    /// <summary>The turn ended: wrap_up's box goes under its closing message (not after a Stop — the owner moved on).</summary>
+    private void AddNextStepBox(ChatRun run)
+    {
+        if (!_pendingNextStep.TryRemove(run.Session.Id, out var step)) return;
+        if (run.Stopped) return;
+        run.Messages.Add(new ChatMessage
+        {
+            Role = MessageRole.System,
+            ToolName = ChatMessage.NextStepTag,
+            ToolOutput = step.ToJson(),
+            Content = "⏭ " + step.Recap + (step.Ask is { Length: > 0 } ask ? "\n" + ask : ""),
+        });
+    }
+
+    /// <summary>A button in the box: its label goes out as the owner's message (into the running reply when one runs),
+    /// once; the owner's draft in the box stays. The label is the model's wording, so it never counts as the owner asking
+    /// for a workflow.</summary>
+    private void OnNextStepPicked(ChatMessage row, string label)
+    {
+        row.ToolSummary = label;   // saved with the chat: a reopened box shows what was picked, without buttons
+        string draft = UserInput ?? "";
+        if (CurrentSession is { } s) WorkflowGate.NoteOwnerMessage(s.Id, "", append: IsGenerating);
+        if (IsGenerating) SendIntoRunningReply(label);
+        else _ = SendMessageCore(label, pipe: null);
+        if (draft.Length > 0 && string.IsNullOrEmpty(UserInput)) UserInput = draft;
+    }
 }

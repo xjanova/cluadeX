@@ -21,7 +21,19 @@ public partial class ChatViewModel
         public required ObservableCollection<ChatMessage> Messages { get; init; }
         public AgentRunScope Scope { get; set; } = null!;
         public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public CancellationTokenSource? Cts;
+        /// <summary>The turn's Stop. Its cancel is remembered in <see cref="Stopped"/>: the source is disposed before the turn
+        /// ends, and the end needs to know (no next-step box after a Stop).</summary>
+        public CancellationTokenSource? Cts
+        {
+            get => _cts;
+            set
+            {
+                _cts = value;
+                try { value?.Token.Register(() => Stopped = true); } catch (ObjectDisposedException) { }
+            }
+        }
+        private CancellationTokenSource? _cts;
+        public volatile bool Stopped;
         public ChatMessage? ActiveStatus;
         /// <summary>The running balloon: the background-work row the current calls fold into (IsLive while they run).</summary>
         public ChatMessage? LiveRow;
@@ -406,6 +418,7 @@ public partial class ChatViewModel
             Services.Agents.RunActivity.ClearRun(run.Session.Id);
             PostRunCostSummary(run);
             RememberRunStats(run);
+            AddNextStepBox(run);
             // A CLI that died mid-question: nobody is listening any more, so its card must not stay open.
             foreach (var open in run.Messages.Where(m => m.Role == MessageRole.Question && !m.QuestionAnswered).ToList())
                 open.CloseQuestion(Loc("chat.ask.cancelled"));
