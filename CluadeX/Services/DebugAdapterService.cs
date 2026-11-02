@@ -214,6 +214,7 @@ public sealed class DebugAdapterService : IDisposable
             };
 
             _adapter = Process.Start(psi);
+            Background.AppChildren.Adopt(_adapter);
             if (_adapter == null) return new DebugStartResult { Error = L("dbg.adapterStartFailed") };
 
             ActiveAdapter = adapter;

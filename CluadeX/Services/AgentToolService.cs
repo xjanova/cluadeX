@@ -782,6 +782,13 @@ public class AgentToolService : IDisposable
     {
         try
         {
+            // ── Arguments a model could not write as JSON: say so, instead of running the tool on nothing ──
+            if (call.Arguments.TryGetValue(CluadeX.Helpers.ToolCallNormalizer.InvalidArgumentsKey, out var badArgs))
+                return Fail(call, $"Your arguments for {call.ToolName} were not a valid JSON object, so nothing ran. Send them again as "
+                                  + $"JSON, with every string quoted and escaped. What arrived: {badArgs[..Math.Min(200, badArgs.Length)]}");
+            // ── Other agents' argument names (file_path, old_string, cmd …) → the ones the executor reads ──
+            CluadeX.Helpers.ToolCallNormalizer.NormalizeArgs(call.Type, call.Arguments);
+
             // ── Skill AllowedTools enforcement ──
             // Compare by RESOLVED ToolType, not raw strings: skills are authored with human names
             // ("grep") while the registry name is "grep_search", and a raw-string gate silently
@@ -1070,7 +1077,12 @@ public class AgentToolService : IDisposable
             var required = new List<string>();
             foreach (var (name, type, desc, req) in props)
             {
-                properties[name] = new Dictionary<string, string> { ["type"] = type, ["description"] = desc };
+                // An array is declared as one, with its items (Gemini refuses an array without them). Written as a JSON
+                // string inside a string, GPT, Gemini and small local models got the escaping wrong; the executor reads
+                // either form.
+                properties[name] = type == "array"
+                    ? new Dictionary<string, object> { ["type"] = "array", ["description"] = desc, ["items"] = ArrayItemsOf(name) }
+                    : new Dictionary<string, object> { ["type"] = type, ["description"] = desc };
                 if (req) required.Add(name);
             }
             var schema = new Dictionary<string, object>
@@ -1083,6 +1095,42 @@ public class AgentToolService : IDisposable
             return System.Text.Json.JsonDocument.Parse(json).RootElement.Clone();
         }
 
+        static Dictionary<string, object> Str(string desc) => new() { ["type"] = "string", ["description"] = desc };
+        static object ArrayItemsOf(string property) => property switch
+        {
+            "edits" => new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["find"] = Str("Current text to replace"), ["replace"] = Str("Replacement text"),
+                    ["replace_all"] = new Dictionary<string, object> { ["type"] = "boolean", ["description"] = "Replace every occurrence" },
+                },
+                ["required"] = new[] { "find", "replace" },
+            },
+            "todos" => new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["content"] = Str("The step"),
+                    ["status"] = new Dictionary<string, object> { ["type"] = "string", ["enum"] = new[] { "pending", "in_progress", "completed" } },
+                },
+                ["required"] = new[] { "content", "status" },
+            },
+            "pieces" => new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["task"] = Str("What this worker does"),
+                    ["files"] = new Dictionary<string, object> { ["type"] = "array", ["items"] = new Dictionary<string, object> { ["type"] = "string" } },
+                },
+                ["required"] = new[] { "task", "files" },
+            },
+            _ => new Dictionary<string, object> { ["type"] = "string" },
+        };
+
         // File tools. A description is the model's entire manual for its tool, so it has to state what the
         // executor really does — told "omit offset/limit to read the whole file", a model never pages on
         // past the first 2,000 lines; told nothing about the shell, it writes POSIX into cmd.exe.
@@ -1093,7 +1141,7 @@ public class AgentToolService : IDisposable
         schemas.Add(new() { Name = "edit_file", Description = "Replace text in a file. 'find' must match the current text exactly once (add surrounding lines, or set replace_all=true). Indentation / line-ending differences and read_file line-number prefixes are tolerated.",
             InputSchema = MakeSchema(("path", "string", "File path", true), ("find", "string", "Current text to replace", true), ("replace", "string", "Replacement text", true), ("replace_all", "string", "true to replace every occurrence; otherwise 'find' must match exactly once", false)) });
         schemas.Add(new() { Name = "multi_edit", Description = "Apply several find/replace edits to ONE file atomically: in order, and nothing is written if any edit fails to match. Prefer it over repeated edit_file calls. Matching as in edit_file.",
-            InputSchema = MakeSchema(("path", "string", "File path", true), ("edits", "string", "A JSON array of edits, e.g. [{\"find\":\"old\",\"replace\":\"new\"},{\"find\":\"a\",\"replace\":\"b\",\"replace_all\":true}]", true)) });
+            InputSchema = MakeSchema(("path", "string", "File path", true), ("edits", "array", "The edits in order, e.g. [{\"find\":\"old\",\"replace\":\"new\"},{\"find\":\"a\",\"replace\":\"b\",\"replace_all\":true}]", true)) });
         schemas.Add(new() { Name = "list_files", Description = "List a directory two levels deep (skips hidden folders, bin, obj, node_modules).",
             InputSchema = MakeSchema(("path", "string", "Directory path ('.' for the project root)", true)) });
         schemas.Add(new() { Name = "search_files", Description = "Find files by glob (*.cs, src/**/*.ts, *.{cs,xaml}; no '/' = any depth). Honors .gitignore, skips bin/obj; newest first, max 100.",
@@ -1164,8 +1212,8 @@ public class AgentToolService : IDisposable
         // Web tools
         if (features.WebFetch && _activationService.IsFeatureUnlocked("feature.webFetch"))
         {
-            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a URL", InputSchema = MakeSchema(("url", "string", "URL to fetch", true)) });
-            schemas.Add(new() { Name = "web_search", Description = "Search the web", InputSchema = MakeSchema(("query", "string", "Search query", true)) });
+            schemas.Add(new() { Name = "web_fetch", Description = "Fetch a web page or file by URL (http/https) and return its text — docs, an API reference, a README, a JSON endpoint. Use it to check facts that may have changed since your training.", InputSchema = MakeSchema(("url", "string", "Full URL to fetch, starting with https://", true)) });
+            schemas.Add(new() { Name = "web_search", Description = "Search the web; returns titles, links and snippets. Use it for current versions, error messages, recent news or anything you are not sure of, then web_fetch the best link.", InputSchema = MakeSchema(("query", "string", "What to search for, in a few keywords", true)) });
         }
 
         // REPL
@@ -1179,14 +1227,14 @@ public class AgentToolService : IDisposable
         // 'action' was missing from the schema, so completing/listing/clearing todos was
         // unreachable and "mark done" silently appended a duplicate instead.
         schemas.Add(new() { Name = "todo_write", Description = "Your plan, shown to the user as a live checklist. Prefer `todos`: send the WHOLE list in one call (it replaces the plan), and send it again with new statuses as items finish. One item in_progress at a time.",
-            InputSchema = MakeSchema(("todos", "string", "The whole plan as a JSON array, e.g. [{\"content\":\"Read the client\",\"status\":\"completed\"},{\"content\":\"Fix the timeout\",\"status\":\"in_progress\"},{\"content\":\"Run the tests\",\"status\":\"pending\"}]", false),
+            InputSchema = MakeSchema(("todos", "array", "The whole plan, e.g. [{\"content\":\"Read the client\",\"status\":\"completed\"},{\"content\":\"Fix the timeout\",\"status\":\"in_progress\"},{\"content\":\"Run the tests\",\"status\":\"pending\"}]", false),
                 ("action", "string", "Without todos: add|complete|list|clear (default add)", false), ("content", "string", "Without todos: the item text (add/complete)", false), ("status", "string", "pending|in_progress|completed", false)) });
         schemas.Add(new() { Name = "plan_mode", Description = "Create an execution plan before starting work", InputSchema = MakeSchema(("plan", "string", "The plan content", true)) });
         schemas.Add(new() { Name = "ask_user", Description = "Ask the user a question for clarification", InputSchema = MakeSchema(("question", "string", "Question to ask", true), ("options", "string", "Comma-separated options", false)) });
         schemas.Add(new() { Name = "powershell", Description = "Run a Windows PowerShell 5.1 script in the project root — for Windows-specific work (registry, services, .NET APIs); use run_command for ordinary shell work. Default timeout 120 s.", InputSchema = MakeSchema(("command", "string", "PowerShell script", true), ("timeout_ms", "string", "Timeout in ms (default 120000, max 600000)", false)) });
         schemas.Add(new() { Name = "notebook_edit", Description = "Edit a Jupyter notebook cell", InputSchema = MakeSchema(("notebook_path", "string", "Path to .ipynb file", true), ("cell_number", "string", "Cell index (0-based)", true), ("new_source", "string", "New cell content", true), ("edit_mode", "string", "replace|insert|delete", false), ("cell_type", "string", "code|markdown", false)) });
         schemas.Add(new() { Name = "config", Description = "View CluadeX configuration", InputSchema = MakeSchema(("action", "string", "get", false), ("key", "string", "Config key", false)) });
-        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "string", "workers only: JSON array [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false)) });
+        schemas.Add(new() { Name = "agent_spawn", Description = "Start a sub-agent: its own conversation and tools on the same model, working on one self-contained sub-task and returning only its final report. Several agent_spawn calls in one response run at the same time, so split independent investigations across them. Use it to keep bulky reading out of your own context. type \"explore\" (default) is read-only (read, search, git log/diff, the brain); \"general\" may also edit files. A sub-agent cannot ask the user, commit, push or start other agents. type \"workers\" (when the effort allows it) splits one change into pieces that touch DISJOINT files: each piece runs as a worker in its own git worktree in parallel, a reviewer checks the combined diff, and only then is it merged into the project — pass the pieces as JSON. If a sub-agent is not allowed for this step, the result says so: then do it yourself.", InputSchema = MakeSchema(("task", "string", "What the sub-agent must do and what its report must contain (for workers: the whole change)", true), ("context", "string", "What it needs to know from your conversation (it sees nothing else)", false), ("type", "string", "explore (read-only, default), general (may edit files) or workers", false), ("pieces", "array", "workers only: [{\"task\":\"…\",\"files\":[\"src/A.cs\"]}, …] — 2+ pieces, each file in one piece only", false), ("continue_agent", "string", "The number from a sub-agent's report: carry on with that one in this run, keeping what it already read, instead of starting fresh. task is then your next message to it", false)) });
         schemas.Add(new() { Name = "skill_invoke", Description = "Invoke a skill by name (e.g., commit, review-pr, simplify)", InputSchema = MakeSchema(("skill", "string", "Skill name to invoke", true), ("args", "string", "Arguments to pass to the skill", false)) });
 
         // Subagent system — specialised single-purpose agents (code-reviewer, security-reviewer, architect, etc.)
@@ -1294,8 +1342,10 @@ public class AgentToolService : IDisposable
         // picks one, fails, and gets a confusing error tends to stop reaching for
         // tools at all. MCP servers carry no such dependency: the brain, and
         // anything else the owner wired up, works fine with no folder open.
+        // The web needs no folder either (owner 2026-11-02: "อย่ากั๊กเครื่องมือกัน"): a plain chat may look something up.
         if (!_fileSystem.HasWorkingDirectory)
-            schemas = schemas.Where(s => IsMcpSchemaName(s.Name) || projectFreeModuleTools?.Contains(s.Name) == true).ToList();
+            schemas = schemas.Where(s => IsMcpSchemaName(s.Name) || s.Name is "web_fetch" or "web_search"
+                                         || projectFreeModuleTools?.Contains(s.Name) == true).ToList();
 
         return schemas;
     }
@@ -2480,6 +2530,13 @@ public class AgentToolService : IDisposable
 
         if (string.IsNullOrEmpty(path))
             return Fail(call, "Missing 'path' argument");
+
+        // An argument the executor does not read means the model meant something else (it named the old text some other
+        // way): refuse with the names it takes. Taking it as "append" put the replacement at the end of the file.
+        var unknownKeys = call.Arguments.Keys.Where(k => k is not ("path" or "find" or "replace" or "replace_all") && !k.StartsWith('_')).ToList();
+        if (string.IsNullOrEmpty(find) && unknownKeys.Count > 0)
+            return Fail(call, $"edit_file takes path, find (the current text), replace (the new text) and replace_all — "
+                              + $"it did not understand {string.Join(", ", unknownKeys.Select(k => $"'{k}'"))}. Nothing was changed.");
 
         // Weak models express "append to the file" as find:"" with the new text in replace —
         // honor the intent instead of failing the turn (the executor is the last line of ergonomics).
@@ -3968,7 +4025,33 @@ public class AgentToolService : IDisposable
     /// <summary>Public wrapper for ResolveToolType (used by native tool_use loop).</summary>
     public ToolType? ResolveToolTypePublic(string toolName) => ResolveToolType(toolName);
 
+    /// <summary>The name a call runs under: the model's own when it is a tool's name, else the translated one
+    /// ("functions.read_file", "Read" → read_file), so status lines, hooks and aliases see CluadeX's name.</summary>
+    public string CanonicalToolName(string toolName)
+    {
+        if (Providers.ApiProviderBase.OriginalToolName(toolName) is { } original) toolName = original;
+        if (string.IsNullOrWhiteSpace(toolName) || ResolveExactToolType(toolName) != null) return toolName;
+        string norm = CluadeX.Helpers.ToolCallNormalizer.NormalizeName(toolName);
+        return ResolveExactToolType(norm) != null ? norm : toolName;
+    }
+
+    /// <summary>
+    /// The tool a name means. Exact names first; then the name as another agent writes it (Read, Bash, replace,
+    /// functions.read_file, ReadFile — <see cref="CluadeX.Helpers.ToolCallNormalizer.NormalizeName"/>); then an MCP tool's bare
+    /// name when only one server has it (a model that dropped the mcp__server__ prefix). Anything else is unknown.
+    /// </summary>
     private ToolType? ResolveToolType(string toolName)
+    {
+        if (string.IsNullOrWhiteSpace(toolName)) return null;
+        // A name shortened for an API's 64-character limit (ApiProviderBase.WireToolName) means its full MCP name.
+        if (Providers.ApiProviderBase.OriginalToolName(toolName) is { } original) toolName = original;
+        if (ResolveExactToolType(toolName) is { } exact) return exact;
+        string norm = CluadeX.Helpers.ToolCallNormalizer.NormalizeName(toolName);
+        if (!string.Equals(norm, toolName, StringComparison.Ordinal) && ResolveExactToolType(norm) is { } foreign) return foreign;
+        return _mcpManager.ToolRegistry.ResolveTool(toolName) != null ? ToolType.McpTool : null;
+    }
+
+    private ToolType? ResolveExactToolType(string toolName)
     {
         // Check MCP tools first (qualified names: mcp__server__tool)
         if (toolName.StartsWith("mcp__") && _mcpManager.ToolRegistry.ResolveTool(toolName) != null)

@@ -397,6 +397,7 @@ public class AntigravityDevProvider : IAiProvider, IDelegatedCliProvider
         try
         {
             proc = Process.Start(psi);
+            Background.AppChildren.Adopt(proc);
             if (proc == null)
             {
                 OnError?.Invoke("Failed to start the Antigravity CLI");

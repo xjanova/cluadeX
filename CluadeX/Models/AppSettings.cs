@@ -132,6 +132,14 @@ public class AppSettings
     /// <summary>The desktop_* tools: see and drive other programs on this PC (testing a desktop app, a game window,
     /// an installer). On by default — every app still asks once per run (or "Allow in this chat").</summary>
     public bool DesktopControlEnabled { get; set; } = true;
+
+    /// <summary>Apps the desktop tools never touch, whatever the permission rules say — process names, '*' wildcards
+    /// ("KeePass*"). Password managers by default: their windows hold every secret the user has.</summary>
+    public List<string> DesktopBlockedApps { get; set; } = new()
+    {
+        "1Password", "KeePass", "KeePassXC", "Bitwarden", "LastPass", "Dashlane", "Keeper*", "NordPass", "Enpass", "RoboForm*",
+        "ProtonPass", "PasswordSafe", "pwsafe",
+    };
     /// <summary>Sub-agents, workers and fixers one run may have going at the same time.</summary>
     public int MaxParallelAgents { get; set; } = 3;
     /// <summary>Race 2–3 fixers in their own worktrees on a red build the main loop could not fix.</summary>
@@ -374,6 +382,9 @@ public class AppSettings
 
     // Sidebar system menu — collapsed by default to give chat history maximum real estate.
     public bool SidebarNavExpanded { get; set; } = false;
+
+    /// <summary>Chats pinned to the top of the sidebar, in the order they were pinned (owner 2026-11-02).</summary>
+    public List<string> PinnedChatIds { get; set; } = new();
 
     // UI settings
     public double FontSize { get; set; } = 14;

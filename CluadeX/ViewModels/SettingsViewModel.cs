@@ -60,6 +60,9 @@ public partial class SettingsViewModel : ViewModelBase
         // Dispatch policy (Services/Agents/DispatchPolicy.cs)
         [nameof(DispatchPolicyEnabled)] = (vm, s) => s.DispatchPolicyEnabled = vm.DispatchPolicyEnabled,
         [nameof(DesktopControlEnabled)] = (vm, s) => s.DesktopControlEnabled = vm.DesktopControlEnabled,
+        [nameof(DesktopBlockedAppsText)] = (vm, s) => s.DesktopBlockedApps = (vm.DesktopBlockedAppsText ?? "")
+            .Split(new[] { ',', ';', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(200).ToList(),
         [nameof(CliRunBudgetUsd)] = (vm, s) => s.CliRunBudgetUsd = Math.Max(0, vm.CliRunBudgetUsd),
         [nameof(CliDailyBudgetUsd)] = (vm, s) => s.CliDailyBudgetUsd = Math.Max(0, vm.CliDailyBudgetUsd),
         [nameof(MaxParallelAgents)] = (vm, s) => s.MaxParallelAgents = Math.Clamp(vm.MaxParallelAgents, 1, Services.Agents.DispatchPolicy.MaxParallelCap),
@@ -165,6 +168,9 @@ public partial class SettingsViewModel : ViewModelBase
     public bool DispatchPolicyEnabled { get => _dispatchPolicyEnabled; set => SetProperty(ref _dispatchPolicyEnabled, value); }
     private bool _desktopControlEnabled = true;
     public bool DesktopControlEnabled { get => _desktopControlEnabled; set => SetProperty(ref _desktopControlEnabled, value); }
+    private string _desktopBlockedAppsText = "";
+    /// <summary>AppSettings.DesktopBlockedApps as one comma-separated line.</summary>
+    public string DesktopBlockedAppsText { get => _desktopBlockedAppsText; set => SetProperty(ref _desktopBlockedAppsText, value); }
     public int MaxParallelAgents { get => _maxParallelAgents; set => SetProperty(ref _maxParallelAgents, value); }
     private decimal _cliRunBudgetUsd;
     public decimal CliRunBudgetUsd { get => _cliRunBudgetUsd; set => SetProperty(ref _cliRunBudgetUsd, value); }
@@ -660,6 +666,7 @@ public partial class SettingsViewModel : ViewModelBase
         BrainAutoRecallEnabled = src.BrainAutoRecallEnabled;
         DispatchPolicyEnabled = src.DispatchPolicyEnabled;
         DesktopControlEnabled = src.DesktopControlEnabled;
+        DesktopBlockedAppsText = string.Join(", ", src.DesktopBlockedApps ?? new List<string>());
         MaxParallelAgents = src.MaxParallelAgents;
         CliRunBudgetUsd = src.CliRunBudgetUsd;
         CliDailyBudgetUsd = src.CliDailyBudgetUsd;

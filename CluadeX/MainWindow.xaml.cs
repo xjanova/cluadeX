@@ -285,7 +285,17 @@ public partial class MainWindow : Window
             RootBorder.Padding = new Thickness(0);
 
         BtnMaximize.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
+
+        // Minimised: no decorative animation asks for frames; restored: each resumes by its own rule.
+        bool minimized = WindowState == WindowState.Minimized;
+        if (minimized != _animationsPausedForMinimize)
+        {
+            _animationsPausedForMinimize = minimized;
+            Views.AmbientAnimation.SetMinimized(this, minimized);
+        }
     }
+
+    private bool _animationsPausedForMinimize;
 
     private void ApplyTitleBarRoom()
     {

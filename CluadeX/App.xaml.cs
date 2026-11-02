@@ -92,6 +92,15 @@ public partial class App : Application
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
+        // Old crash logs, compaction snapshots, the chat database's write-ahead log: a minute after start, off the UI.
+        var housekeepingRoot = _serviceProvider.GetRequiredService<SettingsService>().DataRoot;
+        var housekeepingDb = _serviceProvider.GetService<DatabaseService>();
+        var housekeepingLog = _serviceProvider.GetService<DebugLogService>();
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMinutes(1));
+            Housekeeping.Run(housekeepingRoot, CrashLogDir, housekeepingDb, housekeepingLog);
+        });
         // The Watch page for the phone comes back on if it was on when the app closed.
         try { var watchWeb = _serviceProvider.GetRequiredService<WatchWebServer>(); if (watchWeb.Settings.Enabled) watchWeb.Start(); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine("watch web: " + ex.Message); }
@@ -1108,6 +1117,9 @@ public partial class App : Application
 
             var chatVm = _serviceProvider?.GetService<ChatViewModel>();
             chatVm?.SaveNow();
+            // The autosave tick writes in the background: what it queued reaches the disk before the process ends.
+            _serviceProvider?.GetService<ChatPersistenceService>()?.Flush(TimeSpan.FromSeconds(5));
+            _serviceProvider?.GetService<DebugLogService>()?.Flush();   // the log gathers lines for half a second
 
             _serviceProvider?.GetService<CostTrackingService>()?.FlushLedger();   // today's spend survives the restart
         }

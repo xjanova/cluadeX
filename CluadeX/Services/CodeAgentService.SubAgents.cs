@@ -311,10 +311,11 @@ public partial class CodeAgentService
             {
                 try
                 {
-                    if (c.type == null || !tools.Any(t => t.Name.Equals(c.tc.Name, StringComparison.OrdinalIgnoreCase)))
+                    string runName = _agentToolService.CanonicalToolName(c.tc.Name);   // "Read" → read_file, as in the main loop
+                    if (c.type == null || !tools.Any(t => t.Name.Equals(runName, StringComparison.OrdinalIgnoreCase)))
                         return new ContentBlock { Type = "tool_result", ToolUseId = c.tc.Id, IsError = true,
                             Content = $"Tool '{c.tc.Name}' is not available to a sub-agent." };
-                    var call = new ToolCall { ToolName = c.tc.Name, Type = c.type.Value, Arguments = ParseJsonInputToArgs(c.tc.Input) };
+                    var call = new ToolCall { ToolName = runName, Type = c.type.Value, Arguments = ParseJsonInputToArgs(c.tc.Input) };
                     string doing = GetToolStatusMessage(c.tc.Name, call.Arguments);
                     OnAgentStatus?.Invoke($"{label}: {doing}");
                     RaiseSubAgent(ev with { Phase = "tool", Detail = Shorten(doing, 90), Steps = step, CostUsd = Cost() });

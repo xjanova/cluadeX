@@ -113,6 +113,62 @@ public static class DesktopInput
         }
     }
 
+    /// <summary>Press and release a button at a physical screen point: "left", "right" or "middle", once or twice.</summary>
+    public static void ClickButton(int x, int y, string button, int clicks)
+    {
+        (uint d, uint u) = button switch
+        {
+            "right" => (DesktopNative.MOUSEEVENTF_RIGHTDOWN, DesktopNative.MOUSEEVENTF_RIGHTUP),
+            "middle" => (DesktopNative.MOUSEEVENTF_MIDDLEDOWN, DesktopNative.MOUSEEVENTF_MIDDLEUP),
+            _ => (DesktopNative.MOUSEEVENTF_LEFTDOWN, DesktopNative.MOUSEEVENTF_LEFTUP),
+        };
+        DesktopNative.SetCursorPos(x, y);
+        Thread.Sleep(30);
+        for (int i = 0; i < clicks; i++)
+        {
+            Send(new[] { Mouse(d), Mouse(u) });
+            if (clicks > 1) Thread.Sleep(40);
+        }
+    }
+
+    /// <summary>Left-drag from one physical point to another in small steps, so apps that track the move see it.
+    /// The button is always released, even when the run is stopped mid-drag.</summary>
+    public static void Drag(int x0, int y0, int x1, int y1, CancellationToken ct)
+    {
+        DesktopNative.SetCursorPos(x0, y0);
+        Thread.Sleep(40);
+        Send(new[] { Mouse(DesktopNative.MOUSEEVENTF_LEFTDOWN) });
+        try
+        {
+            int steps = Math.Clamp((int)(Math.Sqrt(Math.Pow(x1 - x0, 2) + Math.Pow(y1 - y0, 2)) / 20), 5, 60);
+            for (int i = 1; i <= steps; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                DesktopNative.SetCursorPos(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps);
+                Thread.Sleep(12);
+            }
+            Thread.Sleep(40);
+        }
+        finally { Send(new[] { Mouse(DesktopNative.MOUSEEVENTF_LEFTUP) }); }
+    }
+
+    /// <summary>Wheel notches at a physical point: positive <paramref name="notches"/> scroll up / right.</summary>
+    public static void Wheel(int x, int y, int notches, bool horizontal)
+    {
+        DesktopNative.SetCursorPos(x, y);
+        Thread.Sleep(30);
+        uint flags = horizontal ? DesktopNative.MOUSEEVENTF_HWHEEL : DesktopNative.MOUSEEVENTF_WHEEL;
+        for (int i = 0; i < Math.Abs(notches); i++)
+        {
+            Send(new[] { new DesktopNative.INPUT
+            {
+                type = DesktopNative.INPUT_MOUSE,
+                u = new() { mi = new() { dwFlags = flags, mouseData = unchecked((uint)(Math.Sign(notches) * DesktopNative.WHEEL_DELTA)) } },
+            } });
+            Thread.Sleep(30);
+        }
+    }
+
     private static DesktopNative.INPUT Mouse(uint flags) =>
         new() { type = DesktopNative.INPUT_MOUSE, u = new() { mi = new() { dwFlags = flags } } };
 

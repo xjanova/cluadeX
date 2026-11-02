@@ -18,16 +18,120 @@ public class ChatPersistenceService
         _settings = settings;
     }
 
-    /// <summary>Save a single chat session.</summary>
+    // ── Writing ──
+    // A save rewrote the whole chat on the UI thread every 10 seconds (autosave) and for every background run: a long
+    // chat froze the window for a moment each time (owner 2026-11-02: "อย่าให้แอพกระตุก"). Now the UI thread only takes
+    // a snapshot of the rows (DatabaseService.Snapshot, no SQL) and one background writer stores it. A chat saved again
+    // before its last snapshot was written keeps only the newest; a write never lands over a newer one (Seq); a delete
+    // drops the chat's pending snapshot and waits for one in flight.
+    private readonly object _writeGate = new();      // one writer at a time: the background drain and the direct paths
+    private readonly object _pendingLock = new();
+    private readonly Dictionary<string, DatabaseService.SessionSnapshot> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _written = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _deleted = new(StringComparer.Ordinal);
+    private bool _draining;
+    private string? _inFlight;                       // the chat the background writer is storing right now
+
+    /// <summary>Save a single chat session now, on the calling thread (a chat switch, the app closing, a copy).</summary>
     public void SaveSession(ChatSession session)
     {
         try
         {
-            _db.SaveSession(session);
+            var snap = DatabaseService.Snapshot(session);
+            lock (_pendingLock)
+            {
+                _pending.Remove(session.Id);
+                _deleted.Remove(session.Id);
+            }
+            Write(snap, background: false);
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to save session: {ex.Message}");
+        }
+    }
+
+    /// <summary>Save a chat without blocking the caller: the snapshot is taken here, the write happens on a background
+    /// thread (the autosave tick, a chat running off screen).</summary>
+    public void SaveSessionInBackground(ChatSession session)
+    {
+        DatabaseService.SessionSnapshot snap;
+        try { snap = DatabaseService.Snapshot(session); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to snapshot session: {ex.Message}");
+            return;
+        }
+        lock (_pendingLock)
+        {
+            _pending[session.Id] = snap;
+            if (_draining) return;
+            _draining = true;
+        }
+        _ = Task.Run(Drain);
+    }
+
+    private void Drain()
+    {
+        while (true)
+        {
+            DatabaseService.SessionSnapshot next;
+            lock (_pendingLock)
+            {
+                if (_pending.Count == 0) { _draining = false; return; }
+                var first = _pending.First();
+                _pending.Remove(first.Key);
+                next = first.Value;
+                _inFlight = next.Id;
+            }
+            try { Write(next, background: true); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Background save failed: {ex.Message}"); }
+            finally { lock (_pendingLock) _inFlight = null; }
+        }
+    }
+
+    private void Write(DatabaseService.SessionSnapshot snap, bool background)
+    {
+        lock (_writeGate)
+        {
+            lock (_pendingLock)
+            {
+                if (background && _deleted.Contains(snap.Id)) return;
+                if (_written.TryGetValue(snap.Id, out long seq) && seq > snap.Seq) return;
+            }
+            _db.WriteSession(snap);
+            lock (_pendingLock) _written[snap.Id] = snap.Seq;
+        }
+    }
+
+    /// <summary>Wait (up to <paramref name="timeout"/>) until every background save has been written — before the
+    /// app exits, and before anything reads a chat back from the database.</summary>
+    public bool Flush(TimeSpan timeout)
+    {
+        var until = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            lock (_pendingLock) if (!_draining && _pending.Count == 0) break;
+            if (DateTime.UtcNow >= until) return false;
+            Thread.Sleep(10);
+        }
+        lock (_writeGate) { }   // a direct save in flight
+        return true;
+    }
+
+    /// <summary>A background save of this chat is queued or being written.</summary>
+    private bool IsUnwritten(string sessionId)
+    {
+        lock (_pendingLock) return _pending.ContainsKey(sessionId) || _inFlight == sessionId;
+    }
+
+    /// <summary>Drop a chat's pending background save and wait out one in flight (before deleting it).</summary>
+    private void Forget(string sessionId)
+    {
+        lock (_pendingLock)
+        {
+            _pending.Remove(sessionId);
+            _deleted.Add(sessionId);
         }
     }
 
@@ -50,6 +154,8 @@ public class ChatPersistenceService
     {
         try
         {
+            // A chat saved a moment ago may still be on its way to the disk: read it back as it was saved.
+            if (IsUnwritten(sessionId)) Flush(TimeSpan.FromSeconds(5));
             return _db.LoadSession(sessionId);
         }
         catch
@@ -65,7 +171,8 @@ public class ChatPersistenceService
         bool deleted = false;
         try
         {
-            _db.DeleteSession(sessionId);
+            Forget(sessionId);
+            lock (_writeGate) _db.DeleteSession(sessionId);
             deleted = true;
         }
         catch { }
@@ -86,7 +193,9 @@ public class ChatPersistenceService
     /// <summary>Remove sessions with no messages (all, or just <paramref name="sessionId"/>).</summary>
     public int DeleteEmptySessions(string? sessionId = null)
     {
-        try { return _db.DeleteEmptySessions(sessionId); }
+        // A chat whose first messages are still on their way to the disk is not empty.
+        if (!Flush(TimeSpan.FromSeconds(5))) return 0;
+        try { lock (_writeGate) return _db.DeleteEmptySessions(sessionId); }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to prune empty sessions: {ex.Message}");
@@ -98,6 +207,7 @@ public class ChatPersistenceService
     /// then leaves the session alone, which is the safe side.</summary>
     public bool SessionHasMessages(string sessionId)
     {
+        if (IsUnwritten(sessionId)) return true;
         try { return _db.SessionHasMessages(sessionId); }
         catch { return true; }
     }

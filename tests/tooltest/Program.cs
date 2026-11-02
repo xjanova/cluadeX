@@ -1598,6 +1598,9 @@ internal static partial class Program
 
             Console.WriteLine("\n── restore points (Time Machine / plan window) ──");
             await Checkpoints();
+
+            Console.WriteLine("\n── calls phrased by other models · desktop tools for CLI agents ──");
+            await ForeignCalls();
         }
         finally
         {

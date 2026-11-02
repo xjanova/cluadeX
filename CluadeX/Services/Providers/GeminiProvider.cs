@@ -450,7 +450,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
                             parts.Add(new Dictionary<string, object> { ["text"] = b.Text! });
                         else if (b.Type == "tool_use")
                         {
-                            var call = new Dictionary<string, object> { ["name"] = b.Name ?? "", ["args"] = b.Input ?? EmptyObjectElement() };
+                            var call = new Dictionary<string, object> { ["name"] = WireToolName(b.Name), ["args"] = b.Input ?? EmptyObjectElement() };
                             if (b.Id != null && !b.Id.StartsWith(SyntheticCallPrefix)) call["id"] = b.Id;
                             var part = new Dictionary<string, object> { ["functionCall"] = call };
                             if (first) { part["thoughtSignature"] = SkipSignature; first = false; }
@@ -468,7 +468,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
                     string id = b.ToolUseId ?? "";
                     var fr = new Dictionary<string, object>
                     {
-                        ["name"] = callNames.TryGetValue(id, out var n) ? n : "",
+                        ["name"] = callNames.TryGetValue(id, out var n) ? WireToolName(n) : "",
                         ["response"] = new Dictionary<string, object> { [b.IsError == true ? "error" : "result"] = b.Content ?? "" },
                     };
                     if (id.Length > 0 && !id.StartsWith(SyntheticCallPrefix)) fr["id"] = id;
@@ -523,7 +523,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
                     // OpenAPI-subset `parameters`, which lacks keywords MCP tool schemas use.
                     ["functionDeclarations"] = tools.Select(t => (object)new Dictionary<string, object>
                     {
-                        ["name"] = t.Name,
+                        ["name"] = WireToolName(t.Name),
                         ["description"] = t.Description,
                         ["parametersJsonSchema"] = t.InputSchema.ValueKind == JsonValueKind.Object
                             ? t.InputSchema
@@ -543,7 +543,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
                 },
             };
             if (lower is not ("" or "auto" or "none" or "required" or "any"))
-                fcc["allowedFunctionNames"] = new[] { choice };
+                fcc["allowedFunctionNames"] = new[] { WireToolName(choice) };
             req["toolConfig"] = new Dictionary<string, object> { ["functionCallingConfig"] = fcc };
         }
         return req;
@@ -559,6 +559,7 @@ public class GeminiProvider : ApiProviderBase, IModelLister
     {
         var config = GetConfig();
         string model = ModelOf(config);
+        tools = UsableTools(tools);
         // A model that can't take the images (or a refused one this session) gets text and the omitted note.
         if (HasToolImages(messages) && !SupportsToolResultImages(model))
             messages = WithoutImages(messages, null);
@@ -595,6 +596,8 @@ public class GeminiProvider : ApiProviderBase, IModelLister
             if ((int)response.StatusCode == 400 && IsTokenOverflow(error))
                 throw new HttpRequestException("Prompt too long for the model's context window. " + explained,
                     null, response.StatusCode);
+            if (RetryWithoutMcpTools((int)response.StatusCode, explained, tools))
+                return await ChatWithToolsAsync(messages, systemPrompt, UsableTools(tools), onTextDelta, ct, toolChoice);
             if (DisableNativeToolsIfRejected((int)response.StatusCode, explained) is { } fallback) return fallback;
             throw new HttpRequestException(explained, null, response.StatusCode);
         }

@@ -58,6 +58,26 @@ public static partial class DesktopSafety
         || CredentialClasses.Contains(className ?? "")
         || CredentialTitle().IsMatch((title ?? "").Trim());
 
+    /// <summary>Non-null (the reason) when <paramref name="processName"/> matches one of the user's blocked apps
+    /// (AppSettings.DesktopBlockedApps: names, '*' wildcards).</summary>
+    public static string? BlockedAppRefusal(string? processName, IEnumerable<string>? blocked)
+    {
+        if (string.IsNullOrWhiteSpace(processName) || blocked == null) return null;
+        foreach (var raw in blocked)
+        {
+            string pat = (raw ?? "").Trim();
+            if (pat.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) pat = pat[..^4];
+            if (pat.Length == 0) continue;
+            bool hit = pat.Contains('*')
+                ? Regex.IsMatch(processName, "^" + Regex.Escape(pat).Replace(@"\*", ".*") + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50))
+                : processName.Equals(pat, StringComparison.OrdinalIgnoreCase);
+            if (hit)
+                return $"{processName} is on the list of apps the desktop tools never touch (Settings ▸ desktop control ▸ blocked apps — "
+                     + "password managers by default). Ask the user to do this part themselves.";
+        }
+        return null;
+    }
+
     /// <summary>The refusal for a password field, or null.</summary>
     public static string? PasswordRefusal(AutomationElement e)
     {

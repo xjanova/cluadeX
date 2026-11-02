@@ -220,5 +220,40 @@ internal static partial class Program
         var dayOrder = GroupsOf(true);
         Check("S13 with the group order: today, yesterday, earlier, whichever row came first",
             dayOrder.SequenceEqual(dayNames), string.Join(", ", dayOrder));
+
+        // S14 — pinned chats (owner 2026-11-02: "เพิ่มการปักหมุดแชทที่ต้องการไว้"): their own group at the top, in pin order,
+        // whatever the project filter; kept in settings; a deleted or vanished chat's pin is forgotten.
+        Vm.SetWorkingDirectory(ProjA);
+        var pinOld = new ChatSession { Title = "s14 other project, last month", ProjectPath = ProjB, UpdatedAt = DateTime.Now.AddDays(-30) };
+        var pinNew = new ChatSession { Title = "s14 this project, today", ProjectPath = ProjA, UpdatedAt = DateTime.Now };
+        var pinSecond = new ChatSession { Title = "s14 pinned second", ProjectPath = ProjA, UpdatedAt = DateTime.Now.AddDays(-2) };
+        Vm.Sessions.Add(pinOld); Vm.Sessions.Add(pinNew); Vm.Sessions.Add(pinSecond);
+        await Render();
+        Check("S14 (before) an old chat of another project is not in the filtered list", !Vm.VisibleSessions.Contains(pinOld));
+        Vm.TogglePinCommand.Execute(pinOld.Id);
+        Vm.TogglePinCommand.Execute(pinSecond.Id);
+        await Render();
+        var pins = Sp.GetRequiredService<SettingsService>().Settings.PinnedChatIds;
+        Check("S14 pinned: first in the list, in pin order, in the pinned group, past the project filter, saved in settings",
+            Vm.VisibleSessions.IndexOf(pinOld) == 0 && Vm.VisibleSessions.IndexOf(pinSecond) == 1
+            && pinOld.DateGroupLabel == L("sidebar.group.pinned") && pins.SequenceEqual([pinOld.Id, pinSecond.Id]),
+            $"at={Vm.VisibleSessions.IndexOf(pinOld)},{Vm.VisibleSessions.IndexOf(pinSecond)} group={pinOld.DateGroupLabel} pins={pins.Count}");
+        var pinGroups = new System.Windows.Data.ListCollectionView(new List<ChatSession> { pinNew, pinOld });
+        var pinBy = new System.Windows.Data.PropertyGroupDescription(nameof(ChatSession.DateGroupLabel)) { CustomSort = new ChatViewModel.DayGroupOrder() };
+        pinGroups.GroupDescriptions.Add(pinBy);
+        Check("S14 the pinned group sorts above today",
+            pinGroups.Groups.Cast<System.Windows.Data.CollectionViewGroup>().First().Name as string == L("sidebar.group.pinned"));
+        Vm.TogglePinCommand.Execute(pinOld.Id);
+        await Render();
+        Check("S14 unpinned: back to its day group, and the filter hides it again; the other pin stays",
+            pinOld.DateGroupLabel != L("sidebar.group.pinned") && !Vm.VisibleSessions.Contains(pinOld)
+            && Sp.GetRequiredService<SettingsService>().Settings.PinnedChatIds.SequenceEqual([pinSecond.Id]));
+        Sp.GetRequiredService<SettingsService>().UpdateSettings(st => st.PinnedChatIds = [pinSecond.Id, "gone-chat-id"]);
+        typeof(ChatViewModel).GetMethod("ApplyPins", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(Vm, null);
+        Check("S14 on load: the pins of chats that are gone are forgotten, the rest marked",
+            pinSecond.IsPinned && Sp.GetRequiredService<SettingsService>().Settings.PinnedChatIds.SequenceEqual([pinSecond.Id]));
+        Vm.TogglePinCommand.Execute(pinSecond.Id);
+        Vm.Sessions.Remove(pinOld); Vm.Sessions.Remove(pinNew); Vm.Sessions.Remove(pinSecond);
+        await Render();
     }
 }

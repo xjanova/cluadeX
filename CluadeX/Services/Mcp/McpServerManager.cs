@@ -1959,7 +1959,9 @@ public sealed partial class McpServerManager : INotifyPropertyChanged, IDisposab
         // could block the UI shutdown for 5N seconds.
         try
         {
-            var stopTasks = snapshot.Select(t => t.StopAsync()).ToArray();
+            // On the thread pool: StopAsync's awaits resumed on the UI thread, which this very wait blocks — so every
+            // exit with an MCP server sat out the whole 5 s and then killed the servers anyway.
+            var stopTasks = snapshot.Select(t => Task.Run(() => t.StopAsync())).ToArray();
             Task.WaitAll(stopTasks, 5000);
         }
         catch (Exception ex)

@@ -34,6 +34,22 @@ internal static class DesktopNative
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT r, int size);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int v, int size);
 
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorEnumProc cb, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr monitor, ref MONITORINFO info);
+
+    public delegate bool MonitorEnumProc(IntPtr monitor, IntPtr dc, ref RECT rect, IntPtr data);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+
+    public const uint GA_ROOT = 2, MONITORINFOF_PRIMARY = 1, WM_CLOSE = 0x0010;
+    public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOZORDER = 0x4, SWP_NOACTIVATE = 0x10;
+    public const int SW_MAXIMIZE = 3, SW_MINIMIZE = 6;
     public const int SW_RESTORE = 9;
     public const uint GW_OWNER = 4;
     public const int GWL_EXSTYLE = -20;
@@ -112,6 +128,9 @@ internal static class DesktopNative
     public const uint MOUSEEVENTF_MOVE = 1, MOUSEEVENTF_LEFTDOWN = 2, MOUSEEVENTF_LEFTUP = 4, MOUSEEVENTF_RIGHTDOWN = 8,
         MOUSEEVENTF_RIGHTUP = 0x10, MOUSEEVENTF_ABSOLUTE = 0x8000, MOUSEEVENTF_VIRTUALDESK = 0x4000;
 
+    public const uint MOUSEEVENTF_MIDDLEDOWN = 0x20, MOUSEEVENTF_MIDDLEUP = 0x40, MOUSEEVENTF_WHEEL = 0x800, MOUSEEVENTF_HWHEEL = 0x1000;
+    public const int WHEEL_DELTA = 120;
+
     [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
@@ -166,6 +185,20 @@ internal static class DesktopNative
         catch { }
         GetWindowRect(h, out var wr);
         return wr;
+    }
+
+    /// <summary>The monitors in physical pixels, primary first (thread must be per-monitor DPI aware).</summary>
+    public static List<(RECT Bounds, bool Primary)> Monitors()
+    {
+        var list = new List<(RECT, bool)>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr m, IntPtr _, ref RECT r, IntPtr _) =>
+        {
+            var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            bool primary = GetMonitorInfoW(m, ref info) && (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+            list.Add((primary ? info.rcMonitor : r, primary));
+            return true;
+        }, IntPtr.Zero);
+        return list.OrderByDescending(x => x.Item2).ToList();
     }
 
     public static bool IsCloaked(IntPtr h)

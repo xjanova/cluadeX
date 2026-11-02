@@ -1669,10 +1669,12 @@ public partial class CodeAgentService
             {
                 if (localNativeTools)
                 {
-                    sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time):");
-                    sb.AppendLine("  1. read_file(\"src/Calc.cs\") — see the real current code BEFORE changing it.");
-                    sb.AppendLine("  2. multi_edit(\"src/Calc.cs\", edits=[{find:\"return a - b;\", replace:\"return a + b;\"}]) — atomic find/replace.");
-                    sb.AppendLine("  3. run_build — if it FAILS, read the error, fix with another edit, build again until green; then run_tests.");
+                    // Steps described as tool calls with JSON arguments, never as code: a Python-style call
+                    // (multi_edit("x", edits=[…])) taught small models to WRITE calls as prose instead of making them.
+                    sb.AppendLine("EXAMPLE of the read→edit→verify discipline (follow this shape every time; each step is a real tool call, not text):");
+                    sb.AppendLine("  1. call read_file with {\"path\": \"src/Calc.cs\"} — see the real current code BEFORE changing it.");
+                    sb.AppendLine("  2. call edit_file with {\"path\": \"src/Calc.cs\", \"find\": \"return a - b;\", \"replace\": \"return a + b;\"}.");
+                    sb.AppendLine("  3. call run_build — if it FAILS, read the error, fix with another edit, build again until green; then run_tests.");
                     sb.AppendLine("  4. Only after it's green do you say you're done.");
                 }
                 else
@@ -2186,10 +2188,12 @@ public partial class CodeAgentService
                 : Providers.ClaudeDevProvider.ExtraDirs(folder, allowed, Directory.Exists, p => PermissionService.IsUnsafeAcceptEditsRoot(p));
             // The browser_* tools ride the chat tools' server: the wrapper says up front when the gate refuses them now.
             string? browserRefusal = chatTools != null ? _agentToolService.ModuleToolRefusal(ToolType.BrowserOpen) : null;
+            string? desktopRefusal = chatTools != null ? _agentToolService.ModuleToolRefusal(ToolType.DesktopWindows) : null;
             Providers.ClaudeDevProvider.Extras.Value = new Providers.ClaudeDevProvider.TurnExtras(chatTools?.ConfigFile, dirs, browserRefusal,
-                provider.RunsOwnSubAgents ? CurrentDispatch : null, spawnGate != null ? chatTools?.Token : null, CliBudgetLeft());
+                provider.RunsOwnSubAgents ? CurrentDispatch : null, spawnGate != null ? chatTools?.Token : null, CliBudgetLeft(),
+                desktopRefusal);
             _debugLog?.Info("Agent", $"{delegated} extras · chat tools={(chatTools != null ? "on" : "off")} · add-dir={dirs.Count}"
-                + (chatTools != null ? $" · browser={(browserRefusal == null ? "on" : "off")}" : ""));
+                + (chatTools != null ? $" · browser={(browserRefusal == null ? "on" : "off")} · desktop={(desktopRefusal == null ? "on" : "off")}" : ""));
         }
         Providers.ClaudeDevProvider.Grant.Value = grant;
         Providers.ClaudeDevProvider.StreamSink.Value = turn != null ? turn.Feed : null;
@@ -4168,7 +4172,7 @@ public partial class CodeAgentService
 
                     var call = new ToolCall
                     {
-                        ToolName = toolCall.Name,
+                        ToolName = _agentToolService.CanonicalToolName(toolCall.Name),
                         Type = resolvedType.Value,
                         Arguments = ParseJsonInputToArgs(toolCall.Input),
                     };

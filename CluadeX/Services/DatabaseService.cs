@@ -139,8 +139,58 @@ public sealed class DatabaseService : IDisposable
 
     // ──────────────────────────── Sessions CRUD ────────────────────────────
 
+    /// <summary>One message as it is stored: plain values only, so a snapshot taken on the UI thread can be written
+    /// from another thread while the live message keeps changing.</summary>
+    public sealed record MessageRow(string Id, int Role, string Content, string Timestamp,
+        object ToolName, object ToolSummary, object ToolOutput, int ToolSuccess, int HasError, int SortOrder);
+
+    /// <summary>A chat as it is stored, taken at one moment (<see cref="Snapshot"/>). <see cref="Seq"/> orders the
+    /// snapshots of one chat: ChatPersistenceService never writes an older one over a newer one.</summary>
+    public sealed record SessionSnapshot(string Id, string Title, string CreatedAt, string ProjectPath, List<MessageRow> Messages)
+    {
+        private static long _next;
+        public long Seq { get; } = Interlocked.Increment(ref _next);
+    }
+
     /// <summary>Save or update a chat session and all its messages.</summary>
-    public void SaveSession(ChatSession session)
+    public void SaveSession(ChatSession session) => WriteSession(Snapshot(session));
+
+    /// <summary>The rows <see cref="WriteSession"/> stores for a chat — cheap (no SQL), so the UI thread takes it and a
+    /// background writer does the slow part. The whole transcript: see the DELETE in WriteSession.</summary>
+    public static SessionSnapshot Snapshot(ChatSession session)
+    {
+        var rows = new List<MessageRow>(session.Messages.Count);
+        for (int i = 0; i < session.Messages.Count; i++)
+        {
+            var msg = session.Messages[i];
+            // Transient UI rows are not history. A permission prompt's Allow/Deny callback can't be persisted
+            // (a reloaded one would render as a dead button; the resulting tool action, with its diff, is
+            // saved separately). Status lines ("⏵ Reading…", "✓ N tokens · …") were saved as Assistant
+            // messages, reloaded, and sent back to the model as turns it never wrote.
+            if (msg.Role is MessageRole.PermissionRequest or MessageRole.AgentStatus or MessageRole.Thinking) continue;
+            // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
+            // a file that has been damaged before.
+            // Images only keep the old "@images" list (older builds read it); with other files too, "@attach" holds both.
+            bool userFiles = msg.Role == MessageRole.User && msg.AttachedFiles.Count > 0;
+            bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0 && !userFiles;
+            // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
+            bool agentMap = msg.AgentNodes != null;
+            object toolName = userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value;
+            object toolSummary = agentMap ? (object?)msg.AgentMapHeader ?? DBNull.Value : (object?)msg.ToolSummary ?? DBNull.Value;
+            object toolOutput = userFiles
+                ? System.Text.Json.JsonSerializer.Serialize(new AttachmentsRow { Images = msg.AttachedImages, Files = msg.AttachedFiles })
+                : userImages
+                ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
+                : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
+                : (object?)msg.ToolOutput ?? DBNull.Value;
+            rows.Add(new MessageRow(msg.Id, (int)msg.Role, msg.Content ?? "", msg.Timestamp.ToString("o"),
+                toolName, toolSummary, toolOutput, msg.ToolSuccess ? 1 : 0, msg.HasError ? 1 : 0, i));
+        }
+        return new SessionSnapshot(session.Id, session.Title, session.CreatedAt.ToString("o"), session.ProjectPath ?? "", rows);
+    }
+
+    /// <summary>Store a snapshot: the session row, and its messages replaced by the snapshot's. Any thread.</summary>
+    public void WriteSession(SessionSnapshot session)
     {
         using var conn = Open();
         using var tx = conn.BeginTransaction();
@@ -160,9 +210,9 @@ public sealed class DatabaseService : IDisposable
                         project_path = excluded.project_path;";
                 cmd.Parameters.AddWithValue("$id", session.Id);
                 cmd.Parameters.AddWithValue("$title", session.Title);
-                cmd.Parameters.AddWithValue("$created", session.CreatedAt.ToString("o"));
+                cmd.Parameters.AddWithValue("$created", session.CreatedAt);
                 cmd.Parameters.AddWithValue("$updated", DateTime.Now.ToString("o"));
-                cmd.Parameters.AddWithValue("$project", session.ProjectPath ?? "");
+                cmd.Parameters.AddWithValue("$project", session.ProjectPath);
                 cmd.ExecuteNonQuery();
             }
 
@@ -178,46 +228,40 @@ public sealed class DatabaseService : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            // Batch insert messages
-            for (int i = 0; i < session.Messages.Count; i++)
+            // Batch insert messages: one prepared command, its parameters rebound per row.
+            using (var cmd = conn.CreateCommand())
             {
-                var msg = session.Messages[i];
-                // Transient UI rows are not history. A permission prompt's Allow/Deny callback can't be persisted
-                // (a reloaded one would render as a dead button; the resulting tool action, with its diff, is
-                // saved separately). Status lines ("⏵ Reading…", "✓ N tokens · …") were saved as Assistant
-                // messages, reloaded, and sent back to the model as turns it never wrote.
-                if (msg.Role is MessageRole.PermissionRequest or MessageRole.AgentStatus or MessageRole.Thinking) continue;
-                using var cmd = conn.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
                     INSERT INTO messages (id, session_id, role, content, timestamp,
                         tool_name, tool_summary, tool_output, tool_success, has_error, sort_order)
                     VALUES ($id, $sid, $role, $content, $ts,
                         $tn, $tsm, $to, $tsuc, $err, $order);";
-                cmd.Parameters.AddWithValue("$id", msg.Id);
+                var pId = cmd.Parameters.Add("$id", SqliteType.Text);
                 cmd.Parameters.AddWithValue("$sid", session.Id);
-                cmd.Parameters.AddWithValue("$role", (int)msg.Role);
-                cmd.Parameters.AddWithValue("$content", msg.Content ?? "");
-                cmd.Parameters.AddWithValue("$ts", msg.Timestamp.ToString("o"));
-                // A user message's attached images ride in its (otherwise unused) tool columns — no schema change on
-                // a file that has been damaged before.
-                // Images only keep the old "@images" list (older builds read it); with other files too, "@attach" holds both.
-                bool userFiles = msg.Role == MessageRole.User && msg.AttachedFiles.Count > 0;
-                bool userImages = msg.Role == MessageRole.User && msg.AttachedImages.Count > 0 && !userFiles;
-                // …and an agent map card its nodes, the same way, so a reopened chat shows the card again.
-                bool agentMap = msg.AgentNodes != null;
-                cmd.Parameters.AddWithValue("$tn", userFiles ? AttachmentsTag : userImages ? AttachedImagesTag : agentMap ? AgentMapTag : (object?)msg.ToolName ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tsm", agentMap ? msg.AgentMapHeader : (object?)msg.ToolSummary ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$to", userFiles
-                    ? System.Text.Json.JsonSerializer.Serialize(new AttachmentsRow { Images = msg.AttachedImages, Files = msg.AttachedFiles })
-                    : userImages
-                    ? System.Text.Json.JsonSerializer.Serialize(msg.AttachedImages)
-                    : agentMap ? System.Text.Json.JsonSerializer.Serialize(msg.AgentNodes!.Select(AgentNodeRow.From).ToList())
-                    : (object?)msg.ToolOutput ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$tsuc", msg.ToolSuccess ? 1 : 0);
-                cmd.Parameters.AddWithValue("$err", msg.HasError ? 1 : 0);
-                cmd.Parameters.AddWithValue("$order", i);
-                cmd.ExecuteNonQuery();
+                var pRole = cmd.Parameters.Add("$role", SqliteType.Integer);
+                var pContent = cmd.Parameters.Add("$content", SqliteType.Text);
+                var pTs = cmd.Parameters.Add("$ts", SqliteType.Text);
+                var pTn = cmd.Parameters.Add("$tn", SqliteType.Text);
+                var pTsm = cmd.Parameters.Add("$tsm", SqliteType.Text);
+                var pTo = cmd.Parameters.Add("$to", SqliteType.Text);
+                var pTsuc = cmd.Parameters.Add("$tsuc", SqliteType.Integer);
+                var pErr = cmd.Parameters.Add("$err", SqliteType.Integer);
+                var pOrder = cmd.Parameters.Add("$order", SqliteType.Integer);
+                foreach (var m in session.Messages)
+                {
+                    pId.Value = m.Id;
+                    pRole.Value = m.Role;
+                    pContent.Value = m.Content;
+                    pTs.Value = m.Timestamp;
+                    pTn.Value = m.ToolName;
+                    pTsm.Value = m.ToolSummary;
+                    pTo.Value = m.ToolOutput;
+                    pTsuc.Value = m.ToolSuccess;
+                    pErr.Value = m.HasError;
+                    pOrder.Value = m.SortOrder;
+                    cmd.ExecuteNonQuery();
+                }
             }
 
             tx.Commit();
@@ -227,6 +271,15 @@ public sealed class DatabaseService : IDisposable
             tx.Rollback();
             throw;
         }
+    }
+
+    /// <summary>Housekeeping: let SQLite refresh its query statistics and fold the write-ahead log back into the
+    /// database file, truncating it (the -wal file otherwise stays as large as its biggest burst).</summary>
+    public void Maintain()
+    {
+        using var conn = Open();
+        Execute(conn, "PRAGMA optimize;");
+        Execute(conn, "PRAGMA wal_checkpoint(TRUNCATE);");
     }
 
     /// <summary>Load session list (metadata only, no messages) ordered by last updated.</summary>

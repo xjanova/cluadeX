@@ -600,11 +600,31 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
     public int SplitDepth
     {
         get => _splitDepth;
-        set { if (_splitDepth != value) { _splitDepth = value; Raise(nameof(SplitDepth)); Raise(nameof(SplitIndent)); } }
+        set { if (_splitDepth != value) { _splitDepth = value; Raise(nameof(SplitDepth)); Raise(nameof(SplitIndent)); Raise(nameof(IsTreeChild)); } }
     }
 
     /// <summary>The row's left indent for <see cref="SplitDepth"/>.</summary>
     public System.Windows.Thickness SplitIndent => new(Math.Min(_splitDepth, 4) * 14, 0, 0, 0);
+
+    /// <summary>It sits under another chat in the tree, so its row draws the line up to it. A split chat at the top (its
+    /// parent not in the list, or pinned on its own) has no line to draw.</summary>
+    public bool IsTreeChild => _splitDepth > 0;
+
+    private bool _isPinned;
+    /// <summary>Pinned to the top of the sidebar by the owner (kept in settings, not in the chat database).</summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        set { if (_isPinned != value) { _isPinned = value; Raise(nameof(IsPinned)); Raise(nameof(DateGroupLabel)); } }
+    }
+
+    private bool _hasWorkingSplits;
+    /// <summary>One of its split chats is working now: the branch badge twinkles (they work together).</summary>
+    public bool HasWorkingSplits
+    {
+        get => _hasWorkingSplits;
+        set { if (_hasWorkingSplits != value) { _hasWorkingSplits = value; Raise(nameof(HasWorkingSplits)); } }
+    }
 
     private string _splitSummary = "";
     /// <summary>On a chat that split work off: "↳ 3 split chats · 2 done · 1 put away". "" when none.</summary>
@@ -665,12 +685,13 @@ public class ChatSession : System.ComponentModel.INotifyPropertyChanged
         Raise(nameof(ParentId)); Raise(nameof(SplitTask)); Raise(nameof(IsSplit)); Raise(nameof(IsArchived));
     }
 
-    /// <summary>Display-only: the sidebar's group — today, yesterday, this week, earlier (in the UI language).</summary>
+    /// <summary>Display-only: the sidebar's group — pinned, today, yesterday, this week, earlier (in the UI language).</summary>
     public string DateGroupLabel
     {
         get
         {
             if (_groupOverride != null) return _groupOverride;
+            if (_isPinned) return CluadeX.Services.LocalizedResources.Instance["sidebar.group.pinned"];
             var day = UpdatedAt.Date;
             var today = DateTime.Today;
             string key = day >= today ? "sidebar.group.today"

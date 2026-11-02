@@ -511,7 +511,7 @@ public partial class ChatViewModel
     }
 
     /// <summary>Store a run's chat from its live list (it may not be the one on screen).</summary>
-    private void SaveRunChat(ChatRun run)
+    private void SaveRunChat(ChatRun run, bool background = false)
     {
         try
         {
@@ -522,7 +522,8 @@ public partial class ChatViewModel
             if (run.Session.Title == "New Chat" && run.Session.Messages.Count > 0)
                 run.Session.Title = ChatPersistenceService.GenerateTitle(run.Session.Messages);
             if (changed) TouchSession(run.Session);
-            _persistenceService.SaveSession(run.Session);
+            if (background) _persistenceService.SaveSessionInBackground(run.Session);
+            else _persistenceService.SaveSession(run.Session);
         }
         catch (Exception ex)
         {
@@ -531,14 +532,29 @@ public partial class ChatViewModel
     }
 
     /// <summary>Every run whose chat is not on screen, stored (autosave tick, app closing).</summary>
-    private void SaveBackgroundRuns()
+    private void SaveBackgroundRuns(bool background = false)
     {
-        // Only chats that gained rows since the last tick: each save rewrites the whole chat on the UI thread.
+        // Only chats that gained rows since the last tick: each save rewrites the whole chat.
         foreach (var run in _runs.Where(r => !ReferenceEquals(r.Session, CurrentSession) && r.Messages.Count != r.SavedCount).ToList())
         {
-            SaveRunChat(run);
+            SaveRunChat(run, background);
             run.SavedCount = run.Messages.Count;
         }
+    }
+
+    /// <summary>Ctrl+Alt+End (MainWindow.Hotkey): cancel every chat's run at once, without asking — the way out when an
+    /// agent is driving the user's mouse and keyboard. Returns how many runs were told to stop.</summary>
+    public int StopAllRuns()
+    {
+        int n = 0;
+        foreach (var run in _runs.ToList())
+        {
+            try { if (run.Cts is { } cts) { cts.Cancel(); n++; } }
+            catch (ObjectDisposedException) { }
+        }
+        if (n > 0) StatusText = Loc("desktop.hotkeyStopped");
+        _debugLog?.Info("Chat", $"Ctrl+Alt+End stopped {n} run(s)");
+        return n;
     }
 
     /// <summary>Stop the run of <paramref name="sessionId"/> (asks first) and wait for it to unwind. True when

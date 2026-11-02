@@ -70,6 +70,27 @@ public static class AmbientAnimation
             SetPaused(VisualTreeHelper.GetChild(root, i), paused, skip);
     }
 
+    /// <summary>The window was minimised (or came back): a minimised window shows nothing, yet every running
+    /// storyboard kept WPF's frame clock ticking — the sidebar's pulses, the split-chat twinkle, the buddy. Paused all
+    /// at once; on restore each resumes by its own rule (WhileVisible: if on screen, WhileActive: if the window is
+    /// active, anything else: as it was).</summary>
+    public static void SetMinimized(Window window, bool minimized)
+    {
+        void Walk(DependencyObject d)
+        {
+            if (d is FrameworkElement fe && fe.Triggers.Count > 0)
+            {
+                bool paused = minimized
+                    || (GetWhileVisible(fe) && !fe.IsVisible)
+                    || (GetWhileActive(fe) && !window.IsActive);
+                SetOwnPaused(fe, paused);
+            }
+            int count = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetChildrenCount(d) : 0;
+            for (int i = 0; i < count; i++) Walk(VisualTreeHelper.GetChild(d, i));
+        }
+        Walk(window);
+    }
+
     private static void SetOwnPaused(FrameworkElement fe, bool paused) =>
         ForEachStoryboard(fe, sb => { if (paused) sb.Pause(fe); else sb.Resume(fe); });
 

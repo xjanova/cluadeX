@@ -311,7 +311,15 @@ public partial class ChatViewModel
         if (!string.IsNullOrWhiteSpace(model))
             return new McpTaskOutcome("Picking a model changes the model box the owner is using, nothing was sent: pass focus: true to open the chat and pick it.", IsError: true);
 
-        var stored = await Task.Run(() => _persistenceService.LoadSession(chat.Id));
+        var (stored, unread) = await Task.Run(() =>
+        {
+            var s = _persistenceService.LoadSession(chat.Id);
+            return (s, s == null && _persistenceService.SessionHasMessages(chat.Id));
+        });
+        // Rows that exist but did not load (a busy database): the sidebar's copy holds none, and the run's save would
+        // store the new message as the whole chat.
+        if (unread)
+            return new McpTaskOutcome($"The chat '{chat.Title}' could not be read just now, nothing was sent: try again.", IsError: true);
         var dispatcher = Application.Current.Dispatcher;
         TaskCompletionSource? turn = null;
         ChatRun? run = null;

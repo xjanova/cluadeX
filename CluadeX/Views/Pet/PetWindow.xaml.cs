@@ -129,7 +129,9 @@ public partial class PetWindow : Window
         double now = Now, dt = Math.Min(0.05, now - _last);
         _last = now;
 
-        if (now >= _scanAt) { Scan(); _scanAt = now + 0.4; }
+        // The scan (every window's bounds, the caret, CluadeX's own input boxes) runs on the UI thread: 0.4 s while the
+        // pet moves and needs fresh floors, 1.5 s while it sits, sleeps or hides behind a full-screen app.
+        if (now >= _scanAt) { Scan(); _scanAt = now + (_tick.Interval.TotalMilliseconds >= 100 ? 1.5 : 0.4); }
         if (_hiddenForFullScreen) { SetPace(500); return; }
 
         // The button is no longer down but no release reached us (it went to a window that popped up): let go.

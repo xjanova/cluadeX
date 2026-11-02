@@ -131,11 +131,14 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// it. <paramref name="GateToken"/>: what the spawn hook shows the app. <paramref name="BudgetLeftUsd"/>: the CLI's own
     /// hard stop, where it has one.</summary>
     public sealed record TurnExtras(string? ToolsConfig, IReadOnlyList<string> AddDirs, string? BrowserRefusal = null,
-        Func<Agents.DispatchDecision>? Dispatch = null, string? GateToken = null, decimal? BudgetLeftUsd = null);
+        Func<Agents.DispatchDecision>? Dispatch = null, string? GateToken = null, decimal? BudgetLeftUsd = null,
+        string? DesktopRefusal = null);
 
-    /// <summary>The browser line for a CLI's wrapper: only when the turn has CluadeX's MCP server. Null = none.</summary>
+    /// <summary>The browser and desktop lines for a CLI's wrapper: only when the turn has CluadeX's MCP server. Null = none.</summary>
     public static string? BrowserHintFor(TurnExtras? extras, bool claudeNames = false) =>
-        string.IsNullOrWhiteSpace(extras?.ToolsConfig) ? null : Tools.ChatToolBridge.BrowserHint(extras.BrowserRefusal, claudeNames);
+        string.IsNullOrWhiteSpace(extras?.ToolsConfig) ? null
+            : Tools.ChatToolBridge.BrowserHint(extras.BrowserRefusal, claudeNames) + " "
+              + Tools.ChatToolBridge.DesktopHint(extras.DesktopRefusal, claudeNames);
 
     /// <summary>The extras for the turn in flight (set by the agent loop around its one delegated call).</summary>
     public static readonly AsyncLocal<TurnExtras?> Extras = new();
@@ -195,7 +198,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
     /// <param name="budgetUsd">The most the turn may spend, sub-agents included (null = no limit).</param>
     public static string BuildArgs(string cwd, WorkerGrant? grant, string model, string effort,
         string? toolsConfig = null, IReadOnlyList<string>? addDirs = null, bool allLevels = false, string? codeComments = null,
-        string? browserRefusal = null, Agents.DispatchDecision? dispatch = null, decimal? budgetUsd = null)
+        string? browserRefusal = null, Agents.DispatchDecision? dispatch = null, decimal? budgetUsd = null,
+        string? desktopRefusal = null)
     {
         bool worker = grant is { Edit: true } || grant is { Run: true };
         addDirs ??= Array.Empty<string>();
@@ -207,7 +211,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
                   "mcp__cluadex__new_chat; a new, independent request that arrives mid-task goes to its own chat with new_chat too, " +
                   "and mcp__cluadex__close_chat lists the chats you split off and puts finished ones away. Never answer that you " +
                   "cannot open a chat or a folder. AskUserQuestion and mcp__cluadex__ask_user both show the user a question card. " +
-                  Tools.ChatToolBridge.BrowserHint(browserRefusal, claudeNames: true) + " "
+                  Tools.ChatToolBridge.BrowserHint(browserRefusal, claudeNames: true) + " " +
+                  Tools.ChatToolBridge.DesktopHint(desktopRefusal, claudeNames: true) + " "
                 : "") +
             "Other agents on this machine: task_queue / agent_inbox show work waiting, task_handoff hands a task to another agent, " +
             "cowork_* is the shared room (brainx-brain tools). ";
@@ -552,7 +557,8 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         if (ReportedCliVersion == null && !_versionProbed) { _versionProbed = true; await ProbeCliVersionAsync(ct); }
         bool allLevels = CliTakesAllLevels(ReportedCliVersion);
         string args = BuildArgs(cwd, grant, model, effort, extras?.ToolsConfig, TurnAddDirs(extras), allLevels,
-            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd);
+            CodeCommentPolicy.InstructionFor(_settingsService.Settings, cwd), extras?.BrowserRefusal, dispatch, extras?.BudgetLeftUsd,
+            extras?.DesktopRefusal);
         // The level the chat shows next to the picker: the one sent; the CLI's hooks then say what it really ran at.
         string sentEffort = SentEffort(effort, allLevels);
         if (effortScope != null) effortScope.LiveEffort = sentEffort;
@@ -602,6 +608,7 @@ public class ClaudeDevProvider : IAiProvider, IDelegatedCliProvider
         try
         {
             proc = Process.Start(psi);
+            Background.AppChildren.Adopt(proc);
             if (proc == null)
             {
                 OnError?.Invoke("Failed to start the Claude Code CLI");

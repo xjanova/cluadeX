@@ -849,12 +849,60 @@
                                                 <!-- The tree line of a split chat: ├ (the line goes on to the next split chat) or ╰ (the last one) — a rounded
                                                      elbow from the parent's line into this row's status dot. -->
                                                 <Grid Width="13" HorizontalAlignment="Left" Margin="-9,0,0,0" IsHitTestVisible="False"
-                                                      Visibility="{Binding IsSplit, Converter={StaticResource BoolVis}}">
+                                                      Visibility="{Binding IsTreeChild, Converter={StaticResource BoolVis}}">
                                                     <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                                                     <Border Grid.RowSpan="2" Width="1.5" HorizontalAlignment="Left" Background="{DynamicResource Border.Strong}"
                                                             Visibility="{Binding IsLastSplit, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                                                     <Border Grid.Row="0" BorderBrush="{DynamicResource Border.Strong}" BorderThickness="1.5,0,0,1.5"
                                                             CornerRadius="0,0,0,7" Margin="0,0,0,-0.75"/>
+                                                    <!-- working: the line lights up in the accent and twinkles, with a spark where it reaches the chat —
+                                                         the two chats work together (owner 2026-11-02: "อนิเมชั่นวิบวับนิดๆ"). Paused while not on screen. -->
+                                                    <Grid Grid.RowSpan="2" views:AmbientAnimation.WhileVisible="True">
+                                                        <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                                        <Grid.Style>
+                                                            <Style TargetType="Grid">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding RunStatus}" Value="working">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Grid.Style>
+                                                        <Border x:Name="LiveStem" Grid.RowSpan="2" Width="1.5" HorizontalAlignment="Left" Background="{DynamicResource Accent.1}"
+                                                                Visibility="{Binding IsLastSplit, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
+                                                        <Border x:Name="LiveElbow" Grid.Row="0" BorderBrush="{DynamicResource Accent.1}" BorderThickness="1.5,0,0,1.5"
+                                                                CornerRadius="0,0,0,7" Margin="0,0,0,-0.75"/>
+                                                        <Ellipse x:Name="LiveSpark" Grid.Row="0" Width="4" Height="4" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                                 Margin="0,0,-1.5,-2.75" Fill="{DynamicResource Accent.1}" Opacity="0" RenderTransformOrigin="0.5,0.5">
+                                                            <Ellipse.RenderTransform><ScaleTransform ScaleX="0.4" ScaleY="0.4"/></Ellipse.RenderTransform>
+                                                        </Ellipse>
+                                                        <Grid.Triggers>
+                                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                <BeginStoryboard x:Name="AmbientLink">
+                                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30">
+                                                                        <DoubleAnimation Storyboard.TargetName="LiveElbow" Storyboard.TargetProperty="Opacity" From="1" To="0.3" Duration="0:0:0.9" AutoReverse="True"/>
+                                                                        <DoubleAnimation Storyboard.TargetName="LiveStem" Storyboard.TargetProperty="Opacity" From="1" To="0.3" Duration="0:0:0.9" AutoReverse="True"/>
+                                                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetName="LiveSpark" Storyboard.TargetProperty="Opacity" Duration="0:0:1.8">
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0"/>
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0.35" Value="1"/>
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0.9" Value="0"/>
+                                                                        </DoubleAnimationUsingKeyFrames>
+                                                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetName="LiveSpark" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)" Duration="0:0:1.8">
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.4"/>
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0.35" Value="1.5"/>
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0.9" Value="0.4"/>
+                                                                        </DoubleAnimationUsingKeyFrames>
+                                                                        <DoubleAnimationUsingKeyFrames Storyboard.TargetName="LiveSpark" Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)" Duration="0:0:1.8">
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0" Value="0.4"/>
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0.35" Value="1.5"/>
+                                                                            <LinearDoubleKeyFrame KeyTime="0:0:0.9" Value="0.4"/>
+                                                                        </DoubleAnimationUsingKeyFrames>
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </EventTrigger>
+                                                        </Grid.Triggers>
+                                                    </Grid>
                                                 </Grid>
                                                 <Button Command="{Binding DataContext.ChatVM.LoadSessionCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding Id}"
@@ -956,6 +1004,20 @@
                                                         </Border>
                                                         <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="4,0,0,0" VerticalAlignment="Center"
                                                                     Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}">
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.TogglePinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.pinTip}"
+                                                                    Visibility="{Binding IsPinned, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                                                <TextBlock Text="&#xE718;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.TogglePinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.unpinTip}"
+                                                                    Visibility="{Binding IsPinned, Converter={StaticResource BoolVis}}">
+                                                                <TextBlock Text="&#xE77A;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Accent.1}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
                                                             <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
                                                                     Command="{Binding DataContext.ChatVM.ArchiveSplitCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding Id}" ToolTip="{services:Loc chat.split.archiveTip}"
@@ -1078,6 +1140,22 @@
                                                                 <Grid DockPanel.Dock="Right" Margin="6,0,0,0" VerticalAlignment="Center" ToolTip="{Binding SplitSummary}"
                                                                       Visibility="{Binding HasOpenSplits, Converter={StaticResource BoolVis}}">
                                                                     <Border CornerRadius="6" Background="{DynamicResource Accent.2}" Opacity="0.16"/>
+                                                                    <!-- a split chat works now: the badge's rim twinkles (they work together) -->
+                                                                    <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource Accent.2}"
+                                                                            views:AmbientAnimation.WhileVisible="True"
+                                                                            Visibility="{Binding HasWorkingSplits, Converter={StaticResource BoolVis}}">
+                                                                        <Border.Triggers>
+                                                                            <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                                                                                <BeginStoryboard x:Name="AmbientBadge">
+                                                                                    <Storyboard RepeatBehavior="Forever" Timeline.DesiredFrameRate="30" AutoReverse="True">
+                                                                                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.15" Duration="0:0:0.9">
+                                                                                            <DoubleAnimation.EasingFunction><SineEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                                                        </DoubleAnimation>
+                                                                                    </Storyboard>
+                                                                                </BeginStoryboard>
+                                                                            </EventTrigger>
+                                                                        </Border.Triggers>
+                                                                    </Border>
                                                                     <StackPanel Orientation="Horizontal" Margin="5,1,6,1">
                                                                         <Path Width="11" Height="12" Margin="0,0,3,0" VerticalAlignment="Center" Stretch="None"
                                                                               Stroke="{DynamicResource Accent.2}" StrokeThickness="1.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
@@ -1127,6 +1205,21 @@
                                                                    Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}, ConverterParameter=Invert}"/>
                                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Top"
                                                                     Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}, Converter={StaticResource BoolVis}}">
+                                                            <!-- pin to the top / unpin -->
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.TogglePinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.pinTip}"
+                                                                    Visibility="{Binding IsPinned, Converter={StaticResource BoolVis}, ConverterParameter=Invert}">
+                                                                <TextBlock Text="&#xE718;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Text.Muted}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                                    Command="{Binding DataContext.ChatVM.TogglePinCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding Id}" ToolTip="{services:Loc sidebar.unpinTip}"
+                                                                    Visibility="{Binding IsPinned, Converter={StaticResource BoolVis}}">
+                                                                <TextBlock Text="&#xE77A;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{DynamicResource Accent.1}"
+                                                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Button>
                                                             <!-- a chat that split work off: put away its finished split chats -->
                                                             <Button Width="20" Height="20" Background="Transparent" BorderThickness="0" Cursor="Hand"
                                                                     Command="{Binding DataContext.ChatVM.ArchiveFinishedSplitsCommand, RelativeSource={RelativeSource AncestorType=Window}}"

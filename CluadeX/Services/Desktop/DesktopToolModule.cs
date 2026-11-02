@@ -23,7 +23,7 @@ namespace CluadeX.Services.Desktop;
 /// windows, the secure desktop and CluadeX's own approval UI are refused whatever the rules say. Every action is
 /// logged with app, action and element name (never the typed text). The run's Stop cancels waits and launches.
 /// </summary>
-public sealed class DesktopToolModule : IAgentToolModule
+public sealed partial class DesktopToolModule : IAgentToolModule
 {
     private readonly SettingsService? _settings;
     private readonly ToolImageStore? _images;
@@ -56,6 +56,10 @@ public sealed class DesktopToolModule : IAgentToolModule
         [ToolType.DesktopKeys] = "desktop_keys",
         [ToolType.DesktopLaunch] = "desktop_launch",
         [ToolType.DesktopWait] = "desktop_wait",
+        [ToolType.DesktopMouse] = "desktop_mouse",
+        [ToolType.DesktopWindowAction] = "desktop_window",
+        [ToolType.DesktopRead] = "desktop_read",
+        [ToolType.DesktopClipboard] = "desktop_clipboard",
     };
 
     private static readonly Dictionary<string, ToolType> ByName = BuildByName();
@@ -73,18 +77,33 @@ public sealed class DesktopToolModule : IAgentToolModule
         d["desktop_press"] = ToolType.DesktopKeys;
         d["desktop_start"] = ToolType.DesktopLaunch;
         d["desktop_wait_for"] = ToolType.DesktopWait;
+        d["desktop_drag"] = ToolType.DesktopMouse;
+        d["desktop_move_mouse"] = ToolType.DesktopMouse;
+        d["desktop_scroll"] = ToolType.DesktopMouse;
+        d["desktop_focus"] = ToolType.DesktopWindowAction;
+        d["desktop_window_action"] = ToolType.DesktopWindowAction;
+        d["desktop_text"] = ToolType.DesktopRead;
+        d["desktop_get_text"] = ToolType.DesktopRead;
         return d;
     }
 
     public IReadOnlyCollection<ToolType> ToolTypes => Names.Keys;
 
-    /// <summary>Testing a desktop app is project work; a plain chat does not pay for nine schemas.</summary>
-    public bool WorksWithoutProject => false;
+    /// <summary>Driving the PC is not project work: "open Notepad and …" in a plain chat needs it too (owner 2026-11-02:
+    /// "อย่ากั๊กเครื่องมือกัน"). The schemas are deferred for a model with tool search.</summary>
+    public bool WorksWithoutProject => true;
 
     public ToolType? ResolveToolType(string toolName) =>
         !string.IsNullOrWhiteSpace(toolName) && ByName.TryGetValue(toolName.Trim(), out var t) ? t : null;
 
     public static string NameOf(ToolType t) => Names.TryGetValue(t, out var n) ? n : t.ToString();
+
+    /// <summary>The tools' names — what Tools.ChatToolBridge offers every CLI agent beside the browser's.</summary>
+    public static IReadOnlyCollection<string> ToolNames => Names.Values;
+
+    /// <summary>The tool a name means (its aliases included), without a module instance: the CLI bridge holds none.</summary>
+    public static ToolType? TypeOf(string? toolName) =>
+        !string.IsNullOrWhiteSpace(toolName) && ByName.TryGetValue(toolName.Trim(), out var t) ? t : null;
 
     public IReadOnlyCollection<string> LocalCoreToolNames { get; } = Array.Empty<string>();
 
@@ -109,16 +128,20 @@ public sealed class DesktopToolModule : IAgentToolModule
         ("handle", "string", "Window handle from desktop_windows (0x…)", false),
     };
 
-    public IEnumerable<ToolSchema> GetToolSchemas()
+    public IEnumerable<ToolSchema> GetToolSchemas() => Schemas();
+
+    /// <summary>The schemas without a module instance — the CLI bridge's tools/list uses the very same list.</summary>
+    public static IEnumerable<ToolSchema> Schemas()
     {
         yield return Schema("desktop_windows",
             "List the top-level windows on this PC (front first): handle, title, process, pid, bounds in screen pixels, which is in front.",
             P("filter", "string", "Only windows whose title or process contains this (or /regex/)"));
         yield return Schema("desktop_screenshot",
-            "Capture one window (even if covered) or a screen region as PNG; saved to disk and attached as an image. Physical pixels, all monitors (coordinates may be negative).",
+            "Capture one window (even if covered), a whole monitor (screen) or a screen region as PNG; saved to disk and attached as an image. Physical pixels, all monitors (coordinates may be negative). With no target it captures the front window.",
             Target.Concat(new[]
             {
                 P("region", "string", "'x,y,width,height' in screen pixels instead of a window"),
+                P("screen", "string", "'all' for every monitor, 'primary', or a monitor number (1 = primary) instead of a window"),
                 P("max_edge", "integer", "Longest edge of the image sent to you (default 1568; the PNG on disk is full size)"),
             }).ToArray());
         yield return Schema("desktop_inspect",
@@ -170,6 +193,7 @@ public sealed class DesktopToolModule : IAgentToolModule
                 P("state", "string", "appear (default) | disappear"),
                 P("timeout_ms", "integer", "Default 10000, max 120000"),
             }).ToArray());
+        foreach (var extra in MoreSchemas()) yield return extra;
     }
 
     private static (string, string, string, bool) P(string name, string type, string desc, bool required = false) => (name, type, desc, required);
@@ -198,6 +222,7 @@ public sealed class DesktopToolModule : IAgentToolModule
     public ToolPermission DescribePermission(ToolCall call, ToolModuleContext context)
     {
         if (call.Type == ToolType.DesktopWindows) return ToolPermission.Free("desktop", "(window list)");
+        if (call.Type == ToolType.DesktopMouse && MouseAction(call) == "position") return ToolPermission.Free("desktop", "(cursor position)");
         string? app;
         string? detail = null;
         if (call.Type == ToolType.DesktopLaunch)
@@ -210,7 +235,9 @@ public sealed class DesktopToolModule : IAgentToolModule
         {
             app = AppOf(call, context);
             if (app == null) return ToolPermission.Free("desktop", "(no target)");   // the call fails on its own
-            detail = string.Format(L("desktop.perm.act"), app, NameOf(call.Type));
+            detail = call.Type == ToolType.DesktopClipboard
+                ? L(ClipboardWrites(call) ? "desktop.perm.clipboardSet" : "desktop.perm.clipboardGet")
+                : string.Format(L("desktop.perm.act"), app, NameOf(call.Type));
         }
         if (string.IsNullOrWhiteSpace(app)) app = "unknown";
         _judged.AddOrUpdate(call, app);
@@ -239,9 +266,12 @@ public sealed class DesktopToolModule : IAgentToolModule
         try
         {
             using var dpi = DesktopNative.PerMonitorDpi();
+            if (call.Type == ToolType.DesktopClipboard) return "clipboard";
+            if (call.Type == ToolType.DesktopMouse) return MouseTarget(call, context)?.ProcessName;
             if (_uia.Lookup(context.SessionKey, call.GetArg("ref")) is { } r) return r.ProcessName;
-            if (call.Type == ToolType.DesktopScreenshot && !string.IsNullOrWhiteSpace(call.GetArg("region")) && !HasTarget(call)) return "screen";
-            bool fgDefault = call.Type is ToolType.DesktopKeys or ToolType.DesktopType;
+            if (call.Type == ToolType.DesktopScreenshot && !HasTarget(call)
+                && (!string.IsNullOrWhiteSpace(call.GetArg("region")) || !string.IsNullOrWhiteSpace(call.GetArg("screen")))) return "screen";
+            bool fgDefault = call.Type is ToolType.DesktopKeys or ToolType.DesktopType or ToolType.DesktopScreenshot;
             if (call.Type == ToolType.DesktopWait && !HasTarget(call)) return null;
             return DesktopWindows.Resolve(call.GetArg("handle"), call.GetArg("pid"), call.GetArg("title"), fgDefault, out _)?.ProcessName;
         }
@@ -269,6 +299,8 @@ public sealed class DesktopToolModule : IAgentToolModule
             // UI thread; a delete aimed at a drive, the root or a home folder goes ahead only on the user's yes (red prompt).
             string? typed = call.Type == ToolType.DesktopType ? call.GetArg("text")
                 : call.Type == ToolType.DesktopAct && call.GetArg("action").Trim().ToLowerInvariant().Replace('-', '_') is "set_value" or "setvalue" or "set" ? call.GetArg("value")
+                // Clipboard text is one ctrl+v away from a console: checked like typed text.
+                : call.Type == ToolType.DesktopClipboard && ClipboardWrites(call) ? call.GetArg("text")
                 : null;
             if (!string.IsNullOrEmpty(typed)
                 && await Safety.DangerApproval.GateAsync(call.ToolName, typed,
@@ -285,6 +317,10 @@ public sealed class DesktopToolModule : IAgentToolModule
                 ToolType.DesktopKeys => await Ui(() => Keys(call, context, ct), ct, 60_000),
                 ToolType.DesktopLaunch => await LaunchAsync(call, context, ct),
                 ToolType.DesktopWait => await WaitAsync(call, context, ct),
+                ToolType.DesktopMouse => await Ui(() => MouseTool(call, context, ct), ct, 60_000),
+                ToolType.DesktopWindowAction => await Ui(() => WindowTool(call), ct),
+                ToolType.DesktopRead => await Ui(() => ReadTool(call, context), ct, 60_000),
+                ToolType.DesktopClipboard => await ClipboardAsync(call, ct),
                 _ => Fail(call, string.Format(L("tool.module.unavailable"), call.ToolName, Id)),
             };
         }
@@ -294,6 +330,7 @@ public sealed class DesktopToolModule : IAgentToolModule
         catch (InvalidOperationException ex) when (ex.Message == "stale") { return Fail(call, Stale(call.GetArg("ref"))); }
         catch (InvalidOperationException ex) { return Fail(call, ex.Message); }
         catch (ArgumentException ex) when (ex.Message == "bad_action") { return Fail(call, $"Unknown action \"{call.GetArg("action")}\". Use invoke, select, toggle, expand, collapse, set_value, scroll, focus, click, double_click or right_click."); }
+        catch (System.Runtime.InteropServices.ExternalException ex) { return Fail(call, $"{call.ToolName}: {ex.Message}"); }
         catch (ArgumentException ex) { return Fail(call, ex.Message); }
         catch (Exception ex)
         {
@@ -351,13 +388,25 @@ public sealed class DesktopToolModule : IAgentToolModule
 
     // ── target resolution ──
 
-    private static DesktopWindow ResolveWindow(ToolCall call, bool foregroundDefault = false)
+    private DesktopWindow ResolveWindow(ToolCall call, bool foregroundDefault = false)
     {
         var w = DesktopWindows.Resolve(call.GetArg("handle"), call.GetArg("pid"), call.GetArg("title"), foregroundDefault, out var err);
         if (w == null) throw new InvalidOperationException(err ?? "No such window.");
-        if (DesktopSafety.CredentialWindowRefusal(w) is { } cr) throw new InvalidOperationException(cr);
+        CheckWindow(w);
         return w;
     }
+
+    /// <summary>Throws when a window is off limits: a credential window, or an app on the user's blocked list.</summary>
+    private void CheckWindow(DesktopWindow w)
+    {
+        if (DesktopSafety.CredentialWindowRefusal(w) is { } cr) throw new InvalidOperationException(cr);
+        if (DesktopSafety.BlockedAppRefusal(w.ProcessName, _settings?.Settings.DesktopBlockedApps) is { } bl) throw new InvalidOperationException(bl);
+    }
+
+    /// <summary>Whether a window is off limits (see <see cref="CheckWindow"/>), without throwing.</summary>
+    private bool OffLimits(DesktopWindow w) =>
+        DesktopSafety.IsCredentialWindow(w.ProcessName, w.ClassName, w.Title)
+        || DesktopSafety.BlockedAppRefusal(w.ProcessName, _settings?.Settings.DesktopBlockedApps) != null;
 
     private DesktopRef RefOf(ToolCall call, ToolModuleContext context)
     {
@@ -367,7 +416,8 @@ public sealed class DesktopToolModule : IAgentToolModule
                     ? "Give a ref (e12) from desktop_inspect or desktop_find."
                     : $"Unknown ref {id}. Refs come from desktop_inspect / desktop_find in this chat.");
         if (!DesktopAutomation.IsAlive(r.Element)) throw new InvalidOperationException("stale");
-        if (DesktopWindows.Describe(r.Window) is { } w && DesktopSafety.CredentialWindowRefusal(w) is { } cr) throw new InvalidOperationException(cr);
+        if (DesktopWindows.Describe(r.Window) is { } w) CheckWindow(w);
+        else if (DesktopSafety.BlockedAppRefusal(r.ProcessName, _settings?.Settings.DesktopBlockedApps) is { } bl) throw new InvalidOperationException(bl);
         return r;
     }
 
@@ -391,6 +441,8 @@ public sealed class DesktopToolModule : IAgentToolModule
         var (shot, what, app) = await Ui(() =>
         {
             string region = call.GetArg("region").Trim();
+            string screen = call.GetArg("screen").Trim();
+            if (screen.Length > 0 && region.Length == 0 && !HasTarget(call)) region = ScreenRegion(screen);
             if (region.Length > 0 && !HasTarget(call))
             {
                 var n = region.Split(new[] { ',', ' ', 'x' }, StringSplitOptions.RemoveEmptyEntries)
@@ -399,12 +451,13 @@ public sealed class DesktopToolModule : IAgentToolModule
                     throw new ArgumentException("region is 'x,y,width,height' in screen pixels, e.g. '-1920,0,800,600'.");
                 // A region that covers a credential window is still a picture of it.
                 foreach (var w in DesktopWindows.List())
-                    if (DesktopSafety.IsCredentialWindow(w.ProcessName, w.ClassName, w.Title)
+                    if (!w.IsMinimized && OffLimits(w)
                         && w.X < n[0]!.Value + n[2]!.Value && n[0]!.Value < w.X + w.Width && w.Y < n[1]!.Value + n[3]!.Value && n[1]!.Value < w.Y + w.Height)
-                        throw new InvalidOperationException(DesktopSafety.CredentialWindowRefusal(w)!);
-                return (DesktopCapture.CaptureRegion(n[0]!.Value, n[1]!.Value, n[2]!.Value, n[3]!.Value), $"screen region {region}", "screen");
+                        CheckWindow(w);
+                return (DesktopCapture.CaptureRegion(n[0]!.Value, n[1]!.Value, n[2]!.Value, n[3]!.Value),
+                        screen.Length > 0 ? $"screen {screen} ({region})" : $"screen region {region}", "screen");
             }
-            var win = ResolveWindow(call);
+            var win = ResolveWindow(call, foregroundDefault: true);
             return (DesktopCapture.CaptureWindow(win.Handle), $"window \"{DesktopWindows.Trunc(win.Title, 80)}\" ({win.ProcessName}, {win.HandleText})", win.ProcessName);
         }, ct);
         Log("desktop_screenshot", app, "capture", null);
@@ -414,6 +467,7 @@ public sealed class DesktopToolModule : IAgentToolModule
         catch (Exception ex) { saveNote = "not saved: " + ex.Message; }
 
         var decoded = await ImageCodec.ProcessAsync(shot.Png, "image/png", maxEdge);
+        if (decoded.Image is { } sent) RememberShot(context.SessionKey, shot, sent.Width, sent.Height);
         var sb = new StringBuilder();
         sb.Append($"Screenshot of {what}: {shot.Width}x{shot.Height} physical px, top-left at screen ({shot.ScreenX},{shot.ScreenY}) [{shot.Method}].\n");
         if (path != null) sb.Append("PNG saved at ").Append(path).Append('\n');
@@ -563,7 +617,7 @@ public sealed class DesktopToolModule : IAgentToolModule
             window = DesktopAutomation.TopLevelOf(target) ?? DesktopNative.GetForegroundWindow();
         }
         var win = DesktopWindows.Describe(window) ?? throw new InvalidOperationException("The target window is gone.");
-        if (DesktopSafety.CredentialWindowRefusal(win) is { } cr) throw new InvalidOperationException(cr);
+        CheckWindow(win);
         if (DesktopSafety.GuardRefusal(target) is { } g) throw new InvalidOperationException(g);
         if (DesktopSafety.PasswordRefusal(target) is { } pw) throw new InvalidOperationException(pw);
 
@@ -642,7 +696,7 @@ public sealed class DesktopToolModule : IAgentToolModule
         }
         else window = ResolveWindow(call, foregroundDefault: true).Handle;
         var win = DesktopWindows.Describe(window) ?? throw new InvalidOperationException("The window is gone.");
-        if (DesktopSafety.CredentialWindowRefusal(win) is { } cr) throw new InvalidOperationException(cr);
+        CheckWindow(win);
 
         int sent = 0;
         for (int i = 0; i < repeat; i++)
@@ -740,7 +794,7 @@ public sealed class DesktopToolModule : IAgentToolModule
             {
                 var w = DesktopWindows.Resolve(call.GetArg("handle"), call.GetArg("pid"), call.GetArg("title"), false, out _);
                 if (w == null) return (false, (string?)null);
-                if (DesktopSafety.CredentialWindowRefusal(w) is { } cr) throw new InvalidOperationException(cr);
+                CheckWindow(w);
                 if (!element) return (true, w.Format());
                 var found = _uia.Find(context.SessionKey, DesktopAutomation.WindowElement(w.Handle), w.Handle, w.ProcessId, w.ProcessName, q, 1, ct);
                 return found.Count > 0 ? (true, DesktopAutomation.Describe(found[0])) : (false, (string?)null);

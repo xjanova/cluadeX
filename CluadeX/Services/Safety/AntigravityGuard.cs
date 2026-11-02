@@ -74,11 +74,12 @@ public static class AntigravityGuard
 
         if (ReadTools.Contains(tool)) return new Decision(Verdict.Allow, null, who);
 
-        // Asking the user changes nothing, so a read-only chat may ask too. CluadeX's browser tools pass in any chat like
+        // Asking the user changes nothing, so a read-only chat may ask too. CluadeX's browser and desktop tools pass in any chat like
         // on the other CLIs: each runs through CluadeX's own gate inside the call (Dev Preview, the site's permission card,
         // the user's rules) — the same answer a native call gets, so this hook adds no second question.
         if (tool == McpTool && IsCluadexServer(Str(args, "ServerName"))
-            && (Str(args, "ToolName") is { } own && (own == Tools.ChatToolBridge.AskToolName || Browser.BrowserToolModule.ToolNames.Contains(own))))
+            && (Str(args, "ToolName") is { } own && (own == Tools.ChatToolBridge.AskToolName || Browser.BrowserToolModule.ToolNames.Contains(own)
+                || Desktop.DesktopToolModule.ToolNames.Contains(own))))
             return new Decision(Verdict.Allow, null, who);
 
         if (tool == McpTool)

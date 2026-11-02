@@ -618,6 +618,13 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding DesktopControlEnabled}" VerticalAlignment="Center" Margin="16,0,0,0"/>
                                 </Grid>
+                                <StackPanel Margin="0,12,0,0">
+                                    <TextBlock Text="{services:Loc settings.desktopBlocked}" Style="{StaticResource SettingLabel}"/>
+                                    <TextBlock Text="{services:Loc settings.desktopBlockedDesc}" Style="{StaticResource SettingDesc}"/>
+                                    <TextBox Text="{Binding DesktopBlockedAppsText}" Style="{StaticResource WideBox}"
+                                             FontFamily="{DynamicResource Font.Mono.Display}" Margin="0,4,0,0"/>
+                                    <TextBlock Text="{services:Loc settings.desktopHotkey}" Style="{StaticResource SettingDesc}" Margin="0,8,0,0"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 

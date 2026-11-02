@@ -161,6 +161,12 @@ public enum ToolType
     ReadDocument,      // Text of a PDF / Word / Excel / PowerPoint / text file, a slice at a time
     ExtractArchive,    // Unpack a zip / tar / tar.gz / gz safely
     CopyFile,          // Copy a file or folder (an attachment) into the project
+
+    // Desktop control, second set (Services/Desktop) — appended last: a ToolType is stored by number
+    DesktopMouse,        // Real mouse at a screen point: move, click, double / right / middle click, drag, scroll
+    DesktopWindowAction, // focus / maximize / minimize / restore / move / resize / close a window
+    DesktopRead,         // An element's whole text (Text / Value pattern), a page at a time
+    DesktopClipboard,    // Read or set the clipboard's text
 }
 
 /// <summary>
@@ -199,7 +205,7 @@ public class ToolCall
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
         or ToolType.BrowserRead or ToolType.BrowserFind
-        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind => true,
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead => true,
         _ => false,
     };
 
@@ -218,7 +224,7 @@ public class ToolCall
         or ToolType.BgOutput or ToolType.BgList
         or ToolType.BrowserScreenshot or ToolType.BrowserConsole or ToolType.BrowserNetwork
         or ToolType.BrowserRead or ToolType.BrowserFind
-        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind => true,
+        or ToolType.DesktopWindows or ToolType.DesktopInspect or ToolType.DesktopFind or ToolType.DesktopRead => true,
         _ => false,
     };
 }

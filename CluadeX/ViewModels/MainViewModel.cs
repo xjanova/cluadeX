@@ -598,7 +598,8 @@ public class MainViewModel : ViewModelBase
                 GpuLiveStats? stats;
                 try { stats = _gpuDetectionService.GetLiveStats(); }
                 finally { Interlocked.Exchange(ref _gpuPollBusy, 0); }
-                App.Current?.Dispatcher.Invoke(() =>
+                // BeginInvoke: the pool thread has no reason to wait for the UI to draw the chart.
+                App.Current?.Dispatcher.BeginInvoke(() =>
                 {
                     if (stats == null)
                     {
