@@ -49,6 +49,7 @@ The workbench left panel is a three-mode activity bar: **EXPLORER | SEARCH | DEB
 | Autocomplete | `Ctrl+Space` | also auto-opens after 2 chars |
 | Side-by-side diff | diff button in Source Control | HEAD vs working tree |
 | Breakpoints | click the editor gutter | |
+| Live errors + hover | status-bar ⊗/⚠ count → Problems | real language server per project (`Services/Lsp/`) |
 
 **Design rule these all follow — no dead buttons.** Nothing here requires an install to be useful:
 navigation/search/rename/completion work off a bounded workspace scan plus `RepoMapService`
@@ -56,6 +57,10 @@ heuristics, and *upgrade* to real semantic results when a language server happen
 (none is installed on the dev machine — that is exactly why the fallback exists). The debugger is
 the one feature that genuinely needs an external adapter, so it **probes** for `debugpy` /
 `netcoredbg` and shows the install command instead of offering a Start button that does nothing.
+Live errors follow the same rule: `EditorLanguageService` probes for csharp-ls/OmniSharp,
+typescript-language-server, pyright/pylsp and `dart language-server`; absent → the Problems panel shows the install
+command (Copy / Run in terminal / Check again). Edits go incrementally after a pause; servers stop with the project
+and on exit. Proven by `tests/lsptest` (fake stdio server + the real Dart SDK when present; `--offline` skips it).
 
 ## What Was Already Done (10 Phases)
 1. ✅ System prompt (10 sections, env info, git status, Claude Code standard)

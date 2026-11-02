@@ -89,6 +89,8 @@ public partial class App : Application
 
         // Wire the XAML-level localization proxy so {services:Loc key} works in any view.
         LocalizedResources.Instance.Initialize(_serviceProvider.GetRequiredService<LocalizationService>());
+        // The editor view finds it through EditorLanguageService.Current. Starts nothing until a file is shown.
+        _ = _serviceProvider.GetRequiredService<Services.Lsp.EditorLanguageService>();
         // Restore points: created now so agent tools can reach it; the 5 GB cap is enforced off the UI thread.
         var checkpoints = _serviceProvider.GetRequiredService<CheckpointService>();
         _ = Task.Run(checkpoints.Prune);
@@ -1026,6 +1028,11 @@ public partial class App : Application
         // debugger. Adapters are not bundled: it probes for netcoredbg / debugpy and reports
         // exactly what is installed rather than offering a Start button that does nothing.
         services.AddSingleton<DebugAdapterService>();
+        // EditorLanguageService — the Code Editor's live errors (squiggles + Problems) and hover from a real language
+        // server (csharp-ls / typescript-language-server / pyright / dart), started per project when installed; the
+        // editor shows the install command when not. Servers stop with the project and on exit.
+        services.AddSingleton(sp => new Services.Lsp.EditorLanguageService(sp.GetService<FileSystemService>()));
+        services.AddSingleton<IAppShutdownHook>(sp => sp.GetRequiredService<Services.Lsp.EditorLanguageService>());
         // SubAgentService — Sprint 1 #1: registry of specialised subagents
         // (code-reviewer, security-reviewer, architect, ...). Built-in 10
         // plus discovery of ~/.cluadex/agents/*.md and project agents.
