@@ -564,8 +564,20 @@ public class CostTrackingService
     /// 1.5x output — every token of it, not just the part past the line.</summary>
     public const int Gpt6LongContextPromptTokens = 272_000;
 
+    // Prices a service reported for its own models (OpenRouter / Together / Hugging Face /models) — they win over the
+    // built-in table, whose unknown-model fallback is Claude Sonnet's price.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ModelPricing> _reported =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Price <paramref name="model"/> as its service reported it (per million tokens).</summary>
+    public static void RegisterPricing(string model, ModelPricing pricing) => _reported[model.Trim()] = pricing;
+
+    /// <summary>True when a service reported this model's price (<see cref="RegisterPricing"/>).</summary>
+    public static bool HasRegisteredPricing(string model) => _reported.ContainsKey(model.Trim());
+
     private static ModelPricing GetPricing(string model, int promptTokens = 0)
     {
+        if (_reported.TryGetValue(model.Trim(), out var reported)) return reported;
         string m = model.ToLowerInvariant();
         ModelPricing Gpt6(ModelPricing p) => promptTokens > Gpt6LongContextPromptTokens
             ? new(p.InputPerMToken * 2m, p.OutputPerMToken * 1.5m, p.CacheReadPerMToken * 2m, p.CacheWritePerMToken * 2m)

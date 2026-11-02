@@ -189,7 +189,8 @@ public class ContextMemoryService
                 return 200_000;   // the room's agents run the Claude Code CLI's standard window
 
             default:
-                return 128_000;
+                // An OpenAI-compatible service: the window its /models reported for the model, else 128K.
+                return Providers.CompatibleProvider.ContextWindowOf(provider, modelId) ?? 128_000;
         }
     }
 
