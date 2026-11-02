@@ -203,8 +203,10 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                     int outTok = usage.TryGetProperty("completion_tokens", out var ot) && ot.TryGetInt32(out var b) ? b : 0;
                     int cached = usage.TryGetProperty("prompt_tokens_details", out var pd)
                                  && pd.TryGetProperty("cached_tokens", out var cd) && cd.TryGetInt32(out var cc) ? cc : 0;
+                    int reasoning = usage.TryGetProperty("completion_tokens_details", out var cdt)
+                                    && cdt.TryGetProperty("reasoning_tokens", out var rt) && rt.TryGetInt32(out var rv) ? rv : 0;
                     if (inTok > 0 || outTok > 0)
-                        _costTracker.RecordUsage(model, inTok - cached, outTok, cached, 0);
+                        _costTracker.RecordUsage(model, inTok - cached, outTok, cached, 0, thinkingTokens: reasoning);
                 }
             }
             catch (OperationCanceledException) { throw; }
@@ -505,7 +507,7 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
         // Cached input is billed at the cached rate (and counts toward GPT-6's 272K long-context line) — it was dropped
         // here, so a cache-heavy agent step read as nearly free.
         if (_costTracker != null && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0))
-            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0);
+            _costTracker.RecordUsage(model, result.InputTokens, result.OutputTokens, result.CacheReadTokens, 0, thinkingTokens: result.ThinkingTokens);
         ConfirmNativeTools();
         if (refusedWhy != null)
         {
@@ -571,6 +573,8 @@ public partial class OpenAiProvider : ApiProviderBase, IModelLister
                                 result.InputTokens = (u.TryGetProperty("input_tokens", out var it) && it.TryGetInt32(out var iv) ? iv : 0) - cached;
                                 result.CacheReadTokens = cached;
                                 result.OutputTokens = u.TryGetProperty("output_tokens", out var ot) && ot.TryGetInt32(out var ov) ? ov : 0;
+                                result.ThinkingTokens = u.TryGetProperty("output_tokens_details", out var otd)
+                                    && otd.TryGetProperty("reasoning_tokens", out var rtk) && rtk.TryGetInt32(out var rv) ? rv : 0;
                             }
                             if (type == "response.incomplete")
                                 stop = resp.TryGetProperty("incomplete_details", out var det) && det.TryGetProperty("reason", out var why)

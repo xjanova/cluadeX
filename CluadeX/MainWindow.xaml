@@ -104,6 +104,9 @@
         <DataTemplate DataType="{x:Type vm:WatchViewModel}">
             <views:WatchView/>
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:BillingViewModel}">
+            <views:BillingView/>
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:UiStudioViewModel}">
             <views:UiStudioView/>
         </DataTemplate>
@@ -650,6 +653,11 @@
                                              Command="{Binding NavigateToCommand}" CommandParameter="Watch"
                                              GroupName="Activity"
                                              ToolTip="{services:Loc nav.watchTip}" AutomationProperties.Name="Watch"/>
+                                <RadioButton Style="{StaticResource ActivityBarButton}" Tag="billing" Content="&#xE8C7;"
+                                             IsChecked="{Binding SelectedNavItem, Converter={StaticResource NavConverter}, ConverterParameter=Billing, Mode=OneWay}"
+                                             Command="{Binding NavigateToCommand}" CommandParameter="Billing"
+                                             GroupName="Activity"
+                                             ToolTip="{services:Loc nav.billingTip}" AutomationProperties.Name="Billing"/>
 
                                 <Border Width="28" Height="1" Margin="16,8" Background="{DynamicResource ActivityBar.Divider}"/>
 

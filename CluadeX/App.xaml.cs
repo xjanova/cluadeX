@@ -1088,6 +1088,7 @@ public partial class App : Application
         services.AddSingleton<PermissionsViewModel>();
         services.AddSingleton<TaskManagerViewModel>();
         services.AddSingleton<WatchViewModel>();
+        services.AddSingleton<BillingViewModel>();
         services.AddSingleton<FeaturesViewModel>();
         services.AddSingleton<McpServersViewModel>();
         services.AddSingleton<Services.Connections.ConnectionService>();

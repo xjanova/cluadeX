@@ -223,6 +223,8 @@ public class MainViewModel : ViewModelBase
     public PermissionsViewModel PermissionsVM { get; }
     public TaskManagerViewModel TaskManagerVM { get; }
     public WatchViewModel? WatchVM { get; }
+    /// <summary>The Billing &amp; cost page; null only in harnesses that build the window without it.</summary>
+    public BillingViewModel? BillingVM { get; }
     public FeaturesViewModel FeaturesVM { get; }
     public McpServersViewModel McpServersVM { get; }
     /// <summary>The setup page ("ตัวช่วยติดตั้ง"); null only in harnesses that build the window without it.</summary>
@@ -260,6 +262,7 @@ public class MainViewModel : ViewModelBase
             ("Models", "Models", ""), ("TimeMachine", "Time Machine", ""),
             ("HexEditor", "Hex Editor", ""), ("Plugins", "Plugins", ""),
             ("McpServers", "MCP Servers", ""), ("Setup", "Setup · ตัวช่วยติดตั้ง", ""), ("Tasks", "Tasks", ""), ("Watch", "Watch", ""),
+            ("Billing", "Billing & cost · บิลและค่าใช้จ่าย", ""),
             ("UiStudio", "UI Studio", ""), ("NodeGraph", "Node Graph", ""),
             ("Permissions", "Permissions", ""), ("Features", "Features", ""),
             ("SubAgents", "Subagents", ""), ("Skills", "Skills", ""),
@@ -382,7 +385,8 @@ public class MainViewModel : ViewModelBase
         WatchViewModel? watchVM = null,
         UiStudioViewModel? uiStudioVM = null,
         NodeGraphViewModel? nodeGraphVM = null,
-        SetupViewModel? setupVM = null)
+        SetupViewModel? setupVM = null,
+        BillingViewModel? billingVM = null)
     {
         _autoUpdate = autoUpdate;
         _activation = activation;
@@ -410,6 +414,7 @@ public class MainViewModel : ViewModelBase
         FeaturesVM = featuresVM;
         McpServersVM = mcpServersVM;
         SetupVM = setupVM;
+        BillingVM = billingVM;
         // A setup row opens another page: Settings at the provider's key, the MCP page, the license window.
         if (setupVM != null) setupVM.NavigateRequested += (target, provider) =>
         {
@@ -860,6 +865,7 @@ public class MainViewModel : ViewModelBase
             "Permissions" => PermissionsVM,
             "Tasks" => TaskManagerVM,
             "Watch" => (ViewModelBase?)WatchVM ?? ChatVM,
+            "Billing" => (ViewModelBase?)BillingVM ?? ChatVM,
             "UiStudio" => (ViewModelBase?)UiStudioVM ?? ChatVM,
             "NodeGraph" => (ViewModelBase?)NodeGraphVM ?? ChatVM,
             "Features" => FeaturesVM,

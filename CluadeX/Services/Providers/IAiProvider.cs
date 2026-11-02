@@ -154,6 +154,9 @@ public class NativeToolResponse
     /// <summary>Prompt-cache tokens this request read back / wrote (Anthropic) — for the step log.</summary>
     public int CacheReadTokens { get; set; }
     public int CacheWriteTokens { get; set; }
+    /// <summary>Of <see cref="OutputTokens"/>, the reasoning tokens the API reports apart (OpenAI, Gemini) — for the
+    /// Billing page.</summary>
+    public int ThinkingTokens { get; set; }
     /// <summary>Server-side tool searches the model ran in this response (deferred tools it loaded).</summary>
     public int ToolSearches { get; set; }
 
